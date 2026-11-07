@@ -511,6 +511,8 @@ const NAVIGATION_DIVIDER_COLOR: &str = "#555555";
 const SIDENAV_DEFAULT_WIDTH: f32 = 292.0;
 const SIDENAV_MIN_WIDTH: f32 = 240.0;
 const SIDENAV_MAX_WIDTH: f32 = 420.0;
+const CANVAS_MIN_CONTENT_WIDTH: f32 = 320.0;
+const CONTENT_SURFACE_COLOR: &str = "#0d0d0d";
 const HEADER_COLLAPSED_PREFIX_WIDTH: f32 = if cfg!(target_os = "macos") {
     184.0
 } else {
@@ -785,6 +787,7 @@ struct State {
     rail_usage_tooltip: Option<Provider>,
     sidenav_visible: bool,
     sidenav_width: f32,
+    canvas_open: bool,
     settings_scroll: SettingsScroll,
     workspace_scroll: SettingsScroll,
 }
@@ -1018,6 +1021,7 @@ impl Default for State {
             rail_usage_tooltip: None,
             sidenav_visible: true,
             sidenav_width: SIDENAV_DEFAULT_WIDTH,
+            canvas_open: false,
             settings_scroll: SettingsScroll::default(),
             workspace_scroll: SettingsScroll::for_key("workspace-scroll"),
         }
@@ -3512,6 +3516,30 @@ fn window_control(
     }
 }
 
+fn canvas_toggle(open: bool, theme: ThemeStyle<'_>) -> El {
+    let color = |value| theme.color(value);
+    let label = if open { "Close Canvas" } else { "Open Canvas" };
+    el().key("header-canvas-toggle")
+        .role("button")
+        .label(label)
+        .help(label)
+        .size(44.0, 38.0)
+        .center()
+        .hover(color("#303030"))
+        .child(icon(if open { &CANVAS_FILLED } else { &CANVAS }, 17.0).color(color("#c8c8c8")))
+        .on_press_tx(|state: &mut State, tx| {
+            tx.instant();
+            state.canvas_open = !state.canvas_open;
+        })
+}
+
+fn canvas_width(window_width: f32, sidenav_width: f32) -> f32 {
+    (window_width * 0.5).min(
+        (window_width - NAVIGATION_RAIL_WIDTH - sidenav_width - CANVAS_MIN_CONTENT_WIDTH - 12.0)
+            .max(160.0),
+    )
+}
+
 fn header(state: &State, prefix_width: f32) -> El {
     let theme = state.appearance.style();
     let color = |value| theme.color(value);
@@ -3552,19 +3580,21 @@ fn header(state: &State, prefix_width: f32) -> El {
             theme,
         ));
     let mut title = row()
-        .key("header-title")
-        .grow(1.0)
-        .h_full()
+        .key("header-view-tab")
+        .role("tab")
+        .min_w(160.0)
+        .max_w(440.0)
+        .h(34.0)
+        .px(14.0)
         .center_y()
-        .gap(11.0)
+        .gap(10.0)
+        .radius(11.0)
+        .continuous_corners()
+        .fill(color("#303030"))
+        .border(1.0, color("#3a3a3a"))
         .window_drag();
     if state.primary_view == PrimaryView::Settings {
         title = title
-            .child(
-                el().key("header-divider")
-                    .size(1.0, 18.0)
-                    .fill(color(NAVIGATION_DIVIDER_COLOR)),
-            )
             .child(icon(state.settings_section.icon(), 16.0).color(color("#c8c8c8")))
             .child(
                 text("Settings")
@@ -3578,11 +3608,6 @@ fn header(state: &State, prefix_width: f32) -> El {
             );
     } else if state.primary_view == PrimaryView::Extensions {
         title = title
-            .child(
-                el().key("header-divider")
-                    .size(1.0, 18.0)
-                    .fill(color(NAVIGATION_DIVIDER_COLOR)),
-            )
             .child(icon(&EXTENSIONS, 16.0).color(color("#c8c8c8")))
             .child(
                 text("Extensions")
@@ -3596,11 +3621,6 @@ fn header(state: &State, prefix_width: f32) -> El {
             );
     } else if state.primary_view == PrimaryView::Fleet {
         title = title
-            .child(
-                el().key("header-divider")
-                    .size(1.0, 18.0)
-                    .fill(color(NAVIGATION_DIVIDER_COLOR)),
-            )
             .child(icon(&FLEET, 16.0).color(color("#c8c8c8")))
             .child(
                 text("Fleet")
@@ -3614,11 +3634,6 @@ fn header(state: &State, prefix_width: f32) -> El {
             );
     } else if state.primary_view == PrimaryView::Automations {
         title = title
-            .child(
-                el().key("header-divider")
-                    .size(1.0, 18.0)
-                    .fill(color(NAVIGATION_DIVIDER_COLOR)),
-            )
             .child(icon(&AUTOMATIONS, 16.0).color(color("#c8c8c8")))
             .child(
                 text("Automations")
@@ -3627,11 +3642,6 @@ fn header(state: &State, prefix_width: f32) -> El {
             );
     } else if state.primary_view == PrimaryView::Tracking {
         title = title
-            .child(
-                el().key("header-divider")
-                    .size(1.0, 18.0)
-                    .fill(color(NAVIGATION_DIVIDER_COLOR)),
-            )
             .child(icon(&TRACKING, 16.0).color(color("#c8c8c8")))
             .child(
                 text("Tracking")
@@ -3640,11 +3650,6 @@ fn header(state: &State, prefix_width: f32) -> El {
             );
     } else if state.primary_view == PrimaryView::WorkspaceCreation {
         title = title
-            .child(
-                el().key("header-divider")
-                    .size(1.0, 18.0)
-                    .fill(color(NAVIGATION_DIVIDER_COLOR)),
-            )
             .child(icon(&HOME, 16.0).color(color("#c8c8c8")))
             .child(
                 text("New Workspace")
@@ -3658,11 +3663,6 @@ fn header(state: &State, prefix_width: f32) -> El {
             );
     } else if state.primary_view == PrimaryView::NewResearch {
         title = title
-            .child(
-                el().key("header-divider")
-                    .size(1.0, 18.0)
-                    .fill(color(NAVIGATION_DIVIDER_COLOR)),
-            )
             .child(icon(&NEW_RESEARCH, 16.0).color(color("#c8c8c8")))
             .child(
                 text("New Research")
@@ -3680,14 +3680,11 @@ fn header(state: &State, prefix_width: f32) -> El {
             })
             .map_or("Workspace", |item| item.name.as_str());
         title = title
-            .child(
-                el().key("header-divider")
-                    .size(1.0, 18.0)
-                    .fill(color(NAVIGATION_DIVIDER_COLOR)),
-            )
             .child(icon(&FOLDER_OPEN, 16.0).color(color("#c8c8c8")))
             .child(
                 text(name)
+                    .min_w(0.0)
+                    .truncate()
                     .font(ui_font(13.0, 500.0))
                     .color(color("#e2e2e2")),
             )
@@ -3697,6 +3694,17 @@ fn header(state: &State, prefix_width: f32) -> El {
                     .color(color("#aaaaaa")),
             );
     }
+    let mut title_area = row()
+        .key("header-title")
+        .grow(1.0)
+        .min_w(0.0)
+        .h_full()
+        .center_y()
+        .gap(10.0)
+        .window_drag();
+    if state.primary_view != PrimaryView::Home {
+        title_area = title_area.child(title);
+    }
     let mut bar = row()
         .key("custom-header")
         .role("banner")
@@ -3705,7 +3713,8 @@ fn header(state: &State, prefix_width: f32) -> El {
         .center_y()
         .window_drag()
         .child(el().w(prefix_width).h_full().child(left))
-        .child(title);
+        .child(title_area)
+        .child(canvas_toggle(state.canvas_open, theme));
     if cfg!(target_os = "windows") {
         bar = bar.child(
             row()
@@ -5509,7 +5518,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
         .min_w(0.0)
         .h_full()
         .min_h(0.0)
-        .fill(color("#0d0d0d"));
+        .fill(color(CONTENT_SURFACE_COLOR));
     if state.primary_view == PrimaryView::NewResearch {
         let graph_width = cx
             .layout_size("content-surface")
@@ -5530,7 +5539,9 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
         );
     } else if workspace_view::graph_open(state) {
         let [width, height] = cx.layout_size("content-surface").unwrap_or([840.0, 600.0]);
-        main_content = main_content.child(workspace_view::render(state, theme, height, width));
+        main_content = main_content
+            .clip_rounded(0.0)
+            .child(workspace_view::render(state, theme, height, width).absolute(0.0, 0.0));
     } else {
         let scroll_watch = if matches!(
             state.primary_view,
@@ -5598,6 +5609,30 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
             .child(scroll_bar.bar(theme));
     }
     settings_surface = settings_surface.child(main_content);
+    if state.canvas_open {
+        let window_width = cx.layout_size("app-surface").map_or(1040.0, |size| size[0]);
+        let sidenav_width = if state.sidenav_visible && state.primary_view != PrimaryView::Tracking
+        {
+            state.sidenav_width + 1.0
+        } else {
+            0.0
+        };
+        settings_surface = settings_surface
+            .child(
+                el().key("canvas-divider")
+                    .w(1.0)
+                    .h_full()
+                    .fill(color("#2a2a2a")),
+            )
+            .child(
+                el().key("canvas")
+                    .role("region")
+                    .label("Canvas")
+                    .w(canvas_width(window_width, sidenav_width))
+                    .h_full()
+                    .fill(color(CONTENT_SURFACE_COLOR)),
+            );
+    }
     if state.sidenav_visible {
         settings_surface = settings_surface.child(sidenav_resize_handle(state.sidenav_width));
     }
@@ -9201,6 +9236,54 @@ mod tests {
     }
 
     #[test]
+    fn user_message_wraps_with_canvas_open_at_narrow_width() {
+        let state = State {
+            primary_view: PrimaryView::NewResearch,
+            canvas_open: true,
+            active_session: Some(SessionDetail {
+                summary: None,
+                messages: vec![beale_contracts::v1::SessionMessage {
+                    role: beale_contracts::v1::SessionRole::User as i32,
+                    text: "Review the example workspace instructions and summarize the steps in a clear, concise response.".to_owned(),
+                    tools: Vec::new(),
+                    reasoning_summaries: Vec::new(),
+                    duration_ms: 0,
+                    commentary: Vec::new(),
+                }],
+                provider: ProviderId::Openai as i32,
+                method: AuthMethod::ApiKey as i32,
+                model: "model-example".to_owned(),
+                goal: None,
+                first_turn_number: 1,
+                graph_id: String::new(),
+                graph_models: vec![],
+                graph_node_concurrency: vec![],
+            }),
+            ..State::default()
+        };
+        let mut runtime = Runtime::new(state, view, (1032.0, 980.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        let (main, _) = runtime.presented("content-surface").unwrap();
+        let (row, _) = runtime.presented("session-message-0").unwrap();
+        let (bubble, _) = runtime.presented("session-message-0-bubble").unwrap();
+        let (text, _) = runtime.presented("session-message-0-text").unwrap();
+        assert!(bubble[0] >= row[0], "row={row:?} bubble={bubble:?}");
+        assert!(
+            bubble[0] + bubble[2] <= row[0] + row[2] + 1.0,
+            "row={row:?} bubble={bubble:?}"
+        );
+        assert!(
+            bubble[0] + bubble[2] <= main[0] + main[2],
+            "main={main:?} bubble={bubble:?}"
+        );
+        assert!(
+            text[0] + text[2] <= bubble[0] + bubble[2] - 12.0,
+            "text={text:?} bubble={bubble:?}"
+        );
+        assert!(text[3] > 40.0, "message did not wrap: {text:?}");
+    }
+
+    #[test]
     fn session_tool_details_mount_only_when_expanded() {
         let workspace_id = "00000000-0000-4000-8000-000000000001";
         let session_id = "00000000-0000-4000-8000-000000000002";
@@ -10140,6 +10223,73 @@ mod tests {
     }
 
     #[test]
+    fn workspace_network_keeps_canvas_in_frame() {
+        use beale_contracts::v1::{SurfaceKind, SurfaceScope};
+
+        let id = uuid::Uuid::from_u128(21);
+        let summary = WorkspaceSummary {
+            id: id.to_string(),
+            name: "Example Workspace".to_owned(),
+            directory: "example-directory".to_owned(),
+        };
+        let surfaces = vec![WorkspaceSurface {
+            id: "S1".to_owned(),
+            kind: SurfaceKind::Repository as i32,
+            scope: SurfaceScope::InScope as i32,
+            value: "example.test".to_owned(),
+            ..Default::default()
+        }];
+        let state = with_surface_feature(State {
+            primary_view: PrimaryView::Workspace,
+            workspace_id: Some(id),
+            workspace_tab: workspace_view::WorkspaceTab::Surfaces,
+            workspace_details: Some(WorkspaceDetails {
+                summary: Some(summary),
+                guidance: String::new(),
+                surfaces: surfaces.clone(),
+                rules: Vec::new(),
+            }),
+            workspace_surface_edits: surfaces,
+            canvas_open: true,
+            ..State::default()
+        });
+        let mut runtime = Runtime::new(state, view, (1040.0, 720.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        runtime.frame(0.0);
+        let (main, _) = runtime.presented("content-surface").unwrap();
+        let (stage, _) = runtime.presented("workspace-surface-network").unwrap();
+        let (canvas, _) = runtime.presented("canvas").unwrap();
+        assert!(canvas[0] + canvas[2] <= 1040.0, "canvas={canvas:?}");
+        assert!(
+            main[0] + main[2] <= canvas[0],
+            "main={main:?} canvas={canvas:?}"
+        );
+        assert_eq!(stage, main, "stage={stage:?} main={main:?}");
+
+        let (sidebar, _) = runtime.presented("home-sidenav").unwrap();
+        let (node, _) = runtime.presented("workspace-surface-node-0").unwrap();
+        let target_x = sidebar[0] + sidebar[2] - 20.0;
+        let target_y = node[1] + node[3] / 2.0;
+        let drag_x = stage[0] + stage[2] - 18.0;
+        let drag_y = stage[1] + stage[3] / 2.0 + 100.0;
+        let delta_x = target_x - node[0] - node[2] / 2.0;
+        runtime.pointer_down(drag_x, drag_y);
+        runtime.pointer_move(drag_x + delta_x, drag_y);
+        runtime.frame(0.0);
+        runtime.pointer_up(drag_x + delta_x, drag_y);
+        runtime.frame(0.0);
+        let (moved, _) = runtime.presented("workspace-surface-node-0").unwrap();
+        assert!(moved[0] < main[0]);
+        runtime.pointer_move(target_x, target_y);
+        runtime.frame(0.0);
+        assert_eq!(runtime.state.workspace_surface_hovered, None);
+        runtime.pointer_down(target_x, target_y);
+        runtime.pointer_up(target_x, target_y);
+        runtime.frame(0.0);
+        assert_eq!(runtime.state.workspace_surface_selected, None);
+    }
+
+    #[test]
     fn surface_network_details_close_on_empty_space_and_switch_between_nodes() {
         use beale_contracts::v1::{SurfaceKind, SurfaceScope, WorkspaceSurface};
 
@@ -10530,6 +10680,95 @@ mod tests {
     }
 
     #[test]
+    fn canvas_stays_open_across_views_and_preserves_main_width() {
+        let mut runtime =
+            Runtime::new(State::default(), view, (1400.0, 800.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        assert!(!runtime.state.canvas_open);
+        assert!(runtime.find("canvas").is_none());
+        let (toggle, _) = runtime.presented("header-canvas-toggle").unwrap();
+        if cfg!(target_os = "windows") {
+            let (minimize, _) = runtime.presented("header-minimize").unwrap();
+            assert!(toggle[0] + toggle[2] <= minimize[0]);
+        }
+        let click = |runtime: &mut Runtime<State>, key: &str| {
+            let (x, y) = runtime.find(key).unwrap();
+            runtime.pointer_down(x, y);
+            runtime.pointer_up(x, y);
+            runtime.frame(0.0);
+        };
+        click(&mut runtime, "header-canvas-toggle");
+        runtime.frame(0.0);
+        assert!(runtime.state.canvas_open);
+        let (canvas, _) = runtime.presented("canvas").unwrap();
+        assert!((canvas[2] - 700.0).abs() < 2.0);
+        click(&mut runtime, "nav-home");
+        assert_eq!(runtime.state.primary_view, PrimaryView::Home);
+        assert!(runtime.find("canvas").is_some());
+        click(&mut runtime, "nav-extensions");
+        assert_eq!(runtime.state.primary_view, PrimaryView::Extensions);
+        assert!(runtime.find("canvas").is_some());
+        click(&mut runtime, "header-canvas-toggle");
+        assert!(!runtime.state.canvas_open);
+        assert!(runtime.find("canvas").is_none());
+
+        let mut narrow = Runtime::new(
+            State {
+                canvas_open: true,
+                ..State::default()
+            },
+            view,
+            (840.0, 720.0),
+            Env::new(true, 1.0),
+        );
+        narrow.frame(0.0);
+        narrow.frame(0.0);
+        let (main, _) = narrow.presented("content-surface").unwrap();
+        let (canvas, _) = narrow.presented("canvas").unwrap();
+        assert!(main[2] >= CANVAS_MIN_CONTENT_WIDTH - 2.0);
+        assert!(canvas[2] >= 160.0);
+    }
+
+    #[test]
+    fn canvas_preserves_new_research_right_inset() {
+        let workspace_id = uuid::Uuid::from_u128(31).to_string();
+        let state = State {
+            workspaces: vec![WorkspaceSummary {
+                id: workspace_id.clone(),
+                name: "Example Research Workspace".to_owned(),
+                directory: "example-directory".to_owned(),
+            }],
+            new_research_workspace_id: Some(workspace_id),
+            ..State::default()
+        };
+        let mut runtime = Runtime::new(state, view, (1470.0, 1000.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        let click = |runtime: &mut Runtime<State>, key: &str| {
+            let (x, y) = runtime.find(key).unwrap();
+            runtime.pointer_down(x, y);
+            runtime.pointer_up(x, y);
+            runtime.frame(0.0);
+        };
+        click(&mut runtime, "header-canvas-toggle");
+        click(&mut runtime, "nav-home");
+        runtime.state.start_new_research();
+        runtime.frame(0.0);
+        assert_eq!(runtime.state.primary_view, PrimaryView::NewResearch);
+        let (surface, _) = runtime.presented("settings-surface").unwrap();
+        let (main, _) = runtime.presented("content-surface").unwrap();
+        let (canvas, _) = runtime.presented("canvas").unwrap();
+        assert!(surface[0] + surface[2] <= 1464.0, "surface={surface:?}");
+        assert!(
+            canvas[0] + canvas[2] <= surface[0] + surface[2],
+            "canvas={canvas:?} surface={surface:?}"
+        );
+        assert!(
+            main[0] + main[2] <= canvas[0],
+            "main={main:?} canvas={canvas:?}"
+        );
+    }
+
+    #[test]
     fn navigation_tooltips_follow_their_icons() {
         let mut runtime =
             Runtime::new(State::default(), view, (1040.0, 720.0), Env::new(true, 1.0));
@@ -10648,10 +10887,61 @@ mod tests {
         runtime.frame(0.0);
         assert!(!runtime.state.sidenav_visible);
         assert!(runtime.find("settings-sidenav").is_none());
-        assert!(runtime.find("header-divider").is_some());
+        assert!(runtime.find("header-view-tab").is_some());
+        assert!(runtime.find("header-divider").is_none());
         if cfg!(target_os = "windows") {
             assert!(runtime.find("header-close").is_some());
         }
+    }
+
+    #[test]
+    fn header_titles_render_as_wide_tabs_without_close_controls() {
+        for primary_view in [
+            PrimaryView::Settings,
+            PrimaryView::NewResearch,
+            PrimaryView::WorkspaceCreation,
+            PrimaryView::Workspace,
+            PrimaryView::Extensions,
+            PrimaryView::Fleet,
+            PrimaryView::Automations,
+            PrimaryView::Tracking,
+        ] {
+            let mut runtime = Runtime::new(
+                State {
+                    primary_view,
+                    ..State::default()
+                },
+                view,
+                (1040.0, 720.0),
+                Env::new(true, 1.0),
+            );
+            runtime.frame(0.0);
+            let (title_area, _) = runtime.presented("header-title").unwrap();
+            let (tab, _) = runtime.presented("header-view-tab").unwrap();
+            assert_eq!(tab[3], 34.0, "{primary_view:?}: {tab:?}");
+            assert!(tab[2] >= 160.0, "{primary_view:?}: {tab:?}");
+            assert!(tab[2] > tab[3] * 3.0, "{primary_view:?}: {tab:?}");
+            assert!((tab[0] - title_area[0]).abs() < 1.0, "{primary_view:?}");
+            assert!(
+                tab[0] + tab[2] <= title_area[0] + title_area[2],
+                "{primary_view:?}: title={title_area:?} tab={tab:?}"
+            );
+            assert!(runtime.find("header-view-tab-close").is_none());
+            assert!(runtime.find("header-divider").is_none());
+        }
+
+        let mut home = Runtime::new(
+            State {
+                primary_view: PrimaryView::Home,
+                ..State::default()
+            },
+            view,
+            (1040.0, 720.0),
+            Env::new(true, 1.0),
+        );
+        home.frame(0.0);
+        assert!(home.find("header-view-tab").is_none());
+        assert!(home.find("header-divider").is_none());
     }
 
     #[test]
@@ -10823,8 +11113,8 @@ mod tests {
     fn sidenav_edge_tracks_header_and_resizes_within_bounds() {
         fn aligned(runtime: &Runtime<State>) {
             let (sidenav, _) = runtime.presented("settings-sidenav").unwrap();
-            let (divider, _) = runtime.presented("header-divider").unwrap();
-            assert!((sidenav[0] + sidenav[2] - divider[0]).abs() < 1.0);
+            let (title_area, _) = runtime.presented("header-title").unwrap();
+            assert!((sidenav[0] + sidenav[2] - title_area[0]).abs() < 1.0);
         }
 
         let mut runtime =
@@ -10854,10 +11144,10 @@ mod tests {
         runtime.frame(0.0);
         runtime.frame(1.0);
         let (forward, _) = runtime.presented("header-forward").unwrap();
-        let (divider, _) = runtime.presented("header-divider").unwrap();
+        let (title_area, _) = runtime.presented("header-title").unwrap();
         assert!(
-            (divider[0] - forward[0] - forward[2]).abs() < 1.0,
-            "forward={forward:?}, divider={divider:?}"
+            (title_area[0] - forward[0] - forward[2]).abs() < 1.0,
+            "forward={forward:?}, title={title_area:?}"
         );
         assert!(runtime.find("settings-sidenav-resize").is_none());
 

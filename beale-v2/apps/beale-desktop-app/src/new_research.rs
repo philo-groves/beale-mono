@@ -1279,6 +1279,7 @@ pub(crate) fn transcript_message(
             col()
                 .key(format!("{key}-bubble"))
                 .max_w(620.0)
+                .shrink()
                 .px(13.0)
                 .py(10.0)
                 .radius(14.0)

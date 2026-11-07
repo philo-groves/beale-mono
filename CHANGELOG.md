@@ -88,6 +88,7 @@
 
 #### Changed
 
+- V2 header titles now sit in wide squircle tabs with their existing icons and labels, without a preceding vertical separator, leaving room for future multiple-view headers.
 - Workspace tabs now distinguish Surfaces with a connected-node icon and Knowledge Base with a book icon.
 - Clicking empty space around a selected V2 surface closes its detail panel; clicking another surface switches the panel, while clicks inside it keep its controls available.
 - The V2 surface network shows each surface name beneath its circle and gives labels more space in the graph layout.
@@ -185,6 +186,8 @@
 
 #### Fixed
 
+- User messages in narrow V2 New Research transcripts now shrink their bubbles to the available width and wrap their text.
+- Opening the V2 Canvas now applies its layout immediately, preserving New Research's rounded right edge and outer margin when switching views.
 - Kept the V2 Canvas visible on workspace surface diagrams by removing diagram sizing from the surrounding row. Dragged nodes and connections are clipped beneath the Home sidenav and Canvas.
 - Custom Instructions workspace imports now make up to two bounded correction attempts when a model draft fails validation. An in-scope surface without an explicit scope basis no longer inherits descendant authorization merely because the model set that flag; invalid references still fail validation.
 - Let v2 Custom Instructions imports continue past the former tool and round cutoffs. Import progress now uses the shared Quick Chat ribbon, bordered body, and rounded footer, omits final JSON from its transcript, and can be canceled from the panel.

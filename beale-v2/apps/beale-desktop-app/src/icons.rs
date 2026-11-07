@@ -279,6 +279,18 @@ pub(crate) static SIDEBAR: Icon = Icon {
     body: r#"<rect fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" x="3" y="3" rx="2"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M9 3v18"/>"#,
 };
 
+pub(crate) static CANVAS: Icon = Icon {
+    name: "beale-canvas",
+    view: 24.0,
+    body: r#"<rect x="2" y="2" width="20" height="20" rx="4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 7v10M7 12h10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>"#,
+};
+
+pub(crate) static CANVAS_FILLED: Icon = Icon {
+    name: "beale-canvas-filled",
+    view: 24.0,
+    body: r#"<path fill="currentColor" fill-rule="evenodd" d="M6 2h12a4 4 0 0 1 4 4v12a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V6a4 4 0 0 1 4-4Zm5 4h2v5h5v2h-5v5h-2v-5H6v-2h5V6Z"/>"#,
+};
+
 pub(crate) static ARROW_LEFT: Icon = Icon {
     name: "lucide-arrow-left",
     view: 24.0,
@@ -390,9 +402,9 @@ pub(crate) static SETTINGS_FILLED: Icon = Icon {
 #[cfg(test)]
 mod tests {
     use super::{
-        AUTOMATION_ACTIVE, AUTOMATION_SCHEDULE, AUTOMATIONS_FILLED, EXTENSIONS_FILLED, FLEET_APPLE,
-        FLEET_FILLED, FLEET_LINUX, FLEET_WINDOWS, HOME_FILLED, PLUGIN_META, SETTINGS_FILLED,
-        WORKSPACE_KNOWLEDGE, WORKSPACE_SURFACES,
+        AUTOMATION_ACTIVE, AUTOMATION_SCHEDULE, AUTOMATIONS_FILLED, CANVAS, CANVAS_FILLED,
+        EXTENSIONS_FILLED, FLEET_APPLE, FLEET_FILLED, FLEET_LINUX, FLEET_WINDOWS, HOME_FILLED,
+        PLUGIN_META, SETTINGS_FILLED, WORKSPACE_KNOWLEDGE, WORKSPACE_SURFACES,
     };
 
     #[test]
@@ -444,5 +456,14 @@ mod tests {
         assert!(surfaces.iter().filter(|&&pixel| pixel > 0).count() > 20);
         assert!(knowledge.iter().filter(|&&pixel| pixel > 0).count() > 20);
         assert_ne!(surfaces, knowledge);
+    }
+
+    #[test]
+    fn canvas_icons_have_distinct_outline_and_filled_states() {
+        let outline = rune::text::icon_coverage(&CANVAS, 17);
+        let filled = rune::text::icon_coverage(&CANVAS_FILLED, 17);
+        assert!(outline.iter().filter(|&&pixel| pixel > 0).count() > 20);
+        assert!(filled.iter().filter(|&&pixel| pixel > 0).count() > 20);
+        assert_ne!(outline, filled);
     }
 }
