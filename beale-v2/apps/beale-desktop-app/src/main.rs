@@ -657,6 +657,7 @@ struct State {
     workspace_surface_management_open: bool,
     workspace_surface_hovered: Option<usize>,
     workspace_surface_selected: Option<usize>,
+    workspace_surface_detail_height: f32,
     workspace_surface_connecting: Option<usize>,
     workspace_surface_relationship_target: Option<usize>,
     workspace_surface_relationship_label: TextEdit,
@@ -882,6 +883,7 @@ impl Default for State {
             workspace_surface_management_open: false,
             workspace_surface_hovered: None,
             workspace_surface_selected: None,
+            workspace_surface_detail_height: 0.0,
             workspace_surface_connecting: None,
             workspace_surface_relationship_target: None,
             workspace_surface_relationship_label: TextEdit::new(""),
@@ -10039,7 +10041,7 @@ mod tests {
 
     #[test]
     fn surface_network_covers_content_and_pans_beneath_title() {
-        use beale_contracts::v1::{SurfaceKind, SurfaceScope, WorkspaceSurface};
+        use beale_contracts::v1::{SurfaceDefinition, SurfaceKind, SurfaceScope, WorkspaceSurface};
 
         let id = uuid::Uuid::parse_str("00000000-0000-4000-8000-000000000003").unwrap();
         let summary = WorkspaceSummary {
@@ -10064,6 +10066,10 @@ mod tests {
                 kind: kinds[index % kinds.len()] as i32,
                 scope: SurfaceScope::InScope as i32,
                 value: format!("surface-{index}.example.test"),
+                definition: (index == 0).then(|| SurfaceDefinition {
+                    name: "Example Repository".to_owned(),
+                    ..Default::default()
+                }),
                 ..Default::default()
             })
             .collect::<Vec<_>>();
@@ -10086,10 +10092,15 @@ mod tests {
         let (content, _) = runtime.presented("content-surface").unwrap();
         let (stage, _) = runtime.presented("workspace-surface-network").unwrap();
         let (node_before, _) = runtime.presented("workspace-surface-node-0").unwrap();
+        let (name, _) = runtime
+            .presented("workspace-surface-visible-name-0")
+            .unwrap();
         let (title, _) = runtime.presented("workspace-title-squircle").unwrap();
         let (manage, _) = runtime.presented("workspace-surface-manage").unwrap();
         assert_eq!(stage, content);
         assert_eq!([node_before[2], node_before[3]], [18.0, 18.0]);
+        assert!(name[1] >= node_before[1] + node_before[3]);
+        assert_eq!(name[2], workspace_surface_layout::NODE_LABEL_WIDTH);
         assert!(title[2] < content[2] / 2.0);
         assert!((manage[0] + manage[2] - content[0] - content[2] + 24.0).abs() < 2.0);
         assert!((manage[1] + manage[3] - content[1] - content[3] + 24.0).abs() < 2.0);
@@ -10105,6 +10116,7 @@ mod tests {
             .into_iter()
             .filter_map(|element| element.text)
             .collect::<Vec<_>>();
+        assert!(labels.iter().any(|label| label == "Example Repository"));
         assert!(!labels.iter().any(|label| label == "Surface Network"));
         assert!(!labels.iter().any(|label| label == "Repositories 100"));
         assert!(
@@ -10115,15 +10127,90 @@ mod tests {
 
         let x = stage[0] + stage[2] - 24.0;
         let y = stage[1] + stage[3] / 2.0;
+        let drag_distance = (node_before[1] - title[1] - title[3] + 18.0).max(110.0);
         runtime.pointer_down(x, y);
-        runtime.pointer_move(x, y - 110.0);
+        runtime.pointer_move(x, y - drag_distance);
         runtime.frame(0.0);
-        assert_eq!(runtime.state.workspace_surface_pan, [0.0, -110.0]);
+        assert_eq!(runtime.state.workspace_surface_pan, [0.0, -drag_distance]);
         let (node_after, _) = runtime.presented("workspace-surface-node-0").unwrap();
-        assert!((node_after[1] - node_before[1] + 110.0).abs() < 1.0);
+        assert!((node_after[1] - node_before[1] + drag_distance).abs() < 1.0);
         assert!(node_after[1] < title[1] + title[3]);
-        runtime.pointer_up(x, y - 110.0);
+        runtime.pointer_up(x, y - drag_distance);
         runtime.frame(0.0);
+    }
+
+    #[test]
+    fn surface_network_details_close_on_empty_space_and_switch_between_nodes() {
+        use beale_contracts::v1::{SurfaceKind, SurfaceScope, WorkspaceSurface};
+
+        let id = uuid::Uuid::parse_str("00000000-0000-4000-8000-000000000004").unwrap();
+        let summary = WorkspaceSummary {
+            id: id.to_string(),
+            name: "Example Workspace".to_owned(),
+            directory: std::env::temp_dir()
+                .join("example-workspace")
+                .to_string_lossy()
+                .into_owned(),
+        };
+        let surfaces = ["S1", "S2"]
+            .into_iter()
+            .map(|surface_id| WorkspaceSurface {
+                id: surface_id.to_owned(),
+                kind: SurfaceKind::Repository as i32,
+                scope: SurfaceScope::InScope as i32,
+                value: format!("example-{surface_id}"),
+                ..Default::default()
+            })
+            .collect::<Vec<_>>();
+        let details = WorkspaceDetails {
+            summary: Some(summary),
+            guidance: String::new(),
+            surfaces: surfaces.clone(),
+            rules: Vec::new(),
+        };
+        let state = with_surface_feature(State {
+            primary_view: PrimaryView::Workspace,
+            workspace_id: Some(id),
+            workspace_tab: workspace_view::WorkspaceTab::Surfaces,
+            workspace_details: Some(details),
+            workspace_surface_edits: surfaces,
+            ..State::default()
+        });
+        let mut runtime = Runtime::new(state, view, (1400.0, 850.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        let click = |runtime: &mut Runtime<State>, x: f32, y: f32| {
+            runtime.pointer_down(x, y);
+            runtime.pointer_up(x, y);
+            runtime.frame(0.0);
+        };
+
+        let (x, y) = runtime.find("workspace-surface-node-0").unwrap();
+        click(&mut runtime, x, y);
+        assert_eq!(runtime.state.workspace_surface_selected, Some(0));
+        let (panel, _) = runtime
+            .presented("workspace-surface-network-details")
+            .unwrap();
+        click(
+            &mut runtime,
+            panel[0] + panel[2] / 2.0,
+            panel[1] + panel[3] / 2.0,
+        );
+        assert_eq!(runtime.state.workspace_surface_selected, Some(0));
+
+        let (x, y) = runtime.find("workspace-surface-node-1").unwrap();
+        click(&mut runtime, x, y);
+        assert_eq!(runtime.state.workspace_surface_selected, Some(1));
+        let (x, y) = runtime.find("workspace-surface-connect").unwrap();
+        click(&mut runtime, x, y);
+        assert_eq!(runtime.state.workspace_surface_connecting, Some(1));
+
+        let (panel, _) = runtime
+            .presented("workspace-surface-network-details")
+            .unwrap();
+        click(&mut runtime, panel[0] + 20.0, panel[1] + panel[3] + 20.0);
+        assert_eq!(runtime.state.workspace_surface_selected, None);
+        assert_eq!(runtime.state.workspace_surface_connecting, None);
+        assert!(runtime.find("workspace-surface-network-details").is_none());
     }
 
     #[test]

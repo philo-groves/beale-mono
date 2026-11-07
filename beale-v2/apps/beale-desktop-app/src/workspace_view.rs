@@ -11,7 +11,7 @@ use crate::{
     FormSpec, SelectionMenu, State, ThemeStyle, ViewLocation, form_button,
     form_controls::icon_action_button,
     form_label_font,
-    icons::{PEN, PLUS, SAFETY, SETTINGS, TARGET, TRASH},
+    icons::{PEN, PLUS, SAFETY, SETTINGS, TARGET, TRASH, WORKSPACE_KNOWLEDGE, WORKSPACE_SURFACES},
     modal_dialog, selection_button, settings_form, settings_form_card, settings_form_with_action,
     toggle_selection_menu, ui_font, view_title_font,
     workspace_creation::{
@@ -62,7 +62,9 @@ impl WorkspaceTab {
 fn tab_button(tab: WorkspaceTab, selected: bool, id: uuid::Uuid, theme: ThemeStyle<'_>) -> El {
     let color = |value| theme.color(value);
     let tab_icon = match tab {
-        WorkspaceTab::Surfaces | WorkspaceTab::Campaign | WorkspaceTab::Knowledge => &TARGET,
+        WorkspaceTab::Surfaces => &WORKSPACE_SURFACES,
+        WorkspaceTab::Knowledge => &WORKSPACE_KNOWLEDGE,
+        WorkspaceTab::Campaign => &TARGET,
         WorkspaceTab::Foundation => &SETTINGS,
         WorkspaceTab::Rules => &SAFETY,
     };
@@ -397,6 +399,27 @@ fn arc(cx: f32, cy: f32, radius: f32, start: f32, end: f32) -> Vec<[f32; 2]> {
         .collect()
 }
 
+fn surface_network_background_drag(state: &mut State, drag: &mut Drag, tx: &mut Tx) {
+    tx.instant();
+    match drag.phase {
+        Phase::Down => state.workspace_surface_pan_origin = state.workspace_surface_pan,
+        Phase::Move => {
+            state.workspace_surface_pan = [
+                state.workspace_surface_pan_origin[0] + drag.dx,
+                state.workspace_surface_pan_origin[1] + drag.dy,
+            ];
+        }
+        Phase::Up if drag.cancelled() => {
+            state.workspace_surface_pan = state.workspace_surface_pan_origin;
+        }
+        Phase::Up if drag.dx.abs() <= 4.0 && drag.dy.abs() <= 4.0 => {
+            state.workspace_surface_selected = None;
+            state.workspace_surface_connecting = None;
+        }
+        Phase::Up => {}
+    }
+}
+
 fn network(
     state: &State,
     theme: ThemeStyle<'_>,
@@ -487,28 +510,60 @@ fn network(
     let mut stage = el()
         .key("workspace-surface-network")
         .size(width, height)
-        .child(canvas(shape).absolute(0.0, 0.0).size(width, height))
-        .on_drag(|state: &mut State, drag: &mut Drag, tx: &mut Tx| {
-            tx.instant();
-            match drag.phase {
-                Phase::Down => state.workspace_surface_pan_origin = state.workspace_surface_pan,
-                Phase::Move => {
-                    state.workspace_surface_pan = [
-                        state.workspace_surface_pan_origin[0] + drag.dx,
-                        state.workspace_surface_pan_origin[1] + drag.dy,
-                    ];
-                }
-                Phase::Up if drag.cancelled() => {
-                    state.workspace_surface_pan = state.workspace_surface_pan_origin;
-                }
-                Phase::Up => {}
-            }
-        });
+        .child(canvas(shape).absolute(0.0, 0.0).size(width, height));
+    let panel_width = (width - 48.0).min(460.0);
+    let panel_bottom = if state.workspace_surface_selected.is_some() {
+        (96.0
+            + if state.workspace_surface_detail_height > 0.0 {
+                state.workspace_surface_detail_height
+            } else {
+                450.0
+            })
+        .min(height)
+    } else {
+        0.0
+    };
+    let hit_regions = if state.workspace_surface_selected.is_some() {
+        [
+            [0.0, 0.0, width, 96.0],
+            [0.0, 96.0, 24.0, panel_bottom - 96.0],
+            [
+                24.0 + panel_width,
+                96.0,
+                width - 24.0 - panel_width,
+                panel_bottom - 96.0,
+            ],
+            [0.0, panel_bottom, width, height - panel_bottom],
+        ]
+    } else {
+        [[0.0, 0.0, width, height], [0.0; 4], [0.0; 4], [0.0; 4]]
+    };
+    for (index, [x, y, region_width, region_height]) in hit_regions.into_iter().enumerate() {
+        if region_width > 0.0 && region_height > 0.0 {
+            stage = stage.child(
+                el().key(if state.workspace_surface_selected.is_some() {
+                    format!("workspace-surface-background-{index}")
+                } else {
+                    "workspace-surface-background-full".to_owned()
+                })
+                .absolute(x, y)
+                .size(region_width, region_height)
+                .on_drag(surface_network_background_drag),
+            );
+        }
+    }
     for (index, surface) in surfaces.iter().enumerate() {
         let [x, y] = position(index);
         let out = surface.scope == SurfaceScope::OutOfScope as i32;
+        let name = surface
+            .definition
+            .as_ref()
+            .map(|definition| definition.name.trim())
+            .filter(|name| !name.is_empty())
+            .unwrap_or(surface.value.as_str());
         let label = format!(
-            "{} · {}{} · {} updates",
+            "{} · {} · {}{} · {} updates",
+            name,
             draft_kind(surface.kind).label(),
             surface.value,
             if out { " · Out of scope" } else { "" },
@@ -535,7 +590,8 @@ fn network(
                     state.workspace_surface_hovered = None;
                 }
             })
-            .on_press(move |state: &mut State| {
+            .on_press_tx(move |state: &mut State, tx| {
+                tx.instant();
                 if let Some(source) = state.workspace_surface_connecting.take() {
                     if source != index {
                         state.workspace_surface_relationship_target = Some(index);
@@ -549,10 +605,25 @@ fn network(
                 }
             });
         stage = stage.child(node);
+        stage = stage.child(
+            el().key(format!("workspace-surface-visible-name-{index}"))
+                .absolute(
+                    x - crate::workspace_surface_layout::NODE_LABEL_WIDTH / 2.0,
+                    y + 25.0,
+                )
+                .w(crate::workspace_surface_layout::NODE_LABEL_WIDTH)
+                .center()
+                .child(
+                    text(name.to_owned())
+                        .truncate()
+                        .font(ui_font(12.0, 500.0))
+                        .color(theme.color(if out { "#888888" } else { "#c9c9c9" })),
+                ),
+        );
         if hovered == Some(index) {
             stage = stage.child(
                 el().key(format!("workspace-surface-name-{index}"))
-                    .absolute((x - 110.0).max(4.0).min((width - 224.0).max(4.0)), y + 26.0)
+                    .absolute((x - 110.0).max(4.0).min((width - 224.0).max(4.0)), y + 48.0)
                     .w(220.0)
                     .px(8.0)
                     .py(5.0)
@@ -626,6 +697,21 @@ fn network(
             }
         }
     }
+    if state.workspace_surface_selected.is_some() {
+        stage = stage.child(
+            surface_network_details(state, theme)
+                .absolute(24.0, 96.0)
+                .w((width - 48.0).min(460.0))
+                .on_layout_tx(|state: &mut State, [_, _, _, height], tx| {
+                    if (state.workspace_surface_detail_height - height).abs() > 0.5 {
+                        state.workspace_surface_detail_height = height;
+                        tx.instant();
+                    } else {
+                        tx.live_only();
+                    }
+                }),
+        );
+    }
     let dirty = state
         .workspace_details
         .as_ref()
@@ -664,13 +750,6 @@ fn network(
         .size(width, height)
         .child(stage)
         .child(header.absolute(24.0, 25.0).w((width - 48.0).max(0.0)));
-    if state.workspace_surface_selected.is_some() {
-        page = page.child(
-            surface_network_details(state, theme)
-                .absolute(24.0, 96.0)
-                .w((width - 48.0).min(460.0)),
-        );
-    }
     if !state.workspace_save_error.is_empty() {
         let mut status = col().key("saved-workspace-save-error").gap(8.0).child(
             text(state.workspace_save_error.clone())

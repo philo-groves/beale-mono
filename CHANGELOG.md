@@ -86,6 +86,9 @@
 
 #### Changed
 
+- Workspace tabs now distinguish Surfaces with a connected-node icon and Knowledge Base with a book icon.
+- Clicking empty space around a selected V2 surface closes its detail panel; clicking another surface switches the panel, while clicks inside it keep its controls available.
+- The V2 surface network shows each surface name beneath its circle and gives labels more space in the graph layout.
 - Replaced the three surface progress gates with a single outline colored from grey to red by update count, scaled to the most edited surface. Surfaces are optional at workspace creation and hidden from default model context; Rules remain available for general scope.
 - Assigned workspace-local `S1`, `S2`, … surface IDs through the app-server. Existing v3 manifests map old IDs and connections to short IDs on read and persist schema 5 on the next write; deleted numbers are not reused. Protocol v1.51 added optional surface definitions so older clients preserve fields they do not know.
 - Laid out the v2 workspace surface network by recorded connections, with related surfaces clustered and unconnected surfaces spread across rows.
@@ -180,6 +183,7 @@
 
 #### Fixed
 
+- Custom Instructions workspace imports now make up to two bounded correction attempts when a model draft fails validation. An in-scope surface without an explicit scope basis no longer inherits descendant authorization merely because the model set that flag; invalid references still fail validation.
 - Let v2 Custom Instructions imports continue past the former tool and round cutoffs. Import progress now uses the shared Quick Chat ribbon, bordered body, and rounded footer, omits final JSON from its transcript, and can be canceled from the panel.
 - Kept the selected saved session row active while its details load, preventing a temporary New Session row in the Home sidebar.
 - Kept v2 popup menus above the New Research composer when their bounds overlap.

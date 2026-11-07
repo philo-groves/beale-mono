@@ -2,6 +2,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use beale_contracts::v1::WorkspaceSurface;
 
+pub(crate) const NODE_LABEL_WIDTH: f32 = 112.0;
+
 /// Place related surfaces together before isolated surfaces.
 /// An absent relationship is not inferred from a surface's type or name.
 pub(crate) fn layout(surfaces: &[WorkspaceSurface], width: f32, height: f32) -> Vec<[f32; 2]> {
@@ -68,7 +70,8 @@ pub(crate) fn layout(surfaces: &[WorkspaceSurface], width: f32, height: f32) -> 
     let mut boxes = Vec::new();
     for members in groups {
         if members.len() == 1 {
-            boxes.push((88.0, 88.0, vec![(members[0], [44.0, 44.0])]));
+            let size = NODE_LABEL_WIDTH + 16.0;
+            boxes.push((size, size, vec![(members[0], [size / 2.0, size / 2.0])]));
             continue;
         }
         let hub = *members
@@ -96,14 +99,15 @@ pub(crate) fn layout(surfaces: &[WorkspaceSurface], width: f32, height: f32) -> 
                 .filter(|&index| distances[index] == ring)
                 .collect();
             ring_members.sort_by(|&left, &right| surfaces[left].id.cmp(&surfaces[right].id));
-            radius = (radius + 68.0).max(ring_members.len() as f32 * 48.0 / std::f32::consts::TAU);
+            radius = (radius + 68.0)
+                .max(ring_members.len() as f32 * NODE_LABEL_WIDTH / std::f32::consts::TAU);
             for (slot, index) in ring_members.iter().enumerate() {
                 let angle = -std::f32::consts::FRAC_PI_2
                     + std::f32::consts::TAU * slot as f32 / ring_members.len() as f32;
                 points.push((*index, [radius * angle.cos(), radius * angle.sin()]));
             }
         }
-        let size = 2.0 * (radius + 28.0);
+        let size = 2.0 * (radius + NODE_LABEL_WIDTH / 2.0 + 4.0);
         boxes.push((
             size,
             size,
