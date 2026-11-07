@@ -6,6 +6,7 @@
 
 #### Added
 
+- Added an empty app-global Canvas in the V2 desktop. A rounded rectangle and plus button beside the window controls toggles the right pane, with outline and filled states; it stays open while changing views and shares the window width with the main content.
 - Added the optional V2 Runbooks feature, disabled by default, with workspace-owned, revisioned Markdown and per-cell multi-language code documents. Four model tools create, edit, get, and query runbooks; authenticated read routes expose the shared JSON contract. App-server SQLite schema 32 and protocol v1.54 add the storage and client boundary. Runbook execution is not available in this first slice.
 - Added the optional V2 Knowledge Base feature with workspace-owned memories, leads, and evidence-gated observed findings. One search and detail path covers both record kinds; short IDs, revision history, links, duplicate relationships, and host-validated read/bash evidence keep reusable context distinct from security claims. Host database schema 31 and protocol v1.53 add the storage and JSON client contract. Reproduced and verified stages remain unavailable until Knowledge owns a qualifying verifier.
 - Added the optional Surfaces feature, disabled by default, with four model tools for adding, editing, getting, and querying workspace surfaces. The app-server records timestamped revisions with before and after values and retains deleted surface lineage in schema 5; protocol v1.52 exposes this history.
@@ -184,6 +185,7 @@
 
 #### Fixed
 
+- Kept the V2 Canvas visible on workspace surface diagrams by removing diagram sizing from the surrounding row. Dragged nodes and connections are clipped beneath the Home sidenav and Canvas.
 - Custom Instructions workspace imports now make up to two bounded correction attempts when a model draft fails validation. An in-scope surface without an explicit scope basis no longer inherits descendant authorization merely because the model set that flag; invalid references still fail validation.
 - Let v2 Custom Instructions imports continue past the former tool and round cutoffs. Import progress now uses the shared Quick Chat ribbon, bordered body, and rounded footer, omits final JSON from its transcript, and can be canceled from the panel.
 - Kept the selected saved session row active while its details load, preventing a temporary New Session row in the Home sidebar.
