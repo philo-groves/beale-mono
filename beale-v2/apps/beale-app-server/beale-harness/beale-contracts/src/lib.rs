@@ -1,6 +1,7 @@
 //! Versioned client-to-host wire contracts. No host-only types belong here.
 
 pub mod knowledge;
+pub mod runbooks;
 
 pub mod v1 {
     /// `proto/beale/v1/host.proto` is the source wire schema. Field tags and
@@ -1266,7 +1267,7 @@ pub mod v1 {
 }
 
 pub const PROTOCOL_MAJOR: u32 = 1;
-pub const PROTOCOL_MINOR: u32 = 53;
+pub const PROTOCOL_MINOR: u32 = 54;
 pub const SERVICE_NAME: &str = "beale-app-server";
 pub const HEALTH_PATH: &str = "/v1/health";
 pub const AUTH_STATUS_PATH: &str = "/v1/providers/status";

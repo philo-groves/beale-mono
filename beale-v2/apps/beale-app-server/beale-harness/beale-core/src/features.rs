@@ -81,6 +81,15 @@ fn feature_specs() -> Vec<FeatureSpec> {
             tool_count: beale_knowledge::TOOL_COUNT,
             prompt_extension: beale_knowledge::PROMPT_EXTENSION,
         },
+        #[cfg(feature = "runbooks")]
+        FeatureSpec {
+            id: beale_runbooks::FEATURE_ID,
+            name: beale_runbooks::FEATURE_NAME,
+            description: beale_runbooks::FEATURE_DESCRIPTION,
+            has_prompt_extension: beale_runbooks::HAS_PROMPT_EXTENSION,
+            tool_count: beale_runbooks::TOOL_COUNT,
+            prompt_extension: beale_runbooks::PROMPT_EXTENSION,
+        },
     ]
 }
 

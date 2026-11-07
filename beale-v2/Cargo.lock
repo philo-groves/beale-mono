@@ -224,6 +224,7 @@ dependencies = [
  "beale-graphs",
  "beale-knowledge",
  "beale-providers",
+ "beale-runbooks",
  "beale-safety",
  "beale-sessions",
  "beale-storage",
@@ -244,6 +245,7 @@ dependencies = [
  "beale-contracts",
  "beale-graphs",
  "beale-knowledge",
+ "beale-runbooks",
  "beale-surfaces",
  "beale-tracking",
  "chrono",
@@ -351,6 +353,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "beale-runbooks"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "beale-contracts",
+ "beale-storage",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower",
+ "uuid",
+]
+
+[[package]]
 name = "beale-safety"
 version = "0.1.0"
 dependencies = [
@@ -378,6 +395,7 @@ dependencies = [
  "beale-graphs",
  "beale-knowledge",
  "beale-providers",
+ "beale-runbooks",
  "beale-safety",
  "beale-storage",
  "beale-surfaces",

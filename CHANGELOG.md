@@ -6,6 +6,7 @@
 
 #### Added
 
+- Added the optional V2 Runbooks feature, disabled by default, with workspace-owned, revisioned Markdown and per-cell multi-language code documents. Four model tools create, edit, get, and query runbooks; authenticated read routes expose the shared JSON contract. App-server SQLite schema 32 and protocol v1.54 add the storage and client boundary. Runbook execution is not available in this first slice.
 - Added the optional V2 Knowledge Base feature with workspace-owned memories, leads, and evidence-gated observed findings. One search and detail path covers both record kinds; short IDs, revision history, links, duplicate relationships, and host-validated read/bash evidence keep reusable context distinct from security claims. Host database schema 31 and protocol v1.53 add the storage and JSON client contract. Reproduced and verified stages remain unavailable until Knowledge owns a qualifying verifier.
 - Added the optional Surfaces feature, disabled by default, with four model tools for adding, editing, getting, and querying workspace surfaces. The app-server records timestamped revisions with before and after values and retains deleted surface lineage in schema 5; protocol v1.52 exposes this history.
 - Expanded v2 surface definitions with validated specific types, typed locators, names, parent links, descriptions, scope basis, provenance, and typed connections. Custom Instructions imports carry this context through workspace creation; selected nodes and session context display it with its source.

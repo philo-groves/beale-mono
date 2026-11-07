@@ -9,6 +9,7 @@ use std::{
 };
 
 mod knowledge;
+mod runbooks;
 
 pub use knowledge::EvidenceInput;
 
@@ -332,7 +333,7 @@ impl HostDatabase {
         connection.busy_timeout(Duration::from_secs(5))?;
         connection.execute_batch("PRAGMA foreign_keys = ON;")?;
         let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version > 31 {
+        if version > 32 {
             bail!("unsupported host database schema version {version}");
         }
         connection.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;")?;
@@ -801,6 +802,40 @@ impl HostDatabase {
         }
         if version < 31 {
             knowledge::migrate_revisions(&mut connection)?;
+        }
+        if version < 32 {
+            connection.execute_batch(
+                "BEGIN IMMEDIATE;
+                 CREATE TABLE IF NOT EXISTS runbook_counters (
+                     workspace_id TEXT PRIMARY KEY,
+                     next_id INTEGER NOT NULL DEFAULT 1
+                 );
+                 CREATE TABLE IF NOT EXISTS runbook_documents (
+                     workspace_id TEXT NOT NULL,
+                     id TEXT NOT NULL,
+                     title TEXT NOT NULL,
+                     purpose TEXT NOT NULL,
+                     updated_at_ms INTEGER NOT NULL,
+                     revision INTEGER NOT NULL,
+                     document_json TEXT NOT NULL,
+                     PRIMARY KEY(workspace_id,id)
+                 );
+                 CREATE INDEX IF NOT EXISTS runbook_documents_workspace_updated
+                     ON runbook_documents(workspace_id,updated_at_ms DESC,id);
+                 CREATE TABLE IF NOT EXISTS runbook_revisions (
+                     workspace_id TEXT NOT NULL,
+                     runbook_id TEXT NOT NULL,
+                     number INTEGER NOT NULL,
+                     at_ms INTEGER NOT NULL,
+                     actor TEXT NOT NULL,
+                     session_id TEXT NOT NULL,
+                     reason TEXT NOT NULL,
+                     document_json TEXT NOT NULL,
+                     PRIMARY KEY(workspace_id,runbook_id,number)
+                 );
+                 PRAGMA user_version = 32;
+                 COMMIT;",
+            )?;
         }
         Ok(Self(Arc::new(Mutex::new(connection))))
     }
@@ -2888,7 +2923,7 @@ mod tests {
         drop(db);
         let connection = Connection::open(root.join("state.sqlite")).unwrap();
         connection
-            .execute_batch("PRAGMA user_version = 32;")
+            .execute_batch("PRAGMA user_version = 33;")
             .unwrap();
         drop(connection);
         assert!(HostDatabase::open(&root).is_err());
@@ -2896,7 +2931,7 @@ mod tests {
         let version: i64 = connection
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 32);
+        assert_eq!(version, 33);
         drop(connection);
         std::fs::remove_dir_all(root).unwrap();
     }

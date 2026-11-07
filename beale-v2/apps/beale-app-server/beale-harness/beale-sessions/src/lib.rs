@@ -80,6 +80,19 @@ fn knowledge_feature_enabled(_db: &HostDatabase, _workspace_id: &str) -> Result<
     Ok(false)
 }
 
+#[cfg(feature = "runbooks")]
+fn runbook_feature_enabled(db: &HostDatabase, workspace_id: &str) -> Result<bool, StatusCode> {
+    db.feature_enabled(beale_runbooks::FEATURE_ID)
+        .and_then(|enabled| {
+            if enabled {
+                db.extension_applies_to("feature", beale_runbooks::FEATURE_ID, workspace_id)
+            } else {
+                Ok(false)
+            }
+        })
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
 fn surface_relationship_lines(surfaces: &[WorkspaceSurface]) -> Vec<String> {
     let names: HashMap<_, _> = surfaces
         .iter()
@@ -1286,6 +1299,8 @@ async fn run_one_turn(
     let workspace_details = state.workspaces.details_for_host(&request.workspace_id)?;
     let surface_tools_enabled = surface_feature_enabled(&state.db, &request.workspace_id)?;
     let knowledge_tools_enabled = knowledge_feature_enabled(&state.db, &request.workspace_id)?;
+    #[cfg(feature = "runbooks")]
+    let runbook_tools_enabled = runbook_feature_enabled(&state.db, &request.workspace_id)?;
     #[cfg(not(feature = "knowledge"))]
     let _ = knowledge_tools_enabled;
     let surfaces_context = if surface_tools_enabled {
@@ -1401,6 +1416,10 @@ async fn run_one_turn(
     if knowledge_tools_enabled {
         sections.push(beale_knowledge::PROMPT_EXTENSION);
     }
+    #[cfg(feature = "runbooks")]
+    if runbook_tools_enabled {
+        sections.push(beale_runbooks::PROMPT_EXTENSION);
+    }
     #[cfg(not(feature = "graphs"))]
     let _ = &mut sections;
     let system = system_prompt::load(state.workspaces.root(), &sections).map_err(|error| {
@@ -1424,14 +1443,16 @@ async fn run_one_turn(
         feature = "goal-mode",
         feature = "graphs",
         feature = "surfaces",
-        feature = "knowledge"
+        feature = "knowledge",
+        feature = "runbooks"
     ))]
     let mut definitions = definitions();
     #[cfg(not(any(
         feature = "goal-mode",
         feature = "graphs",
         feature = "surfaces",
-        feature = "knowledge"
+        feature = "knowledge",
+        feature = "runbooks"
     )))]
     let definitions = definitions();
     #[cfg(feature = "surfaces")]
@@ -1441,6 +1462,10 @@ async fn run_one_turn(
     #[cfg(feature = "knowledge")]
     if knowledge_tools_enabled {
         definitions.extend(beale_knowledge::definitions());
+    }
+    #[cfg(feature = "runbooks")]
+    if runbook_tools_enabled {
+        definitions.extend(beale_runbooks::definitions());
     }
     #[cfg(feature = "goal-mode")]
     if goal_active {
@@ -1653,6 +1678,8 @@ async fn run_one_turn(
                     || call.name.starts_with("finding_"))
             {
                 format!("{} knowledge", call.name.replace('_', " "))
+            } else if cfg!(feature = "runbooks") && call.name.starts_with("runbook_") {
+                format!("{} runbook", call.name.trim_start_matches("runbook_"))
             } else if cfg!(feature = "graphs") && call.name == "graph_delegate" {
                 "Delegate to graph subagents".to_owned()
             } else {
@@ -1679,6 +1706,19 @@ async fn run_one_turn(
             #[cfg(feature = "graphs")]
             let mut child_tools = Vec::<ToolCallRow>::new();
             let (output, is_error) = match args {
+                #[cfg(feature = "runbooks")]
+                Ok(args) if runbook_tools_enabled && beale_runbooks::is_tool(&call.name) => {
+                    match beale_runbooks::execute(
+                        &state.db,
+                        &request.workspace_id,
+                        &session.id,
+                        &call.name,
+                        &args,
+                    ) {
+                        Ok(value) => (value, false),
+                        Err(error) => (format!("Runbook tool error: {error}"), true),
+                    }
+                }
                 #[cfg(feature = "knowledge")]
                 Ok(args) if knowledge_tools_enabled && beale_knowledge::is_tool(&call.name) => {
                     let pending = tool_rows

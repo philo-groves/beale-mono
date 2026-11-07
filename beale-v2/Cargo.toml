@@ -14,6 +14,7 @@ members = [
     "extensions/features/beale-goals",
     "extensions/features/beale-graphs",
     "extensions/features/beale-knowledge",
+    "extensions/features/beale-runbooks",
     "extensions/features/beale-surfaces",
     "extensions/features/beale-tracking",
 ]

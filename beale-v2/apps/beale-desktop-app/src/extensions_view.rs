@@ -189,6 +189,15 @@ pub(crate) fn bundled_features() -> Vec<FeatureEntry> {
         workspace_ids: Vec::new(),
         all_workspaces: true,
     }, FeatureEntry {
+        id: beale_runbooks::FEATURE_ID.to_owned(),
+        name: beale_runbooks::FEATURE_NAME.to_owned(),
+        description: beale_runbooks::FEATURE_DESCRIPTION.to_owned(),
+        enabled: false,
+        has_prompt_extension: true,
+        tool_count: beale_runbooks::TOOL_COUNT as usize,
+        workspace_ids: Vec::new(),
+        all_workspaces: true,
+    }, FeatureEntry {
         id: beale_tracking::FEATURE_ID.to_owned(),
         name: beale_tracking::FEATURE_NAME.to_owned(),
         description: beale_tracking::FEATURE_DESCRIPTION.to_owned(),
@@ -2183,18 +2192,19 @@ mod tests {
             features: bundled_features(),
             ..State::default()
         };
+        let total = state.features.len();
         assert_eq!(state.feature_tab, FeatureTab::All);
-        assert_eq!(feature_rows(&state).count(), 6);
+        assert_eq!(feature_rows(&state).count(), total);
         state.feature_tab = FeatureTab::Available;
-        assert_eq!(feature_rows(&state).count(), 6);
+        assert_eq!(feature_rows(&state).count(), total);
         state.feature_tab = FeatureTab::Enabled;
         assert_eq!(feature_rows(&state).count(), 0);
         state.features[0].enabled = true;
         assert_eq!(feature_rows(&state).count(), 1);
         state.feature_tab = FeatureTab::Available;
-        assert_eq!(feature_rows(&state).count(), 5);
+        assert_eq!(feature_rows(&state).count(), total - 1);
         state.feature_tab = FeatureTab::All;
-        assert_eq!(feature_rows(&state).count(), 6);
+        assert_eq!(feature_rows(&state).count(), total);
     }
 
     #[test]
