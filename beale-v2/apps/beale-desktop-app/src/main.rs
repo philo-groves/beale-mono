@@ -1,7 +1,7 @@
 use rune::tok::TextStyle;
 use rune::{
     Align, AppSpec, Color, Cursor, Cx, Drag, El, Icon, Key, KeyEvent, Phase, ScrollSpec, Side,
-    TextEdit, Tx, col, el, icon, row, text, text_input,
+    TextEdit, Transition, Tx, col, el, icon, row, text, text_input,
 };
 use std::time::{Duration, Instant};
 
@@ -30,6 +30,7 @@ mod provider_icons;
 mod provider_models;
 mod provider_usage;
 mod quick_chat;
+mod session_sidenav;
 mod sessions;
 mod settings_scroll;
 mod tracking_view;
@@ -622,6 +623,13 @@ struct State {
     session_generation: u64,
     session_live_events: Vec<SessionStreamEvent>,
     session_elapsed_ms: u64,
+    session_turn_started: Option<Instant>,
+    session_sidenav_visible: bool,
+    session_sidenav_triggered: bool,
+    session_usage_menu: Option<session_sidenav::UsageMenu>,
+    session_usage_row_hovered: Option<session_sidenav::UsageMenu>,
+    session_usage_popup_hovered: bool,
+    session_usage_snapshot_index: usize,
     session_work_expanded: std::collections::HashSet<usize>,
     expanded_tool_id: Option<String>,
     tool_detail: Option<SessionToolDetailPage>,
@@ -849,6 +857,13 @@ impl Default for State {
             session_generation: 0,
             session_live_events: Vec::new(),
             session_elapsed_ms: 0,
+            session_turn_started: None,
+            session_sidenav_visible: false,
+            session_sidenav_triggered: false,
+            session_usage_menu: None,
+            session_usage_row_hovered: None,
+            session_usage_popup_hovered: false,
+            session_usage_snapshot_index: 0,
             session_work_expanded: std::collections::HashSet::new(),
             expanded_tool_id: None,
             tool_detail: None,
@@ -1310,6 +1325,13 @@ impl State {
         self.clear_tool_detail();
         self.session_live_events.clear();
         self.session_elapsed_ms = 0;
+        self.session_turn_started = None;
+        self.session_sidenav_visible = false;
+        self.session_sidenav_triggered = false;
+        self.session_usage_menu = None;
+        self.session_usage_row_hovered = None;
+        self.session_usage_popup_hovered = false;
+        self.session_usage_snapshot_index = 0;
         self.session_work_expanded.clear();
         let had_session = self.active_session.take().is_some();
         let was_loading = self.session_loading_id.take().is_some();
@@ -1346,8 +1368,11 @@ impl State {
             return;
         }
         self.session_busy = false;
+        self.session_turn_started = None;
+        self.session_elapsed_ms = 0;
         match result {
             Ok(detail) => {
+                self.open_session_sidenav_for_activity(&detail);
                 self.clear_tool_detail();
                 self.session_live_events.clear();
                 if let Some(summary) = &detail.summary {
@@ -1376,8 +1401,13 @@ impl State {
         self.session_busy = false;
         self.session_live_events.clear();
         self.session_work_expanded.clear();
+        self.session_usage_menu = None;
+        self.session_usage_row_hovered = None;
+        self.session_usage_popup_hovered = false;
+        self.session_usage_snapshot_index = 0;
         match result {
             Ok(detail) => {
+                self.open_session_sidenav_for_activity(&detail);
                 self.clear_tool_detail();
                 if let Some(summary) = &detail.summary {
                     self.new_research_workspace_id = Some(summary.workspace_id.clone());
@@ -1417,8 +1447,13 @@ impl State {
                     self.session_live_events.push(event);
                 }
             }
-            Ok(SessionStreamKind::ToolStarted) => self.session_live_events.push(event),
+            Ok(SessionStreamKind::ToolStarted) => {
+                self.session_live_events.push(event);
+            }
             Ok(SessionStreamKind::ToolFinished) => {
+                if session_sidenav::campaign_activity_event(&event) {
+                    self.activate_session_sidenav();
+                }
                 if let Some(tool) = event.tool
                     && let Some(existing) =
                         self.session_live_events.iter_mut().rev().find(|item| {
@@ -1429,12 +1464,15 @@ impl State {
                     existing.tool = Some(tool);
                 }
             }
+            Ok(SessionStreamKind::SubagentsSpawned) => self.activate_session_sidenav(),
             Ok(SessionStreamKind::TurnCompleted) => {
                 if let Some(detail) = event.detail {
                     self.clear_tool_detail();
                     self.session_live_events.clear();
                     self.session_elapsed_ms = 0;
+                    self.session_turn_started = Some(Instant::now());
                     self.session_pending_prompt = None;
+                    self.open_session_sidenav_for_activity(&detail);
                     if let Some(summary) = &detail.summary {
                         self.session_summaries.retain(|item| item.id != summary.id);
                         self.session_summaries.insert(0, summary.clone());
@@ -1444,6 +1482,21 @@ impl State {
                 }
             }
             _ => {}
+        }
+    }
+
+    fn activate_session_sidenav(&mut self) {
+        if !self.session_sidenav_triggered {
+            self.session_sidenav_triggered = true;
+            if !self.canvas_open {
+                self.session_sidenav_visible = true;
+            }
+        }
+    }
+
+    fn open_session_sidenav_for_activity(&mut self, detail: &SessionDetail) {
+        if session_sidenav::has_campaign_activity(detail) {
+            self.activate_session_sidenav();
         }
     }
 
@@ -1983,6 +2036,7 @@ fn start_session_turn(state: &mut State) {
     state.session_error.clear();
     state.session_live_events.clear();
     state.session_elapsed_ms = 0;
+    state.session_turn_started = Some(Instant::now());
     state.session_pending_prompt = Some(prompt);
     state.new_research_prompt.clear();
     state.session_input_history.reset();
@@ -1990,16 +2044,16 @@ fn start_session_turn(state: &mut State) {
     let timer_handle = handle.clone();
     let timer_flag = timer_running.clone();
     std::thread::spawn(move || {
-        let started = Instant::now();
         while timer_flag.load(std::sync::atomic::Ordering::Relaxed) {
             std::thread::sleep(Duration::from_secs(1));
             if !timer_flag.load(std::sync::atomic::Ordering::Relaxed) {
                 break;
             }
-            let elapsed = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
             timer_handle.update(move |state, _| {
                 if state.session_generation == generation && state.session_busy {
-                    state.session_elapsed_ms = elapsed;
+                    state.session_elapsed_ms = state.session_turn_started.map_or(0, |started| {
+                        started.elapsed().as_millis().min(u64::MAX as u128) as u64
+                    });
                 }
             });
         }
@@ -2042,6 +2096,14 @@ fn start_session_load(state: &mut State, id: String) {
     let generation = state.session_generation;
     state.session_loading_id = Some(id.clone());
     state.session_busy = true;
+    state.session_sidenav_visible = false;
+    state.session_sidenav_triggered = false;
+    state.session_usage_menu = None;
+    state.session_usage_row_hovered = None;
+    state.session_usage_popup_hovered = false;
+    state.session_usage_snapshot_index = 0;
+    state.session_turn_started = None;
+    state.session_elapsed_ms = 0;
     state.session_error.clear();
     state.session_pending_prompt = None;
     state.new_research_workspace_id = state
@@ -3527,9 +3589,45 @@ fn canvas_toggle(open: bool, theme: ThemeStyle<'_>) -> El {
         .center()
         .hover(color("#303030"))
         .child(icon(if open { &CANVAS_FILLED } else { &CANVAS }, 17.0).color(color("#c8c8c8")))
-        .on_press_tx(|state: &mut State, tx| {
-            tx.instant();
+        .on_press(|state: &mut State| {
             state.canvas_open = !state.canvas_open;
+            if state.canvas_open {
+                state.session_sidenav_visible = false;
+                state.session_usage_menu = None;
+                state.session_usage_row_hovered = None;
+                state.session_usage_popup_hovered = false;
+            }
+        })
+}
+
+fn in_session(state: &State) -> bool {
+    state.primary_view == PrimaryView::NewResearch
+        && (state.active_session.is_some() || state.session_pending_prompt.is_some())
+}
+
+fn session_sidenav_toggle(open: bool, theme: ThemeStyle<'_>) -> El {
+    let label = if open {
+        "Close Session Sidebar"
+    } else {
+        "Open Session Sidebar"
+    };
+    el().key("header-session-sidenav-toggle")
+        .role("button")
+        .label(label)
+        .help(label)
+        .size(44.0, 38.0)
+        .center()
+        .hover(theme.color("#303030"))
+        .child(icon(&SESSION_SIDENAV, 17.0).color(theme.color("#c8c8c8")))
+        .on_press(|state: &mut State| {
+            state.session_sidenav_visible = !state.session_sidenav_visible;
+            if state.session_sidenav_visible {
+                state.canvas_open = false;
+            } else {
+                state.session_usage_menu = None;
+                state.session_usage_row_hovered = None;
+                state.session_usage_popup_hovered = false;
+            }
         })
 }
 
@@ -3713,8 +3811,11 @@ fn header(state: &State, prefix_width: f32) -> El {
         .center_y()
         .window_drag()
         .child(el().w(prefix_width).h_full().child(left))
-        .child(title_area)
-        .child(canvas_toggle(state.canvas_open, theme));
+        .child(title_area);
+    if in_session(state) {
+        bar = bar.child(session_sidenav_toggle(state.session_sidenav_visible, theme));
+    }
+    bar = bar.child(canvas_toggle(state.canvas_open, theme));
     if cfg!(target_os = "windows") {
         bar = bar.child(
             row()
@@ -5491,7 +5592,11 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
         .h_full()
         .radius(16.0)
         .clip_rounded(16.0)
-        .fill(color("#111111"));
+        .fill(color(if state.primary_view == PrimaryView::NewResearch {
+            CONTENT_SURFACE_COLOR
+        } else {
+            "#111111"
+        }));
     if state.sidenav_visible && state.primary_view != PrimaryView::Tracking {
         settings_surface = settings_surface
             .child(match state.primary_view {
@@ -5609,6 +5714,30 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
             .child(scroll_bar.bar(theme));
     }
     settings_surface = settings_surface.child(main_content);
+    if in_session(state) && state.session_sidenav_visible && !state.canvas_open {
+        settings_surface = settings_surface.child(
+            col()
+                .key("session-sidenav-slot")
+                .w(session_sidenav::WIDTH + session_sidenav::INSET)
+                .h_full()
+                .pt(session_sidenav::INSET)
+                .pr(session_sidenav::INSET)
+                .transition(
+                    Transition::offset(session_sidenav::WIDTH + session_sidenav::INSET, 0.0)
+                        .combined(Transition::opacity()),
+                )
+                .child(session_sidenav::render(
+                    state.active_session.as_ref(),
+                    if state.session_busy {
+                        state.session_elapsed_ms
+                    } else {
+                        0
+                    },
+                    state.session_usage_menu,
+                    theme,
+                )),
+        );
+    }
     if state.canvas_open {
         let window_width = cx.layout_size("app-surface").map_or(1040.0, |size| size[0]);
         let sidenav_width = if state.sidenav_visible && state.primary_view != PrimaryView::Tracking
@@ -5617,21 +5746,28 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
         } else {
             0.0
         };
-        settings_surface = settings_surface
-            .child(
-                el().key("canvas-divider")
-                    .w(1.0)
-                    .h_full()
-                    .fill(color("#2a2a2a")),
-            )
-            .child(
-                el().key("canvas")
-                    .role("region")
-                    .label("Canvas")
-                    .w(canvas_width(window_width, sidenav_width))
-                    .h_full()
-                    .fill(color(CONTENT_SURFACE_COLOR)),
-            );
+        let width = canvas_width(window_width, sidenav_width);
+        settings_surface = settings_surface.child(
+            row()
+                .key("canvas-panel")
+                .w(width + 1.0)
+                .h_full()
+                .transition(Transition::offset(width + 1.0, 0.0).combined(Transition::opacity()))
+                .child(
+                    el().key("canvas-divider")
+                        .w(1.0)
+                        .h_full()
+                        .fill(color("#2a2a2a")),
+                )
+                .child(
+                    el().key("canvas")
+                        .role("region")
+                        .label("Canvas")
+                        .w(width)
+                        .h_full()
+                        .fill(color(CONTENT_SURFACE_COLOR)),
+                ),
+        );
     }
     if state.sidenav_visible {
         settings_surface = settings_surface.child(sidenav_resize_handle(state.sidenav_width));
@@ -5976,6 +6112,18 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
     }
     if state.primary_view == PrimaryView::NewResearch && state.composer_menu_open {
         window = window.child(new_research::model_menu(state, theme));
+    }
+    if in_session(state)
+        && state.session_sidenav_visible
+        && !state.canvas_open
+        && let Some(menu) = state.session_usage_menu
+    {
+        window = window.child(session_sidenav::popup(
+            state.active_session.as_ref(),
+            menu,
+            state.session_usage_snapshot_index,
+            theme,
+        ));
     }
     if state.primary_view == PrimaryView::NewResearch
         && state.active_session.is_none()
@@ -8778,6 +8926,10 @@ mod tests {
             graph_id: String::new(),
             graph_models: vec![],
             graph_node_concurrency: vec![],
+            total_duration_ms: 0,
+            has_campaign_activity: false,
+            token_usage: None,
+            usage_snapshots: Vec::new(),
         };
         state.apply_session_progress(
             1,
@@ -8974,6 +9126,10 @@ mod tests {
             graph_id: String::new(),
             graph_models: vec![],
             graph_node_concurrency: vec![],
+            total_duration_ms: 1_234,
+            has_campaign_activity: false,
+            token_usage: None,
+            usage_snapshots: Vec::new(),
         };
         state.finish_session_turn(1, Ok(detail));
         assert_eq!(state.primary_view, PrimaryView::NewResearch);
@@ -9083,6 +9239,10 @@ mod tests {
                     graph_id: String::new(),
                     graph_models: vec![],
                     graph_node_concurrency: vec![],
+                    total_duration_ms: 0,
+                    has_campaign_activity: false,
+                    token_usage: None,
+                    usage_snapshots: Vec::new(),
                 }),
                 ..State::default()
             },
@@ -9195,6 +9355,10 @@ mod tests {
                 graph_id: String::new(),
                 graph_models: vec![],
                 graph_node_concurrency: vec![],
+                total_duration_ms: 1_000,
+                has_campaign_activity: false,
+                token_usage: None,
+                usage_snapshots: Vec::new(),
             }),
             session_busy: true,
             session_live_events: vec![SessionStreamEvent {
@@ -9258,6 +9422,10 @@ mod tests {
                 graph_id: String::new(),
                 graph_models: vec![],
                 graph_node_concurrency: vec![],
+                total_duration_ms: 0,
+                has_campaign_activity: false,
+                token_usage: None,
+                usage_snapshots: Vec::new(),
             }),
             ..State::default()
         };
@@ -9324,6 +9492,10 @@ mod tests {
                 graph_id: String::new(),
                 graph_models: vec![],
                 graph_node_concurrency: vec![],
+                total_duration_ms: 2_345,
+                has_campaign_activity: false,
+                token_usage: None,
+                usage_snapshots: Vec::new(),
             }),
             ..State::default()
         };
@@ -10680,6 +10852,395 @@ mod tests {
     }
 
     #[test]
+    fn completed_session_period_restarts_live_counter_without_double_counting() {
+        let mut state = State {
+            session_generation: 1,
+            session_busy: true,
+            session_elapsed_ms: 10_000,
+            session_turn_started: Some(Instant::now() - Duration::from_secs(10)),
+            ..State::default()
+        };
+        state.apply_session_progress(
+            1,
+            SessionStreamEvent {
+                kind: SessionStreamKind::TurnCompleted as i32,
+                detail: Some(SessionDetail {
+                    total_duration_ms: 7_000,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        );
+        assert_eq!(state.session_elapsed_ms, 0);
+        assert!(state.session_turn_started.unwrap().elapsed() < Duration::from_secs(1));
+        assert_eq!(
+            session_sidenav::duration_ms(
+                state.active_session.as_ref().unwrap(),
+                state.session_elapsed_ms
+            ),
+            7_000
+        );
+    }
+
+    #[test]
+    fn subagent_spawn_event_opens_session_sidenav() {
+        let mut state = State {
+            session_generation: 1,
+            session_busy: true,
+            ..State::default()
+        };
+        state.apply_session_progress(
+            1,
+            SessionStreamEvent {
+                kind: SessionStreamKind::SubagentsSpawned as i32,
+                ..Default::default()
+            },
+        );
+        assert!(state.session_sidenav_visible);
+        assert!(state.session_sidenav_triggered);
+    }
+
+    #[test]
+    fn session_sidenav_opens_on_activity_and_closes_for_canvas() {
+        use beale_contracts::v1::{SessionMessage, SessionRole, SessionToolSummary};
+
+        let detail = SessionDetail {
+            summary: Some(SessionSummary {
+                id: uuid::Uuid::from_u128(1).to_string(),
+                workspace_id: uuid::Uuid::from_u128(2).to_string(),
+                title: "Example session".to_owned(),
+                last_message_at_ms: 1,
+            }),
+            messages: vec![SessionMessage {
+                role: SessionRole::Assistant as i32,
+                text: "Example response".to_owned(),
+                ..Default::default()
+            }],
+            total_duration_ms: 12_000,
+            ..Default::default()
+        };
+        let mut runtime = Runtime::new(
+            State {
+                primary_view: PrimaryView::NewResearch,
+                active_session: Some(detail.clone()),
+                session_busy: true,
+                session_generation: 1,
+                ..State::default()
+            },
+            view,
+            (1200.0, 800.0),
+            Env::new(true, 1.0),
+        );
+        runtime.frame(0.0);
+        assert!(runtime.find("header-session-sidenav-toggle").is_some());
+        assert!(runtime.find("session-sidenav").is_none());
+        let click = |runtime: &mut Runtime<State>, key: &str| {
+            let (x, y) = runtime.find(key).unwrap();
+            runtime.pointer_down(x, y);
+            runtime.pointer_up(x, y);
+            runtime.frame(0.0);
+        };
+        click(&mut runtime, "header-session-sidenav-toggle");
+        assert!(runtime.find("session-sidenav").is_some());
+        click(&mut runtime, "header-session-sidenav-toggle");
+        assert!(runtime.find("session-sidenav").is_none());
+        runtime.update(|state, _| {
+            state.apply_session_progress(
+                1,
+                SessionStreamEvent {
+                    kind: SessionStreamKind::ToolFinished as i32,
+                    tool: Some(SessionToolSummary {
+                        id: uuid::Uuid::from_u128(3).to_string(),
+                        name: "memory_create".to_owned(),
+                        summary: "Saved example memory".to_owned(),
+                        is_error: false,
+                    }),
+                    ..Default::default()
+                },
+            );
+        });
+        runtime.frame(0.0);
+        assert!(runtime.find("session-sidenav").is_some());
+        let (duration, _) = runtime.presented("session-sidenav-duration").unwrap();
+        assert!(duration[2] > 0.0);
+        click(&mut runtime, "header-canvas-toggle");
+        assert!(runtime.find("session-sidenav").is_none());
+        assert!(runtime.find("canvas").is_some());
+        click(&mut runtime, "header-canvas-toggle");
+        assert!(runtime.find("session-sidenav").is_none());
+        click(&mut runtime, "header-session-sidenav-toggle");
+        assert!(runtime.find("session-sidenav").is_some());
+        click(&mut runtime, "header-session-sidenav-toggle");
+        assert!(runtime.find("session-sidenav").is_none());
+        let mut narrow = Runtime::new(
+            State {
+                primary_view: PrimaryView::NewResearch,
+                active_session: Some(detail.clone()),
+                session_sidenav_visible: true,
+                ..State::default()
+            },
+            view,
+            (840.0, 600.0),
+            Env::new(true, 1.0),
+        );
+        narrow.frame(0.0);
+        let (content, _) = narrow.presented("content-surface").unwrap();
+        let (sidenav, _) = narrow.presented("session-sidenav").unwrap();
+        assert!(content[2] >= 160.0);
+        assert!(content[0] + content[2] <= sidenav[0] + 1.0);
+        runtime.update(|state, _| state.finish_session_turn(1, Ok(detail)));
+        runtime.frame(0.0);
+        assert!(runtime.find("session-sidenav").is_none());
+    }
+
+    #[test]
+    fn session_card_sizes_to_content_and_both_right_panels_slide_in() {
+        let mut session = Runtime::new(
+            State {
+                primary_view: PrimaryView::NewResearch,
+                active_session: Some(SessionDetail {
+                    token_usage: Some(beale_contracts::v1::SessionTokenUsage {
+                        input_tokens: 123_456,
+                        output_tokens: 7_890,
+                        measured_calls: 3,
+                        total_calls: 4,
+                        cache_read_tokens: 67_890,
+                        cache_input_tokens: 100_000,
+                        cache_measured_calls: 2,
+                    }),
+                    ..Default::default()
+                }),
+                ..State::default()
+            },
+            view,
+            (1200.0, 800.0),
+            Env::new(true, 1.0),
+        );
+        session.frame(0.0);
+        let (x, y) = session.find("header-session-sidenav-toggle").unwrap();
+        session.pointer_down(x, y);
+        session.pointer_up(x, y);
+        session.frame(0.0);
+        session.frame(0.06);
+        let entering = session
+            .elements()
+            .into_iter()
+            .find(|element| element.key.as_deref() == Some("session-sidenav-slot"))
+            .unwrap();
+        session.frame(2.0);
+        let settled = session
+            .elements()
+            .into_iter()
+            .find(|element| element.key.as_deref() == Some("session-sidenav-slot"))
+            .unwrap();
+        assert!(entering.rect[0] > settled.rect[0] + 10.0);
+        let (card, _) = session.presented("session-sidenav").unwrap();
+        let (surface, _) = session.presented("settings-surface").unwrap();
+        assert!(card[1] >= surface[1] + session_sidenav::INSET - 1.0);
+        assert!(card[3] >= 100.0 && card[3] < 220.0);
+        let (title, _) = session.presented("session-sidenav-title").unwrap();
+        let (tokens, _) = session.presented("session-sidenav-tokens").unwrap();
+        let space_above_title = title[1] - card[1];
+        let space_below_title = tokens[1] - (title[1] + title[3]);
+        assert!((space_above_title - space_below_title).abs() < 5.0);
+        for (primary, stats) in [
+            ("session-sidenav-tokens", "session-sidenav-token-stats"),
+            ("session-sidenav-cache-rate", "session-sidenav-cache-stats"),
+        ] {
+            let (left, _) = session.presented(primary).unwrap();
+            let (right, _) = session.presented(stats).unwrap();
+            assert!(left[0] + left[2] < right[0]);
+            assert!((left[1] - right[1]).abs() < 4.0);
+        }
+        for (key, expected) in [
+            ("session-sidenav-tokens", "131.3k Tokens"),
+            ("session-sidenav-token-stats", "123.5k in, 7.9k out"),
+            ("session-sidenav-cache-rate", "67.9% Hit Rate"),
+            ("session-sidenav-cache-stats", "67.9k Cached"),
+        ] {
+            assert_eq!(
+                session
+                    .elements()
+                    .into_iter()
+                    .find(|element| element.key.as_deref() == Some(key))
+                    .and_then(|element| element.text)
+                    .as_deref(),
+                Some(expected)
+            );
+        }
+        assert!(card[1] + card[3] < surface[1] + surface[3] - 40.0);
+        session.pointer_down(x, y);
+        session.pointer_up(x, y);
+        session.frame(0.0);
+        session.frame(0.06);
+        let leaving = session
+            .elements()
+            .into_iter()
+            .find(|element| element.key.as_deref() == Some("session-sidenav-slot"))
+            .unwrap();
+        assert!(leaving.rect[0] > settled.rect[0] + 10.0);
+
+        let mut canvas = Runtime::new(State::default(), view, (1200.0, 800.0), Env::new(true, 1.0));
+        canvas.frame(0.0);
+        let (x, y) = canvas.find("header-canvas-toggle").unwrap();
+        canvas.pointer_down(x, y);
+        canvas.pointer_up(x, y);
+        canvas.frame(0.0);
+        canvas.frame(0.06);
+        let entering = canvas
+            .elements()
+            .into_iter()
+            .find(|element| element.key.as_deref() == Some("canvas-panel"))
+            .unwrap();
+        canvas.frame(2.0);
+        let settled = canvas
+            .elements()
+            .into_iter()
+            .find(|element| element.key.as_deref() == Some("canvas-panel"))
+            .unwrap();
+        assert!(entering.rect[0] > settled.rect[0] + 10.0);
+        canvas.pointer_down(x, y);
+        canvas.pointer_up(x, y);
+        canvas.frame(0.0);
+        canvas.frame(0.06);
+        let leaving = canvas
+            .elements()
+            .into_iter()
+            .find(|element| element.key.as_deref() == Some("canvas-panel"))
+            .unwrap();
+        assert!(leaving.rect[0] > settled.rect[0] + 10.0);
+    }
+
+    #[test]
+    fn session_usage_rows_hover_left_popouts_with_selectable_work_snapshots() {
+        use beale_contracts::v1::{SessionTokenUsage, SessionUsageSnapshot};
+        let detail = SessionDetail {
+            total_duration_ms: 600_000,
+            token_usage: Some(SessionTokenUsage {
+                input_tokens: 123_456,
+                output_tokens: 7_890,
+                measured_calls: 3,
+                total_calls: 4,
+                cache_read_tokens: 67_890,
+                cache_input_tokens: 100_000,
+                cache_measured_calls: 2,
+            }),
+            usage_snapshots: vec![
+                SessionUsageSnapshot {
+                    work_duration_ms: 0,
+                    ..Default::default()
+                },
+                SessionUsageSnapshot {
+                    work_duration_ms: 300_000,
+                    input_tokens: 50_000,
+                    output_tokens: 2_000,
+                    cache_read_tokens: 20_000,
+                    cache_input_tokens: 40_000,
+                    measured_calls: 1,
+                    total_calls: 1,
+                    cache_measured_calls: 1,
+                },
+                SessionUsageSnapshot {
+                    work_duration_ms: 600_000,
+                    input_tokens: 123_456,
+                    output_tokens: 7_890,
+                    cache_read_tokens: 67_890,
+                    cache_input_tokens: 100_000,
+                    measured_calls: 3,
+                    total_calls: 4,
+                    cache_measured_calls: 2,
+                },
+            ],
+            ..Default::default()
+        };
+        let mut runtime = Runtime::new(
+            State {
+                primary_view: PrimaryView::NewResearch,
+                active_session: Some(detail),
+                session_sidenav_visible: true,
+                ..State::default()
+            },
+            view,
+            (1200.0, 800.0),
+            Env::new(true, 1.0),
+        );
+        runtime.frame(0.0);
+        let (x, y) = runtime.find("session-sidenav-token-row").unwrap();
+        runtime.pointer_move(x, y);
+        runtime.frame(0.0);
+        runtime.frame(0.3);
+        assert_eq!(
+            runtime.state.session_usage_menu,
+            Some(session_sidenav::UsageMenu::Tokens)
+        );
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+        assert_eq!(
+            runtime.state.session_usage_menu,
+            Some(session_sidenav::UsageMenu::Tokens)
+        );
+        assert!(runtime.find("session-usage-token-chart").is_some());
+        let (popup, _) = runtime.presented("session-usage-popup").unwrap();
+        let (card, _) = runtime.presented("session-sidenav").unwrap();
+        assert!(
+            popup[0] + popup[2] <= card[0],
+            "popup={popup:?}, card={card:?}"
+        );
+        let (x, y) = runtime.find("session-usage-previous").unwrap();
+        assert!(runtime.contains("session-usage-previous", x, y));
+        runtime.pointer_move(x, y);
+        runtime.frame(0.01);
+        assert!(runtime.state.session_usage_popup_hovered);
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+        assert_eq!(runtime.state.session_usage_snapshot_index, 1);
+        assert!(runtime.elements().into_iter().any(|element| {
+            element.key.as_deref() == Some("session-usage-selected-work")
+                && element.text.as_deref() == Some("5:00 work")
+        }));
+        let (x, y) = runtime.find("session-usage-popup-close").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+        assert!(runtime.find("session-usage-popup").is_none());
+        let (x, y) = runtime.find("session-sidenav-cache-row").unwrap();
+        runtime.pointer_move(x, y);
+        runtime.frame(0.0);
+        runtime.frame(0.6);
+        assert!(runtime.find("session-usage-cache-rate-chart").is_some());
+        assert!(runtime.find("session-usage-cache-tokens-chart").is_some());
+        let (x, y) = runtime.find("session-sidenav-token-row").unwrap();
+        runtime.pointer_move(x, y);
+        runtime.frame(0.0);
+        runtime.frame(0.01);
+        assert!(runtime.find("session-usage-token-chart").is_some());
+        let (x, y) = runtime.find("session-sidenav-cache-row").unwrap();
+        runtime.pointer_move(x, y);
+        runtime.frame(0.0);
+        runtime.frame(0.01);
+        assert!(runtime.find("session-usage-cache-rate-chart").is_some());
+        runtime.pointer_move(500.0, 700.0);
+        runtime.frame(0.3);
+        assert!(runtime.state.session_usage_menu.is_none());
+        let (x, y) = runtime.find("session-sidenav-cache-row").unwrap();
+        runtime.pointer_move(x, y);
+        runtime.frame(0.3);
+        assert_eq!(
+            runtime.state.session_usage_menu,
+            Some(session_sidenav::UsageMenu::Cache)
+        );
+        let (x, y) = runtime.find("header-canvas-toggle").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+        assert!(runtime.state.canvas_open);
+        assert!(runtime.state.session_usage_menu.is_none());
+        assert!(runtime.find("session-usage-popup").is_none());
+    }
+
+    #[test]
     fn canvas_stays_open_across_views_and_preserves_main_width() {
         let mut runtime =
             Runtime::new(State::default(), view, (1400.0, 800.0), Env::new(true, 1.0));
@@ -10753,6 +11314,7 @@ mod tests {
         click(&mut runtime, "nav-home");
         runtime.state.start_new_research();
         runtime.frame(0.0);
+        runtime.frame(1.0);
         assert_eq!(runtime.state.primary_view, PrimaryView::NewResearch);
         let (surface, _) = runtime.presented("settings-surface").unwrap();
         let (main, _) = runtime.presented("content-surface").unwrap();

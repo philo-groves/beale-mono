@@ -6,6 +6,8 @@
 
 #### Added
 
+- Added left-opening interactive usage chart menus that open on row hover to the v2 session sidenav. Token and cache charts show five-minute active-work snapshots with selectable values; the Session heading has a chart shortcut.
+- Added a content-sized inset V2 session sidenav card with a header toggle, slide animation, automatic reveal after the first successful campaign creation or subagent delegation, a duration counter, and icon rows for session tokens and cache usage with muted right-aligned stats. The cache rate uses reported cached input over input from calls with cache telemetry and displays one decimal place. App-server schema 33 and protocol v1.56 expose saved main and subagent usage. Opening Canvas closes the sidenav; Canvas also slides into view.
 - Added an empty app-global Canvas in the V2 desktop. A rounded rectangle and plus button beside the window controls toggles the right pane, with outline and filled states; it stays open while changing views and shares the window width with the main content.
 - Added the optional V2 Runbooks feature, disabled by default, with workspace-owned, revisioned Markdown and per-cell multi-language code documents. Four model tools create, edit, get, and query runbooks; authenticated read routes expose the shared JSON contract. App-server SQLite schema 32 and protocol v1.54 add the storage and client boundary. Runbook execution is not available in this first slice.
 - Added the optional V2 Knowledge Base feature with workspace-owned memories, leads, and evidence-gated observed findings. One search and detail path covers both record kinds; short IDs, revision history, links, duplicate relationships, and host-validated read/bash evidence keep reusable context distinct from security claims. Host database schema 31 and protocol v1.53 add the storage and JSON client contract. Reproduced and verified stages remain unavailable until Knowledge owns a qualifying verifier.
@@ -206,6 +208,9 @@
 
 #### Changed
 
+- Protocol v1.57 adds cumulative session usage snapshots at five-minute active-work intervals. SQLite schema 34 stores per-call work offsets; older calls are placed at their completed-turn boundary.
+- Protocol v1.56 adds all-session model token and measured cache totals to session detail. SQLite schema 33 preserves nullable cache-read counts per call; existing calls retain unknown cache telemetry.
+- Protocol v1.55 adds a session's cumulative completed-turn duration and campaign-activity flag to session detail, plus a stream event when graph subagents are scheduled. The aggregates include older turns outside the recent transcript window.
 - OpenAI inference and session tool turns now use the Responses WebSocket with `store: false`; same-connection tool rounds use response IDs and a failed send or missing response ID triggers host-held context replay. Requests enable server-side compaction and group tools in a namespace for subscription use.
 
 #### Fixed

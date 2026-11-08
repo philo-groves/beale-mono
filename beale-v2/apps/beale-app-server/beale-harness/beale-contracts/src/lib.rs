@@ -638,6 +638,7 @@ pub mod v1 {
         Completed = 5,
         Failed = 6,
         TurnCompleted = 7,
+        SubagentsSpawned = 8,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -762,6 +763,52 @@ pub mod v1 {
         pub graph_models: Vec<GraphNodeModel>,
         #[prost(message, repeated, tag = "10")]
         pub graph_node_concurrency: Vec<GraphNodeConcurrency>,
+        #[prost(uint64, tag = "11")]
+        pub total_duration_ms: u64,
+        #[prost(bool, tag = "12")]
+        pub has_campaign_activity: bool,
+        #[prost(message, optional, tag = "13")]
+        pub token_usage: Option<SessionTokenUsage>,
+        #[prost(message, repeated, tag = "14")]
+        pub usage_snapshots: Vec<SessionUsageSnapshot>,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct SessionTokenUsage {
+        #[prost(uint64, tag = "1")]
+        pub input_tokens: u64,
+        #[prost(uint64, tag = "2")]
+        pub output_tokens: u64,
+        #[prost(uint64, tag = "3")]
+        pub measured_calls: u64,
+        #[prost(uint64, tag = "4")]
+        pub total_calls: u64,
+        #[prost(uint64, tag = "5")]
+        pub cache_read_tokens: u64,
+        #[prost(uint64, tag = "6")]
+        pub cache_input_tokens: u64,
+        #[prost(uint64, tag = "7")]
+        pub cache_measured_calls: u64,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct SessionUsageSnapshot {
+        #[prost(uint64, tag = "1")]
+        pub work_duration_ms: u64,
+        #[prost(uint64, tag = "2")]
+        pub input_tokens: u64,
+        #[prost(uint64, tag = "3")]
+        pub output_tokens: u64,
+        #[prost(uint64, tag = "4")]
+        pub cache_read_tokens: u64,
+        #[prost(uint64, tag = "5")]
+        pub cache_input_tokens: u64,
+        #[prost(uint64, tag = "6")]
+        pub measured_calls: u64,
+        #[prost(uint64, tag = "7")]
+        pub total_calls: u64,
+        #[prost(uint64, tag = "8")]
+        pub cache_measured_calls: u64,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1267,7 +1314,7 @@ pub mod v1 {
 }
 
 pub const PROTOCOL_MAJOR: u32 = 1;
-pub const PROTOCOL_MINOR: u32 = 54;
+pub const PROTOCOL_MINOR: u32 = 57;
 pub const SERVICE_NAME: &str = "beale-app-server";
 pub const HEALTH_PATH: &str = "/v1/health";
 pub const AUTH_STATUS_PATH: &str = "/v1/providers/status";

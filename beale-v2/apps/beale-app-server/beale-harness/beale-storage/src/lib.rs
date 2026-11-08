@@ -2,7 +2,7 @@ use anyhow::{Context, Result, bail, ensure};
 use chrono::{DateTime, Datelike, Months, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::{
-    collections::HashSet,
+    collections::{BTreeMap, HashSet},
     path::Path,
     sync::{Arc, Mutex},
     time::Duration,
@@ -241,8 +241,43 @@ pub struct ModelUsageRow {
     pub model: String,
     pub input_tokens: Option<i64>,
     pub output_tokens: Option<i64>,
+    pub cache_read_tokens: Option<i64>,
+    pub work_elapsed_ms: Option<i64>,
     pub duration_ms: i64,
     pub observed_at_ms: i64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SessionUsageTotals {
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub measured_calls: i64,
+    pub total_calls: i64,
+    pub cache_read_tokens: i64,
+    pub cache_input_tokens: i64,
+    pub cache_measured_calls: i64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SessionUsageSnapshotRow {
+    pub work_duration_ms: u64,
+    pub totals: SessionUsageTotals,
+}
+
+fn add_usage_totals(total: &mut SessionUsageTotals, delta: &SessionUsageTotals) {
+    total.input_tokens = total.input_tokens.saturating_add(delta.input_tokens);
+    total.output_tokens = total.output_tokens.saturating_add(delta.output_tokens);
+    total.measured_calls = total.measured_calls.saturating_add(delta.measured_calls);
+    total.total_calls = total.total_calls.saturating_add(delta.total_calls);
+    total.cache_read_tokens = total
+        .cache_read_tokens
+        .saturating_add(delta.cache_read_tokens);
+    total.cache_input_tokens = total
+        .cache_input_tokens
+        .saturating_add(delta.cache_input_tokens);
+    total.cache_measured_calls = total
+        .cache_measured_calls
+        .saturating_add(delta.cache_measured_calls);
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -333,7 +368,7 @@ impl HostDatabase {
         connection.busy_timeout(Duration::from_secs(5))?;
         connection.execute_batch("PRAGMA foreign_keys = ON;")?;
         let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version > 32 {
+        if version > 34 {
             bail!("unsupported host database schema version {version}");
         }
         connection.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;")?;
@@ -837,6 +872,40 @@ impl HostDatabase {
                  COMMIT;",
             )?;
         }
+        if version < 33 {
+            let has_cache_read: bool = connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('session_model_usage') WHERE name = 'cache_read_tokens')",
+                [],
+                |row| row.get(0),
+            )?;
+            if has_cache_read {
+                connection.execute_batch("PRAGMA user_version = 33;")?;
+            } else {
+                connection.execute_batch(
+                    "BEGIN IMMEDIATE;
+                     ALTER TABLE session_model_usage ADD COLUMN cache_read_tokens INTEGER;
+                     PRAGMA user_version = 33;
+                     COMMIT;",
+                )?;
+            }
+        }
+        if version < 34 {
+            let has_work_elapsed: bool = connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('session_model_usage') WHERE name = 'work_elapsed_ms')",
+                [],
+                |row| row.get(0),
+            )?;
+            if has_work_elapsed {
+                connection.execute_batch("PRAGMA user_version = 34;")?;
+            } else {
+                connection.execute_batch(
+                    "BEGIN IMMEDIATE;
+                     ALTER TABLE session_model_usage ADD COLUMN work_elapsed_ms INTEGER;
+                     PRAGMA user_version = 34;
+                     COMMIT;",
+                )?;
+            }
+        }
         Ok(Self(Arc::new(Mutex::new(connection))))
     }
 
@@ -925,7 +994,7 @@ impl HostDatabase {
         self.with_connection(|connection| {
             let mut statement = connection.prepare(
                 "SELECT agent_id, role, provider, method, model, input_tokens, output_tokens,
-                        duration_ms, observed_at_ms
+                        duration_ms, observed_at_ms, cache_read_tokens, work_elapsed_ms
                  FROM session_model_usage WHERE session_id = ?1
                  ORDER BY turn_number, ordinal LIMIT 2001",
             )?;
@@ -941,11 +1010,114 @@ impl HostDatabase {
                         output_tokens: row.get(6)?,
                         duration_ms: row.get(7)?,
                         observed_at_ms: row.get(8)?,
+                        cache_read_tokens: row.get(9)?,
+                        work_elapsed_ms: row.get(10)?,
                     })
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             ensure!(rows.len() <= 2000, "too many session model usage rows");
             Ok(rows)
+        })
+    }
+
+    pub fn session_usage_totals(&self, session_id: &str) -> Result<SessionUsageTotals> {
+        self.with_connection(|connection| {
+            Ok(connection.query_row(
+                "SELECT COALESCE(SUM(COALESCE(input_tokens, 0)), 0),
+                        COALESCE(SUM(COALESCE(output_tokens, 0)), 0),
+                        COUNT(CASE WHEN input_tokens IS NOT NULL AND output_tokens IS NOT NULL THEN 1 END),
+                        COUNT(*),
+                        COALESCE(SUM(COALESCE(cache_read_tokens, 0)), 0),
+                        COALESCE(SUM(CASE WHEN cache_read_tokens IS NOT NULL THEN input_tokens ELSE 0 END), 0),
+                        COUNT(cache_read_tokens)
+                 FROM session_model_usage WHERE session_id = ?1",
+                [session_id],
+                |row| Ok(SessionUsageTotals {
+                    input_tokens: row.get(0)?,
+                    output_tokens: row.get(1)?,
+                    measured_calls: row.get(2)?,
+                    total_calls: row.get(3)?,
+                    cache_read_tokens: row.get(4)?,
+                    cache_input_tokens: row.get(5)?,
+                    cache_measured_calls: row.get(6)?,
+                }),
+            )?)
+        })
+    }
+
+    pub fn session_usage_snapshots(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<SessionUsageSnapshotRow>> {
+        const INTERVAL_MS: u64 = 300_000;
+        const MAX_SNAPSHOTS: u64 = 2_048;
+        self.with_connection(|connection| {
+            let mut statement = connection.prepare(
+                "WITH turn_work AS (
+                     SELECT number, duration_ms,
+                            SUM(duration_ms) OVER (ORDER BY number ROWS UNBOUNDED PRECEDING) - duration_ms AS prior_ms
+                     FROM session_turns WHERE session_id = ?1
+                 )
+                 SELECT t.prior_ms, t.duration_ms, m.ordinal, m.input_tokens,
+                        m.output_tokens, m.cache_read_tokens, m.work_elapsed_ms
+                 FROM turn_work t LEFT JOIN session_model_usage m
+                   ON m.session_id = ?1 AND m.turn_number = t.number
+                 ORDER BY t.number, m.ordinal",
+            )?;
+            let rows = statement.query_map([session_id], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, Option<i64>>(2)?,
+                    row.get::<_, Option<i64>>(3)?,
+                    row.get::<_, Option<i64>>(4)?,
+                    row.get::<_, Option<i64>>(5)?,
+                    row.get::<_, Option<i64>>(6)?,
+                ))
+            })?;
+            let mut changes = BTreeMap::<u64, SessionUsageTotals>::new();
+            let mut total_work_ms = 0_u64;
+            for row in rows {
+                let (prior, duration, ordinal, input, output, cached, elapsed) = row?;
+                let prior = u64::try_from(prior)?;
+                let duration = u64::try_from(duration)?;
+                total_work_ms = total_work_ms.max(prior.saturating_add(duration));
+                if ordinal.is_none() {
+                    continue;
+                }
+                let offset = elapsed.map_or(duration, |value| value.max(0) as u64).min(duration);
+                let work_ms = prior.saturating_add(offset);
+                let bucket = if work_ms == 0 { 0 } else { (work_ms - 1) / INTERVAL_MS + 1 };
+                let delta = changes.entry(bucket).or_default();
+                delta.total_calls += 1;
+                if let (Some(input), Some(output)) = (input, output) {
+                    delta.input_tokens = delta.input_tokens.saturating_add(input);
+                    delta.output_tokens = delta.output_tokens.saturating_add(output);
+                    delta.measured_calls += 1;
+                }
+                if let (Some(input), Some(cached)) = (input, cached) {
+                    delta.cache_read_tokens = delta.cache_read_tokens.saturating_add(cached);
+                    delta.cache_input_tokens = delta.cache_input_tokens.saturating_add(input);
+                    delta.cache_measured_calls += 1;
+                }
+            }
+            let last_bucket = if total_work_ms == 0 { 0 } else { (total_work_ms - 1) / INTERVAL_MS + 1 };
+            let first_bucket = last_bucket.saturating_sub(MAX_SNAPSHOTS - 1);
+            let mut totals = SessionUsageTotals::default();
+            for delta in changes.range(..first_bucket).map(|(_, delta)| delta) {
+                add_usage_totals(&mut totals, delta);
+            }
+            let mut snapshots = Vec::with_capacity((last_bucket - first_bucket + 1) as usize);
+            for bucket in first_bucket..=last_bucket {
+                if let Some(delta) = changes.get(&bucket) {
+                    add_usage_totals(&mut totals, delta);
+                }
+                snapshots.push(SessionUsageSnapshotRow {
+                    work_duration_ms: bucket.saturating_mul(INTERVAL_MS).min(total_work_ms),
+                    totals: totals.clone(),
+                });
+            }
+            Ok(snapshots)
         })
     }
 
@@ -1587,6 +1759,32 @@ impl HostDatabase {
         })
     }
 
+    pub fn session_total_duration_ms(&self, id: &str) -> Result<u64> {
+        self.with_connection(|connection| {
+            let total: i64 = connection.query_row(
+                "SELECT COALESCE(SUM(duration_ms), 0) FROM session_turns WHERE session_id = ?1",
+                [id],
+                |row| row.get(0),
+            )?;
+            u64::try_from(total).map_err(Into::into)
+        })
+    }
+
+    pub fn session_has_campaign_activity(&self, id: &str) -> Result<bool> {
+        self.with_connection(|connection| {
+            connection
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM session_tool_calls
+                 WHERE session_id = ?1 AND (name = 'graph_delegate'
+                 OR (is_error = 0 AND name IN ('memory_create', 'lead_create',
+                     'finding_create', 'runbook_create', 'surface_add'))))",
+                    [id],
+                    |row| row.get(0),
+                )
+                .map_err(Into::into)
+        })
+    }
+
     pub fn goal(&self, session_id: &str) -> Result<Option<GoalRow>> {
         self.with_connection(|connection| {
             connection.query_row(
@@ -1972,16 +2170,19 @@ impl HostDatabase {
                         && item.model.len() <= 200 && item.role.len() <= 20
                         && item.duration_ms >= 0 && item.observed_at_ms >= 0
                         && item.input_tokens.is_none_or(|value| (0..=1_000_000_000_000).contains(&value))
-                        && item.output_tokens.is_none_or(|value| (0..=1_000_000_000_000).contains(&value)),
+                        && item.output_tokens.is_none_or(|value| (0..=1_000_000_000_000).contains(&value))
+                        && item.cache_read_tokens.is_none_or(|cached| item.input_tokens.is_some_and(|input| (0..=input).contains(&cached)))
+                        && item.work_elapsed_ms.is_none_or(|value| (0..=86_400_000).contains(&value)),
                         "invalid model usage");
                     transaction.execute(
                         "INSERT INTO session_model_usage
                          (session_id, turn_number, ordinal, agent_id, role, provider, method, model,
-                          input_tokens, output_tokens, duration_ms, observed_at_ms)
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                          input_tokens, output_tokens, duration_ms, observed_at_ms, cache_read_tokens, work_elapsed_ms)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
                         params![session.id, turn.number, ordinal as i64, item.agent_id, item.role,
                             item.provider, item.method, item.model, item.input_tokens,
-                            item.output_tokens, item.duration_ms, item.observed_at_ms],
+                            item.output_tokens, item.duration_ms, item.observed_at_ms,
+                            item.cache_read_tokens, item.work_elapsed_ms],
                     )?;
                 }
             }
@@ -2381,6 +2582,8 @@ mod tests {
                 model: "model-example".to_owned(),
                 input_tokens: Some(100),
                 output_tokens: Some(20),
+                cache_read_tokens: Some(37),
+                work_elapsed_ms: Some(800),
                 duration_ms: 800,
                 observed_at_ms: day + 1_000,
             },
@@ -2392,6 +2595,8 @@ mod tests {
                 model: "model-example".to_owned(),
                 input_tokens: None,
                 output_tokens: None,
+                cache_read_tokens: None,
+                work_elapsed_ms: Some(1_500),
                 duration_ms: 500,
                 observed_at_ms: day + 2_000,
             },
@@ -2420,7 +2625,20 @@ mod tests {
         let calls = db.session_model_usage(&session.id).unwrap();
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0].agent_id, "main");
+        assert_eq!(calls[0].cache_read_tokens, Some(37));
         assert_eq!(calls[1].agent_id, "scout-example");
+        assert_eq!(
+            db.session_usage_totals(&session.id).unwrap(),
+            SessionUsageTotals {
+                input_tokens: 100,
+                output_tokens: 20,
+                measured_calls: 1,
+                total_calls: 2,
+                cache_read_tokens: 37,
+                cache_input_tokens: 100,
+                cache_measured_calls: 1,
+            }
+        );
         let rows = db.model_usage_days(day).unwrap();
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].role, "main");
@@ -2429,6 +2647,90 @@ mod tests {
         assert_eq!(rows[1].role, "scout");
         assert_eq!((rows[1].duration_ms, rows[1].measured_calls), (500, 0));
         assert!(db.model_usage_days(day + 86_400_000).unwrap().is_empty());
+        drop(db);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn usage_snapshots_follow_active_work_and_keep_legacy_calls_at_turn_end() {
+        let root = root();
+        let db = HostDatabase::open(&root).unwrap();
+        let session = SessionRow {
+            id: "session-example".to_owned(),
+            workspace_id: "workspace-example".to_owned(),
+            title: "Example session".to_owned(),
+            created_at_ms: 1,
+            last_message_at_ms: 2,
+        };
+        for (number, duration_ms, work_elapsed_ms, input_tokens, cache_read_tokens) in [
+            (1, 240_000, Some(180_000), 100, Some(20)),
+            (2, 240_000, Some(120_000), 200, None),
+            (3, 300_000, None, 50, Some(10)),
+        ] {
+            let turn = TurnRow {
+                number,
+                provider: 1,
+                method: 1,
+                model: "model-example".to_owned(),
+                prompt: "Example prompt".to_owned(),
+                answer: "Example answer".to_owned(),
+                duration_ms,
+                internal_prompt: false,
+            };
+            let usage = [ModelUsageRow {
+                agent_id: if number == 2 { "scout-example" } else { "main" }.to_owned(),
+                role: if number == 2 { "scout" } else { "main" }.to_owned(),
+                provider: 1,
+                method: 1,
+                model: "model-example".to_owned(),
+                input_tokens: Some(input_tokens),
+                output_tokens: Some(10),
+                cache_read_tokens,
+                work_elapsed_ms,
+                duration_ms: 100,
+                observed_at_ms: number,
+            }];
+            db.append_turn_with_metadata(
+                &session,
+                &turn,
+                number == 1,
+                TurnActivity {
+                    tools: &[],
+                    reasoning: &[],
+                    commentary: &[],
+                    goal: None,
+                },
+                None,
+                TurnMetadata {
+                    model_usage: Some(&usage),
+                    ..TurnMetadata::default()
+                },
+            )
+            .unwrap();
+        }
+        let snapshots = db.session_usage_snapshots(&session.id).unwrap();
+        assert_eq!(
+            snapshots
+                .iter()
+                .map(|item| item.work_duration_ms)
+                .collect::<Vec<_>>(),
+            [0, 300_000, 600_000, 780_000]
+        );
+        assert_eq!(
+            snapshots
+                .iter()
+                .map(|item| item.totals.input_tokens)
+                .collect::<Vec<_>>(),
+            [0, 100, 300, 350]
+        );
+        assert_eq!(
+            snapshots
+                .iter()
+                .map(|item| item.totals.cache_read_tokens)
+                .collect::<Vec<_>>(),
+            [0, 20, 20, 30]
+        );
+        assert_eq!(snapshots.last().unwrap().totals.cache_input_tokens, 150);
         drop(db);
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -2770,10 +3072,54 @@ mod tests {
             [first, second]
         );
         assert_eq!(db.sessions().unwrap(), [updated_session]);
+        assert_eq!(db.session_total_duration_ms(&session.id).unwrap(), 2_468);
+        assert!(!db.session_has_campaign_activity(&session.id).unwrap());
         assert_eq!(
             db.session_graph_id(&session.id).unwrap().as_deref(),
             Some("simple")
         );
+        drop(db);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn session_totals_and_campaign_activity_survive_transcript_trimming() {
+        let root = root();
+        let db = HostDatabase::open(&root).unwrap();
+        let session = SessionRow {
+            id: "session-example".to_owned(),
+            workspace_id: "workspace-example".to_owned(),
+            title: "Example session".to_owned(),
+            created_at_ms: 1,
+            last_message_at_ms: 1,
+        };
+        for number in 1..=65 {
+            let turn = TurnRow {
+                number,
+                provider: 1,
+                method: 1,
+                model: "model-example".to_owned(),
+                prompt: "Example prompt".to_owned(),
+                answer: "Example answer".to_owned(),
+                duration_ms: 1_000,
+                internal_prompt: false,
+            };
+            let tools = (number == 1).then(|| ToolCallRow {
+                id: "tool-example".to_owned(),
+                turn_number: number,
+                ordinal: 0,
+                name: "memory_create".to_owned(),
+                summary: "Saved example memory".to_owned(),
+                arguments: "{}".to_owned(),
+                output: "{}".to_owned(),
+                is_error: false,
+            });
+            db.append_turn_with_tools(&session, &turn, number == 1, tools.as_slice())
+                .unwrap();
+        }
+        assert_eq!(db.session(&session.id).unwrap().unwrap().turns.len(), 64);
+        assert_eq!(db.session_total_duration_ms(&session.id).unwrap(), 65_000);
+        assert!(db.session_has_campaign_activity(&session.id).unwrap());
         drop(db);
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -2923,7 +3269,7 @@ mod tests {
         drop(db);
         let connection = Connection::open(root.join("state.sqlite")).unwrap();
         connection
-            .execute_batch("PRAGMA user_version = 33;")
+            .execute_batch("PRAGMA user_version = 35;")
             .unwrap();
         drop(connection);
         assert!(HostDatabase::open(&root).is_err());
@@ -2931,7 +3277,7 @@ mod tests {
         let version: i64 = connection
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 33);
+        assert_eq!(version, 35);
         drop(connection);
         std::fs::remove_dir_all(root).unwrap();
     }

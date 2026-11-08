@@ -349,6 +349,7 @@ pub struct ProviderStep {
 pub struct TokenUsage {
     pub input_tokens: u64,
     pub output_tokens: u64,
+    pub cache_read_tokens: Option<u64>,
 }
 
 fn token_usage(value: &Value, input: &str, output: &str) -> Option<TokenUsage> {
@@ -358,8 +359,23 @@ fn token_usage(value: &Value, input: &str, output: &str) -> Option<TokenUsage> {
         TokenUsage {
             input_tokens,
             output_tokens,
+            cache_read_tokens: None,
         },
     )
+}
+
+fn token_usage_with_cache(
+    value: &Value,
+    input: &str,
+    output: &str,
+    cached_path: &str,
+) -> Option<TokenUsage> {
+    let mut usage = token_usage(value, input, output)?;
+    usage.cache_read_tokens = value
+        .pointer(cached_path)
+        .and_then(Value::as_u64)
+        .filter(|&cached| cached <= usage.input_tokens);
+    Some(usage)
 }
 
 #[derive(Clone, Debug)]
@@ -1157,7 +1173,12 @@ where
                         }
                         "response.completed" | "response.done" => {
                             usage = event.pointer("/response/usage").and_then(|value| {
-                                token_usage(value, "input_tokens", "output_tokens")
+                                token_usage_with_cache(
+                                    value,
+                                    "input_tokens",
+                                    "output_tokens",
+                                    "/input_tokens_details/cached_tokens",
+                                )
                             });
                             response_id = event
                                 .pointer("/response/id")
@@ -1182,7 +1203,13 @@ where
                 }
                 WireShape::Chat => {
                     if let Some(value) = event.get("usage") {
-                        usage = token_usage(value, "prompt_tokens", "completion_tokens").or(usage);
+                        usage = token_usage_with_cache(
+                            value,
+                            "prompt_tokens",
+                            "completion_tokens",
+                            "/prompt_tokens_details/cached_tokens",
+                        )
+                        .or(usage);
                     }
                     let before = text.len();
                     apply_chat_event(&event, &mut text, &mut chat_calls)?;
@@ -1546,7 +1573,8 @@ mod tests {
             ),
             Some(TokenUsage {
                 input_tokens: 120,
-                output_tokens: 30
+                output_tokens: 30,
+                cache_read_tokens: None,
             })
         );
         assert!(
@@ -1572,6 +1600,42 @@ mod tests {
                 "output_tokens"
             )
             .is_none()
+        );
+    }
+
+    #[test]
+    fn cache_usage_requires_a_reported_count_within_input_tokens() {
+        let usage = json!({
+            "input_tokens": 120,
+            "output_tokens": 30,
+            "input_tokens_details": {"cached_tokens": 41}
+        });
+        assert_eq!(
+            token_usage_with_cache(
+                &usage,
+                "input_tokens",
+                "output_tokens",
+                "/input_tokens_details/cached_tokens"
+            )
+            .unwrap()
+            .cache_read_tokens,
+            Some(41)
+        );
+        let invalid = json!({
+            "prompt_tokens": 120,
+            "completion_tokens": 30,
+            "prompt_tokens_details": {"cached_tokens": 121}
+        });
+        assert_eq!(
+            token_usage_with_cache(
+                &invalid,
+                "prompt_tokens",
+                "completion_tokens",
+                "/prompt_tokens_details/cached_tokens"
+            )
+            .unwrap()
+            .cache_read_tokens,
+            None
         );
     }
 

@@ -70,6 +70,7 @@ pub(super) struct ChildContext<'a> {
     pub base_system: &'a str,
     pub reasoning_effort: Option<&'a str>,
     pub turn_number: i64,
+    pub turn_started: std::time::Instant,
     pub progress: Option<&'a mpsc::Sender<SessionStreamEvent>>,
     pub model_usage: &'a Mutex<Vec<ModelUsageRow>>,
 }
@@ -157,6 +158,16 @@ async fn run_child(
             model: assignment.model.model.clone(),
             input_tokens: step.usage.map(|usage| usage.input_tokens as i64),
             output_tokens: step.usage.map(|usage| usage.output_tokens as i64),
+            cache_read_tokens: step
+                .usage
+                .and_then(|usage| usage.cache_read_tokens.map(|count| count as i64)),
+            work_elapsed_ms: Some(
+                context
+                    .turn_started
+                    .elapsed()
+                    .as_millis()
+                    .min(i64::MAX as u128) as i64,
+            ),
             duration_ms: call_started.elapsed().as_millis().min(i64::MAX as u128) as i64,
             observed_at_ms: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -419,6 +430,17 @@ pub(super) async fn delegate(
             };
         }
     };
+    if let Some(progress) = context.progress {
+        let _ = progress
+            .send(SessionStreamEvent {
+                kind: SessionStreamKind::SubagentsSpawned as i32,
+                text: String::new(),
+                tool: None,
+                detail: None,
+                segment_index: 0,
+            })
+            .await;
+    }
     let mutation_lock = Mutex::new(());
     let tool_sequence = AtomicI64::new(0);
     let results = schedule(assignments, config, |assignment| {

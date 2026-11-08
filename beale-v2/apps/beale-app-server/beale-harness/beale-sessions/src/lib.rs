@@ -14,8 +14,9 @@ use beale_contracts::{
         ArchiveEntry, AuthMethod, GoalStatus, GraphNodeConcurrency, GraphNodeModel,
         ListArchiveResponse, ListSessionsResponse, ProviderId, ReasoningEffort, SessionCommentary,
         SessionDetail, SessionGoal, SessionGraphConfig, SessionMessage, SessionReasoningSummary,
-        SessionRole, SessionStreamEvent, SessionStreamKind, SessionSummary, SessionToolDetailPage,
-        SessionToolSummary, SubmitSessionTurnRequest, WorkspaceSurface,
+        SessionRole, SessionStreamEvent, SessionStreamKind, SessionSummary, SessionTokenUsage,
+        SessionToolDetailPage, SessionToolSummary, SessionUsageSnapshot, SubmitSessionTurnRequest,
+        WorkspaceSurface,
     },
 };
 use beale_providers::{
@@ -662,6 +663,13 @@ fn detail(
         .transpose()
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .unwrap_or_default();
+    let usage = db
+        .session_usage_totals(&session.id)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let usage_snapshots = db
+        .session_usage_snapshots(&session.id)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let count = |value| u64::try_from(value).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR);
     Ok(SessionDetail {
         summary: Some(summary(session)),
         messages,
@@ -677,6 +685,36 @@ fn detail(
             .unwrap_or_default(),
         graph_models: graph_config.models,
         graph_node_concurrency: graph_config.concurrency,
+        total_duration_ms: db
+            .session_total_duration_ms(&session.id)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+        has_campaign_activity: db
+            .session_has_campaign_activity(&session.id)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+        token_usage: Some(SessionTokenUsage {
+            input_tokens: count(usage.input_tokens)?,
+            output_tokens: count(usage.output_tokens)?,
+            measured_calls: count(usage.measured_calls)?,
+            total_calls: count(usage.total_calls)?,
+            cache_read_tokens: count(usage.cache_read_tokens)?,
+            cache_input_tokens: count(usage.cache_input_tokens)?,
+            cache_measured_calls: count(usage.cache_measured_calls)?,
+        }),
+        usage_snapshots: usage_snapshots
+            .into_iter()
+            .map(|snapshot| {
+                Ok(SessionUsageSnapshot {
+                    work_duration_ms: snapshot.work_duration_ms,
+                    input_tokens: count(snapshot.totals.input_tokens)?,
+                    output_tokens: count(snapshot.totals.output_tokens)?,
+                    cache_read_tokens: count(snapshot.totals.cache_read_tokens)?,
+                    cache_input_tokens: count(snapshot.totals.cache_input_tokens)?,
+                    measured_calls: count(snapshot.totals.measured_calls)?,
+                    total_calls: count(snapshot.totals.total_calls)?,
+                    cache_measured_calls: count(snapshot.totals.cache_measured_calls)?,
+                })
+            })
+            .collect::<Result<_, StatusCode>>()?,
     })
 }
 
@@ -1585,6 +1623,10 @@ async fn run_one_turn(
             model: request.model.clone(),
             input_tokens: step.usage.map(|usage| usage.input_tokens as i64),
             output_tokens: step.usage.map(|usage| usage.output_tokens as i64),
+            cache_read_tokens: step
+                .usage
+                .and_then(|usage| usage.cache_read_tokens.map(|count| count as i64)),
+            work_elapsed_ms: Some(started.elapsed().as_millis().min(i64::MAX as u128) as i64),
             duration_ms: call_started.elapsed().as_millis().min(i64::MAX as u128) as i64,
             observed_at_ms: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -1797,6 +1839,7 @@ async fn run_one_turn(
                                 base_system: &child_system,
                                 reasoning_effort,
                                 turn_number: next_turn_number,
+                                turn_started: started,
                                 progress: progress.as_ref(),
                                 model_usage: &child_usage,
                             },
@@ -2527,6 +2570,7 @@ mod tests {
         assert_eq!(turns.last().unwrap().number, 70);
         let transcript = detail(&db, &loaded, &turns).unwrap();
         assert_eq!(transcript.first_turn_number, 7);
+        assert_eq!(transcript.total_duration_ms, 70);
         assert_eq!(transcript.goal.unwrap().turns_used, 70);
         assert_eq!(
             transcript.messages.last().unwrap().text,
@@ -2558,7 +2602,51 @@ mod tests {
             internal_prompt: false,
         };
         let db = HostDatabase::open(&root).unwrap();
-        db.append_turn(&session, &turn, true).unwrap();
+        let usage = [
+            ModelUsageRow {
+                agent_id: "main".to_owned(),
+                role: "main".to_owned(),
+                provider: turn.provider,
+                method: turn.method,
+                model: turn.model.clone(),
+                input_tokens: Some(100),
+                output_tokens: Some(20),
+                cache_read_tokens: Some(25),
+                work_elapsed_ms: Some(100),
+                duration_ms: 100,
+                observed_at_ms: 1,
+            },
+            ModelUsageRow {
+                agent_id: "scout-example".to_owned(),
+                role: "scout".to_owned(),
+                provider: turn.provider,
+                method: turn.method,
+                model: turn.model.clone(),
+                input_tokens: Some(200),
+                output_tokens: Some(30),
+                cache_read_tokens: None,
+                work_elapsed_ms: Some(200),
+                duration_ms: 100,
+                observed_at_ms: 1,
+            },
+        ];
+        db.append_turn_with_metadata(
+            &session,
+            &turn,
+            true,
+            TurnActivity {
+                tools: &[],
+                reasoning: &[],
+                commentary: &[],
+                goal: None,
+            },
+            None,
+            TurnMetadata {
+                model_usage: Some(&usage),
+                ..TurnMetadata::default()
+            },
+        )
+        .unwrap();
         let (loaded, turns) = load_persisted(&db, id).unwrap();
         let transcript = detail(&db, &loaded, &turns).unwrap();
         assert_eq!(loaded.title, "Echo example");
@@ -2566,6 +2654,20 @@ mod tests {
         assert_eq!(transcript.messages.len(), 2);
         assert_eq!(transcript.messages[0].text, "Echo example");
         assert_eq!(transcript.messages[1].role, SessionRole::Assistant as i32);
+        assert_eq!(transcript.total_duration_ms, 1_234);
+        assert!(!transcript.has_campaign_activity);
+        let tokens = transcript.token_usage.unwrap();
+        assert_eq!((tokens.input_tokens, tokens.output_tokens), (300, 50));
+        assert_eq!((tokens.measured_calls, tokens.total_calls), (2, 2));
+        assert_eq!(
+            (tokens.cache_read_tokens, tokens.cache_input_tokens),
+            (25, 100)
+        );
+        assert_eq!(tokens.cache_measured_calls, 1);
+        assert_eq!(transcript.usage_snapshots.len(), 2);
+        assert_eq!(transcript.usage_snapshots[0].work_duration_ms, 0);
+        assert_eq!(transcript.usage_snapshots[1].work_duration_ms, 1_234);
+        assert_eq!(transcript.usage_snapshots[1].input_tokens, 300);
         drop(db);
         std::fs::remove_dir_all(root).unwrap();
     }

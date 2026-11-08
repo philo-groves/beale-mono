@@ -396,6 +396,7 @@ enum SessionStreamKind {
   SESSION_STREAM_KIND_COMPLETED = 5;
   SESSION_STREAM_KIND_FAILED = 6;
   SESSION_STREAM_KIND_TURN_COMPLETED = 7;
+  SESSION_STREAM_KIND_SUBAGENTS_SPAWNED = 8;
 }
 
 message SessionStreamEvent {
@@ -462,6 +463,31 @@ message SessionDetail {
   string graph_id = 8; // Empty when the session has no orchestration graph.
   repeated GraphNodeModel graph_models = 9; // Saved role model choices; graph execution is separate.
   repeated GraphNodeConcurrency graph_node_concurrency = 10; // Configured per-role maximums.
+  uint64 total_duration_ms = 11; // Sum of saved turn durations, including turns outside the recent transcript.
+  bool has_campaign_activity = 12; // A successful campaign creation or graph delegation call occurred in any saved turn.
+  SessionTokenUsage token_usage = 13; // All saved main and subagent model calls, including turns outside the recent transcript.
+  repeated SessionUsageSnapshot usage_snapshots = 14; // Cumulative usage at five-minute active-work intervals, plus the latest partial interval.
+}
+
+message SessionTokenUsage {
+  uint64 input_tokens = 1;
+  uint64 output_tokens = 2;
+  uint64 measured_calls = 3;
+  uint64 total_calls = 4;
+  uint64 cache_read_tokens = 5;
+  uint64 cache_input_tokens = 6; // Input tokens only from calls with reported cache-read telemetry.
+  uint64 cache_measured_calls = 7;
+}
+
+message SessionUsageSnapshot {
+  uint64 work_duration_ms = 1;
+  uint64 input_tokens = 2;
+  uint64 output_tokens = 3;
+  uint64 cache_read_tokens = 4;
+  uint64 cache_input_tokens = 5;
+  uint64 measured_calls = 6;
+  uint64 total_calls = 7;
+  uint64 cache_measured_calls = 8;
 }
 
 message GraphNodeModel {

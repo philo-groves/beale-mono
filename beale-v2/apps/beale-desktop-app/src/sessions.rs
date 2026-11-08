@@ -125,6 +125,42 @@ pub(crate) fn valid_detail(detail: &SessionDetail) -> bool {
                 | beale_contracts::v1::AuthMethod::ApiKey)
         )
         && !detail.model.is_empty()
+        && detail.total_duration_ms
+            >= detail
+                .messages
+                .iter()
+                .map(|message| message.duration_ms)
+                .fold(0_u64, u64::saturating_add)
+        && detail.token_usage.as_ref().is_none_or(|usage| {
+            usage.measured_calls <= usage.total_calls
+                && usage.cache_measured_calls <= usage.measured_calls
+                && usage.cache_read_tokens <= usage.cache_input_tokens
+                && usage.cache_input_tokens <= usage.input_tokens
+        })
+        && detail.usage_snapshots.len() <= 2_048
+        && detail.usage_snapshots.iter().all(|point| {
+            point.work_duration_ms <= detail.total_duration_ms
+                && point.measured_calls <= point.total_calls
+                && point.cache_measured_calls <= point.measured_calls
+                && point.cache_read_tokens <= point.cache_input_tokens
+                && point.cache_input_tokens <= point.input_tokens
+        })
+        && detail.usage_snapshots.windows(2).all(|pair| {
+            pair[0].work_duration_ms < pair[1].work_duration_ms
+                && pair[0].input_tokens <= pair[1].input_tokens
+                && pair[0].output_tokens <= pair[1].output_tokens
+                && pair[0].cache_read_tokens <= pair[1].cache_read_tokens
+                && pair[0].cache_input_tokens <= pair[1].cache_input_tokens
+        })
+        && detail.usage_snapshots.last().is_none_or(|last| {
+            last.work_duration_ms == detail.total_duration_ms
+                && detail.token_usage.as_ref().is_some_and(|usage| {
+                    last.input_tokens == usage.input_tokens
+                        && last.output_tokens == usage.output_tokens
+                        && last.cache_read_tokens == usage.cache_read_tokens
+                        && last.cache_input_tokens == usage.cache_input_tokens
+                })
+        })
         && detail.goal.as_ref().is_none_or(|goal| {
             !goal.objective.trim().is_empty()
                 && goal.objective.len() <= 16_384
@@ -211,6 +247,9 @@ fn valid_stream_event(event: &SessionStreamEvent) -> bool {
                 && event.text.len() <= 512
                 && event.tool.is_none()
                 && event.detail.is_none()
+        }
+        Ok(SessionStreamKind::SubagentsSpawned) => {
+            event.text.is_empty() && event.tool.is_none() && event.detail.is_none()
         }
         _ => false,
     }
@@ -423,5 +462,18 @@ mod tests {
         let mut decoder = StreamDecoder::default();
         let length = (SESSION_STREAM_MAX_FRAME_BYTES as u32 + 1).to_be_bytes();
         assert!(decoder.push(&length).is_err());
+    }
+
+    #[test]
+    fn spawn_event_has_no_model_visible_payload() {
+        let event = SessionStreamEvent {
+            kind: SessionStreamKind::SubagentsSpawned as i32,
+            ..Default::default()
+        };
+        assert!(valid_stream_event(&event));
+        assert!(!valid_stream_event(&SessionStreamEvent {
+            text: "unexpected".to_owned(),
+            ..event
+        }));
     }
 }

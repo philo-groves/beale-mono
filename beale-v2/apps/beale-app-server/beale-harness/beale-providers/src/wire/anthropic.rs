@@ -32,6 +32,7 @@ pub(super) async fn read_stream(
     let mut stop_reason = None;
     let mut input_tokens = None;
     let mut output_tokens = None;
+    let mut cache_read_tokens = None;
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.context("Anthropic stream interrupted")?;
         ensure!(
@@ -53,6 +54,15 @@ pub(super) async fn read_stream(
             match event.get("type").and_then(Value::as_str).unwrap_or("") {
                 "message_start" => {
                     let usage = &event["message"]["usage"];
+                    cache_read_tokens = usage
+                        .get("cache_read_input_tokens")
+                        .and_then(Value::as_u64)
+                        .or_else(|| {
+                            usage
+                                .get("cache_creation_input_tokens")
+                                .and_then(Value::as_u64)
+                                .map(|_| 0)
+                        });
                     input_tokens = usage
                         .get("input_tokens")
                         .and_then(Value::as_u64)
@@ -236,6 +246,7 @@ pub(super) async fn read_stream(
             .map(|(input_tokens, output_tokens)| TokenUsage {
                 input_tokens,
                 output_tokens,
+                cache_read_tokens: cache_read_tokens.filter(|&cached| cached <= input_tokens),
             }),
         continuation: if continuation.is_empty() {
             Vec::new()
@@ -265,7 +276,8 @@ mod tests {
             step.usage,
             Some(TokenUsage {
                 input_tokens: 35,
-                output_tokens: 7
+                output_tokens: 7,
+                cache_read_tokens: Some(20),
             })
         );
     }

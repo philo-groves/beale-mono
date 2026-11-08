@@ -285,6 +285,24 @@ pub(crate) static CANVAS: Icon = Icon {
     body: r#"<rect x="2" y="2" width="20" height="20" rx="4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 7v10M7 12h10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>"#,
 };
 
+pub(crate) static SESSION_SIDENAV: Icon = Icon {
+    name: "lucide-list",
+    view: 24.0,
+    body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M8 6h13M8 12h13M8 18h13"/><circle cx="4" cy="6" r="1" fill="currentColor"/><circle cx="4" cy="12" r="1" fill="currentColor"/><circle cx="4" cy="18" r="1" fill="currentColor"/>"#,
+};
+
+pub(crate) static SESSION_TOKENS: Icon = Icon {
+    name: "beale-session-tokens",
+    view: 24.0,
+    body: r#"<circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2"/><path d="M18.1 10.4A6 6 0 1 1 10.4 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M8 5.5v5M17 13.5v5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>"#,
+};
+
+pub(crate) static SESSION_CACHE_RATE: Icon = Icon {
+    name: "beale-session-cache-rate",
+    view: 24.0,
+    body: r#"<path d="m12 2 2.2 1.4 2.6-.2 1 2.4 2.4 1-.2 2.6L21.4 12 20 14.2l.2 2.6-2.4 1-1 2.4-2.6-.2L12 21.4 9.8 20l-2.6.2-1-2.4-2.4-1 .2-2.6L2.6 12 4 9.8l-.2-2.6 2.4-1 1-2.4 2.6.2Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="m9 15 6-6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="9" cy="9" r="1" fill="currentColor"/><circle cx="15" cy="15" r="1" fill="currentColor"/>"#,
+};
+
 pub(crate) static CANVAS_FILLED: Icon = Icon {
     name: "beale-canvas-filled",
     view: 24.0,
@@ -404,7 +422,8 @@ mod tests {
     use super::{
         AUTOMATION_ACTIVE, AUTOMATION_SCHEDULE, AUTOMATIONS_FILLED, CANVAS, CANVAS_FILLED,
         EXTENSIONS_FILLED, FLEET_APPLE, FLEET_FILLED, FLEET_LINUX, FLEET_WINDOWS, HOME_FILLED,
-        PLUGIN_META, SETTINGS_FILLED, WORKSPACE_KNOWLEDGE, WORKSPACE_SURFACES,
+        PLUGIN_META, SESSION_CACHE_RATE, SESSION_TOKENS, SETTINGS_FILLED, WORKSPACE_KNOWLEDGE,
+        WORKSPACE_SURFACES,
     };
 
     #[test]
@@ -465,5 +484,13 @@ mod tests {
         assert!(outline.iter().filter(|&&pixel| pixel > 0).count() > 20);
         assert!(filled.iter().filter(|&&pixel| pixel > 0).count() > 20);
         assert_ne!(outline, filled);
+    }
+
+    #[test]
+    fn session_usage_icons_rasterize_at_row_size() {
+        for mark in [&SESSION_TOKENS, &SESSION_CACHE_RATE] {
+            let coverage = rune::text::icon_coverage(mark, 15);
+            assert!(coverage.iter().filter(|&&pixel| pixel > 0).count() > 15);
+        }
     }
 }
