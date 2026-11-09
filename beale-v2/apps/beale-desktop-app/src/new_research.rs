@@ -10,8 +10,8 @@ use rune_kit::{Markdown, MarkdownStyle};
 use crate::{
     Provider, SelectionMenu, State, ThemeStyle, catalog_index, effective_model_method, form_button,
     icons::{
-        ARROW_UP, BRAIN, CHECK, CHEVRON_DOWN, CHEVRON_RIGHT, CHEVRON_UP, FOLDER_OPEN, REPEAT,
-        TARGET, TERMINAL, WRENCH,
+        AGENT, ARROW_UP, BRAIN, CHECK, CHEVRON_DOWN, CHEVRON_RIGHT, CHEVRON_UP, FOLDER_OPEN,
+        REPEAT, TARGET, TERMINAL, WRENCH,
     },
     in_place_menu, input_history, load_tool_detail_page, modal_dialog, selection_button,
     settings_form_card, start_session_turn, toggle_selection_menu, toggle_tool_detail, ui_font,
@@ -610,7 +610,12 @@ fn is_web_link(destination: &str) -> bool {
         .is_ok_and(|url| matches!(url.scheme(), "http" | "https") && url.host().is_some())
 }
 
-fn transcript_markdown(content: String, theme: ThemeStyle<'_>, streaming: bool, muted: bool) -> El {
+pub(crate) fn transcript_markdown(
+    content: String,
+    theme: ThemeStyle<'_>,
+    streaming: bool,
+    muted: bool,
+) -> El {
     let body = ui_font(if muted { 13.0 } else { 14.0 }, 400.0);
     let heading_weight = if muted { 400.0 } else { 600.0 };
     let mut style = MarkdownStyle::neutral(theme.is_dark())
@@ -699,70 +704,92 @@ pub(crate) fn graph_model_config(state: &State) -> Vec<beale_contracts::v1::Grap
         .collect()
 }
 
-fn additional_model_icon_providers(models: &[ModelSelection]) -> Vec<Provider> {
-    let mut providers = Vec::new();
-    for selection in models.iter().skip(1) {
-        if !providers.contains(&selection.provider) {
-            providers.push(selection.provider);
-            if providers.len() == 2 {
-                break;
-            }
-        }
-    }
-    providers
+#[derive(Clone, Copy)]
+struct GraphNodePlacement {
+    role: beale_graphs::Role,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
 }
 
-fn graph_node(state: &State, placement: beale_graphs::NodeLayout, theme: ThemeStyle<'_>) -> El {
-    let role = placement.role;
+const GRAPH_TOP_INSET: f32 = 8.0;
+
+pub(crate) fn graph_model_label(state: &State, role: beale_graphs::Role) -> String {
     let models = role_models(state, role);
     let choices = choices(state);
-    let model = models.first();
-    let name = model.map_or("No model", |selection| {
+    let name = models.first().map_or("No model", |selection| {
         choices
             .iter()
             .find(|choice| choice.selection == *selection)
             .map_or(selection.id.as_str(), |choice| choice.name.as_str())
     });
     let extra = models.len().saturating_sub(1);
+    if extra > 0 {
+        format!("{name} + {extra}")
+    } else {
+        name.to_owned()
+    }
+}
+
+fn graph_node_width(state: &State, role: beale_graphs::Role, max_width: f32) -> f32 {
+    let role_width = rune::text::measure(role.label(), &[], ui_font(12.0, 400.0), None).0
+        + 19.0
+        + (if role == beale_graphs::Role::Main {
+            Some(1)
+        } else {
+            state.new_research_graph_concurrency[role.index()]
+        })
+        .map_or(0.0, |max| {
+            rune::text::measure(&format!("{max} Max"), &[], ui_font(11.0, 400.0), None).0 + 4.0
+        });
+    let model_width = rune::text::measure(
+        &graph_model_label(state, role),
+        &[],
+        ui_font(12.0, 400.0),
+        None,
+    )
+    .0 + if role_models(state, role).is_empty() {
+        0.0
+    } else {
+        18.0
+    };
+    (role_width.max(model_width) + 20.0).ceil().min(max_width)
+}
+
+fn graph_node(state: &State, placement: GraphNodePlacement, theme: ThemeStyle<'_>) -> El {
+    let role = placement.role;
+    let models = role_models(state, role);
+    let model = models.first();
+    let model_label = graph_model_label(state, role);
     let mut model_row = row().w_full().min_w(0.0).center_y().gap(5.0);
     if let Some(selection) = model {
         model_row =
             model_row.child(icon(selection.provider.logo(), 13.0).color(theme.color("#999999")));
     }
     model_row = model_row.child(
-        text(name.to_owned())
+        text(model_label)
+            .key(format!("new-research-graph-model-label-{}", role.id()))
             .min_w(0.0)
             .grow(1.0)
             .truncate()
             .font(ui_font(12.0, 400.0))
             .color(theme.color("#999999")),
     );
-    let mut extra_row = row().w_full().h(16.0).center_y().gap(4.0);
-    if extra > 0 {
-        extra_row = extra_row.key(format!("new-research-graph-other-models-{}", role.id()));
-        for provider in additional_model_icon_providers(&models) {
-            extra_row = extra_row.child(icon(provider.logo(), 12.0).color(theme.color("#999999")));
-        }
-        extra_row = extra_row.child(
-            text(format!(
-                "+ {extra} other{}",
-                if extra == 1 { "" } else { "s" }
-            ))
-            .min_w(0.0)
-            .truncate()
-            .font(ui_font(12.0, 400.0))
-            .color(theme.color("#999999")),
-        );
-    }
     let max_concurrent = if role == beale_graphs::Role::Main {
         Some(1)
     } else {
         state.new_research_graph_concurrency[role.index()]
     };
     let mut role_row = row().w_full().h(18.0).center_y().gap(4.0).child(
+        icon(&AGENT, 15.0)
+            .key(format!("new-research-graph-agent-icon-{}", role.id()))
+            .color(theme.color("#eeeeee")),
+    );
+    role_row = role_row.child(
         text(role.label())
             .grow(1.0)
-            .font(ui_font(14.0, 600.0))
+            .font(ui_font(12.0, 400.0))
             .color(theme.color("#eeeeee")),
     );
     if let Some(max) = max_concurrent {
@@ -778,7 +805,7 @@ fn graph_node(state: &State, placement: beale_graphs::NodeLayout, theme: ThemeSt
         .role("button")
         .label(format!("Edit {} allowed models", role.label()))
         .absolute(placement.x, placement.y)
-        .size(170.0, 76.0)
+        .size(placement.width, placement.height)
         .padding(9.0)
         .gap(5.0)
         .radius(16.0)
@@ -799,56 +826,81 @@ fn graph_node(state: &State, placement: beale_graphs::NodeLayout, theme: ThemeSt
         })
         .child(role_row)
         .child(model_row)
-        .child(extra_row)
 }
 
 fn graph_preview(state: &State, theme: ThemeStyle<'_>, available_width: f32) -> El {
     let graph = &beale_graphs::SIMPLE_GRAPH;
     let stage_width = available_width.clamp(180.0, 640.0);
-    let (layout, stage_height): (Vec<_>, f32) = if stage_width >= 560.0 {
-        (
-            graph
-                .layout
-                .iter()
-                .map(|node| beale_graphs::NodeLayout {
-                    x: node.x / 470.0 * (stage_width - 170.0),
-                    ..*node
-                })
-                .collect(),
-            255.0,
-        )
-    } else if stage_width >= 380.0 {
-        (
-            graph
-                .nodes
-                .iter()
-                .enumerate()
-                .map(|(index, role)| {
-                    let (x, y) = match index {
-                        0 => ((stage_width - 170.0) / 2.0, 15.0),
-                        1 => (0.0, 140.0),
-                        2 => (stage_width - 170.0, 140.0),
-                        _ => ((stage_width - 170.0) / 2.0, 265.0),
-                    };
-                    beale_graphs::NodeLayout { role: *role, x, y }
-                })
-                .collect(),
-            355.0,
-        )
+    let preferred_widths: Vec<_> = graph
+        .nodes
+        .iter()
+        .map(|role| graph_node_width(state, *role, stage_width))
+        .collect();
+    let columns = if stage_width >= 560.0
+        && preferred_widths[1..]
+            .iter()
+            .all(|width| *width <= (stage_width - 24.0) / 3.0)
+    {
+        3
+    } else if stage_width >= 380.0
+        && preferred_widths[1..3]
+            .iter()
+            .all(|width| *width <= (stage_width - 12.0) / 2.0)
+    {
+        2
     } else {
-        (
-            graph
-                .nodes
-                .iter()
-                .enumerate()
-                .map(|(index, role)| beale_graphs::NodeLayout {
-                    role: *role,
-                    x: (stage_width - 170.0) / 2.0,
-                    y: 15.0 + index as f32 * 105.0,
-                })
-                .collect(),
-            420.0,
-        )
+        1
+    };
+    let gap = 12.0;
+    let slot_width = (stage_width - gap * (columns - 1) as f32) / columns as f32;
+    let layout: Vec<_> = graph
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(index, role)| {
+            let width = preferred_widths[index].min(
+                if (columns == 3 && index > 0) || (columns == 2 && (index == 1 || index == 2)) {
+                    slot_width
+                } else {
+                    stage_width
+                },
+            );
+            let (x, y) = match (columns, index) {
+                (3, 0) => ((stage_width - width) / 2.0, GRAPH_TOP_INSET),
+                (3, _) => {
+                    let slot = index - 1;
+                    (
+                        slot as f32 * (slot_width + gap) + (slot_width - width) / 2.0,
+                        154.0 + GRAPH_TOP_INSET,
+                    )
+                }
+                (2, 1) => ((slot_width - width) / 2.0, 125.0 + GRAPH_TOP_INSET),
+                (2, 2) => (
+                    slot_width + gap + (slot_width - width) / 2.0,
+                    125.0 + GRAPH_TOP_INSET,
+                ),
+                (2, 3) => ((stage_width - width) / 2.0, 250.0 + GRAPH_TOP_INSET),
+                (2, _) => ((stage_width - width) / 2.0, GRAPH_TOP_INSET),
+                _ => (
+                    (stage_width - width) / 2.0,
+                    index as f32 * 85.0 + GRAPH_TOP_INSET,
+                ),
+            };
+            GraphNodePlacement {
+                role: *role,
+                x,
+                y,
+                width,
+                height: 56.0,
+            }
+        })
+        .collect();
+    let stage_height = if columns == 3 {
+        240.0 + GRAPH_TOP_INSET
+    } else if columns == 2 {
+        340.0 + GRAPH_TOP_INSET
+    } else {
+        315.0 + GRAPH_TOP_INSET
     };
     let mut shape = Shape::new();
     for edge in graph.edges {
@@ -859,15 +911,15 @@ fn graph_preview(state: &State, theme: ThemeStyle<'_>, available_width: f32) -> 
             continue;
         };
         let path = if stage_width < 380.0 {
-            let source = [from.x, from.y + 38.0];
-            let target = [to.x, to.y + 38.0];
+            let source = [from.x, from.y + from.height / 2.0];
+            let target = [to.x, to.y + to.height / 2.0];
             let rail = (from.x - 9.0).max(0.0);
             Path::new()
                 .move_to(source)
                 .cubic_to([rail, source[1]], [rail, target[1]], target)
         } else {
-            let source = [from.x + 85.0, from.y + 76.0];
-            let target = [to.x + 85.0, to.y];
+            let source = [from.x + from.width / 2.0, from.y + from.height];
+            let target = [to.x + to.width / 2.0, to.y];
             let middle = (source[1] + target[1]) / 2.0;
             Path::new()
                 .move_to(source)
@@ -891,14 +943,17 @@ fn graph_preview(state: &State, theme: ThemeStyle<'_>, available_width: f32) -> 
 
 fn main_only_preview(state: &State, theme: ThemeStyle<'_>, available_width: f32) -> El {
     let stage_width = available_width.clamp(180.0, 640.0);
-    let main = beale_graphs::NodeLayout {
+    let width = graph_node_width(state, beale_graphs::Role::Main, stage_width);
+    let main = GraphNodePlacement {
         role: beale_graphs::Role::Main,
-        x: (stage_width - 170.0) / 2.0,
-        y: 15.0,
+        x: (stage_width - width) / 2.0,
+        y: GRAPH_TOP_INSET,
+        width,
+        height: 56.0,
     };
     row().w_full().center().child(
         el().key("new-research-no-graph")
-            .size(stage_width, 106.0)
+            .size(stage_width, 71.0 + GRAPH_TOP_INSET)
             .child(graph_node(state, main, theme)),
     )
 }
@@ -1209,11 +1264,6 @@ fn new_research_setup(state: &State, theme: ThemeStyle<'_>, available_width: f32
     if crate::extensions_view::graphs_enabled(state) {
         let selected = state.new_research_graph_id == beale_graphs::SIMPLE_ID;
         let active = state.selection_menu == Some(SelectionMenu::SessionGraph);
-        let description = if selected {
-            beale_graphs::SIMPLE_DESCRIPTION.to_owned()
-        } else {
-            "Research with one main agent.".to_owned()
-        };
         let label = if selected {
             beale_graphs::SIMPLE_NAME
         } else {
@@ -1228,17 +1278,7 @@ fn new_research_setup(state: &State, theme: ThemeStyle<'_>, available_width: f32
         .key("new-research-graph-control")
         .role("button")
         .label(format!("Session graph: {label}"));
-        content = content
-            .child(row().w_full().py(6.0).center().child(selector))
-            .child(
-                text(description)
-                    .key("new-research-graph-description")
-                    .w_full()
-                    .align(Align::Center)
-                    .wrap()
-                    .font(ui_font(13.0, 400.0))
-                    .color(theme.color("#aaaaaa")),
-            );
+        content = content.child(row().w_full().py(6.0).center().child(selector));
         content = content.child(if selected {
             graph_preview(state, theme, available_width)
         } else {
@@ -2336,37 +2376,12 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
 #[cfg(test)]
 mod tests {
     use super::{
-        MenuSection, ModelSelection, additional_model_icon_providers, choices,
-        has_configured_provider, is_web_link, normalize_goal_limit, options, selected_model,
-        work_duration,
+        MenuSection, choices, has_configured_provider, is_web_link, normalize_goal_limit, options,
+        selected_model, work_duration,
     };
     use crate::{Provider, State};
-    use beale_contracts::v1::{AuthMethod, CustomProvider, ModelEntry};
+    use beale_contracts::v1::{CustomProvider, ModelEntry};
     use rune::TextEdit;
-
-    #[test]
-    fn additional_model_icons_show_distinct_providers() {
-        let models = [
-            Provider::Xai,
-            Provider::Xai,
-            Provider::Xai,
-            Provider::OpenAi,
-            Provider::OpenAi,
-        ]
-        .into_iter()
-        .enumerate()
-        .map(|(index, provider)| ModelSelection {
-            provider,
-            method: AuthMethod::ApiKey,
-            id: format!("example-model-{index}"),
-        })
-        .collect::<Vec<_>>();
-
-        assert_eq!(
-            additional_model_icon_providers(&models),
-            [Provider::Xai, Provider::OpenAi]
-        );
-    }
 
     #[test]
     fn goal_limit_fields_keep_only_positive_bounded_digits() {

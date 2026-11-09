@@ -1,7 +1,10 @@
 use beale_contracts::v1::{
-    SessionDetail, SessionStreamEvent, SessionStreamKind, SessionTokenUsage, SessionUsageSnapshot,
+    SessionDetail, SessionRunbook, SessionStreamEvent, SessionStreamKind, SessionTokenUsage,
+    SessionUsageSnapshot,
 };
-use rune::{Align, Color, El, Icon, LineCap, Shape, Side, canvas, col, el, icon, row, text};
+use rune::{
+    Align, Color, El, Icon, LineCap, ScrollSpec, Shape, Side, canvas, col, el, icon, row, text,
+};
 use std::time::Duration;
 
 use crate::{
@@ -17,6 +20,7 @@ pub(crate) const INSET: f32 = 12.0;
 pub(crate) enum UsageMenu {
     Tokens,
     Cache,
+    Runbooks,
 }
 
 impl UsageMenu {
@@ -24,6 +28,7 @@ impl UsageMenu {
         match self {
             Self::Tokens => "session-sidenav-token-row",
             Self::Cache => "session-sidenav-cache-row",
+            Self::Runbooks => "session-sidenav-runbooks-row",
         }
     }
 }
@@ -53,6 +58,8 @@ fn activates_sidenav(name: &str) -> bool {
             | "lead_create"
             | "finding_create"
             | "runbook_create"
+            | "runbook_edit"
+            | "runbook_run"
             | "surface_add"
             | "graph_delegate"
     )
@@ -189,6 +196,7 @@ fn usage_row(menu: UsageMenu, active: bool, content: UsageRowContent, theme: The
 
 pub(crate) fn render(
     detail: Option<&SessionDetail>,
+    live_events: &[SessionStreamEvent],
     live_ms: u64,
     active_menu: Option<UsageMenu>,
     theme: ThemeStyle<'_>,
@@ -272,7 +280,28 @@ pub(crate) fn render(
             }
         },
     );
-    col()
+    let live_run = live_events.iter().any(|event| {
+        event.kind == SessionStreamKind::ToolStarted as i32
+            && event
+                .tool
+                .as_ref()
+                .is_some_and(|tool| tool.name == "runbook_run")
+    });
+    let live_touched = live_events.iter().any(|event| {
+        event.tool.as_ref().is_some_and(|tool| {
+            matches!(
+                tool.name.as_str(),
+                "runbook_create" | "runbook_edit" | "runbook_run"
+            ) && (event.kind == SessionStreamKind::ToolStarted as i32 || !tool.is_error)
+        })
+    });
+    let runbooks = detail
+        .map_or(0, |detail| detail.runbook_count)
+        .max(u64::from(live_touched));
+    let active_runbooks = detail
+        .map_or(0, |detail| detail.active_runbook_count)
+        .max(u64::from(live_run));
+    let mut sidebar = col()
         .key("session-sidenav")
         .role("complementary")
         .label("Session sidebar")
@@ -354,7 +383,69 @@ pub(crate) fn render(
                     },
                     theme,
                 )),
-        )
+        );
+    if runbooks > 0 {
+        sidebar = sidebar
+            .child(
+                el().key("session-sidenav-feature-divider")
+                    .role("separator")
+                    .w_full()
+                    .h(1.0)
+                    .my(5.0)
+                    .fill(theme.color("#303030")),
+            )
+            .child(
+                row()
+                    .key("session-sidenav-runbooks-row")
+                    .w_full()
+                    .h(30.0)
+                    .px(2.0)
+                    .center_y()
+                    .gap(8.0)
+                    .role("group")
+                    .label(format!("{runbooks} runbooks, {active_runbooks} active"))
+                    .radius(8.0)
+                    .fill(if active_menu == Some(UsageMenu::Runbooks) {
+                        theme.color("#303030")
+                    } else {
+                        Color::TRANSPARENT
+                    })
+                    .hover(theme.color("#303030"))
+                    .on_hover(|state: &mut State| {
+                        state.session_usage_row_hovered = Some(UsageMenu::Runbooks);
+                        open_menu(state, UsageMenu::Runbooks);
+                    })
+                    .on_hover_change(|state: &mut State, inside, _| {
+                        if inside {
+                            state.session_usage_row_hovered = Some(UsageMenu::Runbooks);
+                            open_menu(state, UsageMenu::Runbooks);
+                        } else if state.session_usage_row_hovered == Some(UsageMenu::Runbooks) {
+                            state.session_usage_row_hovered = None;
+                            if !state.session_usage_popup_hovered {
+                                state.session_usage_menu = None;
+                            }
+                        }
+                    })
+                    .hover_delays(Duration::ZERO, Duration::from_millis(250))
+                    .child(
+                        text(format!(
+                            "{runbooks} Runbook{}",
+                            if runbooks == 1 { "" } else { "s" }
+                        ))
+                        .key("session-sidenav-runbooks")
+                        .font(ui_font(12.0, 400.0))
+                        .color(theme.color("#e7e7e7")),
+                    )
+                    .child(row().grow(1.0))
+                    .child(
+                        text(format!("{active_runbooks} Active"))
+                            .key("session-sidenav-runbooks-active")
+                            .font(ui_font(11.0, 400.0))
+                            .color(theme.color("#929292")),
+                    ),
+            );
+    }
+    sidebar
 }
 
 const CHART_WIDTH: f32 = 322.0;
@@ -498,17 +589,221 @@ fn work_label(ms: u64) -> String {
     format!("{minutes}:{seconds:02} work")
 }
 
+fn runbook_entries(
+    detail: Option<&SessionDetail>,
+    live_events: &[SessionStreamEvent],
+) -> Vec<SessionRunbook> {
+    let mut books = detail.map_or_else(Vec::new, |detail| detail.runbooks.clone());
+    for progress in live_events
+        .iter()
+        .filter_map(|event| event.runbook_progress.as_ref())
+    {
+        if let Some(book) = books.iter_mut().find(|book| book.id == progress.runbook_id) {
+            book.title = progress.title.clone();
+            book.status = "running".to_owned();
+            book.current_cell_number = progress.cell_number;
+            book.current_cell_name = progress.cell_name.clone();
+        } else {
+            books.push(SessionRunbook {
+                id: progress.runbook_id.clone(),
+                title: progress.title.clone(),
+                status: "running".to_owned(),
+                current_cell_number: progress.cell_number,
+                current_cell_name: progress.cell_name.clone(),
+                ..Default::default()
+            });
+        }
+    }
+    books
+}
+
+fn runbook_date(ms: u64) -> String {
+    chrono::DateTime::<chrono::Utc>::from_timestamp_millis(ms.min(i64::MAX as u64) as i64)
+        .map_or_else(
+            || "—".to_owned(),
+            |date| {
+                date.with_timezone(&chrono::Local)
+                    .format("%b %-d, %-I:%M %p")
+                    .to_string()
+            },
+        )
+}
+
+fn runbook_popup(
+    detail: Option<&SessionDetail>,
+    live_events: &[SessionStreamEvent],
+    expanded: [bool; 3],
+    elapsed_ms: u64,
+    theme: ThemeStyle<'_>,
+) -> El {
+    let books = runbook_entries(detail, live_events);
+    let mut content = col().w_full().gap(12.0);
+    for (section, status, index) in [
+        ("Active", "running", 0),
+        ("Prepared", "prepared", 1),
+        ("Done", "done", 2),
+    ] {
+        let mut entries: Vec<_> = books.iter().filter(|book| book.status == status).collect();
+        entries.sort_by(|left, right| {
+            let time = |book: &SessionRunbook| {
+                if status == "done" {
+                    book.completed_at_ms
+                } else {
+                    book.updated_at_ms
+                }
+            };
+            time(right)
+                .cmp(&time(left))
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        let mut group = col()
+            .key(format!("session-runbook-{status}-section"))
+            .w_full()
+            .gap(5.0)
+            .child(
+                text(section)
+                    .font(ui_font(12.0, 400.0))
+                    .color(theme.color("#929292")),
+            );
+        if entries.is_empty() {
+            group = group.child(
+                text("None")
+                    .font(ui_font(11.0, 400.0))
+                    .color(theme.color("#777777")),
+            );
+        }
+        let visible = if expanded[index] {
+            entries.len()
+        } else {
+            entries.len().min(3)
+        };
+        for book in entries.iter().take(visible) {
+            let selected = (*book).clone();
+            let secondary = match status {
+                "running" => {
+                    if book.current_cell_name.is_empty() {
+                        format!("Running cell #{}", book.current_cell_number.max(1))
+                    } else {
+                        format!("Running {}...", book.current_cell_name)
+                    }
+                }
+                "prepared" => format!("Updated {}", runbook_date(book.updated_at_ms)),
+                _ => format!("Completed {}", runbook_date(book.completed_at_ms)),
+            };
+            let mut secondary_row = row().center_y().gap(6.0);
+            if status == "running" {
+                let frame = ["◴", "◷", "◶", "◵"][(elapsed_ms / 1_000) as usize % 4];
+                secondary_row = secondary_row.child(
+                    text(frame)
+                        .font(ui_font(13.0, 400.0))
+                        .color(theme.color("#aebee5")),
+                );
+            }
+            secondary_row = secondary_row.child(
+                text(secondary)
+                    .key(format!("session-runbook-{}-secondary", book.id))
+                    .font(ui_font(11.0, 400.0))
+                    .color(theme.color("#929292")),
+            );
+            group = group.child(
+                col()
+                    .key(format!("session-runbook-{}", book.id))
+                    .role("button")
+                    .label(format!("Open {} in Canvas", book.title))
+                    .w_full()
+                    .padding(6.0)
+                    .gap(2.0)
+                    .radius(7.0)
+                    .hover(theme.color("#3b3b3b"))
+                    .on_press(move |state: &mut State| {
+                        crate::runbook_canvas::open(state, selected.clone())
+                    })
+                    .child(
+                        text(book.title.clone())
+                            .font(ui_font(12.0, 400.0))
+                            .color(theme.color("#eeeeee"))
+                            .w_full()
+                            .wrap(),
+                    )
+                    .child(secondary_row),
+            );
+        }
+        if entries.len() > 3 {
+            group = group.child(
+                el().key(format!("session-runbook-{status}-toggle"))
+                    .role("button")
+                    .label(if expanded[index] {
+                        "Show less"
+                    } else {
+                        "Show more"
+                    })
+                    .w_full()
+                    .h(25.0)
+                    .px(4.0)
+                    .center_y()
+                    .radius(6.0)
+                    .hover(theme.color("#3b3b3b"))
+                    .on_press(move |state: &mut State| {
+                        state.session_runbook_expanded[index] =
+                            !state.session_runbook_expanded[index]
+                    })
+                    .child(
+                        text(if expanded[index] {
+                            "Show less"
+                        } else {
+                            "Show more"
+                        })
+                        .font(ui_font(11.0, 400.0))
+                        .color(theme.color("#b8b8b8")),
+                    ),
+            );
+        }
+        content = content.child(group);
+    }
+    let panel = col()
+        .key("session-runbooks-popup")
+        .role("dialog")
+        .label("Session runbooks")
+        .w(350.0)
+        .padding(14.0)
+        .gap(10.0)
+        .child(
+            text("Runbooks")
+                .font(ui_font(14.0, 550.0))
+                .color(theme.color("#eeeeee")),
+        )
+        .child(content.max_h(480.0).scroll(ScrollSpec {
+            stick_bottom: false,
+        }));
+    in_place_menu::popup_surface(panel, theme.color("#242424"))
+        .anchored_fit(UsageMenu::Runbooks.anchor(), Side::Left, Align::Start, 24.0)
+        .on_hover_change(|state: &mut State, inside, _| {
+            state.session_usage_popup_hovered = inside;
+            if !inside && state.session_usage_row_hovered.is_none() {
+                state.session_usage_menu = None;
+            }
+        })
+        .hover_delays(Duration::ZERO, Duration::from_millis(250))
+}
+
 pub(crate) fn popup(
     detail: Option<&SessionDetail>,
     menu: UsageMenu,
     selected: usize,
+    runbook_expanded: [bool; 3],
+    elapsed_ms: u64,
+    live_events: &[SessionStreamEvent],
     theme: ThemeStyle<'_>,
 ) -> El {
+    if menu == UsageMenu::Runbooks {
+        return runbook_popup(detail, live_events, runbook_expanded, elapsed_ms, theme);
+    }
     let points = detail.map_or(&[][..], |detail| detail.usage_snapshots.as_slice());
     let selected = selected.min(points.len().saturating_sub(1));
     let title = match menu {
         UsageMenu::Tokens => "Session tokens",
         UsageMenu::Cache => "Cache usage",
+        UsageMenu::Runbooks => unreachable!(),
     };
     let mut panel = col()
         .key("session-usage-popup")
@@ -621,6 +916,7 @@ pub(crate) fn popup(
                         theme,
                     ));
             }
+            UsageMenu::Runbooks => unreachable!(),
         }
         let current = &points[selected];
         let detail = match menu {
@@ -641,6 +937,7 @@ pub(crate) fn popup(
                     )
                 }
             }
+            UsageMenu::Runbooks => unreachable!(),
         };
         panel = panel
             .child(
@@ -758,7 +1055,7 @@ mod tests {
     }
 
     #[test]
-    fn only_successful_creation_or_delegation_activates_sidenav() {
+    fn successful_feature_activity_activates_sidenav() {
         let tool = |name: &str, is_error| SessionToolSummary {
             name: name.to_owned(),
             is_error,
@@ -777,16 +1074,25 @@ mod tests {
             ..Default::default()
         }));
         let event = SessionStreamEvent {
+            runbook_progress: None,
             kind: SessionStreamKind::ToolFinished as i32,
             tool: Some(tool("graph_delegate", false)),
             ..Default::default()
         };
         assert!(campaign_activity_event(&event));
+        assert!(campaign_activity_event(&SessionStreamEvent {
+            runbook_progress: None,
+            kind: SessionStreamKind::ToolFinished as i32,
+            tool: Some(tool("runbook_edit", false)),
+            ..Default::default()
+        }));
         assert!(!campaign_activity_event(&SessionStreamEvent {
+            runbook_progress: None,
             kind: SessionStreamKind::ToolStarted as i32,
             ..event.clone()
         }));
         assert!(!campaign_activity_event(&SessionStreamEvent {
+            runbook_progress: None,
             kind: SessionStreamKind::ToolStarted as i32,
             tool: Some(tool("runbook_create", false)),
             ..event

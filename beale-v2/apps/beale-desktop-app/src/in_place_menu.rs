@@ -12,6 +12,12 @@ pub(crate) struct MenuItem {
     pub selected: bool,
 }
 
+pub(crate) struct MenuSpec {
+    pub title: &'static str,
+    pub width: f32,
+    pub item_help: Option<fn(&str) -> &'static str>,
+}
+
 pub(crate) fn popup_surface(panel: El, fill: Color) -> El {
     panel
         .raise()
@@ -23,8 +29,7 @@ pub(crate) fn popup_surface(panel: El, fill: Color) -> El {
 
 pub(crate) fn panel<S: 'static>(
     anchor: String,
-    title: &'static str,
-    width: f32,
+    spec: MenuSpec,
     active: usize,
     items: Vec<MenuItem>,
     theme: ThemeStyle<'_>,
@@ -46,6 +51,7 @@ pub(crate) fn panel<S: 'static>(
         let on_select = select.clone();
         let value = item.value;
         let label = item.label;
+        let help = spec.item_help.map(|describe| describe(&value));
         let mut labels = col().grow(1.0).min_w(0.0).child(
             text(label.clone())
                 .truncate()
@@ -60,39 +66,39 @@ pub(crate) fn panel<S: 'static>(
                     .color(color("#969696")),
             );
         }
-        options = options.child(
-            row()
-                .key(format!("selection-menu-item-{index}"))
-                .role("menuitem")
-                .label(label)
-                .w_full()
-                .h(item_height)
-                .px(10.0)
-                .center_y()
-                .gap(8.0)
-                .radius(6.0)
-                .fill(if index == active {
-                    color("#383838")
-                } else {
-                    Color::TRANSPARENT
-                })
-                .hover(color("#424242"))
-                .on_hover(move |state: &mut S| on_hover(state, index))
-                .on_press_tx(move |state: &mut S, tx| on_select(state, value.clone(), tx))
-                .child(labels)
-                .child(if item.selected {
-                    icon(&CHECK, 14.0).color(color("#c8c8c8"))
-                } else {
-                    el().size(14.0, 14.0)
-                }),
-        );
+        let mut option = row()
+            .key(format!("selection-menu-item-{index}"))
+            .role("menuitem")
+            .label(label)
+            .w_full()
+            .h(item_height)
+            .px(10.0)
+            .center_y()
+            .gap(8.0)
+            .radius(6.0)
+            .fill(if index == active {
+                color("#383838")
+            } else {
+                Color::TRANSPARENT
+            })
+            .hover(color("#424242"))
+            .on_hover(move |state: &mut S| on_hover(state, index))
+            .on_press_tx(move |state: &mut S, tx| on_select(state, value.clone(), tx));
+        if let Some(help) = help {
+            option = option.help(help);
+        }
+        options = options.child(option.child(labels).child(if item.selected {
+            icon(&CHECK, 14.0).color(color("#c8c8c8"))
+        } else {
+            el().size(14.0, 14.0)
+        }));
     }
     popup_surface(
         col()
             .key("selection-menu")
             .role("menu")
-            .label(title)
-            .w(width)
+            .label(spec.title)
+            .w(spec.width)
             .h(height)
             .min_h(0.0)
             .padding(5.0),

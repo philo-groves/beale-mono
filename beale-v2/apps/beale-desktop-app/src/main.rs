@@ -1,7 +1,7 @@
 use rune::tok::TextStyle;
 use rune::{
     Align, AppSpec, Color, Cursor, Cx, Drag, El, Icon, Key, KeyEvent, Phase, ScrollSpec, Side,
-    TextEdit, Transition, Tx, col, el, icon, row, text, text_input,
+    TextEdit, Transition, Tx, canvas, col, el, icon, row, text, text_input,
 };
 use std::time::{Duration, Instant};
 
@@ -16,6 +16,7 @@ mod extensions_view;
 mod fleet_connection;
 mod fleet_view;
 mod form_controls;
+mod grid_background;
 mod home_sidebar;
 mod icons;
 mod in_place_menu;
@@ -30,6 +31,7 @@ mod provider_icons;
 mod provider_models;
 mod provider_usage;
 mod quick_chat;
+mod runbook_canvas;
 mod session_sidenav;
 mod sessions;
 mod settings_scroll;
@@ -630,6 +632,7 @@ struct State {
     session_usage_row_hovered: Option<session_sidenav::UsageMenu>,
     session_usage_popup_hovered: bool,
     session_usage_snapshot_index: usize,
+    session_runbook_expanded: [bool; 3],
     session_work_expanded: std::collections::HashSet<usize>,
     expanded_tool_id: Option<String>,
     tool_detail: Option<SessionToolDetailPage>,
@@ -738,6 +741,7 @@ struct State {
     plugin_source_edit: TextEdit,
     plugin_manifest_name: Option<String>,
     plugin_manifest_text: String,
+    plugin_manifest_tool_names: Vec<String>,
     plugin_manifest_loading: bool,
     plugin_manifest_error: String,
     plugin_manifest_generation: u64,
@@ -796,6 +800,8 @@ struct State {
     sidenav_visible: bool,
     sidenav_width: f32,
     canvas_open: bool,
+    canvas_runbook: runbook_canvas::CanvasRunbookState,
+    canvas_scroll: SettingsScroll,
     settings_scroll: SettingsScroll,
     workspace_scroll: SettingsScroll,
 }
@@ -864,6 +870,7 @@ impl Default for State {
             session_usage_row_hovered: None,
             session_usage_popup_hovered: false,
             session_usage_snapshot_index: 0,
+            session_runbook_expanded: [false; 3],
             session_work_expanded: std::collections::HashSet::new(),
             expanded_tool_id: None,
             tool_detail: None,
@@ -972,6 +979,7 @@ impl Default for State {
             plugin_source_edit: TextEdit::new(""),
             plugin_manifest_name: None,
             plugin_manifest_text: String::new(),
+            plugin_manifest_tool_names: Vec::new(),
             plugin_manifest_loading: false,
             plugin_manifest_error: String::new(),
             plugin_manifest_generation: 0,
@@ -1037,6 +1045,8 @@ impl Default for State {
             sidenav_visible: true,
             sidenav_width: SIDENAV_DEFAULT_WIDTH,
             canvas_open: false,
+            canvas_runbook: runbook_canvas::CanvasRunbookState::default(),
+            canvas_scroll: SettingsScroll::for_key("canvas-runbook-scroll"),
             settings_scroll: SettingsScroll::default(),
             workspace_scroll: SettingsScroll::for_key("workspace-scroll"),
         }
@@ -1222,6 +1232,7 @@ impl State {
         self.plugin_source_edit.clear();
         self.plugin_manifest_name = None;
         self.plugin_manifest_text.clear();
+        self.plugin_manifest_tool_names.clear();
         self.plugin_manifest_loading = false;
         self.plugin_manifest_error.clear();
         self.plugin_manifest_generation = self.plugin_manifest_generation.wrapping_add(1);
@@ -1332,6 +1343,7 @@ impl State {
         self.session_usage_row_hovered = None;
         self.session_usage_popup_hovered = false;
         self.session_usage_snapshot_index = 0;
+        self.session_runbook_expanded = [false; 3];
         self.session_work_expanded.clear();
         let had_session = self.active_session.take().is_some();
         let was_loading = self.session_loading_id.take().is_some();
@@ -1381,6 +1393,7 @@ impl State {
                     self.new_research_workspace_id = Some(summary.workspace_id.clone());
                 }
                 self.active_session = Some(detail);
+                runbook_canvas::refresh(self);
                 self.session_pending_prompt = None;
                 self.session_error.clear();
             }
@@ -1405,6 +1418,7 @@ impl State {
         self.session_usage_row_hovered = None;
         self.session_usage_popup_hovered = false;
         self.session_usage_snapshot_index = 0;
+        self.session_runbook_expanded = [false; 3];
         match result {
             Ok(detail) => {
                 self.open_session_sidenav_for_activity(&detail);
@@ -1451,6 +1465,19 @@ impl State {
                 self.session_live_events.push(event);
             }
             Ok(SessionStreamKind::ToolFinished) => {
+                let refresh_runbook = event
+                    .tool
+                    .as_ref()
+                    .is_some_and(|tool| tool.name == "runbook_run")
+                    && self.canvas_runbook.selected.is_some();
+                if event
+                    .tool
+                    .as_ref()
+                    .is_some_and(|tool| tool.name == "runbook_run")
+                {
+                    self.session_live_events
+                        .retain(|item| item.runbook_progress.is_none());
+                }
                 if session_sidenav::campaign_activity_event(&event) {
                     self.activate_session_sidenav();
                 }
@@ -1463,8 +1490,25 @@ impl State {
                     existing.kind = SessionStreamKind::ToolFinished as i32;
                     existing.tool = Some(tool);
                 }
+                if refresh_runbook {
+                    runbook_canvas::refresh(self);
+                }
             }
             Ok(SessionStreamKind::SubagentsSpawned) => self.activate_session_sidenav(),
+            Ok(SessionStreamKind::RunbookProgress) => {
+                self.activate_session_sidenav();
+                if let Some(progress) = &event.runbook_progress {
+                    self.session_live_events.retain(|prior| {
+                        prior
+                            .runbook_progress
+                            .as_ref()
+                            .is_none_or(|prior_progress| {
+                                prior_progress.runbook_id != progress.runbook_id
+                            })
+                    });
+                }
+                self.session_live_events.push(event);
+            }
             Ok(SessionStreamKind::TurnCompleted) => {
                 if let Some(detail) = event.detail {
                     self.clear_tool_detail();
@@ -1479,6 +1523,7 @@ impl State {
                         self.new_research_workspace_id = Some(summary.workspace_id.clone());
                     }
                     self.active_session = Some(detail);
+                    runbook_canvas::refresh(self);
                 }
             }
             _ => {}
@@ -3178,6 +3223,14 @@ fn selection_menu_items(state: &State, menu: SelectionMenu) -> Vec<in_place_menu
                 })
                 .unwrap_or_default()
         }
+    }
+}
+
+fn graph_option_description(value: &str) -> &'static str {
+    if value == beale_graphs::SIMPLE_ID {
+        beale_graphs::SIMPLE_DESCRIPTION
+    } else {
+        "Research with one main agent."
     }
 }
 
@@ -5625,9 +5678,16 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
         .min_h(0.0)
         .fill(color(CONTENT_SURFACE_COLOR));
     if state.primary_view == PrimaryView::NewResearch {
-        let graph_width = cx
-            .layout_size("content-surface")
-            .map_or(640.0, |size| (size[0] - 80.0).max(180.0));
+        let [width, height] = cx.layout_size("content-surface").unwrap_or([720.0, 600.0]);
+        let graph_width = (width - 80.0).max(180.0);
+        if extensions_view::graphs_enabled(state) {
+            main_content = main_content.child(
+                canvas(grid_background::dots(width, height, theme.color("#303030")))
+                    .key("new-research-grid-background")
+                    .absolute(0.0, 0.0)
+                    .size(width, height),
+            );
+        }
         main_content = main_content.child(new_research::render(state, theme, graph_width));
     } else if state.primary_view == PrimaryView::Home {
         main_content = main_content.child(
@@ -5728,6 +5788,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
                 )
                 .child(session_sidenav::render(
                     state.active_session.as_ref(),
+                    &state.session_live_events,
                     if state.session_busy {
                         state.session_elapsed_ms
                     } else {
@@ -5747,16 +5808,30 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
             0.0
         };
         let width = canvas_width(window_width, sidenav_width);
+        let window_height = cx.layout_size("window").map_or(720.0, |size| size[1]);
+        let surface_top = cx.layout("settings-surface").map_or(0.0, |rect| rect[1]);
+        let canvas_height = (window_height - surface_top - 6.0).max(0.0);
+        let mut canvas_content = col().w_full().h(canvas_height).min_h(0.0);
+        let mut tab_height = 0.0;
+        if let Some(tabs) = runbook_canvas::tab_bar(state, theme) {
+            tab_height = runbook_canvas::TAB_BAR_HEIGHT;
+            canvas_content = canvas_content.child(tabs);
+        }
+        canvas_content = canvas_content.child(runbook_canvas::render(
+            state,
+            theme,
+            (canvas_height - tab_height).max(0.0),
+        ));
         settings_surface = settings_surface.child(
             row()
                 .key("canvas-panel")
                 .w(width + 1.0)
-                .h_full()
+                .h(canvas_height)
                 .transition(Transition::offset(width + 1.0, 0.0).combined(Transition::opacity()))
                 .child(
                     el().key("canvas-divider")
                         .w(1.0)
-                        .h_full()
+                        .h(canvas_height)
                         .fill(color("#2a2a2a")),
                 )
                 .child(
@@ -5764,8 +5839,9 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
                         .role("region")
                         .label("Canvas")
                         .w(width)
-                        .h_full()
-                        .fill(color(CONTENT_SURFACE_COLOR)),
+                        .h(canvas_height)
+                        .fill(color(CONTENT_SURFACE_COLOR))
+                        .child(canvas_content),
                 ),
         );
     }
@@ -6080,8 +6156,12 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
                 window = window.child(
                     in_place_menu::panel(
                         selection_menu_anchor(menu),
-                        title,
-                        width,
+                        in_place_menu::MenuSpec {
+                            title,
+                            width,
+                            item_help: (menu == SelectionMenu::SessionGraph)
+                                .then_some(graph_option_description),
+                        },
                         state.menu_cursor.min(items.len() - 1),
                         items,
                         theme,
@@ -6113,6 +6193,16 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
     if state.primary_view == PrimaryView::NewResearch && state.composer_menu_open {
         window = window.child(new_research::model_menu(state, theme));
     }
+    if state.canvas_open
+        && let Some(menu) = runbook_canvas::language_popup(state, theme)
+    {
+        window = window.child(menu);
+    }
+    if state.canvas_open
+        && let Some(menu) = runbook_canvas::name_popup(state, theme)
+    {
+        window = window.child(menu);
+    }
     if in_session(state)
         && state.session_sidenav_visible
         && !state.canvas_open
@@ -6122,6 +6212,9 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
             state.active_session.as_ref(),
             menu,
             state.session_usage_snapshot_index,
+            state.session_runbook_expanded,
+            state.session_elapsed_ms,
+            &state.session_live_events,
             theme,
         ));
     }
@@ -8615,8 +8708,20 @@ mod tests {
         runtime.frame(0.0);
         assert_eq!(runtime.state.new_research_graph_id, beale_graphs::SIMPLE_ID);
         assert!(runtime.find("new-research-workspace-heading").is_some());
-        assert!(runtime.find("new-research-graph-description").is_some());
+        assert!(runtime.find("new-research-graph-description").is_none());
         assert!(runtime.find("new-research-simple-graph").is_some());
+        let (content, _) = runtime.presented("content-surface").unwrap();
+        let (grid, _) = runtime.presented("new-research-grid-background").unwrap();
+        assert_eq!(grid, content);
+        let (heading, _) = runtime.presented("new-research-workspace-heading").unwrap();
+        let (selector, _) = runtime.presented("new-research-graph-control").unwrap();
+        let (main, _) = runtime.presented("new-research-graph-node-main").unwrap();
+        let above = selector[1] - heading[1] - heading[3];
+        let below = main[1] - selector[1] - selector[3];
+        assert!(
+            (below - above - 8.0).abs() < 1.0,
+            "above={above}, below={below}"
+        );
         for role in beale_graphs::SIMPLE_GRAPH.nodes {
             assert!(
                 runtime
@@ -8624,6 +8729,9 @@ mod tests {
                     .is_some()
             );
         }
+        let (scout_before, _) = runtime.presented("new-research-graph-node-scout").unwrap();
+        assert!(scout_before[2] < 170.0);
+        assert!(scout_before[3] < 76.0);
         let (x, y) = runtime.find("new-research-graph-node-scout").unwrap();
         runtime.pointer_down(x, y);
         runtime.pointer_up(x, y);
@@ -8667,11 +8775,23 @@ mod tests {
             .map(|model| model.model)
             .collect();
         assert_eq!(scout_models, ["example-lead", "example-small"]);
+        assert_eq!(
+            new_research::graph_model_label(&runtime.state, beale_graphs::Role::Scout),
+            "Example Lead + 1"
+        );
+        let (scout_after, _) = runtime.presented("new-research-graph-node-scout").unwrap();
+        assert!(scout_after[2] > scout_before[2]);
         assert!(
             runtime
-                .find("new-research-graph-other-models-scout")
+                .find("new-research-graph-model-label-scout")
                 .is_some()
         );
+        assert!(
+            runtime
+                .find("new-research-graph-agent-icon-scout")
+                .is_some()
+        );
+        assert!(runtime.find("new-research-graph-agent-icon-main").is_some());
         assert_eq!(
             runtime.state.new_research_graph_concurrency,
             [Some(1), None, None, None]
@@ -8718,10 +8838,9 @@ mod tests {
             .map(|model| model.model)
             .collect();
         assert_eq!(main_models, ["example-small"]);
-        assert!(
-            runtime
-                .find("new-research-graph-other-models-main")
-                .is_none()
+        assert_eq!(
+            new_research::graph_model_label(&runtime.state, beale_graphs::Role::Main),
+            "Example Small"
         );
         assert_eq!(runtime.state.new_research_graph_concurrency[0], Some(1));
         assert_eq!(
@@ -8747,9 +8866,19 @@ mod tests {
         assert!(runtime.state.new_research_graph_id.is_empty());
         assert!(runtime.find("new-research-simple-graph").is_none());
         assert!(runtime.find("new-research-no-graph").is_some());
+        assert!(runtime.find("new-research-grid-background").is_some());
         assert!(runtime.find("new-research-graph-node-main").is_some());
         assert!(runtime.find("new-research-graph-node-main-max").is_some());
         assert!(runtime.find("new-research-graph-node-scout").is_none());
+        let (heading, _) = runtime.presented("new-research-workspace-heading").unwrap();
+        let (selector, _) = runtime.presented("new-research-graph-control").unwrap();
+        let (main, _) = runtime.presented("new-research-graph-node-main").unwrap();
+        let above = selector[1] - heading[1] - heading[3];
+        let below = main[1] - selector[1] - selector[3];
+        assert!(
+            (below - above - 8.0).abs() < 1.0,
+            "above={above}, below={below}"
+        );
         let (x, y) = runtime.find("new-research-graph-node-main").unwrap();
         runtime.pointer_down(x, y);
         runtime.pointer_up(x, y);
@@ -8757,6 +8886,98 @@ mod tests {
         assert!(runtime.find("graph-editor-dialog").is_some());
         assert!(runtime.find("graph-editor-max-concurrent").is_none());
         assert!(runtime.find("graph-editor-fixed-max-concurrent").is_some());
+    }
+
+    #[test]
+    fn graph_selector_options_show_descriptions_as_tooltips() {
+        let workspace_id = "00000000-0000-4000-8000-000000000010";
+        let mut state = State {
+            primary_view: PrimaryView::NewResearch,
+            workspaces: vec![WorkspaceSummary {
+                id: workspace_id.to_owned(),
+                name: "Example Workspace".to_owned(),
+                directory: "example-directory".to_owned(),
+            }],
+            new_research_workspace_id: Some(workspace_id.to_owned()),
+            ..State::default()
+        };
+        state.connection = ConnectionStatus::Connected {
+            major: 1,
+            minor: 47,
+        };
+        state
+            .features
+            .iter_mut()
+            .find(|feature| feature.id == beale_graphs::FEATURE_ID)
+            .unwrap()
+            .enabled = true;
+        let mut runtime = Runtime::new(state, view, (900.0, 700.0), Env::new(true, 1.0));
+        runtime.help_delay = 0.05;
+        runtime.frame(0.0);
+        assert!(runtime.find("new-research-graph-description").is_none());
+        let (x, y) = runtime.find("new-research-graph-control").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+        for (index, description) in [
+            beale_graphs::SIMPLE_DESCRIPTION,
+            "Research with one main agent.",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let key = format!("selection-menu-item-{index}");
+            let (x, y) = runtime.find(&key).unwrap();
+            let item = runtime
+                .elements()
+                .into_iter()
+                .find(|item| item.key.as_deref() == Some(key.as_str()))
+                .unwrap();
+            assert_eq!(item.help.as_deref(), Some(description));
+            runtime.pointer_move(x, y);
+            runtime.frame(0.0);
+            runtime.frame(0.1);
+            runtime.frame(0.4);
+            assert_eq!(runtime.help_tooltip().map(|tip| tip.0), Some(description));
+        }
+    }
+
+    #[test]
+    fn new_research_grid_follows_graph_workspace_scope() {
+        let first = "00000000-0000-4000-8000-000000000010";
+        let second = "00000000-0000-4000-8000-000000000011";
+        let mut state = State {
+            primary_view: PrimaryView::NewResearch,
+            workspaces: [first, second]
+                .into_iter()
+                .map(|id| WorkspaceSummary {
+                    id: id.to_owned(),
+                    name: "Example Workspace".to_owned(),
+                    directory: "example-directory".to_owned(),
+                })
+                .collect(),
+            new_research_workspace_id: Some(first.to_owned()),
+            ..State::default()
+        };
+        state.connection = ConnectionStatus::Connected {
+            major: 1,
+            minor: 47,
+        };
+        let graphs = state
+            .features
+            .iter_mut()
+            .find(|feature| feature.id == beale_graphs::FEATURE_ID)
+            .unwrap();
+        graphs.enabled = true;
+        graphs.all_workspaces = false;
+        graphs.workspace_ids = vec![first.to_owned()];
+        let mut runtime = Runtime::new(state, view, (900.0, 700.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        assert!(runtime.find("new-research-grid-background").is_some());
+        runtime.update(|state, _| state.new_research_workspace_id = Some(second.to_owned()));
+        runtime.frame(0.1);
+        assert!(runtime.find("new-research-grid-background").is_none());
+        assert!(runtime.find("new-research-graph-control").is_none());
     }
 
     #[test]
@@ -8930,10 +9151,14 @@ mod tests {
             has_campaign_activity: false,
             token_usage: None,
             usage_snapshots: Vec::new(),
+            runbook_count: 0,
+            active_runbook_count: 0,
+            runbooks: Vec::new(),
         };
         state.apply_session_progress(
             1,
             SessionStreamEvent {
+                runbook_progress: None,
                 kind: SessionStreamKind::TurnCompleted as i32,
                 text: String::new(),
                 tool: None,
@@ -9130,6 +9355,9 @@ mod tests {
             has_campaign_activity: false,
             token_usage: None,
             usage_snapshots: Vec::new(),
+            runbook_count: 0,
+            active_runbook_count: 0,
+            runbooks: Vec::new(),
         };
         state.finish_session_turn(1, Ok(detail));
         assert_eq!(state.primary_view, PrimaryView::NewResearch);
@@ -9243,6 +9471,9 @@ mod tests {
                     has_campaign_activity: false,
                     token_usage: None,
                     usage_snapshots: Vec::new(),
+                    runbook_count: 0,
+                    active_runbook_count: 0,
+                    runbooks: Vec::new(),
                 }),
                 ..State::default()
             },
@@ -9359,9 +9590,13 @@ mod tests {
                 has_campaign_activity: false,
                 token_usage: None,
                 usage_snapshots: Vec::new(),
+runbook_count: 0,
+active_runbook_count: 0,
+            runbooks: Vec::new(),
             }),
             session_busy: true,
             session_live_events: vec![SessionStreamEvent {
+            runbook_progress: None,
                 kind: SessionStreamKind::MessageDelta as i32,
                 text: "**Streaming** `content` and\n\n```sh\nprintf".to_owned(),
                 tool: None,
@@ -9426,6 +9661,9 @@ mod tests {
                 has_campaign_activity: false,
                 token_usage: None,
                 usage_snapshots: Vec::new(),
+runbook_count: 0,
+active_runbook_count: 0,
+            runbooks: Vec::new(),
             }),
             ..State::default()
         };
@@ -9496,6 +9734,9 @@ mod tests {
                 has_campaign_activity: false,
                 token_usage: None,
                 usage_snapshots: Vec::new(),
+                runbook_count: 0,
+                active_runbook_count: 0,
+                runbooks: Vec::new(),
             }),
             ..State::default()
         };
@@ -9558,6 +9799,7 @@ mod tests {
             state.apply_session_progress(
                 7,
                 SessionStreamEvent {
+                    runbook_progress: None,
                     kind: SessionStreamKind::ReasoningDelta as i32,
                     text: text.to_owned(),
                     tool: None,
@@ -9569,6 +9811,7 @@ mod tests {
         state.apply_session_progress(
             7,
             SessionStreamEvent {
+                runbook_progress: None,
                 kind: SessionStreamKind::ToolStarted as i32,
                 text: String::new(),
                 tool: Some(tool.clone()),
@@ -9579,6 +9822,7 @@ mod tests {
         state.apply_session_progress(
             7,
             SessionStreamEvent {
+                runbook_progress: None,
                 kind: SessionStreamKind::ToolFinished as i32,
                 text: String::new(),
                 tool: Some(tool),
@@ -9589,6 +9833,7 @@ mod tests {
         state.apply_session_progress(
             6,
             SessionStreamEvent {
+                runbook_progress: None,
                 kind: SessionStreamKind::MessageDelta as i32,
                 text: "stale".to_owned(),
                 tool: None,
@@ -10216,6 +10461,13 @@ mod tests {
                 loaded.frame(1.0);
                 assert_eq!(loaded.state.workspace_rule_edits.len(), 2);
                 assert!(loaded.find("saved-workspace-rule-dialog").is_none());
+                assert!(loaded.find("saved-workspace-rule-separator-1").is_some());
+                let (x, y) = loaded.find("saved-workspace-rule-remove-1").unwrap();
+                loaded.pointer_down(x, y);
+                loaded.pointer_up(x, y);
+                loaded.frame(1.0);
+                assert_eq!(loaded.state.workspace_rule_edits.len(), 1);
+                assert!(loaded.find("saved-workspace-rule-separator-1").is_none());
             }
         }
         let mut loaded = Runtime::new(loaded.state, view, (2200.0, 900.0), Env::new(true, 1.0));
@@ -10863,6 +11115,7 @@ mod tests {
         state.apply_session_progress(
             1,
             SessionStreamEvent {
+                runbook_progress: None,
                 kind: SessionStreamKind::TurnCompleted as i32,
                 detail: Some(SessionDetail {
                     total_duration_ms: 7_000,
@@ -10892,6 +11145,7 @@ mod tests {
         state.apply_session_progress(
             1,
             SessionStreamEvent {
+                runbook_progress: None,
                 kind: SessionStreamKind::SubagentsSpawned as i32,
                 ..Default::default()
             },
@@ -10948,6 +11202,7 @@ mod tests {
             state.apply_session_progress(
                 1,
                 SessionStreamEvent {
+                    runbook_progress: None,
                     kind: SessionStreamKind::ToolFinished as i32,
                     tool: Some(SessionToolSummary {
                         id: uuid::Uuid::from_u128(3).to_string(),
@@ -11109,6 +11364,569 @@ mod tests {
             .find(|element| element.key.as_deref() == Some("canvas-panel"))
             .unwrap();
         assert!(leaving.rect[0] > settled.rect[0] + 10.0);
+    }
+
+    #[test]
+    fn session_sidenav_lists_runbook_activity_below_usage() {
+        let mut runtime = Runtime::new(
+            State {
+                primary_view: PrimaryView::NewResearch,
+                active_session: Some(SessionDetail {
+                    runbook_count: 1,
+                    active_runbook_count: 0,
+                    runbooks: Vec::new(),
+                    ..Default::default()
+                }),
+                session_sidenav_visible: true,
+                ..State::default()
+            },
+            view,
+            (1200.0, 800.0),
+            Env::new(true, 1.0),
+        );
+        runtime.frame(0.0);
+        let (cache, _) = runtime.presented("session-sidenav-cache-rate").unwrap();
+        let (divider, _) = runtime
+            .presented("session-sidenav-feature-divider")
+            .unwrap();
+        let (runbooks, _) = runtime.presented("session-sidenav-runbooks").unwrap();
+        assert!(cache[1] + cache[3] < divider[1]);
+        assert!(divider[1] < runbooks[1]);
+        for (key, expected) in [
+            ("session-sidenav-runbooks", "1 Runbook"),
+            ("session-sidenav-runbooks-active", "0 Active"),
+        ] {
+            assert_eq!(
+                runtime
+                    .elements()
+                    .into_iter()
+                    .find(|element| element.key.as_deref() == Some(key))
+                    .and_then(|element| element.text)
+                    .as_deref(),
+                Some(expected),
+            );
+        }
+        runtime.update(|state, _| {
+            let detail = state.active_session.as_mut().unwrap();
+            detail.runbook_count = 2;
+            detail.active_runbook_count = 1;
+        });
+        runtime.frame(0.0);
+        assert_eq!(
+            runtime
+                .elements()
+                .into_iter()
+                .find(|element| element.key.as_deref() == Some("session-sidenav-runbooks"))
+                .and_then(|element| element.text)
+                .as_deref(),
+            Some("2 Runbooks"),
+        );
+    }
+
+    #[test]
+    fn runbook_hover_menu_groups_recent_items_and_expands_each_group() {
+        let click = |runtime: &mut Runtime<State>, key: &str| {
+            let (x, y) = runtime.find(key).unwrap();
+            runtime.pointer_down(x, y);
+            runtime.pointer_up(x, y);
+            runtime.frame(1.0);
+        };
+        let runbooks = (0..5)
+            .map(|index| beale_contracts::v1::SessionRunbook {
+                id: format!("R{index}"),
+                title: format!("Example prepared {index}"),
+                status: "prepared".to_owned(),
+                updated_at_ms: 1_700_000_000_000 + index * 1_000,
+                ..Default::default()
+            })
+            .chain([beale_contracts::v1::SessionRunbook {
+                id: "R9".to_owned(),
+                title: "Example completed".to_owned(),
+                status: "done".to_owned(),
+                completed_at_ms: 1_700_000_010_000,
+                ..Default::default()
+            }])
+            .collect();
+        let mut runtime = Runtime::new(
+            State {
+                primary_view: PrimaryView::NewResearch,
+                active_session: Some(SessionDetail {
+                    runbook_count: 6,
+                    runbooks,
+                    ..Default::default()
+                }),
+                session_sidenav_visible: true,
+                ..State::default()
+            },
+            view,
+            (1200.0, 800.0),
+            Env::new(true, 1.0),
+        );
+        runtime.frame(0.0);
+        let (x, y) = runtime.find("session-sidenav-runbooks-row").unwrap();
+        runtime.pointer_move(x, y);
+        runtime.frame(0.0);
+        runtime.frame(0.3);
+        assert!(runtime.find("session-runbooks-popup").is_some());
+        assert!(runtime.find("session-runbook-R4").is_some());
+        assert!(runtime.find("session-runbook-R3").is_some());
+        assert!(runtime.find("session-runbook-R2").is_some());
+        assert!(runtime.find("session-runbook-R1").is_none());
+        assert!(runtime.find("session-runbook-R9").is_some());
+        let (x, y) = runtime.find("session-runbook-prepared-toggle").unwrap();
+        runtime.pointer_move(x, y);
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+        assert!(runtime.find("session-runbook-R1").is_some());
+        assert!(runtime.state.session_runbook_expanded[1]);
+        let (x, y) = runtime.find("session-runbook-prepared-toggle").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+        assert!(runtime.find("session-runbook-R1").is_none());
+        assert!(!runtime.state.session_runbook_expanded[1]);
+        runtime.update(|state, _| {
+            state.session_busy = true;
+            state.session_elapsed_ms = 2_000;
+            state.session_live_events.push(SessionStreamEvent {
+                kind: SessionStreamKind::RunbookProgress as i32,
+                runbook_progress: Some(beale_contracts::v1::RunbookProgress {
+                    runbook_id: "R1".to_owned(),
+                    title: "Example prepared 1".to_owned(),
+                    cell_number: 3,
+                    cell_name: "Example check".to_owned(),
+                }),
+                ..Default::default()
+            });
+        });
+        runtime.frame(0.0);
+        assert!(runtime.find("session-runbook-running-section").is_some());
+        assert_eq!(
+            runtime
+                .elements()
+                .into_iter()
+                .find(|element| element.key.as_deref() == Some("session-runbook-R1-secondary"))
+                .and_then(|element| element.text)
+                .as_deref(),
+            Some("Running Example check..."),
+        );
+        let (x, y) = runtime.find("session-runbook-R1").unwrap();
+        runtime.pointer_move(x, y);
+        runtime.frame(0.01);
+        assert!(runtime.contains("session-runbook-R1", x, y));
+        assert_eq!(
+            runtime.state.session_usage_menu,
+            Some(session_sidenav::UsageMenu::Runbooks)
+        );
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+        assert!(runtime.state.canvas_open);
+        assert!(!runtime.state.session_sidenav_visible);
+        assert!(runtime.state.session_usage_menu.is_none());
+        assert_eq!(
+            runtime.state.canvas_runbook.selected.as_ref().unwrap().id,
+            "R1"
+        );
+        assert!(runtime.find("canvas-runbook-status").is_some());
+        assert!(runtime.find("canvas-tab-1").is_some());
+        runtime.update(|state, _| {
+            runbook_canvas::open(
+                state,
+                beale_contracts::v1::SessionRunbook {
+                    id: "R2".to_owned(),
+                    title: "Example prepared 2".to_owned(),
+                    status: "prepared".to_owned(),
+                    ..Default::default()
+                },
+            );
+        });
+        runtime.frame(0.0);
+        assert!(runtime.find("canvas-tab-1").is_some());
+        assert!(runtime.find("canvas-tab-2").is_some());
+        assert_eq!(
+            runtime.state.canvas_runbook.selected.as_ref().unwrap().id,
+            "R2"
+        );
+        runtime.frame(0.5);
+        click(&mut runtime, "canvas-tab-1-select");
+        assert_eq!(
+            runtime.state.canvas_runbook.selected.as_ref().unwrap().id,
+            "R1"
+        );
+        click(&mut runtime, "canvas-tab-1-close");
+        assert!(runtime.find("canvas-tab-1").is_none());
+        assert_eq!(
+            runtime.state.canvas_runbook.selected.as_ref().unwrap().id,
+            "R2"
+        );
+        click(&mut runtime, "canvas-tab-2-close");
+        assert!(runtime.find("canvas-tab-bar").is_none());
+        assert!(runtime.state.canvas_runbook.selected.is_none());
+        assert!(!runtime.state.canvas_open);
+    }
+
+    #[test]
+    fn canvas_renders_runbook_cells_status_and_saved_results() {
+        use beale_contracts::runbooks::{Cell, CellResult, Document, RunExecution};
+        let mut runtime = Runtime::new(
+            State {
+                primary_view: PrimaryView::NewResearch,
+                canvas_open: true,
+                canvas_runbook: runbook_canvas::CanvasRunbookState::with_view(
+                    runbook_canvas::RunbookView {
+                        workspace_id: "workspace-example".to_owned(),
+                        selected: Some(beale_contracts::v1::SessionRunbook {
+                            id: "R1".to_owned(),
+                            title: "Example procedure with several synthetic checks".to_owned(),
+                            status: "done".to_owned(),
+                            ..Default::default()
+                        }),
+                        document: Some(Document {
+                            id: "R1".to_owned(),
+                            workspace_id: "workspace-example".to_owned(),
+                            title: "Example procedure with several synthetic checks".to_owned(),
+                            purpose: "Synthetic check".to_owned(),
+                            cells: vec![
+                                Cell::Markdown {
+                                    id: "L1".to_owned(),
+                                    name: String::new(),
+                                    source: "Example guidance".to_owned(),
+                                },
+                                Cell::Code {
+                                    id: "L2".to_owned(),
+                                    name: "Read input".to_owned(),
+                                    language: "javascript".to_owned(),
+                                    source: "const value = 1;\nconsole.log(value)".to_owned(),
+                                },
+                                Cell::Code {
+                                    id: "L3".to_owned(),
+                                    name: String::new(),
+                                    language: "javascript".to_owned(),
+                                    source: "console.log('prepared')".to_owned(),
+                                },
+                                Cell::Code {
+                                    id: "L4".to_owned(),
+                                    name: String::new(),
+                                    language: "javascript".to_owned(),
+                                    source: "process.exit(1)".to_owned(),
+                                },
+                            ],
+                            next_cell_number: 5,
+                            created_at_ms: 1_700_000_000_000,
+                            updated_at_ms: 1_700_000_000_000,
+                            revision: 1,
+                        }),
+                        runs: vec![RunExecution {
+                            id: "run-example".to_owned(),
+                            revision: 1,
+                            status: "completed".to_owned(),
+                            output: "Example result".to_owned(),
+                            created_at_ms: 1_700_000_000_000,
+                            updated_at_ms: 1_700_000_001_000,
+                            current_cell_number: 1,
+                        }],
+                        cell_results: vec![
+                            CellResult {
+                                cell_id: "L2".to_owned(),
+                                status: "completed".to_owned(),
+                                updated_at_ms: 1_700_000_001_000,
+                                output: String::new(),
+                                exit_code: Some(0),
+                                stdout: "Example cell output\n".to_owned(),
+                                stderr: String::new(),
+                            },
+                            CellResult {
+                                cell_id: "L4".to_owned(),
+                                status: "failed".to_owned(),
+                                updated_at_ms: 1_700_000_002_000,
+                                output: String::new(),
+                                exit_code: Some(1),
+                                stdout: String::new(),
+                                stderr: "Example cell failure\n".to_owned(),
+                            },
+                        ],
+                        ..Default::default()
+                    },
+                ),
+                ..State::default()
+            },
+            view,
+            (1200.0, 800.0),
+            Env::new(true, 1.0),
+        );
+        runtime.frame(0.0);
+        for key in [
+            "canvas-runbook-description",
+            "canvas-runbook-metadata",
+            "canvas-runbook-status",
+            "canvas-runbook-revision",
+            "canvas-runbook-cell-L1",
+            "canvas-runbook-cell-L2",
+            "canvas-runbook-cell-L1-play",
+            "canvas-runbook-cell-L1-language",
+            "canvas-runbook-cell-L1-delete",
+            "canvas-runbook-cell-L2-play",
+            "canvas-runbook-cell-L2-language",
+            "canvas-runbook-cell-L2-delete",
+            "canvas-runbook-cell-L2-line-number-1",
+            "canvas-runbook-cell-L2-line-number-2",
+            "canvas-runbook-cell-L2-source-line-1",
+            "canvas-runbook-cell-L2-source-line-2",
+            "canvas-runbook-cell-L1-status",
+            "canvas-runbook-cell-L2-status",
+            "canvas-runbook-cell-L3-status",
+            "canvas-runbook-cell-L4-status",
+            "canvas-runbook-cell-L2-number",
+            "canvas-runbook-cell-L2-result-output",
+            "canvas-runbook-cell-L4-result-error",
+            "canvas-runbook-cell-L2-exit-code",
+            "canvas-runbook-cell-L4-exit-code",
+            "canvas-runbook-status-dash-L1",
+            "canvas-runbook-status-dash-L2",
+            "canvas-runbook-status-dash-L3",
+            "canvas-runbook-status-dash-L4",
+        ] {
+            assert!(runtime.find(key).is_some(), "missing {key}");
+        }
+        assert!(
+            runtime
+                .find("canvas-runbook-result-run-example-output")
+                .is_none()
+        );
+        assert!(!runtime.elements().into_iter().any(|element| {
+            matches!(
+                element.text.as_deref(),
+                Some("Cells" | "Results" | "No runs yet.")
+            )
+        }));
+        assert!(runtime.elements().into_iter().any(|element| {
+            element.key.as_deref() == Some("canvas-runbook-cell-L2-line-number-2")
+                && element.text.as_deref() == Some("2")
+        }));
+        assert!(runtime.elements().into_iter().any(|element| {
+            element.key.as_deref() == Some("canvas-runbook-cell-L2-number")
+                && element.text.as_deref() == Some("Read input")
+        }));
+        let elements = runtime.elements();
+        let tab_bar = elements
+            .iter()
+            .find(|item| item.key.as_deref() == Some("canvas-tab-bar"))
+            .unwrap();
+        let tab = elements
+            .iter()
+            .find(|item| item.key.as_deref() == Some("canvas-tab-1"))
+            .unwrap();
+        assert!(tab.rect[2] < tab_bar.rect[2] - 100.0);
+        assert!(elements.iter().any(|item| {
+            item.key.as_deref() == Some("canvas-tab-1-title")
+                && item.text.as_deref() == Some("Example procedure with several synthetic checks")
+        }));
+        let title = elements
+            .iter()
+            .find(|item| item.key.as_deref() == Some("canvas-tab-1-title"))
+            .unwrap();
+        assert!(title.rect[2] > 160.0);
+        assert!(
+            (title.rect[1] + title.rect[3] / 2.0 - tab.rect[1] - tab.rect[3] / 2.0).abs() < 2.0
+        );
+        let description = elements
+            .iter()
+            .find(|item| item.key.as_deref() == Some("canvas-runbook-description"))
+            .unwrap();
+        let purpose = elements
+            .iter()
+            .find(|item| item.key.as_deref() == Some("canvas-runbook-purpose"))
+            .unwrap();
+        let metadata = elements
+            .iter()
+            .find(|item| item.key.as_deref() == Some("canvas-runbook-metadata"))
+            .unwrap();
+        let status = elements
+            .iter()
+            .find(|item| item.key.as_deref() == Some("canvas-runbook-status"))
+            .unwrap();
+        let revision = elements
+            .iter()
+            .find(|item| item.key.as_deref() == Some("canvas-runbook-revision"))
+            .unwrap();
+        assert!(purpose.rect[1] >= description.rect[1]);
+        assert!(metadata.rect[1] >= purpose.rect[1] + purpose.rect[3]);
+        assert!(metadata.rect[1] + metadata.rect[3] <= description.rect[1] + description.rect[3]);
+        assert!(status.rect[0] < revision.rect[0]);
+        assert!(revision.rect[0] + revision.rect[2] <= metadata.rect[0] + metadata.rect[2] + 1.0);
+        assert!(
+            !elements
+                .iter()
+                .any(|item| item.key.as_deref() == Some("canvas-runbook-title"))
+        );
+        let canvas_body = elements
+            .iter()
+            .find(|item| item.key.as_deref() == Some("canvas-runbook"))
+            .unwrap();
+        assert!(canvas_body.rect[1] >= tab_bar.rect[1] + tab_bar.rect[3] - 1.0);
+        let scroll = elements
+            .iter()
+            .find(|item| item.key.as_deref() == Some("canvas-runbook-scroll"))
+            .unwrap();
+        let strip = elements
+            .iter()
+            .find(|item| item.key.as_deref() == Some("canvas-runbook-status-strip"))
+            .unwrap();
+        assert!(scroll.rect[0] + scroll.rect[2] <= strip.rect[0] + 1.0);
+        assert!(elements.iter().any(|item| item.key.as_deref()
+            == Some("canvas-runbook-cell-L2-result-output")
+            && item.text.as_deref() == Some("Example cell output")));
+        assert!(elements.iter().any(|item| item.key.as_deref()
+            == Some("canvas-runbook-cell-L4-result-error")
+            && item.text.as_deref() == Some("Example cell failure")));
+        assert!(elements.iter().any(|item| item.key.as_deref()
+            == Some("canvas-runbook-cell-L2-exit-code")
+            && item.text.as_deref() == Some("Exit Code: 0")));
+        for (key, label) in [
+            ("canvas-runbook-cell-L1-status", "Untouched"),
+            ("canvas-runbook-cell-L3-status", "Prepared"),
+        ] {
+            assert!(runtime.elements().into_iter().any(|element| {
+                element.key.as_deref() == Some(key) && element.label.as_deref() == Some(label)
+            }));
+        }
+        for (key, label) in [
+            ("canvas-runbook-cell-L2-status", "Succeeded "),
+            ("canvas-runbook-cell-L4-status", "Failed "),
+        ] {
+            assert!(runtime.elements().into_iter().any(|element| {
+                element.key.as_deref() == Some(key)
+                    && element
+                        .label
+                        .as_deref()
+                        .is_some_and(|value| value.starts_with(label))
+            }));
+        }
+        let elements = runtime.elements();
+        let header = elements
+            .iter()
+            .find(|item| item.key.as_deref() == Some("canvas-runbook-cell-L2-header"))
+            .unwrap();
+        let number = elements
+            .iter()
+            .find(|item| item.key.as_deref() == Some("canvas-runbook-cell-L2-number"))
+            .unwrap();
+        let actions = elements
+            .iter()
+            .find(|item| item.key.as_deref() == Some("canvas-runbook-cell-L2-actions"))
+            .unwrap();
+        assert!((header.rect[0] + header.rect[2] - actions.rect[0] - actions.rect[2]).abs() < 3.0);
+        assert!(
+            (header.rect[0] + header.rect[2] / 2.0 - number.rect[0] - number.rect[2] / 2.0).abs()
+                < 3.0
+        );
+        let (x, y) = runtime.find("canvas-runbook-cell-L2-name-control").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+        assert!(runtime.find("canvas-runbook-name-menu").is_some());
+        assert!(runtime.find("canvas-runbook-name-input").is_some());
+        runtime.update(|state, _| state.canvas_runbook.name_edit = None);
+        runtime.frame(0.0);
+        let (x, y) = runtime.find("canvas-runbook-cell-L2-language").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.1);
+        runtime.frame(0.3);
+        assert_eq!(
+            runtime.state.canvas_runbook.language_menu_cell.as_deref(),
+            Some("L2")
+        );
+        assert!(runtime.find("canvas-runbook-language-menu").is_some());
+        assert!(runtime.find("canvas-runbook-language-python").is_some());
+        runtime.set_viewport((700.0, 800.0), 1.0);
+        runtime.frame(0.6);
+        let elements = runtime.elements();
+        let header = elements
+            .iter()
+            .find(|item| item.key.as_deref() == Some("canvas-runbook-cell-L2-header"))
+            .unwrap();
+        let number = elements
+            .iter()
+            .find(|item| item.key.as_deref() == Some("canvas-runbook-cell-L2-number"))
+            .unwrap();
+        let header_center = header.rect[0] + header.rect[2] / 2.0;
+        let number_center = number.rect[0] + number.rect[2] / 2.0;
+        assert!((header_center - number_center).abs() < 3.0);
+        runtime.update(|state, _| {
+            state.canvas_runbook.selected.as_mut().unwrap().status = "running".to_owned();
+            state
+                .canvas_runbook
+                .selected
+                .as_mut()
+                .unwrap()
+                .current_cell_number = 2;
+        });
+        runtime.frame(0.7);
+        assert!(runtime.find("canvas-runbook-cell-L2-spinner").is_some());
+        assert!(runtime.find("canvas-runbook-cell-L3-spinner").is_none());
+        assert!(runtime.elements().into_iter().any(|item| {
+            item.key.as_deref() == Some("canvas-runbook-cell-L2-status")
+                && item.label.as_deref() == Some("Running")
+        }));
+        runtime.update(|state, _| state.canvas_runbook.language_menu_cell = None);
+        runtime.frame(0.0);
+        runtime.set_viewport((1100.0, 450.0), 1.0);
+        runtime.frame(0.8);
+        runtime.frame(0.0);
+        let y_of = |runtime: &Runtime<State>, key: &str| {
+            runtime
+                .elements()
+                .into_iter()
+                .find(|item| item.key.as_deref() == Some(key))
+                .unwrap()
+                .rect[1]
+        };
+        let strip_y = y_of(&runtime, "canvas-runbook-status-strip");
+        let tabs_y = y_of(&runtime, "canvas-tab-bar");
+        let purpose_y = y_of(&runtime, "canvas-runbook-purpose");
+        let elements = runtime.elements();
+        let scroll_height = elements
+            .iter()
+            .find(|item| item.key.as_deref() == Some("canvas-runbook-scroll"))
+            .unwrap()
+            .rect[3];
+        let body_height = elements
+            .iter()
+            .find(|item| item.key.as_deref() == Some("canvas-runbook-body"))
+            .unwrap()
+            .rect[3];
+        assert!(body_height > scroll_height);
+        let (scroll_rect, _) = runtime.presented("canvas-runbook-scroll").unwrap();
+        let (bar_rect, _) = runtime.presented("canvas-runbook-scrollbar").unwrap();
+        let (strip_rect, _) = runtime.presented("canvas-runbook-status-strip").unwrap();
+        let (runbook_rect, _) = runtime.presented("canvas-runbook").unwrap();
+        let (dash_rect, _) = runtime.presented("canvas-runbook-status-dash-L1").unwrap();
+        assert!((bar_rect[1] - runbook_rect[1]).abs() < 1.0);
+        assert!((bar_rect[3] - runbook_rect[3]).abs() < 1.0);
+        assert!((bar_rect[0] + bar_rect[2] - runbook_rect[0] - runbook_rect[2]).abs() < 1.0);
+        assert!(scroll_rect[0] + scroll_rect[2] <= strip_rect[0] + 1.0);
+        assert!(dash_rect[0] + dash_rect[2] < bar_rect[0]);
+        assert!(runtime.state.canvas_scroll.metrics().1 > 0.0);
+        let (x, y) = runtime.find("canvas-runbook-scroll").unwrap();
+        assert!(x < 1100.0);
+        runtime.wheel_event(WheelEvent::new(0.0, -120.0).at(x, y));
+        for _ in 0..5 {
+            runtime.frame(1.0 / 60.0);
+        }
+        assert!(y_of(&runtime, "canvas-runbook-purpose") < purpose_y);
+        assert!((strip_y - y_of(&runtime, "canvas-runbook-status-strip")).abs() < 1.0);
+        assert!((tabs_y - y_of(&runtime, "canvas-tab-bar")).abs() < 1.0);
+        let offset = runtime.state.canvas_scroll.position().offset[1];
+        let (down_rect, _) = runtime.presented("canvas-runbook-scroll-down").unwrap();
+        let down_x = down_rect[0] + down_rect[2] / 2.0;
+        let down_y = down_rect[1] + down_rect[3] / 2.0;
+        runtime.pointer_down(down_x, down_y);
+        runtime.pointer_up(down_x, down_y);
+        runtime.frame(1.0 / 60.0);
+        assert!(runtime.state.canvas_scroll.position().offset[1] > offset);
     }
 
     #[test]
@@ -11811,6 +12629,11 @@ mod tests {
         runtime.frame(0.0);
         assert!(runtime.find("plugin-manifest-dialog").is_some());
         assert!(runtime.state.plugin_manifest_text.contains("\"version\""));
+        runtime.update(|state, _| {
+            state.plugin_manifest_tool_names = vec!["example_read".to_owned()];
+        });
+        runtime.frame(0.0);
+        assert!(runtime.find("plugin-manifest-tools").is_some());
         let (x, y) = runtime.find("plugin-manifest-close").unwrap();
         runtime.pointer_down(x, y);
         runtime.pointer_up(x, y);
@@ -11855,9 +12678,18 @@ mod tests {
         assert!(runtime.find("feature-item-fleet").is_some());
         assert!(runtime.find("feature-toggle-fleet").is_some());
         assert!(runtime.find("feature-tools-fleet").is_some());
+        assert!(runtime.find("feature-sidebar-view-fleet").is_some());
         assert!(runtime.find("feature-toggle-goal-mode").is_some());
         assert!(runtime.find("feature-prompt-extension-goal-mode").is_some());
+        assert!(runtime.find("feature-sidebar-view-goal-mode").is_some());
         assert!(runtime.find("feature-tools-goal-mode").is_some());
+        let (prompt, _) = runtime
+            .presented("feature-prompt-extension-goal-mode")
+            .unwrap();
+        let (sidebar, _) = runtime.presented("feature-sidebar-view-goal-mode").unwrap();
+        let (tools, _) = runtime.presented("feature-tools-goal-mode").unwrap();
+        assert!(prompt[1] + prompt[3] <= sidebar[1]);
+        assert!(sidebar[1] + sidebar[3] <= tools[1]);
         assert!(runtime.state.features[0].has_prompt_extension);
         assert_eq!(runtime.state.features[0].tool_count, 1);
         let (x, y) = runtime.find("feature-tab-enabled").unwrap();
@@ -11937,11 +12769,13 @@ mod tests {
                 name: "Goal Mode".to_owned(),
                 description: "Example feature".to_owned(),
                 prompt_extension: "Example prompt extension".to_owned(),
+                tool_names: vec!["goal_status".to_owned()],
             });
             state.feature_details_error.clear();
         });
         runtime.frame(0.0);
         assert!(runtime.find("feature-details-prompt").is_some());
+        assert!(runtime.find("feature-details-tools").is_some());
         let (x, y) = runtime.find("feature-details-close").unwrap();
         runtime.pointer_down(x, y);
         runtime.pointer_up(x, y);

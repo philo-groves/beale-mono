@@ -23,6 +23,15 @@ struct FeatureSpec {
     has_prompt_extension: bool,
     tool_count: u32,
     prompt_extension: &'static str,
+    tool_names: Vec<String>,
+}
+
+#[cfg(any(feature = "surfaces", feature = "knowledge", feature = "runbooks"))]
+fn definition_names(definitions: Vec<serde_json::Value>) -> Vec<String> {
+    definitions
+        .iter()
+        .filter_map(|definition| definition.get("name")?.as_str().map(str::to_owned))
+        .collect()
 }
 
 fn feature_specs() -> Vec<FeatureSpec> {
@@ -35,6 +44,7 @@ fn feature_specs() -> Vec<FeatureSpec> {
             has_prompt_extension: beale_goals::HAS_PROMPT_EXTENSION,
             tool_count: beale_goals::TOOL_COUNT,
             prompt_extension: beale_goals::PROMPT_EXTENSION,
+            tool_names: vec![beale_goals::TOOL_NAME.to_owned()],
         },
         #[cfg(feature = "fleet")]
         FeatureSpec {
@@ -44,6 +54,7 @@ fn feature_specs() -> Vec<FeatureSpec> {
             has_prompt_extension: beale_fleet::HAS_PROMPT_EXTENSION,
             tool_count: beale_fleet::TOOL_COUNT,
             prompt_extension: beale_fleet::PROMPT_EXTENSION,
+            tool_names: Vec::new(),
         },
         #[cfg(feature = "graphs")]
         FeatureSpec {
@@ -53,6 +64,7 @@ fn feature_specs() -> Vec<FeatureSpec> {
             has_prompt_extension: beale_graphs::HAS_PROMPT_EXTENSION,
             tool_count: beale_graphs::TOOL_COUNT,
             prompt_extension: beale_graphs::PROMPT_EXTENSION,
+            tool_names: vec![beale_graphs::DELEGATE_TOOL.to_owned()],
         },
         #[cfg(feature = "tracking")]
         FeatureSpec {
@@ -62,6 +74,7 @@ fn feature_specs() -> Vec<FeatureSpec> {
             has_prompt_extension: beale_tracking::HAS_PROMPT_EXTENSION,
             tool_count: beale_tracking::TOOL_COUNT,
             prompt_extension: beale_tracking::PROMPT_EXTENSION,
+            tool_names: Vec::new(),
         },
         #[cfg(feature = "surfaces")]
         FeatureSpec {
@@ -71,6 +84,7 @@ fn feature_specs() -> Vec<FeatureSpec> {
             has_prompt_extension: beale_surfaces::HAS_PROMPT_EXTENSION,
             tool_count: beale_surfaces::TOOL_COUNT,
             prompt_extension: beale_surfaces::PROMPT_EXTENSION,
+            tool_names: definition_names(beale_surfaces::definitions()),
         },
         #[cfg(feature = "knowledge")]
         FeatureSpec {
@@ -80,6 +94,7 @@ fn feature_specs() -> Vec<FeatureSpec> {
             has_prompt_extension: beale_knowledge::HAS_PROMPT_EXTENSION,
             tool_count: beale_knowledge::TOOL_COUNT,
             prompt_extension: beale_knowledge::PROMPT_EXTENSION,
+            tool_names: definition_names(beale_knowledge::definitions()),
         },
         #[cfg(feature = "runbooks")]
         FeatureSpec {
@@ -89,6 +104,7 @@ fn feature_specs() -> Vec<FeatureSpec> {
             has_prompt_extension: beale_runbooks::HAS_PROMPT_EXTENSION,
             tool_count: beale_runbooks::TOOL_COUNT,
             prompt_extension: beale_runbooks::PROMPT_EXTENSION,
+            tool_names: definition_names(beale_runbooks::definitions()),
         },
     ]
 }
@@ -200,6 +216,7 @@ async fn details(
             name: spec.name.to_owned(),
             description: spec.description.to_owned(),
             prompt_extension: spec.prompt_extension.to_owned(),
+            tool_names: spec.tool_names,
         }
         .encode_to_vec(),
     ))
@@ -314,6 +331,18 @@ mod tests {
     use beale_storage::{GoalRow, SessionRow, TurnActivity, TurnRow, WorkspaceRow};
     use tower::ServiceExt;
 
+    #[test]
+    fn feature_details_tool_names_match_summary_counts() {
+        for spec in feature_specs() {
+            assert_eq!(
+                spec.tool_names.len(),
+                spec.tool_count as usize,
+                "{}",
+                spec.id
+            );
+        }
+    }
+
     #[cfg(feature = "goal-mode")]
     #[tokio::test]
     async fn feature_is_off_by_default_and_toggle_is_authenticated() {
@@ -417,6 +446,7 @@ mod tests {
             .unwrap();
         let details = FeatureDetailsResponse::decode(bytes).unwrap();
         assert_eq!(details.id, FEATURE_ID);
+        assert_eq!(details.tool_names, [beale_goals::TOOL_NAME]);
         assert_eq!(details.prompt_extension, beale_goals::PROMPT_EXTENSION);
         assert!(
             beale_goals::system_section(beale_goals::Limits::default(), 0, 0)

@@ -102,7 +102,7 @@ fn required<'a>(args: &'a Value, key: &str) -> Result<&'a str> {
     Ok(value)
 }
 
-fn bash_executable() -> PathBuf {
+pub fn bash_executable() -> PathBuf {
     #[cfg(windows)]
     {
         for variable in ["ProgramFiles", "ProgramFiles(x86)"] {

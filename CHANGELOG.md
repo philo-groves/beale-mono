@@ -6,6 +6,17 @@
 
 #### Added
 
+- Canvas now shows open runbooks as closeable squircle tabs with a runbook icon and title. Multiple runbooks retain separate view state, and closing a tab selects a neighboring runbook.
+- Runbook cell output now separates stdout and stderr, colors stderr red, and shows the exit code on the Output row. Protocol v1.66 carries structured cell streams; app-server schema 40 stores them while retaining older output text.
+- Runbook Canvas now shows saved output beneath each executed cell, a spinner in the active cell's run button, and a fixed right-side cell status strip. App-server schema 39 stores bounded per-cell output; protocol v1.65 includes it in runbook detail reads. Existing cell results have empty output.
+- Runbook cells can have short optional names. Canvas shows the name in the cell header, and active session Runbooks show it in the running text. Protocol v1.64 carries names in progress and session summaries; app-server schema 38 stores the current cell name.
+- Runbook Canvas cell headers now center the cell number and show Untouched or Prepared beside Play, or a success check or failure X with the cell result time. App-server schema 37 stores session-scoped cell results and clears them when executable cell content changes; protocol v1.63 returns them with runbook details. Existing whole-run records remain readable but do not gain inferred cell results.
+- Runbook Canvas code cells now show line numbers and syntax-colored source for supported languages, with PowerShell using shell token colors.
+- Runbook Canvas cells now have single-cell Play, language selection, and delete controls. Single-cell runs use session locking and Auto-Review, while cell edits require the current revision. Protocol v1.62 adds authenticated cell run and edit requests.
+- Runbook entries in the v2 session hover menu now open Canvas with the runbook's cells, current status, and recent session execution results. Section labels are muted. Protocol v1.61 adds bounded run results to the authenticated runbook read response.
+- Added a Runbooks hover menu to the v2 session sidenav with recent Active, Prepared, and Done lists, per-section expansion, timestamps, and live cell progress. App-server schema 36 records the current cell; protocol v1.60 carries session runbook summaries and progress events.
+- Added a Runbooks activity row to the v2 session sidenav, separated from token usage, with distinct session runbook and active execution counts. Runbooks now provides `runbook_run` and `runbook_status`; supported code cells run in order with bounded host execution and durable status. App-server schema 35 and protocol v1.59 carry the execution and session counts.
+- Listed feature tools in the v2 Feature Details dialog and discovered MCP tools in plugin details. Plugin details refresh installed MCP servers on demand; protocol v1.58 carries tool names.
 - Added left-opening interactive usage chart menus that open on row hover to the v2 session sidenav. Token and cache charts show five-minute active-work snapshots with selectable values; the Session heading has a chart shortcut.
 - Added a content-sized inset V2 session sidenav card with a header toggle, slide animation, automatic reveal after the first successful campaign creation or subagent delegation, a duration counter, and icon rows for session tokens and cache usage with muted right-aligned stats. The cache rate uses reported cached input over input from calls with cache telemetry and displays one decimal place. App-server schema 33 and protocol v1.56 expose saved main and subagent usage. Opening Canvas closes the sidenav; Canvas also slides into view.
 - Added an empty app-global Canvas in the V2 desktop. A rounded rectangle and plus button beside the window controls toggles the right pane, with outline and filled states; it stays open while changing views and shares the window width with the main content.
@@ -90,6 +101,15 @@
 
 #### Changed
 
+- Runbook Canvas now shows cells directly below the runbook metadata without the Cells heading or separate run-level Results section; per-cell output remains attached to each cell.
+- Runbook Canvas uses the Settings scrollbar controls at its right edge, beside the cell status markers.
+- Runbook Canvas content now scrolls within the pane while view tabs and the cell status strip stay fixed. Content fades at the scroll edge beneath the tabs.
+- Runbook Canvas tabs center their titles and close Canvas when the last tab closes. A rounded border encloses the description and its metadata, with ID and status on the left and revision and update time on the right.
+- Canvas runbook tabs now fit their full titles and omit the underline separator. New runbook titles are limited to 64 characters; unchanged older titles remain editable.
+- Feature cards now show whether a feature has a navigation sidebar view, beneath Prompt Extension.
+- Graph descriptions now appear as tooltips on New Research selector options instead of below the selector.
+- New Research uses the workspace Surfaces dot grid as its background when Graphs is enabled for the selected workspace.
+- New Research graph nodes now size to their role and model labels. Additional model counts appear beside the primary model, and all agent roles show a robot icon.
 - V2 header titles now sit in wide squircle tabs with their existing icons and labels, without a preceding vertical separator, leaving room for future multiple-view headers.
 - Workspace tabs now distinguish Surfaces with a connected-node icon and Knowledge Base with a book icon.
 - Clicking empty space around a selected V2 surface closes its detail panel; clicking another surface switches the panel, while clicks inside it keep its controls available.
@@ -97,7 +117,7 @@
 - Replaced the three surface progress gates with a single outline colored from grey to red by update count, scaled to the most edited surface. Surfaces are optional at workspace creation and hidden from default model context; Rules remain available for general scope.
 - Assigned workspace-local `S1`, `S2`, … surface IDs through the app-server. Existing v3 manifests map old IDs and connections to short IDs on read and persist schema 5 on the next write; deleted numbers are not reused. Protocol v1.51 added optional surface definitions so older clients preserve fields they do not know.
 - Laid out the v2 workspace surface network by recorded connections, with related surfaces clustered and unconnected surfaces spread across rows.
-- Made the v2 workspace surface graph fill the main content area with a square grid, compact icon nodes, and drag panning beneath the floating workspace title. Surfaces, Settings, and Rules remain in the title row, and Manage Surfaces stays fixed at the bottom right.
+- Made the v2 workspace surface graph fill the main content area with a fine dot grid, compact icon nodes, and drag panning beneath the floating workspace title. Surfaces, Settings, and Rules remain in the title row, and Manage Surfaces stays fixed at the bottom right.
 - Moved v2 session composer history navigation to the Up and Down keys and removed its history buttons.
 - Renamed v2 workspace Foundation tabs to General and Workspace Details to Basic Information. Name and new-workspace directory values now use edit dialogs and a folder picker; empty required values show a warning, and displayed paths under the user home use `~/`.
 - Gave Automations Active runs a pulse icon and Schedule a Job a calendar-plus icon.

@@ -286,6 +286,42 @@ impl Catalog {
         self.active.lock().await.remove(name);
     }
 
+    async fn tool_names(&self, name: &str, installed: bool) -> Vec<String> {
+        if installed {
+            let _ = timeout(Duration::from_secs(15), self.activate(name)).await;
+            let active = self.active.lock().await;
+            if let Some(servers) = active.get(name) {
+                let mut names = servers
+                    .iter()
+                    .flat_map(|(server_name, server)| {
+                        server.tool_names.iter().map(move |tool_name| {
+                            if servers.len() == 1 {
+                                tool_name.clone()
+                            } else {
+                                format!("{server_name}: {tool_name}")
+                            }
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                names.sort_unstable();
+                return names;
+            }
+            return Vec::new();
+        }
+        if name == "apple-security-devices" {
+            let Some(parent) = self.root.parent() else {
+                return Vec::new();
+            };
+            let path = parent.join("apple-security-device-tools.json");
+            if let Ok(bytes) = std::fs::read(path)
+                && let Ok(names) = serde_json::from_slice::<Vec<String>>(&bytes)
+            {
+                return names;
+            }
+        }
+        Vec::new()
+    }
+
     async fn retain_installed(&self, installed: &HashSet<&str>) {
         self.active
             .lock()
@@ -505,11 +541,18 @@ async fn manifest_route(
         .manifest(&request.name)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
+    let installed = state
+        .db
+        .installed_plugin_names()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .contains(&request.name);
+    let tool_names = state.catalog.tool_names(&request.name, installed).await;
     Ok((
         [(header::CONTENT_TYPE, PROTOBUF_CONTENT_TYPE)],
         PluginManifestResponse {
             name: request.name,
             manifest_json,
+            tool_names,
         }
         .encode_to_vec(),
     ))
@@ -718,6 +761,10 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
         .await
         .unwrap();
         assert_eq!(catalog.activate("example-tools").await.unwrap(), 2);
+        assert_eq!(
+            catalog.tool_names("example-tools", true).await,
+            ["example_read", "example_write"]
+        );
         assert_eq!(catalog.activate("example-tools").await.unwrap(), 2);
         assert_eq!(
             catalog.activate("apple-security-devices").await.unwrap(),
@@ -787,10 +834,32 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
         let bytes = to_bytes(manifest.into_body(), 64_000).await.unwrap();
         let manifest = PluginManifestResponse::decode(bytes).unwrap();
         assert_eq!(manifest.name, "meta-skills");
+        assert!(manifest.tool_names.is_empty());
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&manifest.manifest_json).unwrap()["name"],
             "meta-skills"
         );
+        let inventory = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(PLUGIN_MANIFEST_PATH)
+                    .header(header::AUTHORIZATION, "Bearer example-token")
+                    .header(header::CONTENT_TYPE, PROTOBUF_CONTENT_TYPE)
+                    .body(Body::from(
+                        GetPluginManifestRequest {
+                            name: "apple-security-devices".to_owned(),
+                        }
+                        .encode_to_vec(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let bytes = to_bytes(inventory.into_body(), 70_000).await.unwrap();
+        let inventory = PluginManifestResponse::decode(bytes).unwrap();
+        assert_eq!(inventory.tool_names.len(), 19);
 
         let installed = app
             .clone()

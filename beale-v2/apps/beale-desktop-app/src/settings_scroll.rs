@@ -109,7 +109,7 @@ impl SettingsScroll {
         let up_scroll = self.clone();
         let down_scroll = self.clone();
         col()
-            .key("settings-scrollbar")
+            .key(format!("{}bar", self.scroll_key))
             .role("scrollbar")
             .label("Content scroll position")
             .pin(None, Some(0.0), Some(0.0), Some(0.0))
@@ -118,7 +118,7 @@ impl SettingsScroll {
             .cursor(Cursor::Default)
             .live_opacity(&self.opacity)
             .child(
-                el().key("settings-scroll-up")
+                el().key(format!("{}-up", self.scroll_key))
                     .w_full()
                     .h(ARROW_HEIGHT)
                     .center()
@@ -132,7 +132,7 @@ impl SettingsScroll {
                     .child(icon(&TRIANGLE_UP, 10.0).color(theme.color("#555555"))),
             )
             .child(
-                el().key("settings-scrollbar-track")
+                el().key(format!("{}bar-track", self.scroll_key))
                     .w_full()
                     .grow(1.0)
                     .on_layout_tx(move |_: &mut State, [_, _, _, height], tx| {
@@ -171,14 +171,14 @@ impl SettingsScroll {
                         tx.live_only();
                     })
                     .child(
-                        el().key("settings-scrollbar-thumb")
+                        el().key(format!("{}bar-thumb", self.scroll_key))
                             .live_rect(&self.thumb_rect)
                             .radius(THUMB_WIDTH / 2.0)
                             .fill(theme.color("#111111")),
                     ),
             )
             .child(
-                el().key("settings-scroll-down")
+                el().key(format!("{}-down", self.scroll_key))
                     .w_full()
                     .h(ARROW_HEIGHT)
                     .center()

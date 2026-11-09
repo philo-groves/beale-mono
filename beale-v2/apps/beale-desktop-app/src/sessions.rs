@@ -175,6 +175,16 @@ pub(crate) fn valid_detail(detail: &SessionDetail) -> bool {
                 && (goal.status == GoalStatus::Waiting as i32) != goal.required_state.is_empty()
                 && goal.required_state.len() <= 1_024
         })
+        && detail.runbooks.len() <= 1_024
+        && detail.runbooks.iter().all(|book| {
+            !book.id.is_empty()
+                && book.id.len() <= 128
+                && !book.title.is_empty()
+                && book.title.len() <= 200
+                && matches!(book.status.as_str(), "running" | "prepared" | "done")
+                && book.current_cell_number <= 64
+                && book.current_cell_name.chars().count() <= 40
+        })
         && detail.messages.iter().all(|message| {
             matches!(
                 SessionRole::try_from(message.role),
@@ -218,6 +228,9 @@ pub(crate) fn valid_detail(detail: &SessionDetail) -> bool {
 }
 
 fn valid_stream_event(event: &SessionStreamEvent) -> bool {
+    if event.kind != SessionStreamKind::RunbookProgress as i32 && event.runbook_progress.is_some() {
+        return false;
+    }
     match SessionStreamKind::try_from(event.kind) {
         Ok(SessionStreamKind::MessageDelta | SessionStreamKind::ReasoningDelta) => {
             !event.text.is_empty()
@@ -250,6 +263,19 @@ fn valid_stream_event(event: &SessionStreamEvent) -> bool {
         }
         Ok(SessionStreamKind::SubagentsSpawned) => {
             event.text.is_empty() && event.tool.is_none() && event.detail.is_none()
+        }
+        Ok(SessionStreamKind::RunbookProgress) => {
+            event.text.is_empty()
+                && event.tool.is_none()
+                && event.detail.is_none()
+                && event.runbook_progress.as_ref().is_some_and(|progress| {
+                    !progress.runbook_id.is_empty()
+                        && progress.runbook_id.len() <= 128
+                        && !progress.title.is_empty()
+                        && progress.title.len() <= 200
+                        && progress.cell_number <= 64
+                        && progress.cell_name.chars().count() <= 40
+                })
         }
         _ => false,
     }
@@ -433,6 +459,7 @@ mod tests {
     #[test]
     fn stream_decoder_handles_fragmented_and_adjacent_frames() {
         let first = SessionStreamEvent {
+            runbook_progress: None,
             kind: SessionStreamKind::ReasoningDelta as i32,
             text: "Checking example input".to_owned(),
             tool: None,
@@ -440,6 +467,7 @@ mod tests {
             segment_index: 1,
         };
         let second = SessionStreamEvent {
+            runbook_progress: None,
             kind: SessionStreamKind::MessageDelta as i32,
             text: "Example answer".to_owned(),
             tool: None,
@@ -467,13 +495,39 @@ mod tests {
     #[test]
     fn spawn_event_has_no_model_visible_payload() {
         let event = SessionStreamEvent {
+            runbook_progress: None,
             kind: SessionStreamKind::SubagentsSpawned as i32,
             ..Default::default()
         };
         assert!(valid_stream_event(&event));
         assert!(!valid_stream_event(&SessionStreamEvent {
+            runbook_progress: None,
             text: "unexpected".to_owned(),
             ..event
         }));
+    }
+
+    #[test]
+    fn runbook_progress_event_requires_bounded_identity_and_cell() {
+        let event = SessionStreamEvent {
+            kind: SessionStreamKind::RunbookProgress as i32,
+            runbook_progress: Some(beale_contracts::v1::RunbookProgress {
+                runbook_id: "R1".to_owned(),
+                title: "Example procedure".to_owned(),
+                cell_number: 2,
+                cell_name: "Example step".to_owned(),
+            }),
+            ..Default::default()
+        };
+        assert!(valid_stream_event(&event));
+        let mut invalid = event.clone();
+        invalid.runbook_progress.as_mut().unwrap().cell_number = 65;
+        assert!(!valid_stream_event(&invalid));
+        invalid = event.clone();
+        invalid.runbook_progress.as_mut().unwrap().title.clear();
+        assert!(!valid_stream_event(&invalid));
+        let mut invalid = event;
+        invalid.runbook_progress.as_mut().unwrap().cell_name = "x".repeat(41);
+        assert!(!valid_stream_event(&invalid));
     }
 }

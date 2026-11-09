@@ -10,6 +10,7 @@ use std::{
 
 mod knowledge;
 mod runbooks;
+pub use runbooks::RunbookRunRow;
 
 pub use knowledge::EvidenceInput;
 
@@ -368,7 +369,7 @@ impl HostDatabase {
         connection.busy_timeout(Duration::from_secs(5))?;
         connection.execute_batch("PRAGMA foreign_keys = ON;")?;
         let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version > 34 {
+        if version > 40 {
             bail!("unsupported host database schema version {version}");
         }
         connection.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;")?;
@@ -906,6 +907,111 @@ impl HostDatabase {
                 )?;
             }
         }
+        if version < 35 {
+            connection.execute_batch(
+                "BEGIN IMMEDIATE;
+                 CREATE TABLE IF NOT EXISTS runbook_runs (
+                     id TEXT PRIMARY KEY,
+                     workspace_id TEXT NOT NULL,
+                     runbook_id TEXT NOT NULL,
+                     session_id TEXT NOT NULL,
+                     revision INTEGER NOT NULL,
+                     status TEXT NOT NULL CHECK(status IN ('running','completed','failed','interrupted')),
+                     output TEXT NOT NULL DEFAULT '',
+                     created_at_ms INTEGER NOT NULL,
+                     updated_at_ms INTEGER NOT NULL
+                 );
+                 CREATE INDEX IF NOT EXISTS runbook_runs_session ON runbook_runs(session_id,runbook_id);
+                 PRAGMA user_version = 35;
+                 COMMIT;",
+            )?;
+        }
+        if version < 36 {
+            let tx = connection.transaction()?;
+            let present: i64 = tx.query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('runbook_runs') WHERE name='current_cell_number'",
+                [],
+                |row| row.get(0),
+            )?;
+            if present == 0 {
+                tx.execute_batch(
+                    "ALTER TABLE runbook_runs ADD COLUMN current_cell_number INTEGER NOT NULL DEFAULT 0;",
+                )?;
+            }
+            tx.execute_batch("PRAGMA user_version = 36;")?;
+            tx.commit()?;
+        }
+        if version < 37 {
+            connection.execute_batch(
+                "BEGIN IMMEDIATE;
+                 CREATE TABLE IF NOT EXISTS runbook_cell_results (
+                     workspace_id TEXT NOT NULL,
+                     runbook_id TEXT NOT NULL,
+                     session_id TEXT NOT NULL,
+                     cell_id TEXT NOT NULL,
+                     status TEXT NOT NULL CHECK(status IN ('completed','failed')),
+                     updated_at_ms INTEGER NOT NULL,
+                     PRIMARY KEY(workspace_id,runbook_id,session_id,cell_id)
+                 );
+                 PRAGMA user_version = 37;
+                 COMMIT;",
+            )?;
+        }
+        if version < 38 {
+            let tx = connection.transaction()?;
+            let present: i64 = tx.query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('runbook_runs') WHERE name='current_cell_name'",
+                [],
+                |row| row.get(0),
+            )?;
+            if present == 0 {
+                tx.execute_batch(
+                    "ALTER TABLE runbook_runs ADD COLUMN current_cell_name TEXT NOT NULL DEFAULT '';",
+                )?;
+            }
+            tx.execute_batch("PRAGMA user_version = 38;")?;
+            tx.commit()?;
+        }
+        if version < 39 {
+            let tx = connection.transaction()?;
+            let present: i64 = tx.query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('runbook_cell_results') WHERE name='output'",
+                [],
+                |row| row.get(0),
+            )?;
+            if present == 0 {
+                tx.execute_batch(
+                    "ALTER TABLE runbook_cell_results ADD COLUMN output TEXT NOT NULL DEFAULT '';",
+                )?;
+            }
+            tx.execute_batch("PRAGMA user_version = 39;")?;
+            tx.commit()?;
+        }
+        if version < 40 {
+            let tx = connection.transaction()?;
+            for (name, definition) in [
+                ("exit_code", "INTEGER"),
+                ("stdout", "TEXT NOT NULL DEFAULT ''"),
+                ("stderr", "TEXT NOT NULL DEFAULT ''"),
+            ] {
+                let present: i64 = tx.query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info('runbook_cell_results') WHERE name=?1",
+                    [name],
+                    |row| row.get(0),
+                )?;
+                if present == 0 {
+                    tx.execute_batch(&format!(
+                        "ALTER TABLE runbook_cell_results ADD COLUMN {name} {definition};"
+                    ))?;
+                }
+            }
+            tx.execute_batch("PRAGMA user_version = 40;")?;
+            tx.commit()?;
+        }
+        connection.execute(
+            "UPDATE runbook_runs SET status='interrupted' WHERE status='running'",
+            [],
+        )?;
         Ok(Self(Arc::new(Mutex::new(connection))))
     }
 
@@ -1774,10 +1880,11 @@ impl HostDatabase {
         self.with_connection(|connection| {
             connection
                 .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM session_tool_calls
+                    "SELECT EXISTS(SELECT 1 FROM runbook_runs WHERE session_id = ?1)
+                     OR EXISTS(SELECT 1 FROM session_tool_calls
                  WHERE session_id = ?1 AND (name = 'graph_delegate'
                  OR (is_error = 0 AND name IN ('memory_create', 'lead_create',
-                     'finding_create', 'runbook_create', 'surface_add'))))",
+                     'finding_create', 'runbook_create', 'runbook_edit', 'surface_add'))))",
                     [id],
                     |row| row.get(0),
                 )
@@ -3269,7 +3376,7 @@ mod tests {
         drop(db);
         let connection = Connection::open(root.join("state.sqlite")).unwrap();
         connection
-            .execute_batch("PRAGMA user_version = 35;")
+            .execute_batch("PRAGMA user_version = 41;")
             .unwrap();
         drop(connection);
         assert!(HostDatabase::open(&root).is_err());
@@ -3277,7 +3384,7 @@ mod tests {
         let version: i64 = connection
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 35);
+        assert_eq!(version, 41);
         drop(connection);
         std::fs::remove_dir_all(root).unwrap();
     }

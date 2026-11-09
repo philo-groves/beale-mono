@@ -345,6 +345,12 @@ pub(crate) static CLOSE: Icon = Icon {
     body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M18 6 6 18"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m6 6 12 12"/>"#,
 };
 
+pub(crate) static RUNBOOK: Icon = Icon {
+    name: "lucide-notebook-tabs",
+    view: 24.0,
+    body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20M6 2h13a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Zm3 5h7m-7 4h5"/>"#,
+};
+
 pub(crate) static CHEVRON_DOWN: Icon = Icon {
     name: "lucide-chevron-down",
     view: 24.0,
@@ -367,6 +373,12 @@ pub(crate) static BRAIN: Icon = Icon {
     name: "beale-brain",
     view: 24.0,
     body: r#"<path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M11.5 5.5C10.3 3.1 7.2 2.7 5.8 4.7 3.5 4.8 2.5 7.2 3.8 9 1.9 10.2 1.8 13.2 3.9 14.3 3.2 16.6 4.7 18.4 6.8 18.5 7.5 20.9 10.4 21.5 11.5 19.2Z"/><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M12.5 5.5C13.7 3.1 16.8 2.7 18.2 4.7 20.5 4.8 21.5 7.2 20.2 9 22.1 10.2 22.2 13.2 20.1 14.3 20.8 16.6 19.3 18.4 17.2 18.5 16.5 20.9 13.6 21.5 12.5 19.2Z"/><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M7.2 6.2c-1.4 1.3-1 3.3.5 4.1M4.1 12.1c2.4-.6 4.2.5 4.4 2.7M7.3 18.4c-.5-2.1.8-3.7 2.6-4M16.8 6.2c1.4 1.3 1 3.3-.5 4.1m3.7 1.8c-2.4-.6-4.2.5-4.4 2.7m1.2 3.6c.5-2.1-.8-3.7-2.6-4"/>"#,
+};
+
+pub(crate) static AGENT: Icon = Icon {
+    name: "lucide-bot",
+    view: 24.0,
+    body: r#"<rect x="3" y="8" width="18" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 8V4m-2 0h4M3 14H1m22 0h-2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="8.5" cy="14" r="1" fill="currentColor"/><circle cx="15.5" cy="14" r="1" fill="currentColor"/>"#,
 };
 
 pub(crate) static WRENCH: Icon = Icon {
@@ -422,8 +434,8 @@ mod tests {
     use super::{
         AUTOMATION_ACTIVE, AUTOMATION_SCHEDULE, AUTOMATIONS_FILLED, CANVAS, CANVAS_FILLED,
         EXTENSIONS_FILLED, FLEET_APPLE, FLEET_FILLED, FLEET_LINUX, FLEET_WINDOWS, HOME_FILLED,
-        PLUGIN_META, SESSION_CACHE_RATE, SESSION_TOKENS, SETTINGS_FILLED, WORKSPACE_KNOWLEDGE,
-        WORKSPACE_SURFACES,
+        PLUGIN_META, RUNBOOK, SESSION_CACHE_RATE, SESSION_TOKENS, SETTINGS_FILLED,
+        WORKSPACE_KNOWLEDGE, WORKSPACE_SURFACES,
     };
 
     #[test]
@@ -484,6 +496,13 @@ mod tests {
         assert!(outline.iter().filter(|&&pixel| pixel > 0).count() > 20);
         assert!(filled.iter().filter(|&&pixel| pixel > 0).count() > 20);
         assert_ne!(outline, filled);
+        assert!(
+            rune::text::icon_coverage(&RUNBOOK, 15)
+                .iter()
+                .filter(|&&pixel| pixel > 0)
+                .count()
+                > 20
+        );
     }
 
     #[test]

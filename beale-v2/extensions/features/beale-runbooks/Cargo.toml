@@ -10,8 +10,10 @@ anyhow.workspace = true
 axum.workspace = true
 beale-contracts = { path = "../../../apps/beale-app-server/beale-harness/beale-contracts" }
 beale-storage = { path = "../../../apps/beale-app-server/beale-harness/beale-storage" }
+beale-tools = { path = "../../../apps/beale-app-server/beale-harness/beale-tools" }
 serde.workspace = true
 serde_json.workspace = true
+tokio.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true

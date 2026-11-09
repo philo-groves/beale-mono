@@ -639,6 +639,7 @@ pub mod v1 {
         Failed = 6,
         TurnCompleted = 7,
         SubagentsSpawned = 8,
+        RunbookProgress = 9,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -653,6 +654,20 @@ pub mod v1 {
         pub detail: Option<SessionDetail>,
         #[prost(uint32, tag = "5")]
         pub segment_index: u32,
+        #[prost(message, optional, tag = "6")]
+        pub runbook_progress: Option<RunbookProgress>,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct RunbookProgress {
+        #[prost(string, tag = "1")]
+        pub runbook_id: String,
+        #[prost(string, tag = "2")]
+        pub title: String,
+        #[prost(uint32, tag = "3")]
+        pub cell_number: u32,
+        #[prost(string, tag = "4")]
+        pub cell_name: String,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -771,6 +786,30 @@ pub mod v1 {
         pub token_usage: Option<SessionTokenUsage>,
         #[prost(message, repeated, tag = "14")]
         pub usage_snapshots: Vec<SessionUsageSnapshot>,
+        #[prost(uint64, tag = "15")]
+        pub runbook_count: u64,
+        #[prost(uint64, tag = "16")]
+        pub active_runbook_count: u64,
+        #[prost(message, repeated, tag = "17")]
+        pub runbooks: Vec<SessionRunbook>,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct SessionRunbook {
+        #[prost(string, tag = "1")]
+        pub id: String,
+        #[prost(string, tag = "2")]
+        pub title: String,
+        #[prost(string, tag = "3")]
+        pub status: String,
+        #[prost(uint64, tag = "4")]
+        pub updated_at_ms: u64,
+        #[prost(uint64, tag = "5")]
+        pub completed_at_ms: u64,
+        #[prost(uint32, tag = "6")]
+        pub current_cell_number: u32,
+        #[prost(string, tag = "7")]
+        pub current_cell_name: String,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1138,6 +1177,8 @@ pub mod v1 {
         pub description: String,
         #[prost(string, tag = "4")]
         pub prompt_extension: String,
+        #[prost(string, repeated, tag = "5")]
+        pub tool_names: Vec<String>,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1172,6 +1213,8 @@ pub mod v1 {
         pub name: String,
         #[prost(string, tag = "2")]
         pub manifest_json: String,
+        #[prost(string, repeated, tag = "3")]
+        pub tool_names: Vec<String>,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1314,7 +1357,7 @@ pub mod v1 {
 }
 
 pub const PROTOCOL_MAJOR: u32 = 1;
-pub const PROTOCOL_MINOR: u32 = 57;
+pub const PROTOCOL_MINOR: u32 = 66;
 pub const SERVICE_NAME: &str = "beale-app-server";
 pub const HEALTH_PATH: &str = "/v1/health";
 pub const AUTH_STATUS_PATH: &str = "/v1/providers/status";

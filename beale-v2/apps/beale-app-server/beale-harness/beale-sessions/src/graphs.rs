@@ -229,6 +229,7 @@ async fn run_child(
             {
                 let _ = tx
                     .send(SessionStreamEvent {
+                        runbook_progress: None,
                         kind: SessionStreamKind::ToolStarted as i32,
                         text: String::new(),
                         tool: Some(SessionToolSummary {
@@ -317,6 +318,7 @@ async fn run_child(
                 if let Some(tx) = context.progress {
                     let _ = tx
                         .send(SessionStreamEvent {
+                            runbook_progress: None,
                             kind: SessionStreamKind::ToolFinished as i32,
                             text: String::new(),
                             tool: Some(SessionToolSummary {
@@ -433,6 +435,7 @@ pub(super) async fn delegate(
     if let Some(progress) = context.progress {
         let _ = progress
             .send(SessionStreamEvent {
+                runbook_progress: None,
                 kind: SessionStreamKind::SubagentsSpawned as i32,
                 text: String::new(),
                 tool: None,

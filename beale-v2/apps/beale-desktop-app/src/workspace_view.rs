@@ -3,8 +3,8 @@ use beale_contracts::v1::{
     SurfaceScope, WorkspaceDetails, WorkspaceSurface,
 };
 use rune::{
-    Color, Drag, El, Icon, LineCap, Phase, ScrollSpec, Shape, TextEdit, Tx, canvas, col, el, icon,
-    row, text, text_input,
+    Color, Drag, El, Icon, LineCap, Phase, ScrollSpec, TextEdit, Tx, canvas, col, el, icon, row,
+    text, text_input,
 };
 
 use crate::{
@@ -438,17 +438,7 @@ fn network(
         ]
     };
     let hovered = state.workspace_surface_hovered;
-    let mut shape = Shape::new();
-    let grid_color = theme.color("#303030");
-    for x in (16..width as usize).step_by(28) {
-        for y in (16..height as usize).step_by(28) {
-            let (x, y) = (x as f32, y as f32);
-            shape = shape.fill(
-                vec![[x, y], [x + 2.0, y], [x + 2.0, y + 2.0], [x, y + 2.0]],
-                grid_color,
-            );
-        }
-    }
+    let mut shape = crate::grid_background::dots(width, height, theme.color("#303030"));
     for (index, surface) in surfaces.iter().enumerate() {
         if let Some(parent_id) = surface
             .definition
@@ -1311,8 +1301,21 @@ fn rules(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
         );
     }
     for (index, rule) in state.workspace_rule_edits.iter().enumerate() {
-        let remove =
-            form_button("Remove", theme).key(format!("saved-workspace-rule-remove-{index}"));
+        if index > 0 {
+            list = list.child(
+                el().key(format!("saved-workspace-rule-separator-{index}"))
+                    .role("separator")
+                    .w_full()
+                    .h(1.0)
+                    .fill(theme.color("#303030")),
+            );
+        }
+        let remove = icon_action_button(
+            format!("saved-workspace-rule-remove-{index}"),
+            "Remove rule",
+            &TRASH,
+            theme,
+        );
         list = list.child(
             row()
                 .key(format!("saved-workspace-rule-{index}"))

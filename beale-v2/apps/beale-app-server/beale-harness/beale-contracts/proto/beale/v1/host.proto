@@ -397,6 +397,7 @@ enum SessionStreamKind {
   SESSION_STREAM_KIND_FAILED = 6;
   SESSION_STREAM_KIND_TURN_COMPLETED = 7;
   SESSION_STREAM_KIND_SUBAGENTS_SPAWNED = 8;
+  SESSION_STREAM_KIND_RUNBOOK_PROGRESS = 9;
 }
 
 message SessionStreamEvent {
@@ -405,6 +406,14 @@ message SessionStreamEvent {
   SessionToolSummary tool = 3;
   SessionDetail detail = 4;
   uint32 segment_index = 5;
+  RunbookProgress runbook_progress = 6;
+}
+
+message RunbookProgress {
+  string runbook_id = 1;
+  string title = 2;
+  uint32 cell_number = 3;
+  string cell_name = 4;
 }
 
 message SessionToolSummary {
@@ -467,6 +476,19 @@ message SessionDetail {
   bool has_campaign_activity = 12; // A successful campaign creation or graph delegation call occurred in any saved turn.
   SessionTokenUsage token_usage = 13; // All saved main and subagent model calls, including turns outside the recent transcript.
   repeated SessionUsageSnapshot usage_snapshots = 14; // Cumulative usage at five-minute active-work intervals, plus the latest partial interval.
+  uint64 runbook_count = 15; // Distinct runbooks created, edited, or run in this session.
+  uint64 active_runbook_count = 16; // Runbooks with an execution currently in progress.
+  repeated SessionRunbook runbooks = 17; // Runbooks created, edited, or run in this session.
+}
+
+message SessionRunbook {
+  string id = 1;
+  string title = 2;
+  string status = 3; // running, prepared, or done.
+  uint64 updated_at_ms = 4;
+  uint64 completed_at_ms = 5;
+  uint32 current_cell_number = 6;
+  string current_cell_name = 7;
 }
 
 message SessionTokenUsage {
@@ -688,6 +710,7 @@ message FeatureDetailsResponse {
   string name = 2;
   string description = 3;
   string prompt_extension = 4;
+  repeated string tool_names = 5;
 }
 
 message SetFeatureEnabledRequest {
@@ -710,6 +733,7 @@ message GetPluginManifestRequest {
 message PluginManifestResponse {
   string name = 1;
   string manifest_json = 2;
+  repeated string tool_names = 3;
 }
 
 message FleetAppServerDescriptor {

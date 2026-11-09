@@ -25,6 +25,7 @@ const MAX_TOOLS: usize = 4_096;
 pub(super) struct RunningServer {
     transport: Transport,
     pub(super) tool_count: u32,
+    pub(super) tool_names: Vec<String>,
 }
 
 enum Transport {
@@ -59,15 +60,17 @@ impl RunningServer {
         let mut server = Self {
             transport,
             tool_count: 0,
+            tool_names: Vec::new(),
         };
-        let tool_count = timeout(Duration::from_secs(12), server.discover_tools())
+        let tool_names = timeout(Duration::from_secs(12), server.discover_tools())
             .await
             .context("MCP discovery timed out")??;
-        server.tool_count = tool_count;
+        server.tool_count = u32::try_from(tool_names.len()).context("too many MCP tools")?;
+        server.tool_names = tool_names;
         Ok(server)
     }
 
-    async fn discover_tools(&mut self) -> Result<u32> {
+    async fn discover_tools(&mut self) -> Result<Vec<String>> {
         let discover = self.request(1, "server/discover", modern_params()).await;
         let modern = discover
             .as_ref()
@@ -118,7 +121,10 @@ impl RunningServer {
                     .and_then(Value::as_str)
                     .context("MCP tool has no name")?;
                 ensure!(
-                    !name.is_empty() && names.insert(name.to_owned()),
+                    !name.is_empty()
+                        && name.len() <= 128
+                        && !name.chars().any(char::is_control)
+                        && names.insert(name.to_owned()),
                     "invalid or duplicate MCP tool"
                 );
                 ensure!(names.len() <= MAX_TOOLS, "too many MCP tools");
@@ -130,7 +136,11 @@ impl RunningServer {
                 .map(str::to_owned);
             match &cursor {
                 Some(value) => ensure!(cursors.insert(value.clone()), "repeated MCP tool cursor"),
-                None => return u32::try_from(names.len()).context("too many MCP tools"),
+                None => {
+                    let mut names = names.into_iter().collect::<Vec<_>>();
+                    names.sort_unstable();
+                    return Ok(names);
+                }
             }
         }
         bail!("too many MCP tool pages")

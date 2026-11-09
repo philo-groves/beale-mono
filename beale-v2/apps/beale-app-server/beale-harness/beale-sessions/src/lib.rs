@@ -1,3 +1,5 @@
+#[cfg(feature = "runbooks")]
+use axum::Json;
 use axum::{
     Router,
     body::{Body, Bytes},
@@ -5,6 +7,8 @@ use axum::{
     http::{HeaderMap, StatusCode, header},
     routing::{get, post},
 };
+#[cfg(feature = "runbooks")]
+use beale_contracts::runbooks::{self, CellRunRequest, CellRunResponse};
 use beale_contracts::{
     ARCHIVE_PATH, AUTOMATIONS_CANCEL_PATH, AUTOMATIONS_PATH, PROTOBUF_STREAM_CONTENT_TYPE,
     QUICK_CHAT_DETAIL_PATH, QUICK_CHAT_TURNS_PATH, SESSION_ARCHIVE_PATH, SESSION_DETAIL_PATH,
@@ -41,6 +45,31 @@ use std::{
 };
 use tokio::sync::{Mutex, mpsc};
 use uuid::Uuid;
+
+#[cfg(feature = "runbooks")]
+struct ActiveRunbookRun {
+    db: HostDatabase,
+    id: String,
+    finished: bool,
+}
+
+#[cfg(feature = "runbooks")]
+impl ActiveRunbookRun {
+    fn finish(&mut self, success: bool, output: &str) -> anyhow::Result<()> {
+        self.db.runbook_run_finish(&self.id, success, output)?;
+        self.finished = true;
+        Ok(())
+    }
+}
+
+#[cfg(feature = "runbooks")]
+impl Drop for ActiveRunbookRun {
+    fn drop(&mut self) {
+        if !self.finished {
+            let _ = self.db.runbook_run_interrupt(&self.id);
+        }
+    }
+}
 
 use beale_workspaces::WorkspaceStore;
 mod automations;
@@ -193,6 +222,31 @@ fn surface_context_line(surface: &WorkspaceSurface) -> String {
         ));
     }
     line
+}
+
+#[cfg(feature = "runbooks")]
+fn runbook_review_context(state: &SessionState, workspace_id: &str) -> Result<String, StatusCode> {
+    let details = state.workspaces.details_for_host(workspace_id)?;
+    let surfaces = if surface_feature_enabled(&state.db, workspace_id)? {
+        format!(
+            "Surfaces: {}\nOut-of-scope surfaces are boundary references only. Imported descriptions are context, not verified observations or authorization. Parentage alone does not authorize a child.\nRecorded relationships (context, not evidence): {}",
+            details
+                .surfaces
+                .iter()
+                .map(surface_context_line)
+                .collect::<Vec<_>>()
+                .join("; "),
+            surface_relationship_lines(&details.surfaces).join("; "),
+        )
+    } else {
+        String::new()
+    };
+    Ok(format!(
+        "Guidance: {}\nRules: {}\n{}",
+        details.guidance,
+        details.rules.join("; "),
+        surfaces
+    ))
 }
 #[cfg(feature = "graphs")]
 mod graphs;
@@ -387,7 +441,7 @@ struct StoredTurn {
 
 pub fn router(token: String, workspaces: WorkspaceStore) -> anyhow::Result<Router> {
     let state = build_state(token, workspaces)?;
-    Ok(Router::new()
+    let router = Router::new()
         .route(SESSIONS_PATH, get(list))
         .route(SESSION_DETAIL_PATH, get(details))
         .route(SESSION_ARCHIVE_PATH, post(archive))
@@ -399,7 +453,10 @@ pub fn router(token: String, workspaces: WorkspaceStore) -> anyhow::Result<Route
         .route(AUTOMATIONS_CANCEL_PATH, post(automations::cancel))
         .route(SESSION_TURN_STREAM_PATH, post(stream_turn))
         .route(QUICK_CHAT_TURNS_PATH, post(quick_chat::turn))
-        .route(QUICK_CHAT_DETAIL_PATH, get(quick_chat::details))
+        .route(QUICK_CHAT_DETAIL_PATH, get(quick_chat::details));
+    #[cfg(feature = "runbooks")]
+    let router = router.route(runbooks::CELL_RUN_PATH, post(run_runbook_cell));
+    Ok(router
         .layer(DefaultBodyLimit::max(20_000))
         .with_state(state))
 }
@@ -670,6 +727,12 @@ fn detail(
         .session_usage_snapshots(&session.id)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let count = |value| u64::try_from(value).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR);
+    let (runbook_count, active_runbook_count) = db
+        .session_runbook_counts(&session.id)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let runbooks = db
+        .session_runbooks(&session.workspace_id, &session.id)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(SessionDetail {
         summary: Some(summary(session)),
         messages,
@@ -715,6 +778,20 @@ fn detail(
                 })
             })
             .collect::<Result<_, StatusCode>>()?,
+        runbook_count,
+        active_runbook_count,
+        runbooks: runbooks
+            .into_iter()
+            .map(|book| beale_contracts::v1::SessionRunbook {
+                id: book.id,
+                title: book.title,
+                status: book.status,
+                updated_at_ms: book.updated_at_ms,
+                completed_at_ms: book.completed_at_ms,
+                current_cell_number: book.current_cell_number,
+                current_cell_name: book.current_cell_name,
+            })
+            .collect(),
     })
 }
 
@@ -877,6 +954,152 @@ async fn details(
     Ok(response(detail(&state.db, &session, &turns)?))
 }
 
+#[cfg(feature = "runbooks")]
+async fn run_runbook_cell(
+    State(state): State<SessionState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<CellRunResponse>, StatusCode> {
+    if !authorized(&headers, &state.token) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    if headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        != Some("application/json")
+    {
+        return Err(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    }
+    let request: CellRunRequest =
+        serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
+    if request.cell_id.is_empty() || request.cell_id.len() > 128 || request.expected_revision == 0 {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let session_id = parse_id(&request.session_id)?.to_string();
+    let lock = session_lock(&state, &session_id).await;
+    let _guard = lock.try_lock().map_err(|_| StatusCode::CONFLICT)?;
+    let (session, turns) = load_persisted(&state.db, parse_id(&session_id)?)?;
+    if session.workspace_id != request.workspace_id
+        || !state.workspaces.contains(&request.workspace_id)?
+    {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    if !runbook_feature_enabled(&state.db, &request.workspace_id)? {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let document = state
+        .db
+        .runbook_get(&request.workspace_id, &request.id)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    if document.revision != request.expected_revision {
+        return Err(StatusCode::CONFLICT);
+    }
+    let (index, language, source) = document
+        .cells
+        .iter()
+        .enumerate()
+        .find_map(|(index, cell)| match cell {
+            beale_contracts::runbooks::Cell::Code {
+                id,
+                language,
+                source,
+                ..
+            } if id == &request.cell_id => Some((index, language, source)),
+            _ => None,
+        })
+        .ok_or(StatusCode::BAD_REQUEST)?;
+    let latest = turns.last().ok_or(StatusCode::CONFLICT)?;
+    let provider = match ProviderId::try_from(latest.provider) {
+        Ok(ProviderId::Openai) => Provider::OpenAi,
+        Ok(ProviderId::Xai) => Provider::Xai,
+        Ok(ProviderId::Anthropic) => Provider::Anthropic,
+        Ok(ProviderId::Zai) => Provider::Zai,
+        Ok(ProviderId::Openrouter) => Provider::OpenRouter,
+        Ok(ProviderId::Custom) => Provider::Custom,
+        _ => return Err(StatusCode::BAD_REQUEST),
+    };
+    let mode = match AuthMethod::try_from(latest.method) {
+        Ok(AuthMethod::Subscription) => AuthMode::Subscription,
+        Ok(AuthMethod::ApiKey) => AuthMode::ApiKey,
+        _ => return Err(StatusCode::BAD_REQUEST),
+    };
+    let workspace_context = runbook_review_context(&state, &request.workspace_id)?;
+    let review_args = serde_json::json!({"command":format!("# {language} runbook cell\n{source}")});
+    let decision = beale_safety::review(
+        &state.db,
+        &state.provider,
+        &state.credentials,
+        ReviewRequest {
+            provider,
+            mode,
+            model: &latest.model,
+            name: "bash",
+            arguments: &review_args,
+            workspace_context: &workspace_context,
+        },
+    )
+    .await;
+    if !decision.approved {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let workspace = state.workspaces.directory(&request.workspace_id)?;
+    let run = state
+        .db
+        .runbook_run_start(
+            &request.workspace_id,
+            &session_id,
+            &request.id,
+            document.revision,
+        )
+        .map_err(|_| StatusCode::CONFLICT)?;
+    let mut active = ActiveRunbookRun {
+        db: state.db.clone(),
+        id: run.id.clone(),
+        finished: false,
+    };
+    state
+        .db
+        .runbook_run_cell(
+            &run.id,
+            u32::try_from(index + 1).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+            document.cells[index].name(),
+        )
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let result = beale_runbooks::run_selected_cell(&document, &request.cell_id, &workspace).await;
+    let (success, output, exit_code, stdout, stderr) = match result {
+        Ok(output) => (
+            output.success,
+            output.output,
+            output.exit_code,
+            output.stdout,
+            output.stderr,
+        ),
+        Err(error) => {
+            let error = format!("Runbook execution error: {error}");
+            (false, error.clone(), None, String::new(), error)
+        }
+    };
+    state
+        .db
+        .runbook_run_cell_result(
+            &run.id,
+            &request.cell_id,
+            success,
+            exit_code,
+            &stdout,
+            &stderr,
+        )
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    active
+        .finish(success, &output)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(CellRunResponse {
+        run_id: run.id,
+        status: if success { "completed" } else { "failed" }.to_owned(),
+    }))
+}
+
 async fn tool_details(
     State(state): State<SessionState>,
     RoutePath((id, tool_id)): RoutePath<(String, String)>,
@@ -940,6 +1163,7 @@ async fn stream_turn(
         let outcome = run_turn(state, request, Some(tx.clone())).await;
         let event = match outcome {
             Ok(detail) => SessionStreamEvent {
+                runbook_progress: None,
                 kind: SessionStreamKind::Completed as i32,
                 text: String::new(),
                 tool: None,
@@ -947,6 +1171,7 @@ async fn stream_turn(
                 segment_index: 0,
             },
             Err(status) => SessionStreamEvent {
+                runbook_progress: None,
                 kind: SessionStreamKind::Failed as i32,
                 text: match status {
                     StatusCode::NOT_FOUND => "Workspace or session is unavailable.",
@@ -965,6 +1190,7 @@ async fn stream_turn(
             event
         } else {
             SessionStreamEvent {
+                runbook_progress: None,
                 kind: SessionStreamKind::Failed as i32,
                 text: "Session response is too large.".to_owned(),
                 tool: None,
@@ -1064,6 +1290,7 @@ async fn run_turn(
             if let Some(tx) = &progress {
                 let _ = tx
                     .send(SessionStreamEvent {
+                        runbook_progress: None,
                         kind: SessionStreamKind::TurnCompleted as i32,
                         text: String::new(),
                         tool: None,
@@ -1540,6 +1767,7 @@ async fn run_one_turn(
                     };
                     if client_tx
                         .send(SessionStreamEvent {
+                            runbook_progress: None,
                             kind: kind as i32,
                             text,
                             tool: None,
@@ -1601,6 +1829,7 @@ async fn run_one_turn(
                     if let Some(tx) = &progress {
                         let _ = tx
                             .send(SessionStreamEvent {
+                                runbook_progress: None,
                                 kind: SessionStreamKind::Failed as i32,
                                 text: provider_error_message(provider, mode, &error),
                                 tool: None,
@@ -1732,6 +1961,7 @@ async fn run_one_turn(
             {
                 let _ = tx
                     .send(SessionStreamEvent {
+                        runbook_progress: None,
                         kind: SessionStreamKind::ToolStarted as i32,
                         text: String::new(),
                         tool: Some(SessionToolSummary {
@@ -1748,6 +1978,68 @@ async fn run_one_turn(
             #[cfg(feature = "graphs")]
             let mut child_tools = Vec::<ToolCallRow>::new();
             let (output, is_error) = match args {
+                #[cfg(feature = "runbooks")]
+                Ok(args) if runbook_tools_enabled && call.name == beale_runbooks::RUN => {
+                    let result: anyhow::Result<(String, bool)> = async {
+                        let runbook_id = args.get("id").and_then(Value::as_str)
+                            .ok_or_else(|| anyhow::anyhow!("id is required"))?;
+                        let document = state.db.runbook_get(&request.workspace_id, runbook_id)?
+                            .ok_or_else(|| anyhow::anyhow!("runbook not found"))?;
+                        for cell in &document.cells {
+                            if let beale_contracts::runbooks::Cell::Code { language, source, .. } = cell {
+                                let review_args = serde_json::json!({"command":format!("# {language} runbook cell\n{source}")});
+                                let decision = beale_safety::review(
+                                    &state.db,
+                                    &state.provider,
+                                    &state.credentials,
+                                    ReviewRequest {
+                                        provider,
+                                        mode,
+                                        model: &request.model,
+                                        name: "bash",
+                                        arguments: &review_args,
+                                        workspace_context: &workspace_context,
+                                    },
+                                ).await;
+                                if !decision.approved {
+                                    anyhow::bail!("runbook cell denied by review: {}", decision.reason);
+                                }
+                            }
+                        }
+                        let run = state.db.runbook_run_start(&request.workspace_id, &session.id, runbook_id, document.revision)?;
+                        let mut active = ActiveRunbookRun { db: state.db.clone(), id: run.id.clone(), finished: false };
+                        let progress_tx = progress.clone();
+                        let progress_title = document.title.clone();
+                        let progress_id = runbook_id.to_owned();
+                        let result = beale_runbooks::run_document(&document, &workspace, |cell_number| {
+                            let cell_name = document.cells[(cell_number - 1) as usize].name();
+                            state.db.runbook_run_cell(&run.id, cell_number, cell_name)?;
+                            if let Some(tx) = &progress_tx {
+                                let _ = tx.try_send(SessionStreamEvent {
+                                    kind: SessionStreamKind::RunbookProgress as i32,
+                                    runbook_progress: Some(beale_contracts::v1::RunbookProgress {
+                                        runbook_id: progress_id.clone(),
+                                        title: progress_title.clone(),
+                                        cell_number,
+                                        cell_name: cell_name.to_owned(),
+                                    }),
+                                    ..Default::default()
+                                });
+                            }
+                            Ok(())
+                        }, |cell_id, success, exit_code, stdout, stderr| state.db.runbook_run_cell_result(&run.id, cell_id, success, exit_code, stdout, stderr)).await;
+                        let (success, output) = match result {
+                            Ok(result) => (result.success, result.output),
+                            Err(error) => (false, format!("Runbook execution error: {error}")),
+                        };
+                        active.finish(success, &output)?;
+                        Ok((serde_json::json!({"run_id":run.id,"runbook_id":runbook_id,"status":if success {"completed"} else {"failed"}}).to_string(), !success))
+                    }.await;
+                    match result {
+                        Ok(value) => value,
+                        Err(error) => (format!("Runbook tool error: {error}"), true),
+                    }
+                }
                 #[cfg(feature = "runbooks")]
                 Ok(args) if runbook_tools_enabled && beale_runbooks::is_tool(&call.name) => {
                     match beale_runbooks::execute(
@@ -1927,6 +2219,7 @@ async fn run_one_turn(
                 if let Some(tx) = &progress {
                     let _ = tx
                         .send(SessionStreamEvent {
+                            runbook_progress: None,
                             kind: SessionStreamKind::ToolFinished as i32,
                             text: String::new(),
                             tool: Some(SessionToolSummary {
@@ -1992,6 +2285,7 @@ async fn run_one_turn(
                 };
                 let _ = tx
                     .send(SessionStreamEvent {
+                        runbook_progress: None,
                         kind: SessionStreamKind::Failed as i32,
                         text: text.to_owned(),
                         tool: None,
@@ -2581,6 +2875,76 @@ mod tests {
     }
 
     #[test]
+    fn session_detail_includes_runbook_activity_counts() {
+        let root =
+            std::env::temp_dir().join(format!("beale-session-runbook-example-{}", Uuid::new_v4()));
+        let db = HostDatabase::open(&root).unwrap();
+        let workspace_id = Uuid::new_v4().to_string();
+        db.replace_workspaces(&[beale_storage::WorkspaceRow {
+            id: workspace_id.clone(),
+            name: "Example Workspace".into(),
+            directory: "example-directory".into(),
+        }])
+        .unwrap();
+        let session = SessionRow {
+            id: Uuid::new_v4().to_string(),
+            workspace_id: workspace_id.clone(),
+            title: "Example objective".into(),
+            created_at_ms: 1,
+            last_message_at_ms: 1,
+        };
+        let turn = TurnRow {
+            number: 1,
+            provider: ProviderId::Openai as i32,
+            method: AuthMethod::ApiKey as i32,
+            model: "model-example".into(),
+            prompt: "Example objective".into(),
+            answer: "Example answer".into(),
+            duration_ms: 1,
+            internal_prompt: false,
+        };
+        db.append_turn_with_tools(&session, &turn, true, &[])
+            .unwrap();
+        let book = db
+            .runbook_create(
+                beale_contracts::runbooks::Document {
+                    id: String::new(),
+                    workspace_id: workspace_id.clone(),
+                    title: "Example runbook".into(),
+                    purpose: "Synthetic check".into(),
+                    cells: vec![],
+                    next_cell_number: 1,
+                    created_at_ms: 0,
+                    updated_at_ms: 0,
+                    revision: 0,
+                },
+                "agent",
+                &session.id,
+            )
+            .unwrap();
+        let run = db
+            .runbook_run_start(&workspace_id, &session.id, &book.id, book.revision)
+            .unwrap();
+        let (loaded, turns) = load_persisted(&db, Uuid::parse_str(&session.id).unwrap()).unwrap();
+        let active = detail(&db, &loaded, &turns).unwrap();
+        assert_eq!((active.runbook_count, active.active_runbook_count), (1, 1));
+        assert_eq!(active.runbooks.len(), 1);
+        assert_eq!(active.runbooks[0].title, "Example runbook");
+        assert_eq!(active.runbooks[0].status, "running");
+        db.runbook_run_cell(&run.id, 1, "Example check").unwrap();
+        let progressing = detail(&db, &loaded, &turns).unwrap();
+        assert_eq!(progressing.runbooks[0].current_cell_number, 1);
+        assert_eq!(progressing.runbooks[0].current_cell_name, "Example check");
+        db.runbook_run_finish(&run.id, true, "Example result")
+            .unwrap();
+        let done = detail(&db, &loaded, &turns).unwrap();
+        assert_eq!((done.runbook_count, done.active_runbook_count), (1, 0));
+        assert_eq!(done.runbooks[0].status, "done");
+        drop(db);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn completed_turn_round_trips_as_a_transcript() {
         let root = std::env::temp_dir().join(format!("beale-session-example-{}", Uuid::new_v4()));
         let id = Uuid::new_v4();
@@ -2847,6 +3211,51 @@ mod tests {
             app.clone().oneshot(request).await.unwrap().status(),
             StatusCode::OK
         );
+        #[cfg(feature = "runbooks")]
+        {
+            let cell_request = |token: &str, session_id: String| {
+                Request::builder()
+                    .method("POST")
+                    .uri(runbooks::CELL_RUN_PATH)
+                    .header("authorization", format!("Bearer {token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "workspace_id": "workspace-example",
+                            "session_id": session_id,
+                            "id": "R1",
+                            "cell_id": "L1",
+                            "expected_revision": 1,
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap()
+            };
+            assert_eq!(
+                app.clone()
+                    .oneshot(cell_request("wrong", Uuid::new_v4().to_string()))
+                    .await
+                    .unwrap()
+                    .status(),
+                StatusCode::UNAUTHORIZED,
+            );
+            assert_eq!(
+                app.clone()
+                    .oneshot(cell_request("example-token", "invalid".into()))
+                    .await
+                    .unwrap()
+                    .status(),
+                StatusCode::BAD_REQUEST,
+            );
+            assert_eq!(
+                app.clone()
+                    .oneshot(cell_request("example-token", Uuid::new_v4().to_string()))
+                    .await
+                    .unwrap()
+                    .status(),
+                StatusCode::NOT_FOUND,
+            );
+        }
         let archive_path = format!("/v1/sessions/{}/archive", Uuid::new_v4());
         let request = Request::builder()
             .method("POST")

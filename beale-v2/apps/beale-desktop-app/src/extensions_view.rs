@@ -412,6 +412,13 @@ fn from_wire(plugin: PluginSummary) -> Result<PluginEntry, String> {
 }
 
 async fn decode<T: Message + Default>(response: reqwest::Response) -> Result<T, String> {
+    decode_with_limit(response, 70_000).await
+}
+
+async fn decode_with_limit<T: Message + Default>(
+    response: reqwest::Response,
+    max_bytes: usize,
+) -> Result<T, String> {
     if response.status() != StatusCode::OK
         || response
             .headers()
@@ -425,7 +432,7 @@ async fn decode<T: Message + Default>(response: reqwest::Response) -> Result<T, 
         .bytes()
         .await
         .map_err(|_| "Could not read extension response".to_owned())?;
-    if bytes.len() > 70_000 {
+    if bytes.len() > max_bytes {
         return Err("Extension response is too large".to_owned());
     }
     T::decode(bytes).map_err(|_| "Invalid extension response".to_owned())
@@ -652,9 +659,13 @@ fn format_manifest(source: &str, name: &str) -> Result<String, String> {
     serde_json::to_string_pretty(&value).map_err(|_| "Invalid plugin manifest".to_owned())
 }
 
-async fn manifest(client: &Client, addr: SocketAddr, name: &str) -> Result<String, String> {
+async fn manifest(
+    client: &Client,
+    addr: SocketAddr,
+    name: &str,
+) -> Result<(String, Vec<String>), String> {
     let token = crate::provider_auth::authenticated_token(client, addr).await?;
-    let response: PluginManifestResponse = decode(
+    let response: PluginManifestResponse = decode_with_limit(
         client
             .post(format!("http://{addr}{PLUGIN_MANIFEST_PATH}"))
             .bearer_auth(token)
@@ -668,12 +679,26 @@ async fn manifest(client: &Client, addr: SocketAddr, name: &str) -> Result<Strin
             .send()
             .await
             .map_err(|_| "Could not load plugin manifest".to_owned())?,
+        600_000,
     )
     .await?;
     if response.name != name {
         return Err("Invalid plugin manifest response".to_owned());
     }
-    format_manifest(&response.manifest_json, name)
+    if !valid_tool_names(&response.tool_names, 4_096) {
+        return Err("Invalid plugin tools".to_owned());
+    }
+    Ok((
+        format_manifest(&response.manifest_json, name)?,
+        response.tool_names,
+    ))
+}
+
+fn valid_tool_names(names: &[String], limit: usize) -> bool {
+    names.len() <= limit
+        && names.iter().all(|name| {
+            !name.trim().is_empty() && name.len() <= 256 && !name.chars().any(char::is_control)
+        })
 }
 
 async fn feature_details(
@@ -698,6 +723,7 @@ async fn feature_details(
         || response.name.len() > 80
         || response.description.len() > 2_000
         || response.prompt_extension.len() > 24_000
+        || !valid_tool_names(&response.tool_names, 64)
     {
         return Err("Invalid feature details".to_owned());
     }
@@ -754,6 +780,7 @@ fn start_manifest(state: &mut State, name: String) {
     let generation = state.plugin_manifest_generation;
     state.plugin_manifest_name = Some(name.clone());
     state.plugin_manifest_text.clear();
+    state.plugin_manifest_tool_names.clear();
     state.plugin_manifest_error.clear();
     state.plugin_manifest_loading = true;
     if !matches!(state.connection, ConnectionStatus::Connected { .. }) {
@@ -797,7 +824,10 @@ fn start_manifest(state: &mut State, name: String) {
             }
             state.plugin_manifest_loading = false;
             match result {
-                Ok(text) => state.plugin_manifest_text = text,
+                Ok((text, tool_names)) => {
+                    state.plugin_manifest_text = text;
+                    state.plugin_manifest_tool_names = tool_names;
+                }
                 Err(error) => state.plugin_manifest_error = error,
             }
         });
@@ -1331,6 +1361,10 @@ fn feature_rows(state: &State) -> impl Iterator<Item = (usize, &FeatureEntry)> {
         })
 }
 
+fn feature_has_sidebar_view(id: &str) -> bool {
+    id == "fleet" || id == beale_tracking::FEATURE_ID
+}
+
 fn workspace_scope(state: &State, menu: SelectionMenu) -> Option<(bool, &[String])> {
     match menu {
         SelectionMenu::PluginWorkspaces { index } => state
@@ -1734,6 +1768,16 @@ fn feature_card(index: usize, feature: &FeatureEntry, state: &State, theme: Them
                     .font(ui_font(13.0, 500.0))
                     .color(theme.color("#f2f2f2")),
                 ),
+            stat_row(
+                "Sidebar View",
+                if feature_has_sidebar_view(&feature.id) {
+                    "Yes"
+                } else {
+                    "No"
+                },
+                theme,
+            )
+            .key(format!("feature-sidebar-view-{}", feature.id)),
             stat_row("Tools", feature.tool_count, theme)
                 .key(format!("feature-tools-{}", feature.id)),
         ],
@@ -1952,6 +1996,7 @@ fn close_manifest_dialog(state: &mut State) {
     state.plugin_manifest_generation = state.plugin_manifest_generation.wrapping_add(1);
     state.plugin_manifest_name = None;
     state.plugin_manifest_text.clear();
+    state.plugin_manifest_tool_names.clear();
     state.plugin_manifest_error.clear();
     state.plugin_manifest_loading = false;
 }
@@ -1965,35 +2010,72 @@ pub(crate) fn manifest_dialog(state: &State, theme: ThemeStyle<'_>) -> [El; 2] {
     } else {
         state.plugin_manifest_text.clone()
     };
-    let body = col()
-        .w_full()
-        .gap(12.0)
-        .child(
-            text(name.to_owned())
-                .font(ui_font(14.0, 550.0))
-                .color(theme.color("#e2e2e2")),
-        )
-        .child(
-            col()
-                .key("plugin-manifest-content")
-                .w_full()
-                .max_h(420.0)
-                .min_h(0.0)
-                .scroll(ScrollSpec {
-                    stick_bottom: false,
+    let mut body = col().w_full().gap(12.0).child(
+        text(name.to_owned())
+            .font(ui_font(14.0, 550.0))
+            .color(theme.color("#e2e2e2")),
+    );
+    if state.plugin_manifest_error.is_empty() {
+        let mut tools = col().w_full().gap(4.0);
+        let tool_names = &state.plugin_manifest_tool_names;
+        if tool_names.is_empty() {
+            tools = tools.child(
+                text(if state.plugin_manifest_loading {
+                    "Loading tools…"
+                } else if !matches!(state.connection, ConnectionStatus::Connected { .. }) {
+                    "Connect to the app-server to load tools"
+                } else {
+                    "No tools discovered"
                 })
-                .child(
-                    text(content)
+                .font(ui_font(13.0, 400.0))
+                .color(theme.color("#a8a8a8")),
+            );
+        } else {
+            for name in tool_names {
+                tools = tools.child(
+                    text(name.clone())
                         .selectable(true)
                         .font(ui_font(13.0, 400.0))
-                        .color(theme.color(if state.plugin_manifest_error.is_empty() {
-                            "#c8c8c8"
-                        } else {
-                            "#e07676"
-                        }))
-                        .wrap(),
-                ),
+                        .color(theme.color("#c8c8c8")),
+                );
+            }
+        }
+        body = body.child(
+            col()
+                .key("plugin-manifest-tools")
+                .w_full()
+                .gap(6.0)
+                .child(
+                    text("Tools")
+                        .font(ui_font(14.0, 550.0))
+                        .color(theme.color("#e2e2e2")),
+                )
+                .child(tools.max_h(150.0).scroll(ScrollSpec {
+                    stick_bottom: false,
+                })),
         );
+    }
+    body = body.child(
+        col()
+            .key("plugin-manifest-content")
+            .w_full()
+            .max_h(300.0)
+            .min_h(0.0)
+            .scroll(ScrollSpec {
+                stick_bottom: false,
+            })
+            .child(
+                text(content)
+                    .selectable(true)
+                    .font(ui_font(13.0, 400.0))
+                    .color(theme.color(if state.plugin_manifest_error.is_empty() {
+                        "#c8c8c8"
+                    } else {
+                        "#e07676"
+                    }))
+                    .wrap(),
+            ),
+    );
     let actions = row().w_full().child(el().grow(1.0)).child(
         form_button("Close", theme)
             .key("plugin-manifest-close")
@@ -2054,7 +2136,50 @@ pub(crate) fn feature_details_dialog(state: &State, theme: ThemeStyle<'_>) -> [E
                 .color(theme.color("#e07676"))
                 .wrap(),
         );
-    } else if feature.is_some_and(|item| item.has_prompt_extension) {
+    } else {
+        let mut tools = col().w_full().gap(4.0);
+        if state.feature_details_loading {
+            tools = tools.child(
+                text("Loading tools…")
+                    .font(ui_font(13.0, 400.0))
+                    .color(theme.color("#a8a8a8")),
+            );
+        } else if let Some(details) = details {
+            if details.tool_names.is_empty() {
+                tools = tools.child(
+                    text("No tools")
+                        .font(ui_font(13.0, 400.0))
+                        .color(theme.color("#a8a8a8")),
+                );
+            } else {
+                for name in &details.tool_names {
+                    tools = tools.child(
+                        text(name.clone())
+                            .selectable(true)
+                            .font(ui_font(13.0, 400.0))
+                            .color(theme.color("#c8c8c8")),
+                    );
+                }
+            }
+        }
+        body = body
+            .child(
+                text("Tools")
+                    .font(ui_font(14.0, 550.0))
+                    .color(theme.color("#e2e2e2")),
+            )
+            .child(
+                tools
+                    .key("feature-details-tools")
+                    .max_h(150.0)
+                    .scroll(ScrollSpec {
+                        stick_bottom: false,
+                    }),
+            );
+    }
+    if state.feature_details_error.is_empty()
+        && feature.is_some_and(|item| item.has_prompt_extension)
+    {
         let content = if state.feature_details_loading {
             "Loading prompt extension…"
         } else {
@@ -2070,7 +2195,7 @@ pub(crate) fn feature_details_dialog(state: &State, theme: ThemeStyle<'_>) -> [E
                 col()
                     .key("feature-details-prompt")
                     .w_full()
-                    .max_h(420.0)
+                    .max_h(300.0)
                     .min_h(0.0)
                     .scroll(ScrollSpec {
                         stick_bottom: false,
@@ -2205,6 +2330,16 @@ mod tests {
         assert_eq!(feature_rows(&state).count(), total - 1);
         state.feature_tab = FeatureTab::All;
         assert_eq!(feature_rows(&state).count(), total);
+    }
+
+    #[test]
+    fn sidebar_view_capability_matches_feature_navigation() {
+        let destinations = bundled_features()
+            .into_iter()
+            .filter(|feature| feature_has_sidebar_view(&feature.id))
+            .map(|feature| feature.id)
+            .collect::<Vec<_>>();
+        assert_eq!(destinations, ["fleet", beale_tracking::FEATURE_ID]);
     }
 
     #[test]
