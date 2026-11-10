@@ -102,6 +102,7 @@
 
 #### Changed
 
+- Updated the v2 desktop to Rune commit `0ec97aa4b764b35196ba8f4d133c9722f4b37a6c`, raised the v2 Rust toolchain to 1.99.1 to build Rune directly, and adapted session prompt history to Rune's `TextEdit::preedit()` accessor.
 - Runbook Canvas now shows cells directly below the runbook metadata without the Cells heading or separate run-level Results section; per-cell output remains attached to each cell.
 - Runbook Canvas uses the Settings scrollbar controls at its right edge, beside the cell status markers.
 - Runbook Canvas content now scrolls within the pane while view tabs and the cell status strip stay fixed. Content fades at the scroll edge beneath the tabs.

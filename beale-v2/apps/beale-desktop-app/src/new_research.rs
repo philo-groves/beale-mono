@@ -1616,7 +1616,7 @@ fn composer_history_key(state: &mut State, event: &KeyEvent, _: &mut Tx) -> bool
         || event.mods.alt
         || event.mods.ctrl
         || event.mods.logo
-        || state.new_research_prompt.preedit.is_some()
+        || state.new_research_prompt.preedit().is_some()
     {
         return false;
     }

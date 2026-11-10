@@ -26,7 +26,7 @@ extension_roots = ["extensions/features", "extensions/plugins", "extensions/rese
 
 [workspace.package]
 edition = "2024"
-rust-version = "1.89"
+rust-version = "1.99.1"
 license = "MIT"
 
 [workspace.dependencies]

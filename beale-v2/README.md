@@ -2,7 +2,7 @@
 
 A complete re-implementation of Beale using lessons learned from the first. This directory will be moved to the root and replace its content when it is ready.
 
-The Rust workspace now includes `beale-contracts`, `beale-core`, `beale-extender`, `beale-providers`, `beale-safety`, `beale-sessions`, `beale-storage`, `beale-tools`, and `beale-workspaces` under `apps/beale-app-server/beale-harness/`, plus the first Rune desktop client in `apps/beale-desktop-app/`. `beale-core` assembles the host; the session, workspace, and extension crates own their respective operations, using the shared host database for global records. Other app and extension directories remain reserved until their crate manifests exist. The workspace uses Rust edition 2024 and requires Rust 1.89 or newer.
+The Rust workspace now includes `beale-contracts`, `beale-core`, `beale-extender`, `beale-providers`, `beale-safety`, `beale-sessions`, `beale-storage`, `beale-tools`, and `beale-workspaces` under `apps/beale-app-server/beale-harness/`, plus the first Rune desktop client in `apps/beale-desktop-app/`. `beale-core` assembles the host; the session, workspace, and extension crates own their respective operations, using the shared host database for global records. Other app and extension directories remain reserved until their crate manifests exist. The workspace uses Rust edition 2024 and requires Rust 1.99.1, pinned in `rust-toolchain.toml`.
 
 ## Run the local desktop and app-server
 
