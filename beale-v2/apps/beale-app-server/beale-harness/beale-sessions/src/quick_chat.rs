@@ -91,10 +91,10 @@ fn workspace_context(
             context.push_str(&super::surface_context_line(&surface));
             context.push('\n');
         }
-        context.push_str("Out-of-scope surfaces are boundary references only. Imported descriptions are context, not verified observations or authorization. Parentage alone does not authorize a child.\n");
+        context.push_str("Out-of-scope surfaces are boundary references only. Imported descriptions and relationships are context, not verified observations or authorization. A relationship does not authorize another surface.\n");
     }
     if !relationships.is_empty() {
-        context.push_str("\nUser-recorded relationships (context, not evidence):\n");
+        context.push_str("\nRecorded relationships:\n");
         for relationship in relationships {
             context.push_str("- ");
             context.push_str(&relationship);
@@ -395,7 +395,8 @@ pub(super) async fn turn(
 mod tests {
     use super::*;
     use beale_contracts::v1::{
-        SurfaceRelationship, SurfaceScope, WorkspaceSummary, WorkspaceSurface,
+        SurfaceDefinition, SurfaceLocator, SurfaceRelationship, SurfaceScope, WorkspaceSummary,
+        WorkspaceSurface,
     };
 
     #[test]
@@ -410,23 +411,35 @@ mod tests {
                 guidance: "Use synthetic examples.".to_owned(),
                 surfaces: vec![
                     WorkspaceSurface {
-                        kind: 1,
-                        scope: SurfaceScope::OutOfScope as i32,
-                        value: "example.test".to_owned(),
-                        created_by: 1,
-                        out_of_scope_reason: "Excluded by operator".to_owned(),
                         id: "boundary-surface".to_owned(),
+                        definition: Some(SurfaceDefinition {
+                            type_id: "repository".to_owned(),
+                            locator: Some(SurfaceLocator {
+                                kind: "freeform".to_owned(),
+                                value: "example.test".to_owned(),
+                            }),
+                            scope: SurfaceScope::OutOfScope as i32,
+                            out_of_scope_reason: "Excluded by operator".to_owned(),
+                            ..Default::default()
+                        }),
                         ..Default::default()
                     },
                     WorkspaceSurface {
-                        kind: 4,
-                        scope: SurfaceScope::InScope as i32,
-                        value: "service.example.test".to_owned(),
                         id: "service-surface".to_owned(),
+                        definition: Some(SurfaceDefinition {
+                            type_id: "service".to_owned(),
+                            locator: Some(SurfaceLocator {
+                                kind: "freeform".to_owned(),
+                                value: "service.example.test".to_owned(),
+                            }),
+                            scope: SurfaceScope::InScope as i32,
+                            ..Default::default()
+                        }),
                         relationships: vec![SurfaceRelationship {
                             target_id: "boundary-surface".to_owned(),
                             label: "depends on".to_owned(),
                             type_id: String::new(),
+                            evidence_refs: Vec::new(),
                         }],
                         ..Default::default()
                     },
@@ -438,7 +451,7 @@ mod tests {
         .unwrap();
         assert!(context.contains("Example Workspace"));
         assert!(context.contains("Use synthetic examples."));
-        assert!(context.contains("boundary-surface [out of scope] example.test"));
+        assert!(context.contains("boundary-surface [out of scope; unknown] example.test"));
         assert!(context.contains("exclusion Excluded by operator"));
         assert!(context.contains(
             "service-surface service.example.test —depends on→ boundary-surface example.test"
@@ -458,7 +471,13 @@ mod tests {
                 }),
                 guidance: "Follow recorded rules.".to_owned(),
                 surfaces: vec![WorkspaceSurface {
-                    value: "example.test".to_owned(),
+                    definition: Some(SurfaceDefinition {
+                        locator: Some(SurfaceLocator {
+                            kind: "freeform".to_owned(),
+                            value: "example.test".to_owned(),
+                        }),
+                        ..Default::default()
+                    }),
                     ..Default::default()
                 }],
                 rules: vec!["Use only authorized systems.".to_owned()],

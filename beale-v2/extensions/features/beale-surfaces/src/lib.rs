@@ -2,8 +2,8 @@
 
 use anyhow::{Context, Result, bail, ensure};
 use beale_contracts::v1::{
-    SurfaceDefinition, SurfaceKind, SurfaceLocator, SurfaceRelationship, SurfaceScope,
-    WorkspaceSurface, WorkspaceSurfaceInput,
+    SurfaceDefinition, SurfaceEvidence, SurfaceLocator, SurfaceRelationship, SurfaceScope,
+    SurfaceScopeState, WorkspaceSurface, WorkspaceSurfaceInput,
 };
 use beale_workspaces::WorkspaceStore;
 use serde_json::{Value, json};
@@ -22,18 +22,17 @@ pub const GET: &str = "surface_get";
 pub const QUERY: &str = "surface_query";
 
 pub fn definitions() -> Vec<Value> {
-    let definition = json!({"type":"object","properties":{
-        "type_id":{"type":"string"},"name":{"type":"string"},
-        "locator":{"type":"object","properties":{"kind":{"type":"string"},"value":{"type":"string"}},"required":["kind","value"],"additionalProperties":false},
-        "parent_id":{"type":"string"},"summary":{"type":"string"},"context":{"type":"string"},
-        "scope_basis":{"type":"string"},"scope_descendants":{"type":"boolean"}
-    },"additionalProperties":false});
-    let relationship = json!({"type":"object","properties":{"target_id":{"type":"string"},"label":{"type":"string"},"type_id":{"type":"string"}},"required":["target_id","label"],"additionalProperties":false});
+    let evidence = json!({"type":"object","properties":{"kind":{"type":"string"},"reference":{"type":"string"},"note":{"type":"string"}},"required":["kind","reference"],"additionalProperties":false});
+    let locator = json!({"type":"object","properties":{"kind":{"type":"string"},"value":{"type":"string"}},"required":["kind","value"],"additionalProperties":false});
+    let definition = json!({"type":"object","properties":{"type_id":{"type":"string"},"name":{"type":"string"},"locator":locator,"scope":{"type":"string","enum":["in_scope","out_of_scope"]},"description":{"type":"string"},"out_of_scope_reason":{"type":"string"},"evidence_refs":{"type":"array","items":evidence}},"additionalProperties":false});
+    let mut add_definition = definition.clone();
+    add_definition["required"] = json!(["type_id", "locator", "scope"]);
+    let relationship = json!({"type":"object","properties":{"target_id":{"type":"string"},"label":{"type":"string"},"type_id":{"type":"string"},"evidence_refs":{"type":"array","items":evidence}},"required":["target_id","label"],"additionalProperties":false});
     vec![
-        json!({"type":"function","name":ADD,"description":"Add a surface to this workspace. The host assigns its short ID. A surface record is context, not proof of authorization.","parameters":{"type":"object","properties":{"kind":{"type":"string","enum":["repository","documentation","binary","service","domain","other"]},"scope":{"type":"string","enum":["in_scope","out_of_scope"]},"value":{"type":"string"},"definition":definition,"relationships":{"type":"array","items":relationship}},"required":["kind","scope","value"],"additionalProperties":false}}),
-        json!({"type":"function","name":EDIT,"description":"Edit a surface by short ID. Supply only fields to change. The host records a new revision with before and after values.","parameters":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["repository","documentation","binary","service","domain","other"]},"scope":{"type":"string","enum":["in_scope","out_of_scope"]},"value":{"type":"string"},"definition":definition,"relationships":{"type":"array","items":relationship}},"required":["id"],"additionalProperties":false}}),
+        json!({"type":"function","name":ADD,"description":"Add a surface to this workspace. Supply a definition with type_id, locator, and scope. The host assigns its short ID; evidence references are candidate context, not proof of authorization.","parameters":{"type":"object","properties":{"definition":add_definition,"relationships":{"type":"array","items":relationship}},"required":["definition"],"additionalProperties":false}}),
+        json!({"type":"function","name":EDIT,"description":"Edit a surface by short ID. Supply only definition fields or relationships to change. The host records a new revision.","parameters":{"type":"object","properties":{"id":{"type":"string"},"definition":definition,"relationships":{"type":"array","items":relationship}},"required":["id"],"additionalProperties":false}}),
         json!({"type":"function","name":GET,"description":"Get one surface and its revision lineage by short ID.","parameters":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"],"additionalProperties":false}}),
-        json!({"type":"function","name":QUERY,"description":"Query surfaces in this workspace by type, scope, parent, or text. Returns at most 50 summaries.","parameters":{"type":"object","properties":{"type_id":{"type":"string"},"scope":{"type":"string","enum":["in_scope","out_of_scope"]},"parent_id":{"type":"string"},"text":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":50}},"additionalProperties":false}}),
+        json!({"type":"function","name":QUERY,"description":"Query surfaces in this workspace by type, scope, or text. Returns at most 50 surfaces.","parameters":{"type":"object","properties":{"type_id":{"type":"string"},"scope":{"type":"string","enum":["in_scope","out_of_scope"]},"text":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":50}},"additionalProperties":false}}),
     ]
 }
 
@@ -47,24 +46,52 @@ fn required<'a>(args: &'a Value, key: &str) -> Result<&'a str> {
         .with_context(|| format!("{key} is required"))
 }
 
-fn kind(value: &str) -> Result<i32> {
-    Ok(match value {
-        "repository" => SurfaceKind::Repository,
-        "documentation" => SurfaceKind::Documentation,
-        "binary" => SurfaceKind::Binary,
-        "service" => SurfaceKind::Service,
-        "domain" => SurfaceKind::Domain,
-        "other" => SurfaceKind::Other,
-        _ => bail!("invalid surface kind"),
-    } as i32)
-}
-
 fn scope(value: &str) -> Result<i32> {
     Ok(match value {
         "in_scope" => SurfaceScope::InScope,
         "out_of_scope" => SurfaceScope::OutOfScope,
         _ => bail!("invalid surface scope"),
     } as i32)
+}
+
+fn evidence_refs(
+    value: Option<&Value>,
+    previous: Vec<SurfaceEvidence>,
+) -> Result<Vec<SurfaceEvidence>> {
+    let Some(value) = value else {
+        return Ok(previous);
+    };
+    let items = value.as_array().context("evidence_refs must be an array")?;
+    ensure!(items.len() <= 16, "too many evidence references");
+    items
+        .iter()
+        .map(|item| {
+            let object = item.as_object().context("invalid evidence reference")?;
+            ensure!(
+                object
+                    .keys()
+                    .all(|key| matches!(key.as_str(), "kind" | "reference" | "note")),
+                "unknown evidence field"
+            );
+            Ok(SurfaceEvidence {
+                kind: object
+                    .get("kind")
+                    .and_then(Value::as_str)
+                    .context("evidence kind is required")?
+                    .to_owned(),
+                reference: object
+                    .get("reference")
+                    .and_then(Value::as_str)
+                    .context("evidence reference is required")?
+                    .to_owned(),
+                note: object
+                    .get("note")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_owned(),
+            })
+        })
+        .collect()
 }
 
 fn definition(
@@ -80,19 +107,25 @@ fn definition(
         match key.as_str() {
             "type_id" => result.type_id = value.as_str().context("invalid type_id")?.to_owned(),
             "name" => result.name = value.as_str().context("invalid name")?.to_owned(),
-            "parent_id" => {
-                result.parent_id = value.as_str().context("invalid parent_id")?.to_owned()
+            "scope" => result.scope = scope(value.as_str().context("invalid scope")?)?,
+            "description" => {
+                result.description = value.as_str().context("invalid description")?.to_owned()
             }
-            "summary" => result.summary = value.as_str().context("invalid summary")?.to_owned(),
-            "context" => result.context = value.as_str().context("invalid context")?.to_owned(),
-            "scope_basis" => {
-                result.scope_basis = value.as_str().context("invalid scope_basis")?.to_owned()
+            "out_of_scope_reason" => {
+                result.out_of_scope_reason = value
+                    .as_str()
+                    .context("invalid out_of_scope_reason")?
+                    .to_owned()
             }
-            "scope_descendants" => {
-                result.scope_descendants = value.as_bool().context("invalid scope_descendants")?
-            }
+            "evidence_refs" => result.evidence_refs = evidence_refs(Some(value), Vec::new())?,
             "locator" => {
                 let locator = value.as_object().context("invalid locator")?;
+                ensure!(
+                    locator
+                        .keys()
+                        .all(|key| matches!(key.as_str(), "kind" | "value")),
+                    "unknown locator field"
+                );
                 result.locator = Some(SurfaceLocator {
                     kind: locator
                         .get("kind")
@@ -125,6 +158,13 @@ fn relationships(
         .iter()
         .map(|item| {
             let item = item.as_object().context("invalid relationship")?;
+            ensure!(
+                item.keys().all(|key| matches!(
+                    key.as_str(),
+                    "target_id" | "label" | "type_id" | "evidence_refs"
+                )),
+                "unknown relationship field"
+            );
             Ok(SurfaceRelationship {
                 target_id: item
                     .get("target_id")
@@ -141,6 +181,7 @@ fn relationships(
                     .and_then(Value::as_str)
                     .unwrap_or("")
                     .to_owned(),
+                evidence_refs: evidence_refs(item.get("evidence_refs"), Vec::new())?,
             })
         })
         .collect()
@@ -148,46 +189,28 @@ fn relationships(
 
 fn input_from_surface(surface: WorkspaceSurface) -> WorkspaceSurfaceInput {
     WorkspaceSurfaceInput {
-        kind: surface.kind,
-        scope: surface.scope,
-        value: surface.value,
         id: surface.id,
-        relationships: surface.relationships,
         definition: surface.definition,
-        ..Default::default()
+        relationships: surface.relationships,
     }
 }
 
+fn evidence_json(item: &SurfaceEvidence) -> Value {
+    json!({"kind":item.kind,"reference":item.reference,"note":item.note})
+}
+
 fn surface_json(surface: &WorkspaceSurface, include_lineage: bool) -> Value {
-    let definition = surface.definition.as_ref();
-    let kind_name = match SurfaceKind::try_from(surface.kind) {
-        Ok(SurfaceKind::Repository) => "repository",
-        Ok(SurfaceKind::Documentation) => "documentation",
-        Ok(SurfaceKind::Binary) => "binary",
-        Ok(SurfaceKind::Service) => "service",
-        Ok(SurfaceKind::Domain) => "domain",
-        _ => "other",
-    };
-    let scope_name = if surface.scope == SurfaceScope::InScope as i32 {
-        "in_scope"
-    } else {
-        "out_of_scope"
-    };
-    let mut value = json!({
-        "id":surface.id,"kind":kind_name,
-        "scope":scope_name,
-        "value":surface.value,"created_by":surface.created_by,"out_of_scope_reason":surface.out_of_scope_reason,
-        "created_at_ms":surface.created_at_ms,"updated_at_ms":surface.updated_at_ms,"revision":surface.revision,
-        "definition":definition.map(|item| json!({"type_id":item.type_id,"name":item.name,"locator":item.locator.as_ref().map(|locator| json!({"kind":locator.kind,"value":locator.value})),"parent_id":item.parent_id,"summary":item.summary,"context":item.context,"scope_basis":item.scope_basis,"scope_descendants":item.scope_descendants,"source":item.source})),
-        "relationships":surface.relationships.iter().map(|item| json!({"target_id":item.target_id,"label":item.label,"type_id":item.type_id})).collect::<Vec<_>>()
+    let definition = surface.definition.as_ref().map(|item| {
+        let scope_name = if item.scope == SurfaceScope::InScope as i32 { "in_scope" } else { "out_of_scope" };
+        let scope_state = match SurfaceScopeState::try_from(item.scope_state) { Ok(SurfaceScopeState::Approved) => "approved", Ok(SurfaceScopeState::Candidate) => "candidate", _ => "unknown" };
+        json!({"type_id":item.type_id,"name":item.name,"locator":item.locator.as_ref().map(|locator| json!({"kind":locator.kind,"value":locator.value})),"scope":scope_name,"scope_state":scope_state,"description":item.description,"out_of_scope_reason":item.out_of_scope_reason,"evidence_refs":item.evidence_refs.iter().map(evidence_json).collect::<Vec<_>>()})
     });
-    if include_lineage {
-        value["lineage"] = json!(surface.lineage.iter().map(|event| json!({
-            "number":event.number,"at_ms":event.at_ms,"actor":event.actor,"action":event.action,
-            "changes":event.changes.iter().map(|change| json!({"field":change.field,"before":serde_json::from_str::<Value>(&change.before_json).unwrap_or(Value::Null),"after":serde_json::from_str::<Value>(&change.after_json).unwrap_or(Value::Null)})).collect::<Vec<_>>()
-        })).collect::<Vec<_>>());
-    }
-    value
+    let lineage = if include_lineage {
+        surface.lineage.iter().map(|event| json!({"number":event.number,"at_ms":event.at_ms,"actor":event.actor,"action":event.action,"changes":event.changes.iter().map(|change| json!({"field":change.field,"before":serde_json::from_str::<Value>(&change.before_json).unwrap_or(Value::Null),"after":serde_json::from_str::<Value>(&change.after_json).unwrap_or(Value::Null)})).collect::<Vec<_>>()})).collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    json!({"id":surface.id,"definition":definition,"relationships":surface.relationships.iter().map(|item| json!({"target_id":item.target_id,"label":item.label,"type_id":item.type_id,"evidence_refs":item.evidence_refs.iter().map(evidence_json).collect::<Vec<_>>()})).collect::<Vec<_>>(),"lineage":lineage})
 }
 
 pub fn execute(
@@ -195,6 +218,7 @@ pub fn execute(
     workspace_id: &str,
     name: &str,
     args: &Value,
+    review_approved: bool,
 ) -> Result<String> {
     ensure!(args.is_object(), "arguments must be an object");
     let current = store
@@ -207,14 +231,11 @@ pub fn execute(
                 .surface_for_host(workspace_id, id)
                 .map_err(|status| anyhow::anyhow!("surface read failed: {status}"))?
                 .context("surface not found")?;
-            let mut value = surface_json(&surface, true);
-            value["deleted"] = json!(deleted);
-            Ok(value.to_string())
+            Ok(json!({"surface":surface_json(&surface, true),"deleted":deleted}).to_string())
         }
         QUERY => {
             let type_id = args.get("type_id").and_then(Value::as_str);
             let filter_scope = args.get("scope").and_then(Value::as_str);
-            let parent_id = args.get("parent_id").and_then(Value::as_str);
             let text = args
                 .get("text")
                 .and_then(Value::as_str)
@@ -225,22 +246,22 @@ pub fn execute(
                 .surfaces
                 .iter()
                 .filter(|surface| {
-                    let definition = surface.definition.as_ref();
-                    type_id.is_none_or(|type_id| {
-                        definition.is_some_and(|item| item.type_id == type_id)
-                    }) && filter_scope.is_none_or(|scope| {
-                        (scope == "in_scope" && surface.scope == SurfaceScope::InScope as i32)
-                            || (scope == "out_of_scope"
-                                && surface.scope == SurfaceScope::OutOfScope as i32)
-                    }) && parent_id
-                        .is_none_or(|id| definition.is_some_and(|item| item.parent_id == id))
-                        && text.as_ref().is_none_or(|needle| {
-                            surface.value.to_lowercase().contains(needle)
-                                || definition.is_some_and(|item| {
-                                    item.name.to_lowercase().contains(needle)
-                                        || item.summary.to_lowercase().contains(needle)
-                                })
-                        })
+                    surface.definition.as_ref().is_some_and(|definition| {
+                        type_id.is_none_or(|filter| definition.type_id == filter)
+                            && filter_scope.is_none_or(|filter| {
+                                (filter == "in_scope"
+                                    && definition.scope == SurfaceScope::InScope as i32)
+                                    || (filter == "out_of_scope"
+                                        && definition.scope == SurfaceScope::OutOfScope as i32)
+                            })
+                            && text.as_ref().is_none_or(|needle| {
+                                definition.name.to_lowercase().contains(needle)
+                                    || definition.description.to_lowercase().contains(needle)
+                                    || definition.locator.as_ref().is_some_and(|locator| {
+                                        locator.value.to_lowercase().contains(needle)
+                                    })
+                            })
+                    })
                 })
                 .take(limit as usize)
                 .map(|surface| surface_json(surface, false))
@@ -254,37 +275,37 @@ pub fn execute(
                 .map(input_from_surface)
                 .collect::<Vec<_>>();
             if name == ADD {
-                let mut item = WorkspaceSurfaceInput {
-                    kind: kind(required(args, "kind")?)?,
-                    scope: scope(required(args, "scope")?)?,
-                    value: required(args, "value")?.to_owned(),
-                    definition: Some(definition(args.get("definition"), None)?),
+                let mut definition = definition(args.get("definition"), None)?;
+                ensure!(
+                    args.get("definition").is_some()
+                        && !definition.type_id.is_empty()
+                        && definition.locator.is_some()
+                        && definition.scope != 0,
+                    "surface definition requires type_id, locator, and scope"
+                );
+                definition.scope_state = if review_approved {
+                    SurfaceScopeState::Approved
+                } else {
+                    SurfaceScopeState::Candidate
+                } as i32;
+                inputs.push(WorkspaceSurfaceInput {
+                    id: String::new(),
+                    definition: Some(definition),
                     relationships: relationships(args.get("relationships"), Vec::new())?,
-                    ..Default::default()
-                };
-                if let Some(definition) = &mut item.definition {
-                    definition.source = "agent".to_owned();
-                }
-                inputs.push(item);
+                });
             } else {
                 let id = required(args, "id")?;
                 let item = inputs
                     .iter_mut()
                     .find(|item| item.id == id)
                     .context("surface not found")?;
-                if let Some(value) = args.get("kind") {
-                    item.kind = kind(value.as_str().context("invalid kind")?)?;
-                }
-                if let Some(value) = args.get("scope") {
-                    item.scope = scope(value.as_str().context("invalid scope")?)?;
-                }
-                if let Some(value) = args.get("value") {
-                    item.value = value.as_str().context("invalid value")?.to_owned();
-                }
-                if args.get("definition").is_some() {
-                    item.definition =
-                        Some(definition(args.get("definition"), item.definition.take())?);
-                }
+                let mut updated = definition(args.get("definition"), item.definition.take())?;
+                updated.scope_state = if review_approved {
+                    SurfaceScopeState::Approved
+                } else {
+                    SurfaceScopeState::Candidate
+                } as i32;
+                item.definition = Some(updated);
                 item.relationships = relationships(
                     args.get("relationships"),
                     std::mem::take(&mut item.relationships),
@@ -329,6 +350,31 @@ mod tests {
     use tower::ServiceExt;
     use uuid::Uuid;
 
+    #[test]
+    fn tool_contract_requires_definition_and_exposes_typed_evidence() {
+        let tools = definitions();
+        assert_eq!(tools[0]["parameters"]["required"][0], "definition");
+        assert_eq!(
+            tools[0]["parameters"]["properties"]["definition"]["required"],
+            json!(["type_id", "locator", "scope"])
+        );
+        assert!(
+            tools[0]["parameters"]["properties"]["definition"]["properties"]
+                .get("parent_id")
+                .is_none()
+        );
+        assert!(
+            tools[0]["parameters"]["properties"]["definition"]["properties"]
+                .get("evidence_refs")
+                .is_some()
+        );
+        assert!(
+            tools[0]["parameters"]["properties"]["relationships"]["items"]["properties"]
+                .get("evidence_refs")
+                .is_some()
+        );
+    }
+
     #[tokio::test]
     async fn tools_add_edit_get_and_query_workspace_surfaces() {
         let base =
@@ -357,27 +403,44 @@ mod tests {
         assert_eq!(response.status(), axum::http::StatusCode::CREATED);
         let workspace =
             WorkspaceSummary::decode(to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
-        let added: Value = serde_json::from_str(&execute(&store, &workspace.id, ADD, &json!({"kind":"repository","scope":"in_scope","value":"example repository","definition":{"name":"Example repository","scope_basis":"Operator supplied authorization."}})).unwrap()).unwrap();
+        let added: Value = serde_json::from_str(&execute(&store, &workspace.id, ADD, &json!({"definition":{"type_id":"repository","name":"Example repository","locator":{"kind":"freeform","value":"example repository"},"scope":"in_scope","description":"Example research code.","evidence_refs":[{"kind":"artifact","reference":"artifact-example-001"}]} }), false).unwrap()).unwrap();
         assert_eq!(added["id"], "S1");
-        assert_eq!(added["revision"], 1);
+        assert_eq!(added["lineage"][0]["number"], 1);
+        assert_eq!(added["definition"]["scope_state"], "candidate");
+        assert_eq!(
+            added["definition"]["evidence_refs"][0]["reference"],
+            "artifact-example-001"
+        );
+        assert!(
+            execute(
+                &store,
+                &workspace.id,
+                EDIT,
+                &json!({"id":"S1","definition":{"scope_state":"approved"}}),
+                false
+            )
+            .is_err()
+        );
         let edited: Value = serde_json::from_str(
             &execute(
                 &store,
                 &workspace.id,
                 EDIT,
-                &json!({"id":"S1","definition":{"summary":"Example parser repository."}}),
+                &json!({"id":"S1","definition":{"description":"Example parser repository."}}),
+                true,
             )
             .unwrap(),
         )
         .unwrap();
-        assert_eq!(edited["revision"], 2);
+        assert_eq!(edited["lineage"][1]["number"], 2);
+        assert_eq!(edited["definition"]["scope_state"], "approved");
         assert_eq!(edited["lineage"][1]["actor"], "agent");
         let fetched: Value = serde_json::from_str(
-            &execute(&store, &workspace.id, GET, &json!({"id":"S1"})).unwrap(),
+            &execute(&store, &workspace.id, GET, &json!({"id":"S1"}), false).unwrap(),
         )
         .unwrap();
         assert_eq!(
-            fetched["definition"]["summary"],
+            fetched["surface"]["definition"]["description"],
             "Example parser repository."
         );
         let queried: Value = serde_json::from_str(
@@ -386,6 +449,7 @@ mod tests {
                 &workspace.id,
                 QUERY,
                 &json!({"type_id":"repository","text":"parser"}),
+                false,
             )
             .unwrap(),
         )
@@ -396,7 +460,8 @@ mod tests {
                 &store,
                 &workspace.id,
                 EDIT,
-                &json!({"id":"S1","definition":{"parent_id":"S1"}})
+                &json!({"id":"S1","definition":{"evidence_refs":[{"kind":"Invalid Kind","reference":"x"}]}}),
+                false,
             )
             .is_err()
         );

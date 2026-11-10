@@ -9,9 +9,9 @@ use beale_contracts::{
     WORKSPACE_CAMPAIGN_PATH, WORKSPACE_DETAILS_PATH, WORKSPACE_FOUNDATION_PATH,
     WORKSPACE_RULES_PATH, WORKSPACE_SURFACES_PATH, WORKSPACES_PATH,
     v1::{
-        CreateWorkspaceRequest, ListWorkspacesResponse, SurfaceChange, SurfaceCreator,
-        SurfaceDefinition, SurfaceKind, SurfaceLocator, SurfaceRelationship, SurfaceRevision,
-        SurfaceScope, UpdateWorkspaceFoundationRequest, UpdateWorkspaceRulesRequest,
+        CreateWorkspaceRequest, ListWorkspacesResponse, SurfaceChange, SurfaceDefinition,
+        SurfaceEvidence, SurfaceLocator, SurfaceRelationship, SurfaceRevision, SurfaceScope,
+        SurfaceScopeState, UpdateWorkspaceFoundationRequest, UpdateWorkspaceRulesRequest,
         UpdateWorkspaceSurfacesRequest, WorkspaceCampaign, WorkspaceDetails, WorkspaceFoundation,
         WorkspaceRules, WorkspaceSummary, WorkspaceSurface, WorkspaceSurfaceInput,
         WorkspaceSurfaces,
@@ -113,32 +113,36 @@ struct StoredManifest {
 struct StoredSurface {
     #[serde(default)]
     id: String,
+    #[serde(default, skip_serializing)]
     kind: String,
+    #[serde(default, skip_serializing)]
     scope: String,
+    #[serde(default = "unknown_scope_state", skip_serializing)]
+    scope_state: String,
+    #[serde(default, skip_serializing)]
     value: String,
+    #[serde(default, skip_serializing)]
     created_by: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing)]
     out_of_scope_reason: Option<String>,
-    #[serde(default, skip_serializing)]
-    mapping_progress: u32,
-    #[serde(default, skip_serializing)]
-    threat_modeling_progress: u32,
-    #[serde(default, skip_serializing)]
-    analysis_progress: u32,
     #[serde(default)]
     relationships: Vec<StoredRelationship>,
     #[serde(default)]
     definition: Option<StoredDefinition>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing)]
     legacy_ids: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     created_at_ms: u64,
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     updated_at_ms: u64,
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     revision: u64,
     #[serde(default)]
     lineage: Vec<StoredRevision>,
+}
+
+fn unknown_scope_state() -> String {
+    "unknown".to_owned()
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -166,6 +170,17 @@ struct StoredRelationship {
     label: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     type_id: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    evidence_refs: Vec<StoredEvidence>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredEvidence {
+    kind: String,
+    reference: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    note: String,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -174,17 +189,24 @@ struct StoredDefinition {
     type_id: String,
     name: String,
     locator: StoredLocator,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    parent_id: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    summary: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    context: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    scope_basis: String,
     #[serde(default)]
-    scope_descendants: bool,
-    source: String,
+    description: String,
+    #[serde(default)]
+    scope: String,
+    #[serde(default = "unknown_scope_state")]
+    scope_state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    out_of_scope_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    evidence_refs: Vec<StoredEvidence>,
+    #[serde(default, skip_serializing)]
+    parent_id: String,
+    #[serde(default, skip_serializing)]
+    summary: String,
+    #[serde(default, skip_serializing)]
+    context: String,
+    #[serde(default, skip_serializing)]
+    scope_basis: String,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -361,7 +383,7 @@ impl WorkspaceStore {
         let manifest: StoredManifest = serde_json::from_slice(&manifest_bytes)
             .map_err(|_| WorkspaceError::Internal("decode workspace manifest"))?;
         let manifest = normalize_manifest(manifest)?;
-        if manifest.schema_version != 5
+        if manifest.schema_version != 6
             || manifest.workspace_id != entry.id
             || manifest.name != entry.name
             || manifest.surfaces.len() > 256
@@ -415,7 +437,7 @@ impl WorkspaceStore {
         let manifest: StoredManifest = serde_json::from_slice(&bytes)
             .map_err(|_| WorkspaceError::Internal("decode workspace manifest"))?;
         let manifest = normalize_manifest(manifest)?;
-        if manifest.schema_version != 5
+        if manifest.schema_version != 6
             || manifest.workspace_id != entry.id
             || manifest.name != entry.name
             || manifest.surfaces.len() > 256
@@ -669,7 +691,7 @@ impl WorkspaceStore {
         }
         let id = Uuid::new_v4().to_string();
         let manifest = WorkspaceManifest {
-            schema_version: 5,
+            schema_version: 6,
             workspace_id: id.clone(),
             name: input.name.clone(),
             directories: &DIRECTORIES,
@@ -751,47 +773,12 @@ fn summary(entry: &RegistryEntry) -> WorkspaceSummary {
 }
 
 fn surface_dto(surface: StoredSurface) -> Result<WorkspaceSurface, WorkspaceError> {
-    let id = if surface.id.is_empty() {
-        legacy_surface_id(&surface.kind, &surface.value)
-    } else {
-        surface.id.clone()
-    };
-    let kind = match surface.kind.as_str() {
-        "repository" => SurfaceKind::Repository,
-        "documentation" => SurfaceKind::Documentation,
-        "binary" => SurfaceKind::Binary,
-        "service" => SurfaceKind::Service,
-        "domain" => SurfaceKind::Domain,
-        "other" => SurfaceKind::Other,
-        _ => return Err(WorkspaceError::Internal("invalid workspace surface kind")),
-    };
-    let scope = match surface.scope.as_str() {
-        "in_scope" => SurfaceScope::InScope,
-        "out_of_scope" => SurfaceScope::OutOfScope,
-        _ => return Err(WorkspaceError::Internal("invalid workspace surface scope")),
-    };
-    let created_by = match surface.created_by.as_str() {
-        "user" => SurfaceCreator::User,
-        "agent" => SurfaceCreator::Agent,
-        _ => {
-            return Err(WorkspaceError::Internal(
-                "invalid workspace surface creator",
-            ));
-        }
-    };
     let definition = surface
         .definition
-        .unwrap_or_else(|| legacy_definition(&surface.kind, &surface.value));
+        .ok_or(WorkspaceError::Internal("missing surface definition"))?;
     Ok(WorkspaceSurface {
-        kind: kind as i32,
-        scope: scope as i32,
-        value: surface.value,
-        created_by: created_by as i32,
-        out_of_scope_reason: surface.out_of_scope_reason.unwrap_or_default(),
-        id,
-        mapping_progress: 0,
-        threat_modeling_progress: 0,
-        analysis_progress: 0,
+        id: surface.id,
+        definition: Some(definition_dto(definition)?),
         relationships: surface
             .relationships
             .into_iter()
@@ -799,12 +786,13 @@ fn surface_dto(surface: StoredSurface) -> Result<WorkspaceSurface, WorkspaceErro
                 target_id: relationship.target_id,
                 label: relationship.label,
                 type_id: relationship.type_id,
+                evidence_refs: relationship
+                    .evidence_refs
+                    .into_iter()
+                    .map(evidence_dto)
+                    .collect(),
             })
             .collect(),
-        definition: Some(definition_dto(definition)),
-        created_at_ms: surface.created_at_ms,
-        updated_at_ms: surface.updated_at_ms,
-        revision: surface.revision,
         lineage: surface
             .lineage
             .into_iter()
@@ -902,10 +890,8 @@ fn stamp_lineage(
                 number: surface.revision,
                 at_ms: surface.updated_at_ms,
                 actor: if prior.is_none()
-                    && surface
-                        .definition
-                        .as_ref()
-                        .is_some_and(|definition| definition.source == "ai_import")
+                    && surface.scope_state == "candidate"
+                    && actor == "operator"
                 {
                     "ai_import"
                 } else {
@@ -963,12 +949,15 @@ fn legacy_definition(kind: &str, value: &str) -> StoredDefinition {
             kind: "freeform".to_owned(),
             value: value.to_owned(),
         },
+        description: String::new(),
+        scope: String::new(),
+        scope_state: unknown_scope_state(),
+        out_of_scope_reason: None,
+        evidence_refs: Vec::new(),
         parent_id: String::new(),
         summary: String::new(),
         context: String::new(),
         scope_basis: String::new(),
-        scope_descendants: false,
-        source: "legacy".to_owned(),
     }
 }
 
@@ -983,20 +972,46 @@ fn default_surface_name(value: &str) -> String {
     name
 }
 
-fn definition_dto(definition: StoredDefinition) -> SurfaceDefinition {
-    SurfaceDefinition {
+fn definition_dto(definition: StoredDefinition) -> Result<SurfaceDefinition, WorkspaceError> {
+    let scope = match definition.scope.as_str() {
+        "in_scope" => SurfaceScope::InScope,
+        "out_of_scope" => SurfaceScope::OutOfScope,
+        _ => return Err(WorkspaceError::Internal("invalid workspace surface scope")),
+    };
+    let scope_state = match definition.scope_state.as_str() {
+        "unknown" => SurfaceScopeState::Unknown,
+        "candidate" => SurfaceScopeState::Candidate,
+        "approved" => SurfaceScopeState::Approved,
+        _ => {
+            return Err(WorkspaceError::Internal(
+                "invalid workspace surface scope state",
+            ));
+        }
+    };
+    Ok(SurfaceDefinition {
         type_id: definition.type_id,
         name: definition.name,
         locator: Some(SurfaceLocator {
             kind: definition.locator.kind,
             value: definition.locator.value,
         }),
-        parent_id: definition.parent_id,
-        summary: definition.summary,
-        context: definition.context,
-        scope_basis: definition.scope_basis,
-        scope_descendants: definition.scope_descendants,
-        source: definition.source,
+        scope: scope as i32,
+        scope_state: scope_state as i32,
+        description: definition.description,
+        out_of_scope_reason: definition.out_of_scope_reason.unwrap_or_default(),
+        evidence_refs: definition
+            .evidence_refs
+            .into_iter()
+            .map(evidence_dto)
+            .collect(),
+    })
+}
+
+fn evidence_dto(evidence: StoredEvidence) -> SurfaceEvidence {
+    SurfaceEvidence {
+        kind: evidence.kind,
+        reference: evidence.reference,
+        note: evidence.note,
     }
 }
 
@@ -1013,16 +1028,38 @@ fn valid_repository_path(value: &str) -> bool {
             .all(|part| !matches!(part, "" | "." | ".."))
 }
 
-fn validate_definition(
-    input: SurfaceDefinition,
-    kind: &str,
-    value: &str,
-) -> Result<StoredDefinition, WorkspaceError> {
-    let type_id = if input.type_id.is_empty() {
-        kind
-    } else {
-        input.type_id.as_str()
-    };
+fn validate_evidence_refs(
+    input: Vec<SurfaceEvidence>,
+) -> Result<Vec<StoredEvidence>, WorkspaceError> {
+    if input.len() > 16 {
+        return Err(WorkspaceError::Invalid);
+    }
+    input
+        .into_iter()
+        .map(|item| {
+            if item.kind.is_empty()
+                || item.kind.len() > 64
+                || !item.kind.bytes().all(|byte| {
+                    byte.is_ascii_lowercase()
+                        || byte.is_ascii_digit()
+                        || matches!(byte, b'.' | b'_' | b'-')
+                })
+                || !valid_text(&item.reference, 2_048, false)
+                || !valid_optional_text(&item.note, 500, true)
+            {
+                return Err(WorkspaceError::Invalid);
+            }
+            Ok(StoredEvidence {
+                kind: item.kind,
+                reference: item.reference.trim().to_owned(),
+                note: item.note.trim().to_owned(),
+            })
+        })
+        .collect()
+}
+
+fn validate_definition(input: SurfaceDefinition) -> Result<StoredDefinition, WorkspaceError> {
+    let type_id = input.type_id.as_str();
     let known = matches!(
         type_id,
         "repository"
@@ -1049,15 +1086,13 @@ fn validate_definition(
     {
         return Err(WorkspaceError::Invalid);
     }
+    let locator = input.locator.ok_or(WorkspaceError::Invalid)?;
+    let value = locator.value.trim();
     let name = if input.name.trim().is_empty() {
         default_surface_name(value)
     } else {
         input.name.trim().to_owned()
     };
-    let locator = input.locator.unwrap_or(SurfaceLocator {
-        kind: "freeform".to_owned(),
-        value: value.to_owned(),
-    });
     let locator_allowed = match type_id {
         "repository" => matches!(locator.kind.as_str(), "freeform" | "git_url" | "url"),
         "code.module" | "code.package" | "code.file" => {
@@ -1088,16 +1123,23 @@ fn validate_definition(
         || !locator_allowed
         || !valid_text(&locator.value, 2_048, false)
         || (locator.kind == "repository_path" && !valid_repository_path(&locator.value))
-        || !valid_optional_text(&input.summary, 2_000, true)
-        || !valid_optional_text(&input.context, 4_000, true)
-        || !valid_optional_text(&input.scope_basis, 2_000, true)
-        || !matches!(
-            input.source.as_str(),
-            "" | "operator" | "agent" | "ai_import" | "research_kit" | "legacy"
-        )
-        || input.parent_id.len() > 128
-        || input.parent_id.chars().any(char::is_control)
+        || !valid_optional_text(&input.description, 10_000, true)
+        || !valid_optional_text(&input.out_of_scope_reason, 2_000, true)
     {
+        return Err(WorkspaceError::Invalid);
+    }
+    let scope = match SurfaceScope::try_from(input.scope) {
+        Ok(SurfaceScope::InScope) => "in_scope",
+        Ok(SurfaceScope::OutOfScope) => "out_of_scope",
+        _ => return Err(WorkspaceError::Invalid),
+    };
+    let scope_state = match SurfaceScopeState::try_from(input.scope_state) {
+        Ok(SurfaceScopeState::Unknown) => "unknown",
+        Ok(SurfaceScopeState::Candidate) => "candidate",
+        Ok(SurfaceScopeState::Approved) => "approved",
+        Err(_) => return Err(WorkspaceError::Invalid),
+    };
+    if scope == "in_scope" && !input.out_of_scope_reason.is_empty() {
         return Err(WorkspaceError::Invalid);
     }
     Ok(StoredDefinition {
@@ -1107,16 +1149,16 @@ fn validate_definition(
             kind: locator.kind,
             value: locator.value.trim().to_owned(),
         },
-        parent_id: input.parent_id,
-        summary: input.summary.trim().to_owned(),
-        context: input.context.trim().to_owned(),
-        scope_basis: input.scope_basis.trim().to_owned(),
-        scope_descendants: input.scope_descendants,
-        source: if input.source.is_empty() {
-            "operator".to_owned()
-        } else {
-            input.source
-        },
+        description: input.description.trim().to_owned(),
+        scope: scope.to_owned(),
+        scope_state: scope_state.to_owned(),
+        out_of_scope_reason: (!input.out_of_scope_reason.trim().is_empty())
+            .then(|| input.out_of_scope_reason.trim().to_owned()),
+        evidence_refs: validate_evidence_refs(input.evidence_refs)?,
+        parent_id: String::new(),
+        summary: String::new(),
+        context: String::new(),
+        scope_basis: String::new(),
     })
 }
 
@@ -1154,6 +1196,11 @@ fn normalize_manifest(mut manifest: StoredManifest) -> Result<StoredManifest, Wo
             surface.id = short;
         }
         for surface in &mut manifest.surfaces {
+            if let Some(definition) = &mut surface.definition
+                && let Some(parent) = renamed.get(&definition.parent_id)
+            {
+                definition.parent_id = parent.clone();
+            }
             for relationship in &mut surface.relationships {
                 if let Some(target) = renamed.get(&relationship.target_id) {
                     relationship.target_id = target.clone();
@@ -1166,135 +1213,179 @@ fn normalize_manifest(mut manifest: StoredManifest) -> Result<StoredManifest, Wo
     if manifest.schema_version == 4 {
         manifest.schema_version = 5;
     }
-    if manifest.schema_version != 5 {
+    if manifest.schema_version == 5 {
+        let mut parent_links = Vec::new();
+        let active_ids: HashSet<_> = manifest
+            .surfaces
+            .iter()
+            .map(|surface| surface.id.clone())
+            .collect();
+        for surface in manifest
+            .surfaces
+            .iter_mut()
+            .chain(manifest.retired_surfaces.iter_mut())
+        {
+            let definition = surface
+                .definition
+                .get_or_insert_with(|| legacy_definition(&surface.kind, &surface.value));
+            if definition.scope.is_empty() {
+                definition.scope = surface.scope.clone();
+            }
+            definition.scope_state.clone_from(&surface.scope_state);
+            if definition.out_of_scope_reason.is_none() {
+                definition
+                    .out_of_scope_reason
+                    .clone_from(&surface.out_of_scope_reason);
+            }
+            if definition.description.is_empty() {
+                let mut parts = Vec::new();
+                if !definition.summary.is_empty() {
+                    parts.push(definition.summary.clone());
+                }
+                if !definition.context.is_empty() {
+                    parts.push(definition.context.clone());
+                }
+                if !definition.scope_basis.is_empty() {
+                    parts.push(format!("Authorization basis: {}", definition.scope_basis));
+                }
+                definition.description = parts.join("\n\n");
+            }
+            if !definition.parent_id.is_empty() && active_ids.contains(&surface.id) {
+                parent_links.push((definition.parent_id.clone(), surface.id.clone()));
+            }
+        }
+        for (parent, child) in parent_links {
+            let surface = manifest
+                .surfaces
+                .iter_mut()
+                .find(|item| item.id == parent)
+                .ok_or(WorkspaceError::Internal("missing surface parent"))?;
+            if parent == child {
+                return Err(WorkspaceError::Internal("surface parent cycle"));
+            }
+            if !surface
+                .relationships
+                .iter()
+                .any(|item| item.target_id == child)
+            {
+                surface.relationships.push(StoredRelationship {
+                    target_id: child,
+                    label: "contains".to_owned(),
+                    type_id: "contains".to_owned(),
+                    evidence_refs: Vec::new(),
+                });
+            }
+        }
+        manifest.schema_version = 6;
+    }
+    if manifest.schema_version != 6 {
         return Err(WorkspaceError::Internal(
             "invalid workspace manifest version",
         ));
     }
     let mut ids = HashSet::new();
-    for surface in &mut manifest.surfaces {
-        surface.mapping_progress = 0;
-        surface.threat_modeling_progress = 0;
-        surface.analysis_progress = 0;
-        if surface.definition.is_none() {
-            surface.definition = Some(legacy_definition(&surface.kind, &surface.value));
+    for surface in manifest
+        .surfaces
+        .iter_mut()
+        .chain(manifest.retired_surfaces.iter_mut())
+    {
+        let definition = surface
+            .definition
+            .as_ref()
+            .ok_or(WorkspaceError::Internal("missing surface definition"))?;
+        let validated = validate_definition(definition_dto(definition.clone())?)
+            .map_err(|_| WorkspaceError::Internal("invalid surface definition"))?;
+        surface.kind = match validated.type_id.as_str() {
+            "repository" | "code.module" | "code.package" | "code.file" => "repository",
+            "documentation" => "documentation",
+            "binary" | "configuration" => "binary",
+            "service" | "api.endpoint" => "service",
+            "domain" | "host" => "domain",
+            _ => "other",
         }
-        let Some(number) = surface_number(&surface.id) else {
-            return Err(WorkspaceError::Internal("invalid surface id"));
-        };
-        if !ids.insert(surface.id.clone()) || number >= manifest.next_surface_number {
-            return Err(WorkspaceError::Internal("invalid surface counter"));
-        }
-        if surface.revision != surface.lineage.last().map_or(0, |event| event.number)
-            || (surface.revision > 0
-                && (surface.created_at_ms == 0 || surface.updated_at_ms < surface.created_at_ms))
-            || surface
-                .lineage
-                .iter()
-                .enumerate()
-                .any(|(index, event)| event.number != index as u64 + 1 || event.at_ms == 0)
-        {
-            return Err(WorkspaceError::Internal("invalid surface lineage"));
-        }
-    }
-    for surface in &mut manifest.retired_surfaces {
-        surface.mapping_progress = 0;
-        surface.threat_modeling_progress = 0;
-        surface.analysis_progress = 0;
+        .to_owned();
+        surface.scope.clone_from(&validated.scope);
+        surface.scope_state.clone_from(&validated.scope_state);
+        surface.value.clone_from(&validated.locator.value);
+        surface
+            .out_of_scope_reason
+            .clone_from(&validated.out_of_scope_reason);
+        surface.created_by = surface
+            .lineage
+            .first()
+            .map_or("user", |event| {
+                if matches!(event.actor.as_str(), "agent" | "ai_import") {
+                    "agent"
+                } else {
+                    "user"
+                }
+            })
+            .to_owned();
+        surface.revision = surface.lineage.last().map_or(0, |event| event.number);
+        surface.created_at_ms = surface.lineage.first().map_or(0, |event| event.at_ms);
+        surface.updated_at_ms = surface.lineage.last().map_or(0, |event| event.at_ms);
         if surface_number(&surface.id).is_none() || !ids.insert(surface.id.clone()) {
-            return Err(WorkspaceError::Internal("invalid retired surface id"));
+            return Err(WorkspaceError::Internal("invalid surface id"));
         }
         if surface
             .lineage
-            .last()
-            .is_none_or(|event| event.action != "deleted" || event.number != surface.revision)
+            .iter()
+            .enumerate()
+            .any(|(index, event)| event.number != index as u64 + 1 || event.at_ms == 0)
         {
-            return Err(WorkspaceError::Internal("invalid retired surface lineage"));
+            return Err(WorkspaceError::Internal("invalid surface lineage"));
         }
     }
     let active_ids: HashSet<_> = manifest
         .surfaces
         .iter()
-        .map(|surface| surface.id.clone())
+        .map(|surface| surface.id.as_str())
         .collect();
+    if manifest.surfaces.iter().any(|surface| {
+        surface_number(&surface.id).is_some_and(|number| number >= manifest.next_surface_number)
+    }) {
+        return Err(WorkspaceError::Internal("invalid surface counter"));
+    }
     for surface in &manifest.surfaces {
-        let definition = surface
-            .definition
-            .as_ref()
-            .ok_or(WorkspaceError::Internal("missing surface definition"))?;
-        validate_definition(
-            definition_dto(definition.clone()),
-            &surface.kind,
-            &surface.value,
-        )
-        .map_err(|_| WorkspaceError::Internal("invalid surface definition"))?;
-        if surface.scope == "in_scope"
-            && definition.scope_descendants
-            && definition.scope_basis.is_empty()
-        {
-            return Err(WorkspaceError::Internal("surface scope basis missing"));
-        }
-        if !definition.parent_id.is_empty() && !active_ids.contains(&definition.parent_id) {
-            return Err(WorkspaceError::Internal("missing surface parent"));
-        }
-        if surface
-            .relationships
-            .iter()
-            .any(|relationship| !active_ids.contains(&relationship.target_id))
-        {
-            return Err(WorkspaceError::Internal(
-                "missing surface relationship target",
-            ));
+        let mut targets = HashSet::new();
+        if surface.relationships.iter().any(|relationship| {
+            relationship.target_id == surface.id
+                || !active_ids.contains(relationship.target_id.as_str())
+                || !targets.insert(relationship.target_id.as_str())
+                || !valid_text(&relationship.label, 80, false)
+                || !valid_optional_text(&relationship.type_id, 64, false)
+                || !relationship.type_id.bytes().all(|byte| {
+                    byte.is_ascii_lowercase()
+                        || byte.is_ascii_digit()
+                        || matches!(byte, b'.' | b'_')
+                })
+                || validate_evidence_refs(
+                    relationship
+                        .evidence_refs
+                        .clone()
+                        .into_iter()
+                        .map(evidence_dto)
+                        .collect(),
+                )
+                .is_err()
+        }) {
+            return Err(WorkspaceError::Internal("invalid surface relationship"));
         }
     }
-    let parents: std::collections::HashMap<_, _> = manifest
-        .surfaces
-        .iter()
-        .map(|surface| {
-            (
-                surface.id.as_str(),
-                surface
-                    .definition
-                    .as_ref()
-                    .map_or("", |definition| definition.parent_id.as_str()),
-            )
-        })
-        .collect();
-    let by_id: std::collections::HashMap<_, _> = manifest
-        .surfaces
-        .iter()
-        .map(|surface| (surface.id.as_str(), surface))
-        .collect();
-    for surface in &manifest.surfaces {
-        let mut seen = HashSet::new();
-        let mut current = surface.id.as_str();
-        while let Some(parent) = parents
-            .get(current)
-            .copied()
-            .filter(|parent| !parent.is_empty())
+    for surface in &manifest.retired_surfaces {
+        if surface
+            .lineage
+            .last()
+            .is_none_or(|event| event.action != "deleted")
         {
-            if !seen.insert(parent) {
-                return Err(WorkspaceError::Internal("surface parent cycle"));
-            }
-            if surface.scope == "in_scope"
-                && by_id.get(parent).is_some_and(|ancestor| {
-                    ancestor.scope == "out_of_scope"
-                        && ancestor
-                            .definition
-                            .as_ref()
-                            .is_some_and(|definition| definition.scope_descendants)
-                })
-            {
-                return Err(WorkspaceError::Internal("surface excluded by parent"));
-            }
-            current = parent;
+            return Err(WorkspaceError::Internal("invalid retired surface lineage"));
         }
     }
     Ok(manifest)
 }
 
 fn validate_surface_update_with_counter(
-    inputs: Vec<beale_contracts::v1::WorkspaceSurfaceInput>,
+    inputs: Vec<WorkspaceSurfaceInput>,
     existing: &[StoredSurface],
     mut next_surface_number: u64,
 ) -> Result<(Vec<StoredSurface>, u64), WorkspaceError> {
@@ -1302,40 +1393,26 @@ fn validate_surface_update_with_counter(
         return Err(WorkspaceError::Invalid);
     }
     let mut seen = HashSet::new();
-    let mut result = Vec::with_capacity(inputs.len());
     let mut ids = HashSet::new();
-    let mut legacy_rows = Vec::with_capacity(inputs.len());
     let mut remap = std::collections::HashMap::new();
+    let mut result = Vec::with_capacity(inputs.len());
     for input in inputs {
-        let legacy_client = input.id.is_empty();
-        let kind = match SurfaceKind::try_from(input.kind) {
-            Ok(SurfaceKind::Repository) => "repository",
-            Ok(SurfaceKind::Documentation) => "documentation",
-            Ok(SurfaceKind::Binary) => "binary",
-            Ok(SurfaceKind::Service) => "service",
-            Ok(SurfaceKind::Domain) => "domain",
-            Ok(SurfaceKind::Other) => "other",
-            _ => return Err(WorkspaceError::Invalid),
+        let mut definition = validate_definition(input.definition.ok_or(WorkspaceError::Invalid)?)?;
+        let kind = match definition.type_id.as_str() {
+            "repository" | "code.module" | "code.package" | "code.file" => "repository",
+            "documentation" => "documentation",
+            "binary" | "configuration" => "binary",
+            "service" | "api.endpoint" => "service",
+            "domain" | "host" => "domain",
+            _ => "other",
         };
-        let scope = match SurfaceScope::try_from(input.scope) {
-            Ok(SurfaceScope::InScope) => "in_scope",
-            Ok(SurfaceScope::OutOfScope) => "out_of_scope",
-            _ => return Err(WorkspaceError::Invalid),
-        };
-        let value = input.value.trim();
-        if !valid_text(value, 2_048, false) || !seen.insert((kind, value.to_lowercase())) {
+        let value = definition.locator.value.clone();
+        if !seen.insert((definition.type_id.clone(), value.to_lowercase())) {
             return Err(WorkspaceError::Invalid);
         }
-        let previous = existing.iter().find(|item| {
-            let id = if item.id.is_empty() {
-                legacy_surface_id(&item.kind, &item.value)
-            } else {
-                item.id.clone()
-            };
-            id == input.id
-                || item.legacy_ids.iter().any(|legacy| legacy == &input.id)
-                || (legacy_client && item.kind == kind && item.value.eq_ignore_ascii_case(value))
-        });
+        let previous = existing
+            .iter()
+            .find(|item| item.id == input.id || item.legacy_ids.contains(&input.id));
         if previous.is_none()
             && !input.id.is_empty()
             && (surface_number(&input.id).is_some()
@@ -1344,8 +1421,8 @@ fn validate_surface_update_with_counter(
         {
             return Err(WorkspaceError::Invalid);
         }
-        let id = if let Some(item) = previous {
-            item.id.clone()
+        let id = if let Some(prior) = previous {
+            prior.id.clone()
         } else {
             let id = format!("S{next_surface_number}");
             next_surface_number = next_surface_number
@@ -1353,112 +1430,66 @@ fn validate_surface_update_with_counter(
                 .ok_or(WorkspaceError::Invalid)?;
             id
         };
-        if !input.id.is_empty() && remap.insert(input.id.clone(), id.clone()).is_some() {
+        if !input.id.is_empty() && remap.insert(input.id, id.clone()).is_some() {
             return Err(WorkspaceError::Invalid);
         }
         if !ids.insert(id.clone()) || input.relationships.len() > 64 {
             return Err(WorkspaceError::Invalid);
         }
-        let unchanged = previous.is_some_and(|item| {
-            item.kind == kind && item.scope == scope && item.value.eq_ignore_ascii_case(value)
-        });
-        let definition = if let Some(definition) = input.definition {
-            validate_definition(definition, kind, value)?
-        } else {
-            previous
-                .and_then(|item| item.definition.clone())
-                .unwrap_or_else(|| {
-                    let mut definition = legacy_definition(kind, value);
-                    if previous.is_none() {
-                        definition.source = "operator".to_owned();
-                    }
-                    definition
-                })
-        };
-        if scope == "in_scope" && definition.scope_descendants && definition.scope_basis.is_empty()
+        if definition.scope_state == "unknown"
+            && let Some(prior) = previous
         {
-            return Err(WorkspaceError::Invalid);
+            definition.scope_state.clone_from(&prior.scope_state);
         }
+        if definition.scope == "out_of_scope" && definition.out_of_scope_reason.is_none() {
+            definition.out_of_scope_reason = Some("Set in workspace".to_owned());
+        }
+        let unchanged = previous.is_some_and(|prior| {
+            prior.kind == kind
+                && prior.scope == definition.scope
+                && prior.value.eq_ignore_ascii_case(&value)
+        });
         let created_by = if unchanged {
-            previous.map_or("user", |item| item.created_by.as_str())
-        } else if matches!(
-            definition.source.as_str(),
-            "agent" | "ai_import" | "research_kit"
-        ) {
+            previous.map_or("user", |prior| prior.created_by.as_str())
+        } else if definition.scope_state == "candidate" {
             "agent"
         } else {
             "user"
         };
-        let reason = if scope == "out_of_scope" {
-            previous
-                .filter(|_| unchanged)
-                .and_then(|item| item.out_of_scope_reason.clone())
-                .or_else(|| Some("Set in workspace".to_owned()))
-        } else {
-            None
-        };
-        let relationships = if legacy_client {
-            previous.map_or_else(Vec::new, |item| item.relationships.clone())
-        } else {
-            input
-                .relationships
-                .into_iter()
-                .map(|relationship| {
-                    let label = relationship.label.trim().to_owned();
-                    let type_id = if relationship.type_id.is_empty() {
-                        previous
-                            .and_then(|item| {
-                                item.relationships.iter().find(|old| {
-                                    old.target_id == relationship.target_id && old.label == label
-                                })
-                            })
-                            .map_or(String::new(), |old| old.type_id.clone())
-                    } else {
-                        relationship.type_id.trim().to_owned()
-                    };
-                    StoredRelationship {
-                        target_id: relationship.target_id,
-                        label,
-                        type_id,
-                    }
+        let relationships = input
+            .relationships
+            .into_iter()
+            .map(|relationship| {
+                Ok(StoredRelationship {
+                    target_id: relationship.target_id,
+                    label: relationship.label.trim().to_owned(),
+                    type_id: relationship.type_id.trim().to_owned(),
+                    evidence_refs: validate_evidence_refs(relationship.evidence_refs)?,
                 })
-                .collect()
-        };
-        legacy_rows.push(legacy_client);
+            })
+            .collect::<Result<Vec<_>, WorkspaceError>>()?;
         result.push(StoredSurface {
             id,
             kind: kind.to_owned(),
-            scope: scope.to_owned(),
-            value: value.to_owned(),
+            scope: definition.scope.clone(),
+            scope_state: definition.scope_state.clone(),
+            value,
             created_by: created_by.to_owned(),
-            out_of_scope_reason: reason,
-            mapping_progress: 0,
-            threat_modeling_progress: 0,
-            analysis_progress: 0,
+            out_of_scope_reason: definition.out_of_scope_reason.clone(),
             relationships,
             definition: Some(definition),
-            legacy_ids: previous.map_or_else(Vec::new, |item| item.legacy_ids.clone()),
+            legacy_ids: previous.map_or_else(Vec::new, |prior| prior.legacy_ids.clone()),
             created_at_ms: 0,
             updated_at_ms: 0,
             revision: 0,
             lineage: Vec::new(),
         });
     }
-    for (surface, legacy_client) in result.iter_mut().zip(legacy_rows) {
-        if let Some(definition) = &mut surface.definition
-            && let Some(parent) = remap.get(&definition.parent_id)
-        {
-            definition.parent_id = parent.clone();
-        }
+    for surface in &mut result {
         for relationship in &mut surface.relationships {
             if let Some(target) = remap.get(&relationship.target_id) {
                 relationship.target_id = target.clone();
             }
-        }
-        if legacy_client {
-            surface
-                .relationships
-                .retain(|relationship| ids.contains(&relationship.target_id));
         }
         let mut targets = HashSet::new();
         for relationship in &surface.relationships {
@@ -1470,59 +1501,11 @@ fn validate_surface_update_with_counter(
                 || !relationship.type_id.bytes().all(|byte| {
                     byte.is_ascii_lowercase()
                         || byte.is_ascii_digit()
-                        || byte == b'.'
-                        || byte == b'_'
+                        || matches!(byte, b'.' | b'_')
                 })
             {
                 return Err(WorkspaceError::Invalid);
             }
-        }
-        if let Some(definition) = &surface.definition
-            && (definition.parent_id == surface.id
-                || (!definition.parent_id.is_empty() && !ids.contains(&definition.parent_id)))
-        {
-            return Err(WorkspaceError::Invalid);
-        }
-    }
-    let parents: std::collections::HashMap<_, _> = result
-        .iter()
-        .map(|surface| {
-            (
-                surface.id.as_str(),
-                surface
-                    .definition
-                    .as_ref()
-                    .map_or("", |definition| definition.parent_id.as_str()),
-            )
-        })
-        .collect();
-    let by_id: std::collections::HashMap<_, _> = result
-        .iter()
-        .map(|surface| (surface.id.as_str(), surface))
-        .collect();
-    for surface in &result {
-        let mut seen = HashSet::new();
-        let mut current = surface.id.as_str();
-        while let Some(parent) = parents
-            .get(current)
-            .copied()
-            .filter(|parent| !parent.is_empty())
-        {
-            if !seen.insert(parent) {
-                return Err(WorkspaceError::Invalid);
-            }
-            if surface.scope == "in_scope"
-                && by_id.get(parent).is_some_and(|ancestor| {
-                    ancestor.scope == "out_of_scope"
-                        && ancestor
-                            .definition
-                            .as_ref()
-                            .is_some_and(|definition| definition.scope_descendants)
-                })
-            {
-                return Err(WorkspaceError::Invalid);
-            }
-            current = parent;
         }
     }
     Ok((result, next_surface_number))
@@ -1618,8 +1601,14 @@ fn validate(request: CreateWorkspaceRequest) -> Result<ValidatedWorkspace, Works
     let (mut surfaces, next_surface_number) =
         validate_surface_update_with_counter(request.surfaces, &[], 1)?;
     for surface in &mut surfaces {
-        if surface.scope == "out_of_scope" {
-            surface.out_of_scope_reason = Some("Set at workspace creation".to_owned());
+        if surface.scope == "out_of_scope"
+            && let Some(definition) = &mut surface.definition
+            && definition.out_of_scope_reason.is_none()
+        {
+            definition.out_of_scope_reason = Some("Set at workspace creation".to_owned());
+            surface
+                .out_of_scope_reason
+                .clone_from(&definition.out_of_scope_reason);
         }
     }
     stamp_lineage(&mut surfaces, &[], "operator")?;
@@ -1864,725 +1853,248 @@ async fn update_rules(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn surface_lineage_records_changes_and_keeps_deleted_records() {
-        let base = std::env::temp_dir().join(format!("beale-lineage-example-{}", Uuid::new_v4()));
-        fs::create_dir_all(&base).unwrap();
-        let store = WorkspaceStore::at(base.join("host")).unwrap();
-        let directory = base.join("workspace");
-        let mut request = example_request(&directory);
-        request.surfaces.clear();
-        let mut unscoped = request.clone();
-        unscoped.rules.clear();
-        assert!(validate(unscoped).is_err());
-        let workspace = store.create(request).unwrap();
-        assert!(store.surfaces(&workspace.id).unwrap().surfaces.is_empty());
-        assert!(
-            store
-                .update_rules(
-                    &workspace.id,
-                    UpdateWorkspaceRulesRequest {
-                        expected_revision: 1,
-                        rules: Vec::new()
-                    }
-                )
-                .is_err()
-        );
-        let added = store
-            .update_surfaces(
-                &workspace.id,
-                UpdateWorkspaceSurfacesRequest {
-                    expected_revision: 1,
-                    surfaces: vec![WorkspaceSurfaceInput {
-                        kind: SurfaceKind::Domain as i32,
-                        scope: SurfaceScope::InScope as i32,
-                        value: "example.test".to_owned(),
-                        ..Default::default()
-                    }],
-                },
-            )
-            .unwrap();
-        assert_eq!(added.surfaces[0].id, "S1");
-        assert_eq!(added.surfaces[0].revision, 1);
-        assert_eq!(added.surfaces[0].lineage[0].action, "created");
-        let manifest: serde_json::Value =
-            serde_json::from_slice(&fs::read(directory.join("workspace.json")).unwrap()).unwrap();
-        assert!(manifest["surfaces"][0].get("mappingProgress").is_none());
-        let edited = store
-            .update_surfaces(
-                &workspace.id,
-                UpdateWorkspaceSurfacesRequest {
-                    expected_revision: added.revision,
-                    surfaces: vec![WorkspaceSurfaceInput {
-                        id: "S1".to_owned(),
-                        kind: SurfaceKind::Domain as i32,
-                        scope: SurfaceScope::InScope as i32,
-                        value: "api.example.test".to_owned(),
-                        ..Default::default()
-                    }],
-                },
-            )
-            .unwrap();
-        assert_eq!(edited.surfaces[0].revision, 2);
-        assert!(edited.surfaces[0].updated_at_ms > edited.surfaces[0].created_at_ms);
-        assert!(
-            edited.surfaces[0].lineage[1]
-                .changes
-                .iter()
-                .any(|change| change.field == "value"
-                    && change.before_json == "\"example.test\""
-                    && change.after_json == "\"api.example.test\"")
-        );
-        let unchanged = store
-            .update_surfaces(
-                &workspace.id,
-                UpdateWorkspaceSurfacesRequest {
-                    expected_revision: edited.revision,
-                    surfaces: vec![WorkspaceSurfaceInput {
-                        id: "S1".to_owned(),
-                        kind: SurfaceKind::Domain as i32,
-                        scope: SurfaceScope::InScope as i32,
-                        value: "api.example.test".to_owned(),
-                        ..Default::default()
-                    }],
-                },
-            )
-            .unwrap();
-        assert_eq!(unchanged.surfaces[0].revision, 2);
-        store
-            .update_surfaces(
-                &workspace.id,
-                UpdateWorkspaceSurfacesRequest {
-                    expected_revision: unchanged.revision,
-                    surfaces: Vec::new(),
-                },
-            )
-            .unwrap();
-        let (retired, deleted) = store
-            .surface_for_host(&workspace.id, "S1")
-            .unwrap()
-            .unwrap();
-        assert!(deleted);
-        assert_eq!(retired.revision, 3);
-        assert_eq!(retired.lineage[2].action, "deleted");
-        assert!(store.surfaces(&workspace.id).unwrap().surfaces.is_empty());
-        drop(store);
-        fs::remove_dir_all(base).unwrap();
-    }
-
-    #[test]
-    fn surface_definitions_resolve_draft_references_and_reject_cycles() {
-        let repository = beale_contracts::v1::WorkspaceSurfaceInput {
-            id: "draft-repo".to_owned(),
-            kind: SurfaceKind::Repository as i32,
-            scope: SurfaceScope::InScope as i32,
-            value: "example repository".to_owned(),
-            relationships: vec![SurfaceRelationship {
-                target_id: "draft-module".to_owned(),
-                label: "contains".to_owned(),
-                type_id: "contains".to_owned(),
-            }],
-            definition: Some(SurfaceDefinition {
-                type_id: "repository".to_owned(),
-                name: "Example repository".to_owned(),
-                locator: Some(SurfaceLocator {
-                    kind: "git_url".to_owned(),
-                    value: "https://github.com/example-org/example-repository".to_owned(),
-                }),
-                scope_basis: "Operator supplied authorization.".to_owned(),
-                scope_descendants: true,
-                source: "ai_import".to_owned(),
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-        let module = beale_contracts::v1::WorkspaceSurfaceInput {
-            id: "draft-module".to_owned(),
-            kind: SurfaceKind::Other as i32,
-            scope: SurfaceScope::InScope as i32,
-            value: "src/parser".to_owned(),
-            definition: Some(SurfaceDefinition {
-                type_id: "code.module".to_owned(),
-                name: "Parser".to_owned(),
-                locator: Some(SurfaceLocator {
-                    kind: "repository_path".to_owned(),
-                    value: "src/parser".to_owned(),
-                }),
-                parent_id: "draft-repo".to_owned(),
-                summary: "Parses example inputs.".to_owned(),
-                source: "ai_import".to_owned(),
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-        let (saved, next) =
-            validate_surface_update_with_counter(vec![repository.clone(), module.clone()], &[], 1)
-                .unwrap();
-        assert_eq!(saved[0].id, "S1");
-        assert_eq!(saved[1].id, "S2");
-        assert_eq!(saved[1].definition.as_ref().unwrap().parent_id, "S1");
-        assert_eq!(saved[1].definition.as_ref().unwrap().type_id, "code.module");
-        assert_eq!(saved[0].relationships[0].target_id, "S2");
-        assert_eq!(next, 3);
-        let mut escaped = module.clone();
-        escaped
-            .definition
-            .as_mut()
-            .unwrap()
-            .locator
-            .as_mut()
-            .unwrap()
-            .value = "../outside".to_owned();
-        assert!(
-            validate_surface_update_with_counter(vec![repository.clone(), escaped], &[], 1)
-                .is_err()
-        );
-        let mut cycle = repository.clone();
-        cycle.definition.as_mut().unwrap().parent_id = "draft-module".to_owned();
-        assert!(validate_surface_update_with_counter(vec![cycle, module.clone()], &[], 1).is_err());
-        let mut excluded = repository;
-        excluded.scope = SurfaceScope::OutOfScope as i32;
-        assert!(validate_surface_update_with_counter(vec![excluded, module], &[], 1).is_err());
-        let old_client = beale_contracts::v1::WorkspaceSurfaceInput {
-            id: "S2".to_owned(),
-            kind: SurfaceKind::Other as i32,
-            scope: SurfaceScope::InScope as i32,
-            value: "src/parser".to_owned(),
-            ..Default::default()
-        };
-        let repository_client = beale_contracts::v1::WorkspaceSurfaceInput {
-            id: "S1".to_owned(),
-            kind: SurfaceKind::Repository as i32,
-            scope: SurfaceScope::InScope as i32,
-            value: "example repository".to_owned(),
-            relationships: vec![SurfaceRelationship {
-                target_id: "S2".to_owned(),
-                label: "contains".to_owned(),
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-        let (preserved, _) =
-            validate_surface_update_with_counter(vec![repository_client, old_client], &saved, next)
-                .unwrap();
-        assert_eq!(preserved[1].definition.as_ref().unwrap().parent_id, "S1");
-        assert_eq!(preserved[0].relationships[0].type_id, "contains");
-    }
-
-    #[test]
-    fn v3_manifest_rewrites_surface_references_and_keeps_old_ids_as_aliases() {
-        let old_a = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa";
-        let old_b = "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb";
-        let manifest: StoredManifest = serde_json::from_value(serde_json::json!({
-            "schemaVersion": 3, "workspaceId": "workspace-example", "name": "Example Workspace",
-            "directories": [], "rules": [], "surfaces": [
-                {"id": old_a, "kind": "repository", "scope": "in_scope", "value": "example repository", "createdBy": "user",
-                    "relationships": [{"targetId": old_b, "label": "contains"}]},
-                {"id": old_b, "kind": "other", "scope": "in_scope", "value": "src/parser", "createdBy": "agent"}
-            ]
-        })).unwrap();
-        let migrated = normalize_manifest(manifest).unwrap();
-        assert_eq!(migrated.schema_version, 5);
-        assert_eq!(migrated.next_surface_number, 3);
-        assert_eq!(migrated.surfaces[0].id, "S1");
-        assert_eq!(migrated.surfaces[0].relationships[0].target_id, "S2");
-        assert_eq!(migrated.surfaces[1].legacy_ids, [old_b]);
-        let inputs = vec![
-            beale_contracts::v1::WorkspaceSurfaceInput {
-                id: old_a.to_owned(),
-                kind: SurfaceKind::Repository as i32,
-                scope: SurfaceScope::InScope as i32,
-                value: "example repository".to_owned(),
-                ..Default::default()
-            },
-            beale_contracts::v1::WorkspaceSurfaceInput {
-                id: "draft-new".to_owned(),
-                kind: SurfaceKind::Other as i32,
-                scope: SurfaceScope::InScope as i32,
-                value: "src/worker".to_owned(),
-                ..Default::default()
-            },
-        ];
-        let (updated, next) = validate_surface_update_with_counter(
-            inputs,
-            &migrated.surfaces,
-            migrated.next_surface_number,
-        )
-        .unwrap();
-        assert_eq!(updated[0].id, "S1");
-        assert_eq!(updated[1].id, "S3");
-        assert_eq!(next, 4);
-    }
-
-    #[test]
-    fn surface_graph_preserves_ids_and_discards_old_progress() {
-        let source_id = Uuid::new_v4().to_string();
-        let target_id = Uuid::new_v4().to_string();
-        let existing: Vec<StoredSurface> = serde_json::from_value(serde_json::json!([
-            {"id": source_id, "kind": "domain", "scope": "in_scope", "value": "example.test", "createdBy": "user"},
-            {"id": target_id, "kind": "service", "scope": "out_of_scope", "value": "boundary.example.test", "createdBy": "agent", "outOfScopeReason": "Excluded by operator"}
-        ])).unwrap();
-        let inputs = vec![
-            beale_contracts::v1::WorkspaceSurfaceInput {
-                id: source_id.clone(),
-                kind: SurfaceKind::Domain as i32,
-                scope: SurfaceScope::InScope as i32,
-                value: "renamed.example.test".to_owned(),
-                mapping_progress: 100,
-                threat_modeling_progress: 50,
-                relationships: vec![SurfaceRelationship {
-                    target_id: target_id.clone(),
-                    label: "calls".to_owned(),
-                    type_id: String::new(),
-                }],
-                ..Default::default()
-            },
-            beale_contracts::v1::WorkspaceSurfaceInput {
-                id: target_id.clone(),
-                kind: SurfaceKind::Service as i32,
-                scope: SurfaceScope::OutOfScope as i32,
-                value: "boundary.example.test".to_owned(),
-                mapping_progress: 100,
-                ..Default::default()
-            },
-        ];
-        let saved = validate_surface_update(inputs.clone(), &existing).unwrap();
-        assert_eq!(saved[0].id, source_id);
-        assert_eq!(saved[0].relationships[0].target_id, target_id);
-        assert_eq!(saved[0].threat_modeling_progress, 0);
-        assert_eq!(saved[1].created_by, "agent");
-        let mut invalid = inputs;
-        invalid[1].relationships.push(SurfaceRelationship {
-            target_id: target_id.clone(),
-            label: "self".to_owned(),
-            type_id: String::new(),
-        });
-        assert!(validate_surface_update(invalid, &existing).is_err());
-        let legacy = vec![beale_contracts::v1::WorkspaceSurfaceInput {
-            kind: SurfaceKind::Domain as i32,
-            scope: SurfaceScope::InScope as i32,
-            value: "renamed.example.test".to_owned(),
-            ..Default::default()
-        }];
-        let preserved = validate_surface_update(legacy, &saved).unwrap();
-        assert_eq!(preserved[0].id, source_id);
-        assert_eq!(preserved[0].mapping_progress, 0);
-        assert!(preserved[0].relationships.is_empty());
-    }
     use axum::{
         body::{Body, to_bytes},
-        http::{Request, header},
+        http::Request,
     };
-    use beale_contracts::PROTOBUF_CONTENT_TYPE;
+    use beale_contracts::{PROTOBUF_CONTENT_TYPE, WORKSPACES_PATH};
     use prost::Message;
     use tower::ServiceExt;
+
+    fn example_input(value: &str, scope: SurfaceScope) -> WorkspaceSurfaceInput {
+        WorkspaceSurfaceInput {
+            id: String::new(),
+            definition: Some(SurfaceDefinition {
+                type_id: "domain".to_owned(),
+                name: value.to_owned(),
+                locator: Some(SurfaceLocator {
+                    kind: "domain".to_owned(),
+                    value: value.to_owned(),
+                }),
+                scope: scope as i32,
+                scope_state: SurfaceScopeState::Approved as i32,
+                out_of_scope_reason: if scope == SurfaceScope::OutOfScope {
+                    "Excluded by operator.".to_owned()
+                } else {
+                    String::new()
+                },
+                ..Default::default()
+            }),
+            relationships: Vec::new(),
+        }
+    }
 
     fn example_request(directory: &Path) -> CreateWorkspaceRequest {
         CreateWorkspaceRequest {
             name: "Example Workspace".to_owned(),
             directory: directory.to_string_lossy().into_owned(),
-            guidance: "# Example guidance\n\nStay within scope.\n".to_owned(),
+            guidance: "Stay within recorded scope.".to_owned(),
             surfaces: vec![
-                beale_contracts::v1::WorkspaceSurfaceInput {
-                    kind: SurfaceKind::Domain as i32,
-                    scope: SurfaceScope::InScope as i32,
-                    value: "example.test".to_owned(),
-                    ..Default::default()
-                },
-                beale_contracts::v1::WorkspaceSurfaceInput {
-                    kind: SurfaceKind::Domain as i32,
-                    scope: SurfaceScope::OutOfScope as i32,
-                    value: "excluded.example.test".to_owned(),
-                    ..Default::default()
-                },
+                example_input("example.test", SurfaceScope::InScope),
+                example_input("excluded.example.test", SurfaceScope::OutOfScope),
             ],
             rules: vec!["Do not contact excluded third parties.".to_owned()],
         }
     }
 
-    fn post(token: Option<&str>, body: Vec<u8>) -> Request<Body> {
-        let mut builder = Request::builder()
-            .method("POST")
-            .uri(WORKSPACES_PATH)
-            .header(header::CONTENT_TYPE, PROTOBUF_CONTENT_TYPE);
-        if let Some(token) = token {
-            builder = builder.header(header::AUTHORIZATION, format!("Bearer {token}"));
+    #[test]
+    fn required_definition_and_evidence_refs_are_validated() {
+        let mut input = example_input("example.test", SurfaceScope::InScope);
+        assert!(validate_surface_update(vec![WorkspaceSurfaceInput::default()], &[]).is_err());
+        input
+            .definition
+            .as_mut()
+            .unwrap()
+            .evidence_refs
+            .push(SurfaceEvidence {
+                kind: "tool_result".to_owned(),
+                reference: "result-example-001".to_owned(),
+                note: "Observed host response".to_owned(),
+            });
+        let saved = validate_surface_update(vec![input.clone()], &[]).unwrap();
+        assert_eq!(
+            saved[0].definition.as_ref().unwrap().evidence_refs[0].reference,
+            "result-example-001"
+        );
+        input.definition.as_mut().unwrap().evidence_refs[0].kind = "Invalid Kind".to_owned();
+        assert!(validate_surface_update(vec![input], &[]).is_err());
+    }
+
+    #[test]
+    fn relationships_remap_draft_ids_and_preserve_evidence() {
+        let mut source = example_input("example.test", SurfaceScope::InScope);
+        source.id = "draft-source".to_owned();
+        source.relationships.push(SurfaceRelationship {
+            target_id: "draft-target".to_owned(),
+            label: "calls".to_owned(),
+            type_id: "calls".to_owned(),
+            evidence_refs: vec![SurfaceEvidence {
+                kind: "artifact".to_owned(),
+                reference: "artifact-example-001".to_owned(),
+                note: String::new(),
+            }],
+        });
+        let mut target = example_input("api.example.test", SurfaceScope::InScope);
+        target.id = "draft-target".to_owned();
+        let saved = validate_surface_update(vec![source.clone(), target], &[]).unwrap();
+        assert_eq!(saved[0].relationships[0].target_id, "S2");
+        assert_eq!(
+            saved[0].relationships[0].evidence_refs[0].reference,
+            "artifact-example-001"
+        );
+        assert!(validate_surface_update(vec![source], &[]).is_err());
+    }
+
+    #[test]
+    fn v5_manifest_migrates_parent_and_description_without_progress_fields() {
+        let value = serde_json::json!({
+            "schemaVersion":5,"workspaceId":"workspace-example","name":"Example Workspace","directories":[],"nextSurfaceNumber":3,"rules":[],
+            "surfaces":[
+                {"id":"S1","kind":"repository","scope":"in_scope","scopeState":"approved","value":"example repository","createdBy":"user","mappingProgress":75,"relationships":[],"definition":{"typeId":"repository","name":"Example repository","locator":{"kind":"freeform","value":"example repository"},"summary":"Research code","source":"operator"}},
+                {"id":"S2","kind":"other","scope":"in_scope","value":"src/parser","createdBy":"user","relationships":[],"definition":{"typeId":"code.module","name":"Parser","locator":{"kind":"repository_path","value":"src/parser"},"parentId":"S1","context":"Parses inputs","source":"operator"}}
+            ]
+        });
+        let manifest: StoredManifest = serde_json::from_value(value).unwrap();
+        let migrated = normalize_manifest(manifest).unwrap();
+        assert_eq!(migrated.schema_version, 6);
+        assert_eq!(migrated.surfaces[0].relationships[0].target_id, "S2");
+        assert_eq!(
+            migrated.surfaces[1]
+                .definition
+                .as_ref()
+                .unwrap()
+                .description,
+            "Parses inputs"
+        );
+        let serialized = serde_json::to_value(&migrated).unwrap();
+        let surface = serialized["surfaces"][0].as_object().unwrap();
+        assert_eq!(surface.len(), 4);
+        for key in ["id", "definition", "relationships", "lineage"] {
+            assert!(surface.contains_key(key));
         }
-        builder.body(Body::from(body)).unwrap()
+        assert!(
+            serialized["surfaces"][1]["definition"]
+                .get("parentId")
+                .is_none()
+        );
+        assert!(serialized["surfaces"][0].get("mappingProgress").is_none());
+    }
+
+    #[test]
+    fn v3_manifest_rewrites_legacy_parent_ids_as_relationships() {
+        let value = serde_json::json!({
+            "schemaVersion":3,"workspaceId":"workspace-example","name":"Example Workspace","directories":[],"rules":[],
+            "surfaces":[
+                {"id":"legacy-repo","kind":"repository","scope":"in_scope","value":"example repository","createdBy":"user","definition":{"typeId":"repository","name":"Example repository","locator":{"kind":"freeform","value":"example repository"}}},
+                {"id":"legacy-module","kind":"other","scope":"in_scope","value":"src/parser","createdBy":"user","definition":{"typeId":"code.module","name":"Parser","locator":{"kind":"repository_path","value":"src/parser"},"parentId":"legacy-repo"}}
+            ]
+        });
+        let manifest: StoredManifest = serde_json::from_value(value).unwrap();
+        let migrated = normalize_manifest(manifest).unwrap();
+        assert_eq!(migrated.schema_version, 6);
+        assert_eq!(migrated.surfaces[0].id, "S1");
+        assert_eq!(migrated.surfaces[0].relationships[0].target_id, "S2");
+        assert_eq!(
+            migrated.surfaces[1].definition.as_ref().unwrap().scope,
+            "in_scope"
+        );
+    }
+
+    #[test]
+    fn lineage_and_manifest_survive_edits_and_retirement() {
+        let base = std::env::temp_dir().join(format!("beale-surface-example-{}", Uuid::new_v4()));
+        fs::create_dir_all(&base).unwrap();
+        let directory = base.join("workspace");
+        let store = WorkspaceStore::at(base.join("host")).unwrap();
+        let summary = store.create(example_request(&directory)).unwrap();
+        let original = store.surfaces(&summary.id).unwrap();
+        assert_eq!(original.surfaces[0].lineage[0].action, "created");
+        let mut inputs = original
+            .surfaces
+            .into_iter()
+            .map(|surface| WorkspaceSurfaceInput {
+                id: surface.id,
+                definition: surface.definition,
+                relationships: surface.relationships,
+            })
+            .collect::<Vec<_>>();
+        inputs[0].definition.as_mut().unwrap().description =
+            "Updated example description".to_owned();
+        let updated = store
+            .update_surfaces(
+                &summary.id,
+                UpdateWorkspaceSurfacesRequest {
+                    expected_revision: original.revision,
+                    surfaces: inputs,
+                },
+            )
+            .unwrap();
+        assert_eq!(updated.surfaces[0].lineage.len(), 2);
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(directory.join("workspace.json")).unwrap()).unwrap();
+        assert_eq!(manifest["schemaVersion"], 6);
+        assert_eq!(
+            manifest["surfaces"][0]["definition"]["description"],
+            "Updated example description"
+        );
+        drop(store);
+        let reopened = WorkspaceStore::at(base.join("host")).unwrap();
+        assert_eq!(
+            reopened.surfaces(&summary.id).unwrap().surfaces[0]
+                .lineage
+                .len(),
+            2
+        );
+        reopened
+            .update_surfaces(
+                &summary.id,
+                UpdateWorkspaceSurfacesRequest {
+                    expected_revision: updated.revision,
+                    surfaces: Vec::new(),
+                },
+            )
+            .unwrap();
+        let (retired, deleted) = reopened
+            .surface_for_host(&summary.id, "S1")
+            .unwrap()
+            .unwrap();
+        assert!(deleted);
+        assert_eq!(retired.lineage.last().unwrap().action, "deleted");
+        drop(reopened);
+        fs::remove_dir_all(base).unwrap();
     }
 
     #[tokio::test]
-    async fn create_and_list_preserve_scope_and_require_authentication() {
-        let base = std::env::temp_dir().join(format!("beale-workspace-example-{}", Uuid::new_v4()));
+    async fn create_route_requires_authentication_and_returns_new_contract() {
+        let base = std::env::temp_dir().join(format!("beale-route-example-{}", Uuid::new_v4()));
+        fs::create_dir_all(&base).unwrap();
         let directory = base.join("workspace");
-        fs::create_dir_all(&directory).unwrap();
         let token = "ab".repeat(32);
         let app = router(
             token.clone(),
             WorkspaceStore::at(base.join("host")).unwrap(),
         );
         let payload = example_request(&directory).encode_to_vec();
+        let request = |authorized: bool| {
+            let mut builder = Request::builder()
+                .method("POST")
+                .uri(WORKSPACES_PATH)
+                .header(axum::http::header::CONTENT_TYPE, PROTOBUF_CONTENT_TYPE);
+            if authorized {
+                builder =
+                    builder.header(axum::http::header::AUTHORIZATION, format!("Bearer {token}"));
+            }
+            builder.body(Body::from(payload.clone())).unwrap()
+        };
         assert_eq!(
-            app.clone()
-                .oneshot(post(None, payload.clone()))
-                .await
-                .unwrap()
-                .status(),
-            StatusCode::UNAUTHORIZED,
-        );
-        assert!(fs::read_dir(&directory).unwrap().next().is_none());
-        let result = app
-            .clone()
-            .oneshot(post(Some(&token), payload.clone()))
-            .await
-            .unwrap();
-        assert_eq!(result.status(), StatusCode::CREATED);
-        assert_eq!(
-            result.headers()[header::CONTENT_TYPE],
-            PROTOBUF_CONTENT_TYPE
-        );
-        let bytes = to_bytes(result.into_body(), 4096).await.unwrap();
-        let summary = WorkspaceSummary::decode(bytes).unwrap();
-        assert_eq!(summary.name, "Example Workspace");
-        assert_eq!(
-            summary.directory,
-            fs::canonicalize(&directory).unwrap().to_string_lossy()
-        );
-        assert!(Uuid::parse_str(&summary.id).is_ok());
-        assert!(directory.join("AGENTS.md").is_file());
-        assert_eq!(
-            fs::read_to_string(directory.join("AGENTS.md")).unwrap(),
-            "# Example guidance\n\nStay within scope.\n"
-        );
-        assert!(directory.join(".beale").is_dir());
-        for name in DIRECTORIES {
-            assert!(directory.join(name).is_dir(), "{name}");
-        }
-        let manifest: serde_json::Value =
-            serde_json::from_slice(&fs::read(directory.join("workspace.json")).unwrap()).unwrap();
-        assert_eq!(manifest["schemaVersion"], 5);
-        assert_eq!(manifest["nextSurfaceNumber"], 3);
-        assert_eq!(manifest["surfaces"][0]["id"], "S1");
-        assert_eq!(manifest["workspaceId"], summary.id);
-        assert_eq!(manifest["surfaces"][0]["scope"], "in_scope");
-        assert_eq!(manifest["surfaces"][0]["createdBy"], "user");
-        assert_eq!(manifest["surfaces"][1]["scope"], "out_of_scope");
-        assert_eq!(
-            manifest["surfaces"][1]["outOfScopeReason"],
-            "Set at workspace creation"
-        );
-        let detail_path = format!("{WORKSPACES_PATH}/{}", summary.id);
-        let unauthorized_details = Request::builder()
-            .uri(&detail_path)
-            .body(Body::empty())
-            .unwrap();
-        assert_eq!(
-            app.clone()
-                .oneshot(unauthorized_details)
-                .await
-                .unwrap()
-                .status(),
+            app.clone().oneshot(request(false)).await.unwrap().status(),
             StatusCode::UNAUTHORIZED
         );
-        let details_request = Request::builder()
-            .uri(&detail_path)
-            .header(header::AUTHORIZATION, format!("Bearer {token}"))
-            .body(Body::empty())
-            .unwrap();
-        let detail_response = app.clone().oneshot(details_request).await.unwrap();
-        assert_eq!(detail_response.status(), StatusCode::OK);
-        let detail_bytes = to_bytes(detail_response.into_body(), 65_536).await.unwrap();
-        let details = WorkspaceDetails::decode(detail_bytes).unwrap();
-        assert_eq!(details.summary, Some(summary.clone()));
-        assert_eq!(
-            details.guidance,
-            "# Example guidance\n\nStay within scope.\n"
-        );
-        assert_eq!(details.surfaces[0].kind, SurfaceKind::Domain as i32);
-        assert_eq!(details.surfaces[0].scope, SurfaceScope::InScope as i32);
-        assert_eq!(details.surfaces[0].created_by, SurfaceCreator::User as i32);
-        assert_eq!(details.surfaces[1].scope, SurfaceScope::OutOfScope as i32);
-        assert_eq!(
-            details.surfaces[1].out_of_scope_reason,
-            "Set at workspace creation"
-        );
-        assert_eq!(details.rules, ["Do not contact excluded third parties."]);
-        assert_eq!(
-            app.clone()
-                .oneshot(post(Some(&token), payload))
-                .await
-                .unwrap()
-                .status(),
-            StatusCode::CONFLICT,
-        );
-        let second_directory = base.join("workspace-two");
-        let mut second_input = example_request(&second_directory);
-        second_input.name = "Second Example Workspace".to_owned();
-        let created_second = app
-            .clone()
-            .oneshot(post(Some(&token), second_input.encode_to_vec()))
-            .await
-            .unwrap();
-        assert_eq!(created_second.status(), StatusCode::CREATED);
-        let bytes = to_bytes(created_second.into_body(), 4096).await.unwrap();
-        let second_summary = WorkspaceSummary::decode(bytes).unwrap();
-        let unauthorized = Request::builder()
-            .uri(WORKSPACES_PATH)
-            .body(Body::empty())
-            .unwrap();
-        assert_eq!(
-            app.clone().oneshot(unauthorized).await.unwrap().status(),
-            StatusCode::UNAUTHORIZED,
-        );
-        let list_request = Request::builder()
-            .uri(WORKSPACES_PATH)
-            .header(header::AUTHORIZATION, format!("Bearer {token}"))
-            .body(Body::empty())
-            .unwrap();
-        let listed = app.oneshot(list_request).await.unwrap();
-        assert_eq!(listed.status(), StatusCode::OK);
-        let bytes = to_bytes(listed.into_body(), 4096).await.unwrap();
-        let list = ListWorkspacesResponse::decode(bytes).unwrap();
-        assert_eq!(list.workspaces, vec![summary, second_summary]);
-        assert_eq!(
-            WorkspaceStore::at(base.join("host"))
-                .unwrap()
-                .list()
-                .unwrap()
-                .len(),
-            2
-        );
+        let result = app.oneshot(request(true)).await.unwrap();
+        assert_eq!(result.status(), StatusCode::CREATED);
+        let summary =
+            WorkspaceSummary::decode(to_bytes(result.into_body(), 4096).await.unwrap()).unwrap();
+        assert_eq!(summary.name, "Example Workspace");
         fs::remove_dir_all(base).unwrap();
-    }
-
-    #[tokio::test]
-    async fn workspace_sections_save_independently_with_revision_checks() {
-        let base = std::env::temp_dir().join(format!("beale-section-example-{}", Uuid::new_v4()));
-        fs::create_dir_all(&base).unwrap();
-        let store = WorkspaceStore::at(base.join("host")).unwrap();
-        let summary = store
-            .create(example_request(&base.join("workspace")))
-            .unwrap();
-        let token = "ef".repeat(32);
-        let app = router(token.clone(), store.clone());
-        let path = |section: &str| format!("{WORKSPACES_PATH}/{}/{section}", summary.id);
-        let get = |section: &str| {
-            Request::builder()
-                .uri(path(section))
-                .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .body(Body::empty())
-                .unwrap()
-        };
-        let put = |section: &str, body: Vec<u8>| {
-            Request::builder()
-                .method("PUT")
-                .uri(path(section))
-                .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .header(header::CONTENT_TYPE, PROTOBUF_CONTENT_TYPE)
-                .body(Body::from(body))
-                .unwrap()
-        };
-        let campaign = app.clone().oneshot(get("campaign")).await.unwrap();
-        assert_eq!(campaign.status(), StatusCode::OK);
-        assert!(
-            WorkspaceCampaign::decode(to_bytes(campaign.into_body(), 4096).await.unwrap())
-                .unwrap()
-                .enabled_feature_ids
-                .is_empty()
-        );
-        let foundation = app.clone().oneshot(get("foundation")).await.unwrap();
-        let foundation =
-            WorkspaceFoundation::decode(to_bytes(foundation.into_body(), 25_000).await.unwrap())
-                .unwrap();
-        assert_eq!(foundation.revision, 1);
-        let changed = UpdateWorkspaceFoundationRequest {
-            expected_revision: 1,
-            name: "Renamed Example Workspace".to_owned(),
-            guidance: "Use only example.test.".to_owned(),
-        };
-        let saved = app
-            .clone()
-            .oneshot(put("foundation", changed.encode_to_vec()))
-            .await
-            .unwrap();
-        assert_eq!(saved.status(), StatusCode::OK);
-        let saved = WorkspaceFoundation::decode(to_bytes(saved.into_body(), 25_000).await.unwrap())
-            .unwrap();
-        assert_eq!(saved.revision, 2);
-        assert_eq!(saved.summary.unwrap().name, "Renamed Example Workspace");
-        assert_eq!(
-            fs::read_to_string(base.join("workspace/AGENTS.md")).unwrap(),
-            "Use only example.test.\n"
-        );
-        assert_eq!(store.list().unwrap()[0].name, "Renamed Example Workspace");
-        let stale = UpdateWorkspaceFoundationRequest {
-            expected_revision: 1,
-            name: "Stale Example".to_owned(),
-            guidance: String::new(),
-        };
-        assert_eq!(
-            app.clone()
-                .oneshot(put("foundation", stale.encode_to_vec()))
-                .await
-                .unwrap()
-                .status(),
-            StatusCode::CONFLICT
-        );
-        let initial_surfaces = store.details(&summary.id).unwrap().surfaces;
-        let new_surface_id = Uuid::new_v4().to_string();
-        let surface_update = UpdateWorkspaceSurfacesRequest {
-            expected_revision: 1,
-            surfaces: vec![
-                beale_contracts::v1::WorkspaceSurfaceInput {
-                    kind: SurfaceKind::Domain as i32,
-                    scope: SurfaceScope::InScope as i32,
-                    value: "example.test".to_owned(),
-                    id: initial_surfaces[0].id.clone(),
-                    mapping_progress: 100,
-                    relationships: vec![SurfaceRelationship {
-                        target_id: new_surface_id.clone(),
-                        label: "references".to_owned(),
-                        type_id: String::new(),
-                    }],
-                    ..Default::default()
-                },
-                beale_contracts::v1::WorkspaceSurfaceInput {
-                    kind: SurfaceKind::Documentation as i32,
-                    scope: SurfaceScope::OutOfScope as i32,
-                    value: "excluded.example.test".to_owned(),
-                    id: new_surface_id.clone(),
-                    ..Default::default()
-                },
-            ],
-        };
-        let saved = app
-            .clone()
-            .oneshot(put("surfaces", surface_update.encode_to_vec()))
-            .await
-            .unwrap();
-        assert_eq!(saved.status(), StatusCode::OK);
-        let saved =
-            WorkspaceSurfaces::decode(to_bytes(saved.into_body(), 65_536).await.unwrap()).unwrap();
-        assert_eq!(saved.revision, 2);
-        assert_eq!(saved.surfaces[0].id, initial_surfaces[0].id);
-        assert_eq!(saved.surfaces[0].mapping_progress, 0);
-        assert_eq!(saved.surfaces[0].relationships[0].target_id, "S3");
-        assert_eq!(saved.surfaces[1].id, "S3");
-        assert_eq!(saved.surfaces[1].created_by, SurfaceCreator::User as i32);
-        assert_eq!(saved.surfaces[1].out_of_scope_reason, "Set in workspace");
-        assert_eq!(
-            store.details(&summary.id).unwrap().surfaces[0].relationships[0].label,
-            "references"
-        );
-        let rule_update = UpdateWorkspaceRulesRequest {
-            expected_revision: 1,
-            rules: vec!["Stay within scope.".to_owned()],
-        };
-        let saved = app
-            .clone()
-            .oneshot(put("rules", rule_update.encode_to_vec()))
-            .await
-            .unwrap();
-        assert_eq!(saved.status(), StatusCode::OK);
-        let saved =
-            WorkspaceRules::decode(to_bytes(saved.into_body(), 65_536).await.unwrap()).unwrap();
-        assert_eq!(saved.revision, 2);
-        assert_eq!(saved.rules, ["Stay within scope."]);
-        assert_eq!(store.foundation(&summary.id).unwrap().revision, 2);
-        assert_eq!(store.surfaces(&summary.id).unwrap().revision, 2);
-        assert_eq!(store.rules(&summary.id).unwrap().revision, 2);
-        drop(app);
-        drop(store);
-        fs::remove_dir_all(base).unwrap();
-    }
-
-    #[tokio::test]
-    async fn invalid_scope_and_nonempty_directory_do_not_create_workspaces() {
-        let base = std::env::temp_dir().join(format!(
-            "beale-workspace-invalid-example-{}",
-            Uuid::new_v4()
-        ));
-        let directory = base.join("workspace");
-        fs::create_dir_all(&directory).unwrap();
-        let token = "cd".repeat(32);
-        let app = router(
-            token.clone(),
-            WorkspaceStore::at(base.join("host")).unwrap(),
-        );
-        let mut input = example_request(&directory);
-        input.surfaces[0].scope = SurfaceScope::Unspecified as i32;
-        assert_eq!(
-            app.clone()
-                .oneshot(post(Some(&token), input.encode_to_vec()))
-                .await
-                .unwrap()
-                .status(),
-            StatusCode::BAD_REQUEST,
-        );
-        assert!(fs::read_dir(&directory).unwrap().next().is_none());
-        let host_directory = base.join("host");
-        assert_eq!(
-            app.clone()
-                .oneshot(post(
-                    Some(&token),
-                    example_request(&host_directory).encode_to_vec()
-                ))
-                .await
-                .unwrap()
-                .status(),
-            StatusCode::BAD_REQUEST,
-        );
-        assert!(
-            WorkspaceStore::at(host_directory)
-                .unwrap()
-                .list()
-                .unwrap()
-                .is_empty()
-        );
-        fs::write(directory.join("existing.txt"), b"existing material").unwrap();
-        assert_eq!(
-            app.oneshot(post(
-                Some(&token),
-                example_request(&directory).encode_to_vec()
-            ))
-            .await
-            .unwrap()
-            .status(),
-            StatusCode::CONFLICT,
-        );
-        assert_eq!(
-            fs::read(directory.join("existing.txt")).unwrap(),
-            b"existing material"
-        );
-        assert!(!directory.join("workspace.json").exists());
-        fs::remove_dir_all(base).unwrap();
-    }
-
-    #[test]
-    fn database_registry_ignores_old_file_and_survives_restart() {
-        let root = std::env::temp_dir().join(format!(
-            "beale-workspace-migration-example-{}",
-            Uuid::new_v4()
-        ));
-        fs::create_dir_all(&root).unwrap();
-        let id = Uuid::new_v4().to_string();
-        fs::write(root.join("workspaces.json"), b"stale registry file").unwrap();
-        let store = WorkspaceStore::at(root.clone()).unwrap();
-        assert!(store.list().unwrap().is_empty());
-        let saved = Registry {
-            workspaces: vec![RegistryEntry {
-                id: id.clone(),
-                name: "Example Workspace".to_owned(),
-                directory: "example-directory".to_owned(),
-            }],
-        };
-        store.write_registry(&saved).unwrap();
-        assert_eq!(store.list().unwrap()[0].id, id);
-        drop(store);
-        let reopened = WorkspaceStore::at(root.clone()).unwrap();
-        assert_eq!(reopened.list().unwrap()[0].name, "Example Workspace");
-        drop(reopened);
-        fs::remove_dir_all(root).unwrap();
     }
 }

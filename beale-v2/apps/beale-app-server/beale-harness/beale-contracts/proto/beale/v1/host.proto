@@ -201,22 +201,29 @@ enum SurfaceScope {
   SURFACE_SCOPE_OUT_OF_SCOPE = 2;
 }
 
+enum SurfaceScopeState {
+  SURFACE_SCOPE_STATE_UNKNOWN = 0;
+  SURFACE_SCOPE_STATE_CANDIDATE = 1;
+  SURFACE_SCOPE_STATE_APPROVED = 2;
+}
+
 message WorkspaceSurfaceInput {
-  SurfaceKind kind = 1;
-  SurfaceScope scope = 2;
-  string value = 3;
-  string id = 4;
-  uint32 mapping_progress = 5 [deprecated = true];
-  uint32 threat_modeling_progress = 6 [deprecated = true];
-  uint32 analysis_progress = 7 [deprecated = true];
-  repeated SurfaceRelationship relationships = 8;
-  SurfaceDefinition definition = 9;
+  string id = 1;
+  SurfaceDefinition definition = 2;
+  repeated SurfaceRelationship relationships = 3;
 }
 
 message SurfaceRelationship {
   string target_id = 1;
   string label = 2;
   string type_id = 3;
+  repeated SurfaceEvidence evidence_refs = 4;
+}
+
+message SurfaceEvidence {
+  string kind = 1;
+  string reference = 2;
+  string note = 3;
 }
 
 message SurfaceLocator {
@@ -228,12 +235,11 @@ message SurfaceDefinition {
   string type_id = 1;
   string name = 2;
   SurfaceLocator locator = 3;
-  string parent_id = 4;
-  string summary = 5;
-  string context = 6;
-  string scope_basis = 7;
-  bool scope_descendants = 8;
-  string source = 9;
+  SurfaceScope scope = 4;
+  SurfaceScopeState scope_state = 5;
+  string description = 6;
+  string out_of_scope_reason = 7;
+  repeated SurfaceEvidence evidence_refs = 8;
 }
 
 message SurfaceChange {
@@ -295,28 +301,11 @@ message ListWorkspacesResponse {
   repeated WorkspaceSummary workspaces = 1;
 }
 
-enum SurfaceCreator {
-  SURFACE_CREATOR_UNSPECIFIED = 0;
-  SURFACE_CREATOR_USER = 1;
-  SURFACE_CREATOR_AGENT = 2;
-}
-
 message WorkspaceSurface {
-  SurfaceKind kind = 1;
-  SurfaceScope scope = 2;
-  string value = 3;
-  SurfaceCreator created_by = 4;
-  string out_of_scope_reason = 5;
-  string id = 6;
-  uint32 mapping_progress = 7 [deprecated = true];
-  uint32 threat_modeling_progress = 8 [deprecated = true];
-  uint32 analysis_progress = 9 [deprecated = true];
-  repeated SurfaceRelationship relationships = 10;
-  SurfaceDefinition definition = 11;
-  uint64 created_at_ms = 12;
-  uint64 updated_at_ms = 13;
-  uint64 revision = 14;
-  repeated SurfaceRevision lineage = 15;
+  string id = 1;
+  SurfaceDefinition definition = 2;
+  repeated SurfaceRelationship relationships = 3;
+  repeated SurfaceRevision lineage = 4;
 }
 
 message WorkspaceDetails {

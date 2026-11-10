@@ -102,6 +102,9 @@
 
 #### Changed
 
+- Beale v2 surfaces now use `id`, a required definition, relationships, and lineage. Definitions and relationships carry typed evidence references; the former parent hierarchy and progress fields are removed. Workspace manifests migrate to schema 6, and the incompatible client contract advances to protocol 2.1.
+- Workspace surfaces now record Candidate, Approved, or Unknown scope review state alongside in-scope/out-of-scope classification. Existing manifests default to Unknown; operator edits and reviewed agent writes become Approved.
+- Auto-Review now checks feature tools, including surface, knowledge, runbook, goal, and graph delegation calls. Guardian can reconsider denials; disabled review leaves agent surface writes Candidate.
 - Updated the v2 desktop to Rune commit `0ec97aa4b764b35196ba8f4d133c9722f4b37a6c`, raised the v2 Rust toolchain to 1.99.1 to build Rune directly, and adapted session prompt history to Rune's `TextEdit::preedit()` accessor.
 - Runbook Canvas now shows cells directly below the runbook metadata without the Cells heading or separate run-level Results section; per-cell output remains attached to each cell.
 - Runbook Canvas uses the Settings scrollbar controls at its right edge, beside the cell status markers.

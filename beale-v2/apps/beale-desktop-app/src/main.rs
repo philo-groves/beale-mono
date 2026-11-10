@@ -687,11 +687,7 @@ struct State {
     workspace_surface_name: TextEdit,
     workspace_surface_locator_kind: TextEdit,
     workspace_surface_locator_value: TextEdit,
-    workspace_surface_parent_id: TextEdit,
-    workspace_surface_summary: TextEdit,
-    workspace_surface_context: TextEdit,
-    workspace_surface_scope_basis: TextEdit,
-    workspace_surface_scope_descendants: bool,
+    workspace_surface_description: TextEdit,
     workspace_surface_dialog_scope: Option<workspace_creation::SurfaceScope>,
     workspace_surface_edit_index: Option<usize>,
     workspace_surface_delete_index: Option<usize>,
@@ -925,11 +921,7 @@ impl Default for State {
             workspace_surface_name: TextEdit::new(""),
             workspace_surface_locator_kind: TextEdit::new("freeform"),
             workspace_surface_locator_value: TextEdit::new(""),
-            workspace_surface_parent_id: TextEdit::new(""),
-            workspace_surface_summary: TextEdit::new(""),
-            workspace_surface_context: TextEdit::new(""),
-            workspace_surface_scope_basis: TextEdit::new(""),
-            workspace_surface_scope_descendants: false,
+            workspace_surface_description: TextEdit::new(""),
             workspace_surface_dialog_scope: None,
             workspace_surface_edit_index: None,
             workspace_surface_delete_index: None,
@@ -2458,10 +2450,11 @@ fn start_workspace_save(state: &mut State, tab: workspace_view::WorkspaceTab) {
         tab,
         workspace_view::WorkspaceTab::Surfaces | workspace_view::WorkspaceTab::Rules
     ) && state.workspace_rule_edits.is_empty()
-        && !state
-            .workspace_surface_edits
-            .iter()
-            .any(|surface| surface.scope == beale_contracts::v1::SurfaceScope::InScope as i32)
+        && !state.workspace_surface_edits.iter().any(|surface| {
+            surface.definition.as_ref().is_some_and(|definition| {
+                definition.scope == beale_contracts::v1::SurfaceScope::InScope as i32
+            })
+        })
     {
         state.workspace_save_error = "Add a rule that records the authorized scope.".to_owned();
         return;
@@ -2484,13 +2477,9 @@ fn start_workspace_save(state: &mut State, tab: workspace_view::WorkspaceTab) {
                 .workspace_surface_edits
                 .iter()
                 .map(|surface| WorkspaceSurfaceInput {
-                    kind: surface.kind,
-                    scope: surface.scope,
-                    value: surface.value.clone(),
                     id: surface.id.clone(),
                     relationships: surface.relationships.clone(),
                     definition: surface.definition.clone(),
-                    ..Default::default()
                 })
                 .collect(),
         });
@@ -10189,7 +10178,9 @@ active_runbook_count: 0,
 
     #[test]
     fn saved_workspace_opens_surface_graph_and_shows_recorded_forms() {
-        use beale_contracts::v1::{SurfaceCreator, SurfaceKind, SurfaceScope, WorkspaceSurface};
+        use beale_contracts::v1::{
+            SurfaceDefinition, SurfaceLocator, SurfaceRevision, SurfaceScope, WorkspaceSurface,
+        };
         let id = uuid::Uuid::parse_str("00000000-0000-4000-8000-000000000002").unwrap();
         let summary = WorkspaceSummary {
             id: id.to_string(),
@@ -10238,12 +10229,24 @@ active_runbook_count: 0,
             summary: Some(summary),
             guidance: "Use only example.test.\n".to_owned(),
             surfaces: vec![WorkspaceSurface {
-                kind: SurfaceKind::Domain as i32,
-                scope: SurfaceScope::InScope as i32,
-                value: "example.test".to_owned(),
-                created_by: SurfaceCreator::Agent as i32,
-                out_of_scope_reason: String::new(),
                 id: "surface-example".to_owned(),
+                definition: Some(SurfaceDefinition {
+                    type_id: "domain".to_owned(),
+                    name: "Example domain".to_owned(),
+                    locator: Some(SurfaceLocator {
+                        kind: "domain".to_owned(),
+                        value: "example.test".to_owned(),
+                    }),
+                    scope: SurfaceScope::InScope as i32,
+                    ..Default::default()
+                }),
+                lineage: vec![SurfaceRevision {
+                    number: 1,
+                    at_ms: 1,
+                    actor: "agent".to_owned(),
+                    action: "created".to_owned(),
+                    ..Default::default()
+                }],
                 ..Default::default()
             }],
             rules: vec!["Stay within scope.".to_owned()],
@@ -10343,7 +10346,11 @@ active_runbook_count: 0,
                 loaded.frame(1.0 / 60.0);
                 assert_eq!(loaded.state.workspace_surface_edits.len(), 2);
                 assert_eq!(
-                    loaded.state.workspace_surface_edits[1].scope,
+                    loaded.state.workspace_surface_edits[1]
+                        .definition
+                        .as_ref()
+                        .unwrap()
+                        .scope,
                     SurfaceScope::InScope as i32
                 );
                 let (x, y) = loaded.find("workspace-surface-management-back").unwrap();
@@ -10399,12 +10406,23 @@ active_runbook_count: 0,
                 loaded.pointer_up(x, y);
                 loaded.frame(1.0);
                 assert_eq!(
-                    loaded.state.workspace_surface_edits[0].value,
+                    loaded.state.workspace_surface_edits[0]
+                        .definition
+                        .as_ref()
+                        .unwrap()
+                        .locator
+                        .as_ref()
+                        .unwrap()
+                        .value,
                     "primary.example.test"
                 );
                 assert_eq!(
-                    loaded.state.workspace_surface_edits[0].created_by,
-                    SurfaceCreator::User as i32
+                    loaded.state.workspace_surface_edits[0]
+                        .definition
+                        .as_ref()
+                        .unwrap()
+                        .scope_state,
+                    beale_contracts::v1::SurfaceScopeState::Approved as i32
                 );
                 assert!(loaded.state.workspace_surface_edit_index.is_none());
                 let (x, y) = loaded.find("saved-workspace-surface-remove-1").unwrap();
@@ -10577,7 +10595,9 @@ active_runbook_count: 0,
 
     #[test]
     fn surface_network_covers_content_and_pans_beneath_title() {
-        use beale_contracts::v1::{SurfaceDefinition, SurfaceKind, SurfaceScope, WorkspaceSurface};
+        use beale_contracts::v1::{
+            SurfaceDefinition, SurfaceKind, SurfaceLocator, SurfaceScope, WorkspaceSurface,
+        };
 
         let id = uuid::Uuid::parse_str("00000000-0000-4000-8000-000000000003").unwrap();
         let summary = WorkspaceSummary {
@@ -10599,11 +10619,26 @@ active_runbook_count: 0,
         let surfaces = (0..600)
             .map(|index| WorkspaceSurface {
                 id: format!("surface-example-{index}"),
-                kind: kinds[index % kinds.len()] as i32,
-                scope: SurfaceScope::InScope as i32,
-                value: format!("surface-{index}.example.test"),
-                definition: (index == 0).then(|| SurfaceDefinition {
-                    name: "Example Repository".to_owned(),
+                definition: Some(SurfaceDefinition {
+                    type_id: match kinds[index % kinds.len()] {
+                        SurfaceKind::Repository => "repository",
+                        SurfaceKind::Documentation => "documentation",
+                        SurfaceKind::Binary => "binary",
+                        SurfaceKind::Service => "service",
+                        SurfaceKind::Domain => "domain",
+                        _ => "other",
+                    }
+                    .to_owned(),
+                    name: if index == 0 {
+                        "Example Repository".to_owned()
+                    } else {
+                        String::new()
+                    },
+                    locator: Some(SurfaceLocator {
+                        kind: "freeform".to_owned(),
+                        value: format!("surface-{index}.example.test"),
+                    }),
+                    scope: SurfaceScope::InScope as i32,
                     ..Default::default()
                 }),
                 ..Default::default()
@@ -10677,7 +10712,7 @@ active_runbook_count: 0,
 
     #[test]
     fn workspace_network_keeps_canvas_in_frame() {
-        use beale_contracts::v1::{SurfaceKind, SurfaceScope};
+        use beale_contracts::v1::{SurfaceDefinition, SurfaceLocator, SurfaceScope};
 
         let id = uuid::Uuid::from_u128(21);
         let summary = WorkspaceSummary {
@@ -10687,9 +10722,15 @@ active_runbook_count: 0,
         };
         let surfaces = vec![WorkspaceSurface {
             id: "S1".to_owned(),
-            kind: SurfaceKind::Repository as i32,
-            scope: SurfaceScope::InScope as i32,
-            value: "example.test".to_owned(),
+            definition: Some(SurfaceDefinition {
+                type_id: "repository".to_owned(),
+                locator: Some(SurfaceLocator {
+                    kind: "freeform".to_owned(),
+                    value: "example.test".to_owned(),
+                }),
+                scope: SurfaceScope::InScope as i32,
+                ..Default::default()
+            }),
             ..Default::default()
         }];
         let state = with_surface_feature(State {
@@ -10744,7 +10785,9 @@ active_runbook_count: 0,
 
     #[test]
     fn surface_network_details_close_on_empty_space_and_switch_between_nodes() {
-        use beale_contracts::v1::{SurfaceKind, SurfaceScope, WorkspaceSurface};
+        use beale_contracts::v1::{
+            SurfaceDefinition, SurfaceLocator, SurfaceScope, WorkspaceSurface,
+        };
 
         let id = uuid::Uuid::parse_str("00000000-0000-4000-8000-000000000004").unwrap();
         let summary = WorkspaceSummary {
@@ -10759,9 +10802,15 @@ active_runbook_count: 0,
             .into_iter()
             .map(|surface_id| WorkspaceSurface {
                 id: surface_id.to_owned(),
-                kind: SurfaceKind::Repository as i32,
-                scope: SurfaceScope::InScope as i32,
-                value: format!("example-{surface_id}"),
+                definition: Some(SurfaceDefinition {
+                    type_id: "repository".to_owned(),
+                    locator: Some(SurfaceLocator {
+                        kind: "freeform".to_owned(),
+                        value: format!("example-{surface_id}"),
+                    }),
+                    scope: SurfaceScope::InScope as i32,
+                    ..Default::default()
+                }),
                 ..Default::default()
             })
             .collect::<Vec<_>>();

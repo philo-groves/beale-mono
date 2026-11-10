@@ -275,11 +275,7 @@ pub(crate) struct WorkspaceDraft {
     pub(crate) surface_name: TextEdit,
     pub(crate) surface_locator_kind: TextEdit,
     pub(crate) surface_locator_value: TextEdit,
-    pub(crate) surface_parent_key: TextEdit,
-    pub(crate) surface_summary: TextEdit,
-    pub(crate) surface_context: TextEdit,
-    pub(crate) surface_scope_basis: TextEdit,
-    pub(crate) surface_scope_descendants: bool,
+    pub(crate) surface_description: TextEdit,
     next_surface_draft_number: u64,
     pub(crate) surfaces: Vec<Surface>,
     pub(crate) surface_dialog_scope: Option<SurfaceScope>,
@@ -312,11 +308,7 @@ impl Default for WorkspaceDraft {
             surface_name: TextEdit::new(""),
             surface_locator_kind: TextEdit::new("freeform"),
             surface_locator_value: TextEdit::new(""),
-            surface_parent_key: TextEdit::new(""),
-            surface_summary: TextEdit::new(""),
-            surface_context: TextEdit::new(""),
-            surface_scope_basis: TextEdit::new(""),
-            surface_scope_descendants: false,
+            surface_description: TextEdit::new(""),
             next_surface_draft_number: 1,
             surfaces: Vec::new(),
             surface_dialog_scope: None,
@@ -334,7 +326,7 @@ impl WorkspaceDraft {
         &mut self,
         result: beale_contracts::v1::WorkspaceImportResult,
     ) -> Result<(), &'static str> {
-        use beale_contracts::v1::{SurfaceKind as WireKind, SurfaceScope as WireScope};
+        use beale_contracts::v1::SurfaceScope as WireScope;
         if result.name.trim().is_empty()
             || result.name.chars().count() > 200
             || result.name.chars().any(char::is_control)
@@ -350,22 +342,30 @@ impl WorkspaceDraft {
         }
         let mut surfaces = Vec::with_capacity(result.surfaces.len());
         for item in result.surfaces {
-            if item.value.trim().is_empty()
-                || item.value.len() > 2_000
-                || item.value.chars().any(char::is_control)
+            let definition = item
+                .definition
+                .ok_or("The model returned a surface without a definition.")?;
+            let value = definition
+                .locator
+                .as_ref()
+                .ok_or("The model returned a surface without a locator.")?
+                .value
+                .clone();
+            if value.trim().is_empty() || value.len() > 2_000 || value.chars().any(char::is_control)
             {
                 return Err("The model returned an invalid surface.");
             }
-            let kind = match WireKind::try_from(item.kind) {
-                Ok(WireKind::Repository) => SurfaceKind::Repository,
-                Ok(WireKind::Documentation) => SurfaceKind::Documentation,
-                Ok(WireKind::Binary) => SurfaceKind::Binary,
-                Ok(WireKind::Service) => SurfaceKind::Service,
-                Ok(WireKind::Domain) => SurfaceKind::Domain,
-                Ok(WireKind::Other) => SurfaceKind::Other,
-                _ => return Err("The model returned an unknown surface kind."),
+            let kind = match definition.type_id.as_str() {
+                "repository" | "code.module" | "code.package" | "code.file" => {
+                    SurfaceKind::Repository
+                }
+                "documentation" => SurfaceKind::Documentation,
+                "binary" | "configuration" => SurfaceKind::Binary,
+                "service" | "api.endpoint" => SurfaceKind::Service,
+                "domain" | "host" => SurfaceKind::Domain,
+                _ => SurfaceKind::Other,
             };
-            let scope = match WireScope::try_from(item.scope) {
+            let scope = match WireScope::try_from(definition.scope) {
                 Ok(WireScope::InScope) => SurfaceScope::InScope,
                 Ok(WireScope::OutOfScope) => SurfaceScope::OutOfScope,
                 _ => return Err("The model returned an unknown surface scope."),
@@ -373,12 +373,12 @@ impl WorkspaceDraft {
             surfaces.push(Surface {
                 kind,
                 scope,
-                value: item.value,
+                value,
                 created_by: SurfaceCreator::Agent,
                 out_of_scope_reason: (scope == SurfaceScope::OutOfScope)
-                    .then(|| "Imported from custom instructions".to_owned()),
+                    .then_some(definition.out_of_scope_reason.clone()),
                 id: item.id,
-                definition: item.definition,
+                definition: Some(definition),
                 relationships: item.relationships,
             });
         }
@@ -447,11 +447,7 @@ impl WorkspaceDraft {
         self.surface_name.clear();
         self.surface_locator_kind = TextEdit::new("freeform");
         self.surface_locator_value.clear();
-        self.surface_parent_key.clear();
-        self.surface_summary.clear();
-        self.surface_context.clear();
-        self.surface_scope_basis.clear();
-        self.surface_scope_descendants = false;
+        self.surface_description.clear();
         self.surface_error = None;
         self.surface_dialog_scope = Some(scope);
     }
@@ -459,7 +455,7 @@ impl WorkspaceDraft {
     pub(crate) fn close_surface_dialog(&mut self) {
         self.surface_dialog_scope = None;
         self.surface_value.clear();
-        self.surface_parent_key.clear();
+        self.surface_description.clear();
         self.surface_error = None;
     }
 
@@ -532,18 +528,6 @@ impl WorkspaceDraft {
             surface.kind == self.surface_kind && surface.value.eq_ignore_ascii_case(value)
         }) {
             self.surface_error = Some("That surface is already listed.");
-        } else if !self.surface_parent_key.text.trim().is_empty()
-            && !self
-                .surfaces
-                .iter()
-                .any(|surface| surface.id == self.surface_parent_key.text.trim())
-        {
-            self.surface_error = Some("Choose a parent key from the surface list.");
-        } else if scope == SurfaceScope::InScope
-            && self.surface_scope_descendants
-            && self.surface_scope_basis.text.trim().is_empty()
-        {
-            self.surface_error = Some("Explain why scope covers children.");
         } else {
             let type_id = if self.surface_type_id.text.trim().is_empty() {
                 match self.surface_kind {
@@ -569,12 +553,19 @@ impl WorkspaceDraft {
                         self.surface_locator_value.text.trim().to_owned()
                     },
                 }),
-                parent_id: self.surface_parent_key.text.trim().to_owned(),
-                summary: self.surface_summary.text.trim().to_owned(),
-                context: self.surface_context.text.trim().to_owned(),
-                scope_basis: self.surface_scope_basis.text.trim().to_owned(),
-                scope_descendants: self.surface_scope_descendants,
-                source: "operator".to_owned(),
+                scope: if scope == SurfaceScope::InScope {
+                    beale_contracts::v1::SurfaceScope::InScope
+                } else {
+                    beale_contracts::v1::SurfaceScope::OutOfScope
+                } as i32,
+                scope_state: beale_contracts::v1::SurfaceScopeState::Approved as i32,
+                description: self.surface_description.text.trim().to_owned(),
+                out_of_scope_reason: if scope == SurfaceScope::OutOfScope {
+                    "Set at workspace creation".to_owned()
+                } else {
+                    String::new()
+                },
+                evidence_refs: Vec::new(),
             };
             let id = loop {
                 let candidate = format!("M{}", self.next_surface_draft_number);
@@ -1103,69 +1094,15 @@ pub(crate) fn surface_dialog(state: &State, scope: SurfaceScope, theme: ThemeSty
                 theme,
             ),
             row_with_control(
-                "Parent key",
-                "Optional containing surface shown in the list.",
+                "Description",
+                "What this surface is and why it matters to the research.",
                 field(
-                    &state.workspace_draft.surface_parent_key,
-                    "workspace-surface-parent",
-                    "M1",
+                    &state.workspace_draft.surface_description,
+                    "workspace-surface-description",
+                    "Description",
                     theme,
-                    |s| &mut s.workspace_draft.surface_parent_key,
+                    |s| &mut s.workspace_draft.surface_description,
                 ),
-                theme,
-            ),
-            row_with_control(
-                "Summary",
-                "What this surface does.",
-                field(
-                    &state.workspace_draft.surface_summary,
-                    "workspace-surface-summary",
-                    "Purpose",
-                    theme,
-                    |s| &mut s.workspace_draft.surface_summary,
-                ),
-                theme,
-            ),
-            row_with_control(
-                "Security context",
-                "Interfaces, trust boundaries, and assumptions.",
-                field(
-                    &state.workspace_draft.surface_context,
-                    "workspace-surface-context",
-                    "Context",
-                    theme,
-                    |s| &mut s.workspace_draft.surface_context,
-                ),
-                theme,
-            ),
-            row_with_control(
-                "Scope basis",
-                "Recorded reason for this scope decision.",
-                field(
-                    &state.workspace_draft.surface_scope_basis,
-                    "workspace-surface-scope-basis",
-                    "Scope basis",
-                    theme,
-                    |s| &mut s.workspace_draft.surface_scope_basis,
-                ),
-                theme,
-            ),
-            row_with_control(
-                "Descendant coverage",
-                "Whether this recorded boundary covers children.",
-                form_button(
-                    if state.workspace_draft.surface_scope_descendants {
-                        "Covers children"
-                    } else {
-                        "Does not cover children"
-                    },
-                    theme,
-                )
-                .key("workspace-surface-descendants")
-                .on_press(|s: &mut State| {
-                    s.workspace_draft.surface_scope_descendants =
-                        !s.workspace_draft.surface_scope_descendants
-                }),
                 theme,
             ),
         ],
@@ -1275,10 +1212,15 @@ fn surface_list(state: &State, scope: SurfaceScope, theme: ThemeStyle<'_>) -> El
         }
         count += 1;
         let mut label = format!(
-            "{} · {} · {}{}",
+            "{} · {} · {} · {}{}",
             surface.kind.label(),
             surface.value,
             surface.created_by.label(),
+            if surface.created_by == SurfaceCreator::Agent {
+                "Candidate"
+            } else {
+                "Approved"
+            },
             if surface.id.is_empty() {
                 String::new()
             } else {
@@ -1298,20 +1240,8 @@ fn surface_list(state: &State, scope: SurfaceScope, theme: ThemeStyle<'_>) -> El
             if let Some(locator) = &definition.locator {
                 label.push_str(&format!(" · {}: {}", locator.kind, locator.value));
             }
-            if !definition.parent_id.is_empty() {
-                label.push_str(&format!(" · child of {}", definition.parent_id));
-            }
-            if !definition.summary.is_empty() {
-                label.push_str(&format!(" · {}", definition.summary));
-            }
-            if !definition.scope_basis.is_empty() {
-                label.push_str(&format!(" · scope: {}", definition.scope_basis));
-            }
-            if !definition.context.is_empty() {
-                label.push_str(&format!(" · context: {}", definition.context));
-            }
-            if definition.scope_descendants {
-                label.push_str(" · scope covers children");
+            if !definition.description.is_empty() {
+                label.push_str(&format!(" · {}", definition.description));
             }
             if !surface.relationships.is_empty() {
                 label.push_str(&format!(" · {} connections", surface.relationships.len()));
@@ -1343,11 +1273,6 @@ fn surface_list(state: &State, scope: SurfaceScope, theme: ThemeStyle<'_>) -> El
                         .on_press(move |s: &mut State| {
                             let removed = s.workspace_draft.surfaces.remove(index);
                             for surface in &mut s.workspace_draft.surfaces {
-                                if let Some(definition) = &mut surface.definition
-                                    && definition.parent_id == removed.id
-                                {
-                                    definition.parent_id.clear();
-                                }
                                 surface
                                     .relationships
                                     .retain(|relationship| relationship.target_id != removed.id);
@@ -1603,7 +1528,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn manual_child_surface_keeps_a_short_draft_parent_key() {
+    fn manual_surfaces_keep_short_draft_ids_and_required_definitions() {
         let mut draft = WorkspaceDraft {
             name: TextEdit::new("Example Workspace"),
             directory: TextEdit::new(
@@ -1622,21 +1547,21 @@ mod tests {
         draft.surface_value = TextEdit::new("src/parser");
         draft.surface_type_id = TextEdit::new("code.module");
         draft.surface_locator_kind = TextEdit::new("repository_path");
-        draft.surface_parent_key = TextEdit::new("M1");
+        draft.surface_description = TextEdit::new("Example parser module.");
         draft.add_surface();
         let request = crate::workspaces::request_from_draft(&draft).unwrap();
         assert_eq!(request.surfaces[1].id, "M2");
         assert_eq!(
-            request.surfaces[1].definition.as_ref().unwrap().parent_id,
-            "M1"
+            request.surfaces[1].definition.as_ref().unwrap().description,
+            "Example parser module."
         );
     }
 
     #[test]
     fn imported_draft_opens_general_with_model_surfaces_and_rules() {
         use beale_contracts::v1::{
-            SurfaceDefinition, SurfaceKind as WireKind, SurfaceScope as WireScope,
-            WorkspaceImportResult, WorkspaceSurfaceInput,
+            SurfaceDefinition, SurfaceLocator, SurfaceScope as WireScope, WorkspaceImportResult,
+            WorkspaceSurfaceInput,
         };
         let mut draft = WorkspaceDraft {
             import_source: ImportSource::CustomInstructions,
@@ -1647,15 +1572,16 @@ mod tests {
                 name: "Example Workspace".to_owned(),
                 guidance: "Follow authorized scope.".to_owned(),
                 surfaces: vec![WorkspaceSurfaceInput {
-                    kind: WireKind::Domain as i32,
-                    scope: WireScope::InScope as i32,
-                    value: "example.test".to_owned(),
                     id: "draft-domain".to_owned(),
                     definition: Some(SurfaceDefinition {
                         type_id: "domain".to_owned(),
                         name: "Example domain".to_owned(),
-                        summary: "Synthetic test scope.".to_owned(),
-                        source: "ai_import".to_owned(),
+                        locator: Some(SurfaceLocator {
+                            kind: "domain".to_owned(),
+                            value: "example.test".to_owned(),
+                        }),
+                        scope: WireScope::InScope as i32,
+                        description: "Synthetic test scope.".to_owned(),
                         ..Default::default()
                     }),
                     ..Default::default()
@@ -1668,7 +1594,7 @@ mod tests {
         assert_eq!(draft.surfaces[0].created_by, SurfaceCreator::Agent);
         assert_eq!(draft.surfaces[0].id, "draft-domain");
         assert_eq!(
-            draft.surfaces[0].definition.as_ref().unwrap().summary,
+            draft.surfaces[0].definition.as_ref().unwrap().description,
             "Synthetic test scope."
         );
         draft.directory = TextEdit::new(
@@ -1678,8 +1604,8 @@ mod tests {
         );
         let request = crate::workspaces::request_from_draft(&draft).unwrap();
         assert_eq!(
-            request.surfaces[0].definition.as_ref().unwrap().source,
-            "ai_import"
+            request.surfaces[0].definition.as_ref().unwrap().scope_state,
+            beale_contracts::v1::SurfaceScopeState::Candidate as i32
         );
         assert_eq!(draft.rules, ["Stay within scope."]);
         assert!(draft.validate_tab(CreationTab::Surfaces).is_none());

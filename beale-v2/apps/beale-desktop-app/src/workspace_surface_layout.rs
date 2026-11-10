@@ -18,17 +18,6 @@ pub(crate) fn layout(surfaces: &[WorkspaceSurface], width: f32, height: f32) -> 
     let mut neighbors = vec![Vec::new(); surfaces.len()];
     let mut edges = HashSet::new();
     for (source, surface) in surfaces.iter().enumerate() {
-        if let Some(parent_id) = surface
-            .definition
-            .as_ref()
-            .map(|definition| definition.parent_id.as_str())
-            && let Some(&target) = indices.get(parent_id)
-            && source != target
-            && edges.insert((source.min(target), source.max(target)))
-        {
-            neighbors[source].push(target);
-            neighbors[target].push(source);
-        }
         for relationship in &surface.relationships {
             if let Some(&target) = indices.get(relationship.target_id.as_str())
                 && source != target
@@ -173,7 +162,7 @@ pub(crate) fn layout(surfaces: &[WorkspaceSurface], width: f32, height: f32) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use beale_contracts::v1::{SurfaceDefinition, SurfaceRelationship};
+    use beale_contracts::v1::SurfaceRelationship;
 
     fn surface(id: &str, target: Option<&str>) -> WorkspaceSurface {
         WorkspaceSurface {
@@ -184,6 +173,7 @@ mod tests {
                     target_id: target_id.to_owned(),
                     label: "calls".to_owned(),
                     type_id: String::new(),
+                    evidence_refs: Vec::new(),
                 })
                 .collect(),
             ..Default::default()
@@ -232,14 +222,13 @@ mod tests {
     }
 
     #[test]
-    fn parent_links_place_children_with_their_repository() {
-        let mut child = surface("S2", None);
-        child.definition = Some(SurfaceDefinition {
-            parent_id: "S1".to_owned(),
-            ..Default::default()
-        });
+    fn explicit_contains_relationship_places_surfaces_together() {
         let positions = layout(
-            &[surface("S1", None), child, surface("S3", None)],
+            &[
+                surface("S1", Some("S2")),
+                surface("S2", None),
+                surface("S3", None),
+            ],
             1000.0,
             700.0,
         );

@@ -291,6 +291,7 @@ async fn create_rule_route(
 #[derive(Debug)]
 pub struct ReviewDecision {
     pub approved: bool,
+    pub reviewed: bool,
     pub reason: String,
 }
 
@@ -316,6 +317,7 @@ fn parse_review(value: &str) -> Result<ReviewDecision> {
     );
     Ok(ReviewDecision {
         approved: review.decision == "approved",
+        reviewed: true,
         reason: review.reason,
     })
 }
@@ -341,6 +343,7 @@ pub async fn review(
             eprintln!("permission review failed: {error:#}");
             ReviewDecision {
                 approved: false,
+                reviewed: false,
                 reason: "Review unavailable; the tool was not run.".to_owned(),
             }
         }
@@ -361,6 +364,7 @@ async fn review_inner(
     if active.is_empty() {
         return Ok(ReviewDecision {
             approved: true,
+            reviewed: false,
             reason: "Auto-Review rules are disabled.".to_owned(),
         });
     }
@@ -500,7 +504,11 @@ mod tests {
     fn review_parser_rejects_ambiguous_answers() {
         assert!(parse_review("approved").is_err());
         assert!(parse_review(r#"{"decision":"maybe","reason":"uncertain"}"#).is_err());
-        assert!(parse_review(r#"{"decision":"denied","reason":"broad deletion"}"#).is_ok());
+        assert!(
+            parse_review(r#"{"decision":"denied","reason":"broad deletion"}"#)
+                .unwrap()
+                .reviewed
+        );
         assert!(
             parse_review("```json\n{\"decision\":\"approved\",\"reason\":\"bounded\"}\n```")
                 .unwrap()
@@ -545,6 +553,7 @@ mod tests {
         )
         .await;
         assert!(decision.approved);
+        assert!(!decision.reviewed);
         drop(db);
         cleanup(&root);
     }

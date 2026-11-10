@@ -2,7 +2,7 @@ use beale_contracts::{
     PROTOBUF_CONTENT_TYPE, PROTOBUF_STREAM_CONTENT_TYPE, SESSION_STREAM_MAX_FRAME_BYTES,
     WORKSPACE_IMPORT_STREAM_PATH, WORKSPACES_PATH,
     v1::{
-        CreateWorkspaceRequest, ListWorkspacesResponse, SurfaceCreator, SurfaceKind, SurfaceScope,
+        CreateWorkspaceRequest, ListWorkspacesResponse, SurfaceScope, SurfaceScopeState,
         UpdateWorkspaceFoundationRequest, UpdateWorkspaceRulesRequest,
         UpdateWorkspaceSurfacesRequest, WorkspaceCampaign, WorkspaceDetails, WorkspaceFoundation,
         WorkspaceImportEvent, WorkspaceImportEventKind, WorkspaceImportRequest,
@@ -14,9 +14,7 @@ use prost::Message;
 use reqwest::{Client, Response, StatusCode, header::CONTENT_TYPE};
 use std::{collections::HashSet, net::SocketAddr, path::Path, time::Duration};
 
-use crate::workspace_creation::{
-    SurfaceKind as DraftSurfaceKind, SurfaceScope as DraftSurfaceScope, WorkspaceDraft,
-};
+use crate::workspace_creation::WorkspaceDraft;
 
 const MAX_LIST_BYTES: usize = 2_097_152;
 const MAX_CREATE_BYTES: usize = 4_096;
@@ -142,6 +140,13 @@ pub(crate) fn request_from_draft(
     if let Some(error) = draft.validate_submission() {
         return Err(error);
     }
+    if draft
+        .surfaces
+        .iter()
+        .any(|surface| surface.definition.is_none())
+    {
+        return Err("Every surface needs a definition.");
+    }
     Ok(CreateWorkspaceRequest {
         name: draft.name.text.trim().to_owned(),
         directory: draft.directory.text.trim().to_owned(),
@@ -150,23 +155,19 @@ pub(crate) fn request_from_draft(
             .surfaces
             .iter()
             .map(|surface| WorkspaceSurfaceInput {
-                kind: match surface.kind {
-                    DraftSurfaceKind::Repository => SurfaceKind::Repository,
-                    DraftSurfaceKind::Documentation => SurfaceKind::Documentation,
-                    DraftSurfaceKind::Binary => SurfaceKind::Binary,
-                    DraftSurfaceKind::Service => SurfaceKind::Service,
-                    DraftSurfaceKind::Domain => SurfaceKind::Domain,
-                    DraftSurfaceKind::Other => SurfaceKind::Other,
-                } as i32,
-                scope: match surface.scope {
-                    DraftSurfaceScope::InScope => SurfaceScope::InScope,
-                    DraftSurfaceScope::OutOfScope => SurfaceScope::OutOfScope,
-                } as i32,
-                value: surface.value.trim().to_owned(),
                 id: surface.id.clone(),
-                definition: surface.definition.clone(),
+                definition: surface.definition.clone().map(|mut definition| {
+                    definition.scope_state = match surface.created_by {
+                        crate::workspace_creation::SurfaceCreator::User => {
+                            SurfaceScopeState::Approved
+                        }
+                        crate::workspace_creation::SurfaceCreator::Agent => {
+                            SurfaceScopeState::Candidate
+                        }
+                    } as i32;
+                    definition
+                }),
                 relationships: surface.relationships.clone(),
-                ..Default::default()
             })
             .collect(),
         rules: draft.rules.clone(),
@@ -426,23 +427,19 @@ fn decode_details(id: uuid::Uuid, body: &[u8]) -> Result<WorkspaceDetails, Strin
         && details.surfaces.len() <= 256
         && details.rules.len() <= 128
         && details.surfaces.iter().all(|surface| {
-            matches!(
-                SurfaceKind::try_from(surface.kind),
-                Ok(SurfaceKind::Repository
-                    | SurfaceKind::Documentation
-                    | SurfaceKind::Binary
-                    | SurfaceKind::Service
-                    | SurfaceKind::Domain
-                    | SurfaceKind::Other)
-            ) && matches!(
-                SurfaceScope::try_from(surface.scope),
-                Ok(SurfaceScope::InScope | SurfaceScope::OutOfScope)
-            ) && matches!(
-                SurfaceCreator::try_from(surface.created_by),
-                Ok(SurfaceCreator::User | SurfaceCreator::Agent)
-            ) && !surface.value.trim().is_empty()
-                && surface.value.len() <= 2_048
-                && surface.out_of_scope_reason.len() <= 2_000
+            surface.definition.as_ref().is_some_and(|definition| {
+                matches!(
+                    SurfaceScope::try_from(definition.scope),
+                    Ok(SurfaceScope::InScope | SurfaceScope::OutOfScope)
+                ) && matches!(
+                    SurfaceScopeState::try_from(definition.scope_state),
+                    Ok(SurfaceScopeState::Unknown
+                        | SurfaceScopeState::Candidate
+                        | SurfaceScopeState::Approved)
+                ) && definition.locator.as_ref().is_some_and(|locator| {
+                    !locator.value.trim().is_empty() && locator.value.len() <= 2_048
+                }) && definition.out_of_scope_reason.len() <= 2_000
+            })
         });
     if !valid {
         return Err("Invalid workspace details".to_owned());
@@ -453,7 +450,10 @@ fn decode_details(id: uuid::Uuid, body: &[u8]) -> Result<WorkspaceDetails, Strin
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workspace_creation::{Surface, SurfaceCreator as DraftSurfaceCreator};
+    use crate::workspace_creation::{
+        Surface, SurfaceCreator as DraftSurfaceCreator, SurfaceKind as DraftSurfaceKind,
+        SurfaceScope as DraftSurfaceScope,
+    };
     use rune::TextEdit;
 
     #[test]
@@ -474,7 +474,15 @@ mod tests {
                 created_by: DraftSurfaceCreator::User,
                 out_of_scope_reason: None,
                 id: String::new(),
-                definition: None,
+                definition: Some(beale_contracts::v1::SurfaceDefinition {
+                    type_id: "domain".to_owned(),
+                    locator: Some(beale_contracts::v1::SurfaceLocator {
+                        kind: "domain".to_owned(),
+                        value: "example.test".to_owned(),
+                    }),
+                    scope: SurfaceScope::InScope as i32,
+                    ..Default::default()
+                }),
                 relationships: Vec::new(),
             },
             Surface {
@@ -484,17 +492,38 @@ mod tests {
                 created_by: DraftSurfaceCreator::User,
                 out_of_scope_reason: Some("Set at workspace creation".to_owned()),
                 id: String::new(),
-                definition: None,
+                definition: Some(beale_contracts::v1::SurfaceDefinition {
+                    type_id: "documentation".to_owned(),
+                    locator: Some(beale_contracts::v1::SurfaceLocator {
+                        kind: "freeform".to_owned(),
+                        value: "excluded.example.test".to_owned(),
+                    }),
+                    scope: SurfaceScope::OutOfScope as i32,
+                    out_of_scope_reason: "Set at workspace creation".to_owned(),
+                    ..Default::default()
+                }),
                 relationships: Vec::new(),
             },
         ];
         draft.rules.push("Keep within scope.".to_owned());
         let request = request_from_draft(&draft).unwrap();
         assert_eq!(request.name, "Example Workspace");
-        assert_eq!(request.surfaces[0].kind, SurfaceKind::Domain as i32);
-        assert_eq!(request.surfaces[0].scope, SurfaceScope::InScope as i32);
-        assert_eq!(request.surfaces[1].kind, SurfaceKind::Documentation as i32);
-        assert_eq!(request.surfaces[1].scope, SurfaceScope::OutOfScope as i32);
+        assert_eq!(
+            request.surfaces[0].definition.as_ref().unwrap().type_id,
+            "domain"
+        );
+        assert_eq!(
+            request.surfaces[0].definition.as_ref().unwrap().scope,
+            SurfaceScope::InScope as i32
+        );
+        assert_eq!(
+            request.surfaces[1].definition.as_ref().unwrap().type_id,
+            "documentation"
+        );
+        assert_eq!(
+            request.surfaces[1].definition.as_ref().unwrap().scope,
+            SurfaceScope::OutOfScope as i32
+        );
         assert_eq!(request.rules, ["Keep within scope."]);
         assert_eq!(
             CreateWorkspaceRequest::decode(request.encode_to_vec().as_slice())
@@ -533,11 +562,15 @@ mod tests {
             }),
             guidance: "Use only example.test.\n".to_owned(),
             surfaces: vec![beale_contracts::v1::WorkspaceSurface {
-                kind: SurfaceKind::Domain as i32,
-                scope: SurfaceScope::InScope as i32,
-                value: "example.test".to_owned(),
-                created_by: SurfaceCreator::User as i32,
-                out_of_scope_reason: String::new(),
+                definition: Some(beale_contracts::v1::SurfaceDefinition {
+                    type_id: "domain".to_owned(),
+                    locator: Some(beale_contracts::v1::SurfaceLocator {
+                        kind: "domain".to_owned(),
+                        value: "example.test".to_owned(),
+                    }),
+                    scope: SurfaceScope::InScope as i32,
+                    ..Default::default()
+                }),
                 ..Default::default()
             }],
             rules: vec!["Stay within scope.".to_owned()],
@@ -545,9 +578,9 @@ mod tests {
         assert!(valid_summary(details.summary.as_ref().unwrap()));
         let decoded = decode_details(id, &details.encode_to_vec());
         assert!(decoded.is_ok(), "{decoded:?}");
-        details.surfaces[0].kind = SurfaceKind::Unspecified as i32;
+        details.surfaces[0].definition.as_mut().unwrap().scope = SurfaceScope::Unspecified as i32;
         assert!(decode_details(id, &details.encode_to_vec()).is_err());
-        details.surfaces[0].kind = SurfaceKind::Domain as i32;
+        details.surfaces[0].definition.as_mut().unwrap().scope = SurfaceScope::InScope as i32;
         details.summary.as_mut().unwrap().id = uuid::Uuid::new_v4().to_string();
         assert!(decode_details(id, &details.encode_to_vec()).is_err());
     }
