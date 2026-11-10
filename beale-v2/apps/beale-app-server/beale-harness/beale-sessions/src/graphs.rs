@@ -107,7 +107,15 @@ async fn run_child(
         input.insert(0, json!({"role":"system","content":system}));
     }
     let mut connection = OpenAiConnection::default();
-    let definitions = definitions();
+    let definitions = definitions()
+        .into_iter()
+        .filter(|tool| {
+            !matches!(
+                tool["name"].as_str(),
+                Some(beale_tools::GET_SCOPE | beale_tools::LOAD_EXTENSION)
+            )
+        })
+        .collect::<Vec<_>>();
     let mut tools = Vec::<ToolCallRow>::new();
     let mut call_count = 0;
     for round in 0..MAX_CHILD_ROUNDS {
@@ -272,7 +280,10 @@ async fn run_child(
                     }
                 }
                 Ok(arguments)
-                    if matches!(call.name.as_str(), "read" | "write" | "edit" | "bash") =>
+                    if matches!(
+                        call.name.as_str(),
+                        "read" | "write" | "edit" | "bash" | "webfetch"
+                    ) =>
                 {
                     let decision = beale_safety::review(
                         &context.state.db,
@@ -291,7 +302,7 @@ async fn run_child(
                     if !decision.approved {
                         (format!("Tool denied by review: {}", decision.reason), true)
                     } else {
-                        let _guard = if call.name == "read" {
+                        let _guard = if matches!(call.name.as_str(), "read" | "webfetch") {
                             None
                         } else {
                             Some(mutation_lock.lock().await)

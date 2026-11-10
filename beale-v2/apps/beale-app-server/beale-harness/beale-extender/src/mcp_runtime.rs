@@ -26,6 +26,9 @@ pub(super) struct RunningServer {
     transport: Transport,
     pub(super) tool_count: u32,
     pub(super) tool_names: Vec<String>,
+    pub(super) tools: Vec<Value>,
+    next_request_id: i64,
+    modern_protocol: bool,
 }
 
 enum Transport {
@@ -61,16 +64,23 @@ impl RunningServer {
             transport,
             tool_count: 0,
             tool_names: Vec::new(),
+            tools: Vec::new(),
+            next_request_id: 67,
+            modern_protocol: false,
         };
-        let tool_names = timeout(Duration::from_secs(12), server.discover_tools())
+        let tools = timeout(Duration::from_secs(12), server.discover_tools())
             .await
             .context("MCP discovery timed out")??;
-        server.tool_count = u32::try_from(tool_names.len()).context("too many MCP tools")?;
-        server.tool_names = tool_names;
+        server.tool_count = u32::try_from(tools.len()).context("too many MCP tools")?;
+        server.tool_names = tools
+            .iter()
+            .filter_map(|tool| tool.get("name").and_then(Value::as_str).map(str::to_owned))
+            .collect();
+        server.tools = tools;
         Ok(server)
     }
 
-    async fn discover_tools(&mut self) -> Result<Vec<String>> {
+    async fn discover_tools(&mut self) -> Result<Vec<Value>> {
         let discover = self.request(1, "server/discover", modern_params()).await;
         let modern = discover
             .as_ref()
@@ -83,6 +93,7 @@ impl RunningServer {
                     .iter()
                     .any(|version| version.as_str() == Some(MODERN_VERSION))
             });
+        self.modern_protocol = modern;
         if !modern {
             let initialized = self
                 .request(
@@ -102,6 +113,7 @@ impl RunningServer {
             self.notify("notifications/initialized", json!({})).await?;
         }
         let mut names = HashSet::new();
+        let mut discovered = Vec::new();
         let mut cursors = HashSet::new();
         let mut cursor: Option<String> = None;
         for id in 3..67 {
@@ -128,6 +140,7 @@ impl RunningServer {
                     "invalid or duplicate MCP tool"
                 );
                 ensure!(names.len() <= MAX_TOOLS, "too many MCP tools");
+                discovered.push(tool.clone());
             }
             cursor = result
                 .get("nextCursor")
@@ -137,13 +150,44 @@ impl RunningServer {
             match &cursor {
                 Some(value) => ensure!(cursors.insert(value.clone()), "repeated MCP tool cursor"),
                 None => {
-                    let mut names = names.into_iter().collect::<Vec<_>>();
-                    names.sort_unstable();
-                    return Ok(names);
+                    discovered.sort_unstable_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
+                    return Ok(discovered);
                 }
             }
         }
         bail!("too many MCP tool pages")
+    }
+
+    pub(super) async fn call_tool(&mut self, name: &str, arguments: Value) -> Result<Value> {
+        ensure!(
+            self.tool_names.iter().any(|tool| tool == name),
+            "MCP tool is unavailable"
+        );
+        let id = self.next_request_id;
+        self.next_request_id = self
+            .next_request_id
+            .checked_add(1)
+            .context("MCP request ID exhausted")?;
+        let mut params = if self.modern_protocol {
+            modern_params()
+        } else {
+            json!({})
+        };
+        params["name"] = json!(name);
+        params["arguments"] = arguments;
+        let response = timeout(
+            Duration::from_secs(60),
+            self.request(id, "tools/call", params),
+        )
+        .await
+        .context("MCP tool call timed out")??;
+        if let Some(error) = response.get("error") {
+            bail!("MCP tool error: {error}");
+        }
+        response
+            .get("result")
+            .cloned()
+            .context("MCP tool result is missing")
     }
 
     async fn request(&mut self, id: i64, method: &str, params: Value) -> Result<Value> {

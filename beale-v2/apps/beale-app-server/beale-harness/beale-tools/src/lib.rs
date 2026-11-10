@@ -1,6 +1,7 @@
-//! Four host-executed base tools. The caller owns result retention and pagination.
+//! Host-executed base tools. The caller owns result retention and pagination.
 
 use anyhow::{Context, Result, bail, ensure};
+use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
     path::{Component, Path, PathBuf},
@@ -8,10 +9,46 @@ use std::{
     time::Duration,
 };
 use tokio::{io::AsyncReadExt, process::Command, time::timeout};
+mod webfetch;
 
 pub const MAX_RESULT_BYTES: usize = 8_000_000;
 const MAX_INPUT_BYTES: usize = 8_000_000;
 const BASH_TIMEOUT: Duration = Duration::from_secs(60);
+
+pub const GET_SCOPE: &str = "get_scope";
+pub const LOAD_EXTENSION: &str = "load_plugin_or_feature";
+pub const WEBFETCH: &str = "webfetch";
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct GetScopeArgs {}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct LoadExtensionArgs {
+    pub kind: ExtensionKind,
+    pub id: String,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ExtensionKind {
+    Feature,
+    Plugin,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PluginCallArgs {
+    pub plugin: String,
+    pub server: String,
+    pub tool: String,
+    pub arguments: Value,
+}
+
+pub fn plugin_call_definition() -> Value {
+    json!({"type":"function","name":"plugin_call","description":"Call a tool from a plugin loaded in this turn. Use the plugin's discovered server and tool names.","parameters":{"type":"object","properties":{"plugin":{"type":"string"},"server":{"type":"string"},"tool":{"type":"string"},"arguments":{"type":"object"}},"required":["plugin","server","tool","arguments"],"additionalProperties":false}})
+}
 
 pub struct ToolOutcome {
     pub output: String,
@@ -32,6 +69,9 @@ pub fn definitions() -> Vec<Value> {
         json!({"type":"function","name":"edit","description":"Replace exactly one occurrence of old_text in a UTF-8 file.","parameters":{"type":"object","properties":{"path":{"type":"string"},"old_text":{"type":"string"},"new_text":{"type":"string"}},"required":["path","old_text","new_text"],"additionalProperties":false}}),
         json!({"type":"function","name":"bash","description":"Run a bash command in the workspace. This uses the current user's host privileges.","parameters":{"type":"object","properties":{"command":{"type":"string"}},"required":["command"],"additionalProperties":false}}),
         json!({"type":"function","name":"tool_result_page","description":"Read another bounded page of a previous tool result by tool_call_id and byte offset.","parameters":{"type":"object","properties":{"tool_call_id":{"type":"string"},"offset":{"type":"integer","minimum":0}},"required":["tool_call_id","offset"],"additionalProperties":false}}),
+        json!({"type":"function","name":GET_SCOPE,"description":"Read the current workspace's recorded rules and top-level surfaces, including authorization boundaries. Use before target operations or when scope is uncertain.","parameters":{"type":"object","properties":{},"additionalProperties":false}}),
+        json!({"type":"function","name":LOAD_EXTENSION,"description":"Load the instructions and tools for an available feature or installed plugin when the user's task calls for it.","parameters":{"type":"object","properties":{"kind":{"type":"string","enum":["feature","plugin"]},"id":{"type":"string"}},"required":["kind","id"],"additionalProperties":false}}),
+        json!({"type":"function","name":WEBFETCH,"description":"Search the web with a query or fetch a page by URL. Returns readable text and links without executing JavaScript. Supply exactly one of query or url.","parameters":{"type":"object","properties":{"query":{"type":"string"},"url":{"type":"string"}},"additionalProperties":false}}),
     ]
 }
 
@@ -48,7 +88,30 @@ pub fn summary(name: &str, args: &Value) -> String {
         "write" => format!("Write {short}"),
         "edit" => format!("Edit {short}"),
         "bash" => format!("Run {short}"),
+        WEBFETCH => format!(
+            "Web {}",
+            args.get("query")
+                .or_else(|| args.get("url"))
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .chars()
+                .take(120)
+                .collect::<String>()
+        ),
         "tool_result_page" => "Read more tool output".to_owned(),
+        GET_SCOPE => "Read workspace scope".to_owned(),
+        LOAD_EXTENSION => format!(
+            "Load {} {}",
+            args.get("kind")
+                .and_then(Value::as_str)
+                .unwrap_or("extension"),
+            args.get("id").and_then(Value::as_str).unwrap_or("")
+        ),
+        "plugin_call" => format!(
+            "Plugin {}: {}",
+            args.get("plugin").and_then(Value::as_str).unwrap_or(""),
+            args.get("tool").and_then(Value::as_str).unwrap_or("")
+        ),
         _ => "Run tool".to_owned(),
     }
 }
@@ -258,6 +321,7 @@ pub async fn execute(
                 .await
                 .context("bash timed out")?
         }
+        WEBFETCH => webfetch::fetch(args).await,
         _ => bail!("unknown tool"),
     }
 }
@@ -300,6 +364,43 @@ pub fn model_preview(value: &str, tool_call_id: &str) -> String {
 mod tests {
     use super::*;
     use uuid::Uuid;
+
+    #[test]
+    fn base_tools_and_extension_arguments_have_bounded_contracts() {
+        let names = definitions()
+            .into_iter()
+            .filter_map(|item| item["name"].as_str().map(str::to_owned))
+            .collect::<Vec<_>>();
+        assert_eq!(names.len(), 8);
+        assert!(names.contains(&GET_SCOPE.to_owned()));
+        assert!(names.contains(&LOAD_EXTENSION.to_owned()));
+        assert!(names.contains(&WEBFETCH.to_owned()));
+        assert!(serde_json::from_value::<GetScopeArgs>(json!({})).is_ok());
+        assert!(serde_json::from_value::<GetScopeArgs>(json!({"extra":true})).is_err());
+        assert!(
+            serde_json::from_value::<PluginCallArgs>(
+                json!({"plugin":"example","server":"main","tool":"read","arguments":{}})
+            )
+            .is_ok()
+        );
+        assert!(serde_json::from_value::<PluginCallArgs>(json!({"plugin":"example","server":"main","tool":"read","arguments":{},"extra":true})).is_err());
+        assert_eq!(plugin_call_definition()["name"], "plugin_call");
+        assert_eq!(
+            serde_json::from_value::<LoadExtensionArgs>(
+                json!({"kind":"feature","id":"beale-runbooks"})
+            )
+            .unwrap(),
+            LoadExtensionArgs {
+                kind: ExtensionKind::Feature,
+                id: "beale-runbooks".to_owned(),
+            }
+        );
+        assert!(
+            serde_json::from_value::<LoadExtensionArgs>(json!({"kind":"unknown","id":"x"}))
+                .is_err()
+        );
+    }
+
     #[test]
     fn preview_and_pages_recover_middle_without_utf8_loss() {
         let value = format!("{}é{}", "a".repeat(12000), "z".repeat(12000));

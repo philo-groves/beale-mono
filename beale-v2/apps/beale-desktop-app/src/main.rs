@@ -5680,7 +5680,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
     if state.primary_view == PrimaryView::NewResearch {
         let [width, height] = cx.layout_size("content-surface").unwrap_or([720.0, 600.0]);
         let graph_width = (width - 80.0).max(180.0);
-        if extensions_view::graphs_enabled(state) {
+        if extensions_view::graphs_enabled(state) && !in_session(state) {
             main_content = main_content.child(
                 canvas(grid_background::dots(width, height, theme.color("#303030")))
                     .key("new-research-grid-background")
@@ -8973,6 +8973,35 @@ mod tests {
         graphs.workspace_ids = vec![first.to_owned()];
         let mut runtime = Runtime::new(state, view, (900.0, 700.0), Env::new(true, 1.0));
         runtime.frame(0.0);
+        assert!(runtime.find("new-research-grid-background").is_some());
+        runtime.update(|state, _| {
+            state.session_pending_prompt = Some("Example objective".to_owned());
+        });
+        runtime.frame(0.1);
+        assert!(runtime.find("session-pending-message").is_some());
+        assert!(runtime.find("new-research-grid-background").is_none());
+        runtime.update(|state, _| {
+            state.session_pending_prompt = None;
+            state.active_session = Some(SessionDetail {
+                summary: Some(SessionSummary {
+                    id: "session-example".to_owned(),
+                    workspace_id: first.to_owned(),
+                    title: "Example session".to_owned(),
+                    last_message_at_ms: 1,
+                }),
+                messages: vec![beale_contracts::v1::SessionMessage {
+                    role: beale_contracts::v1::SessionRole::User as i32,
+                    text: "Example objective".to_owned(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            });
+        });
+        runtime.frame(0.1);
+        assert!(runtime.find("session-message-0").is_some());
+        assert!(runtime.find("new-research-grid-background").is_none());
+        runtime.update(|state, _| state.active_session = None);
+        runtime.frame(0.1);
         assert!(runtime.find("new-research-grid-background").is_some());
         runtime.update(|state, _| state.new_research_workspace_id = Some(second.to_owned()));
         runtime.frame(0.1);

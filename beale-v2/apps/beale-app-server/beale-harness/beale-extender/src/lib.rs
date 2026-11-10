@@ -23,6 +23,7 @@ use beale_contracts::{
 use beale_storage::HostDatabase;
 use prost::Message;
 use serde::Deserialize;
+use serde_json::Value;
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
@@ -60,6 +61,127 @@ struct Catalog {
     root: PathBuf,
     data_root: PathBuf,
     active: Arc<Mutex<HashMap<String, HashMap<String, mcp_runtime::RunningServer>>>>,
+}
+
+#[derive(Clone)]
+pub struct PluginRuntime {
+    catalog: Catalog,
+    db: HostDatabase,
+}
+
+impl PluginRuntime {
+    pub fn new(db: HostDatabase, data_root: PathBuf) -> Result<Self> {
+        Ok(Self {
+            catalog: Catalog::bundled(data_root)?,
+            db,
+        })
+    }
+
+    pub fn available(&self, workspace_id: &str) -> Result<Vec<PluginSummary>> {
+        self.catalog
+            .list(&self.db)?
+            .into_iter()
+            .filter(|plugin| plugin.installed)
+            .filter_map(|plugin| {
+                match self
+                    .db
+                    .extension_applies_to("plugin", &plugin.name, workspace_id)
+                {
+                    Ok(true) => Some(Ok(plugin)),
+                    Ok(false) => None,
+                    Err(error) => Some(Err(error)),
+                }
+            })
+            .collect()
+    }
+
+    pub async fn details(&self, name: &str, workspace_id: &str) -> Result<Value> {
+        ensure!(
+            self.db
+                .installed_plugin_names()?
+                .iter()
+                .any(|installed| installed == name),
+            "plugin is not installed"
+        );
+        ensure!(
+            self.db.extension_applies_to("plugin", name, workspace_id)?,
+            "plugin is unavailable in this workspace"
+        );
+        let root = self
+            .catalog
+            .package(name)?
+            .context("plugin package is unavailable")?;
+        let description = self.catalog.scan(name, &root)?.description;
+        let mut skills = Vec::new();
+        let skills_root = root.join("skills");
+        if skills_root.is_dir() {
+            for entry in std::fs::read_dir(skills_root)? {
+                let entry = entry?;
+                let path = entry.path().join("SKILL.md");
+                if path.exists() {
+                    let path = contained_file(&root, &path)?;
+                    ensure!(
+                        path.metadata()?.len() <= 64_000,
+                        "plugin skill is too large for model context"
+                    );
+                    skills.push(serde_json::json!({"name":entry.file_name().to_string_lossy(),"instructions":std::fs::read_to_string(path)?}));
+                }
+            }
+        }
+        timeout(Duration::from_secs(20), self.catalog.activate(name))
+            .await
+            .context("plugin launch timed out")??;
+        let active = self.catalog.active.lock().await;
+        let mut tools = Vec::new();
+        if let Some(servers) = active.get(name) {
+            for (server_name, server) in servers {
+                for tool in &server.tools {
+                    tools.push(serde_json::json!({"server":server_name,"definition":tool}));
+                }
+            }
+        }
+        tools.sort_unstable_by(|a, b| {
+            a["server"].as_str().cmp(&b["server"].as_str()).then(
+                a["definition"]["name"]
+                    .as_str()
+                    .cmp(&b["definition"]["name"].as_str()),
+            )
+        });
+        let details = serde_json::json!({"plugin":name,"description":description,"skills":skills,"tools":tools,"call_tool":"Use plugin_call with this plugin, server, tool, and arguments."});
+        ensure!(
+            details.to_string().len() <= 8_000_000,
+            "plugin details are too large"
+        );
+        Ok(details)
+    }
+
+    pub async fn call_tool(
+        &self,
+        plugin: &str,
+        server: &str,
+        tool: &str,
+        arguments: Value,
+        workspace_id: &str,
+    ) -> Result<Value> {
+        ensure!(
+            self.db
+                .installed_plugin_names()?
+                .iter()
+                .any(|installed| installed == plugin),
+            "plugin is not installed"
+        );
+        ensure!(
+            self.db
+                .extension_applies_to("plugin", plugin, workspace_id)?,
+            "plugin is unavailable in this workspace"
+        );
+        let mut active = self.catalog.active.lock().await;
+        let server = active
+            .get_mut(plugin)
+            .and_then(|servers| servers.get_mut(server))
+            .context("plugin server is unavailable; load the plugin again")?;
+        server.call_tool(tool, arguments).await
+    }
 }
 
 impl Catalog {
@@ -388,7 +510,11 @@ struct HttpState {
 }
 
 pub fn router(token: String, db: HostDatabase, data_root: PathBuf) -> Result<Router> {
-    let catalog = Catalog::bundled(data_root)?;
+    router_with_runtime(token, PluginRuntime::new(db, data_root)?)
+}
+
+pub fn router_with_runtime(token: String, runtime: PluginRuntime) -> Result<Router> {
+    let PluginRuntime { catalog, db } = runtime;
     Ok(Router::new()
         .route(PLUGINS_PATH, get(list_route))
         .route(PLUGIN_INSTALL_PATH, post(install_route))
@@ -724,6 +850,12 @@ mod tests {
         std::fs::create_dir_all(&invalid).unwrap();
         std::fs::write(invalid.join("plugin.json"), "{}").unwrap();
         std::fs::write(package.join("plugin.json"), format!(r#"{{"$schema":"{MANIFEST_SCHEMA}","name":"example-tools","description":"Example tools"}}"#)).unwrap();
+        std::fs::create_dir_all(package.join("skills/example-skill")).unwrap();
+        std::fs::write(
+            package.join("skills/example-skill/SKILL.md"),
+            "# Example skill\n\nUse for example.test research.",
+        )
+        .unwrap();
         std::fs::write(package.join("mcp.json"), format!(r#"{{"$schema":"{MCP_SCHEMA}","mcpServers":{{"example":{{"type":"stdio","command":"node","args":["${{PLUGIN_ROOT}}/server.mjs"]}}}}}}"#)).unwrap();
         std::fs::write(
             package.join("server.mjs"),
@@ -735,7 +867,9 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
   const result = request.method === 'server/discover'
     ? { supportedVersions: ['2026-07-28'] }
     : request.method === 'tools/list'
-      ? { tools: [{ name: 'example_read' }, { name: 'example_write' }] }
+      ? { tools: [{ name: 'example_read', description: 'Read example data', inputSchema: { type: 'object', properties: {}, additionalProperties: false } }, { name: 'example_write' }] }
+      : request.method === 'tools/call'
+        ? { content: [{ type: 'text', text: `Called ${request.params.name}` }] }
       : {};
   process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }) + '\n');
 }
@@ -761,6 +895,64 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
         .await
         .unwrap();
         assert_eq!(catalog.activate("example-tools").await.unwrap(), 2);
+        let runtime = PluginRuntime {
+            catalog: catalog.clone(),
+            db: db.clone(),
+        };
+        let details = runtime
+            .details("example-tools", "example-workspace")
+            .await
+            .unwrap();
+        assert_eq!(
+            details["tools"][0]["definition"]["description"],
+            "Read example data"
+        );
+        assert_eq!(details["skills"][0]["name"], "example-skill");
+        let result = runtime
+            .call_tool(
+                "example-tools",
+                "example",
+                "example_read",
+                serde_json::json!({}),
+                "example-workspace",
+            )
+            .await
+            .unwrap();
+        assert_eq!(result["content"][0]["text"], "Called example_read");
+        assert!(
+            runtime
+                .call_tool(
+                    "example-tools",
+                    "example",
+                    "unknown",
+                    serde_json::json!({}),
+                    "example-workspace"
+                )
+                .await
+                .is_err()
+        );
+        db.set_extension_scope("plugin", "example-tools", false, &[])
+            .unwrap();
+        assert!(
+            runtime
+                .details("example-tools", "example-workspace")
+                .await
+                .is_err()
+        );
+        assert!(
+            runtime
+                .call_tool(
+                    "example-tools",
+                    "example",
+                    "example_read",
+                    serde_json::json!({}),
+                    "example-workspace"
+                )
+                .await
+                .is_err()
+        );
+        db.set_extension_scope("plugin", "example-tools", true, &[])
+            .unwrap();
         assert_eq!(
             catalog.tool_names("example-tools", true).await,
             ["example_read", "example_write"]
@@ -772,6 +964,7 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
         );
         catalog.deactivate("example-tools").await;
         catalog.deactivate("apple-security-devices").await;
+        drop(runtime);
         drop(db);
         std::fs::remove_dir_all(root).unwrap();
     }

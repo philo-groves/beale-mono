@@ -105,10 +105,15 @@ async fn serve() -> Result<()> {
     let workspaces = beale_workspaces::WorkspaceStore::new()?;
     let db = beale_storage::HostDatabase::open(workspaces.root())?;
     let plugin_data_root = workspaces.root().to_path_buf();
+    let plugins = beale_extender::PluginRuntime::new(db.clone(), plugin_data_root)?;
     let app = Router::new()
         .route(HEALTH_PATH, get(health))
         .merge(beale_workspaces::router(token.clone(), workspaces.clone()))
-        .merge(beale_sessions::router(token.clone(), workspaces.clone())?)
+        .merge(beale_sessions::router_with_runtime(
+            token.clone(),
+            workspaces.clone(),
+            plugins.clone(),
+        )?)
         .merge(features::router(token.clone(), db.clone()));
     #[cfg(feature = "knowledge")]
     let app = app.merge(beale_knowledge::router(token.clone(), db.clone()));
@@ -120,17 +125,16 @@ async fn serve() -> Result<()> {
     let app = app.merge(beale_fleet::router(token.clone(), db.clone()));
     let app = app
         .merge(beale_safety::router(token.clone(), db.clone()))
-        .merge(beale_extender::router(
+        .merge(beale_extender::router_with_runtime(
             token.clone(),
-            db.clone(),
-            plugin_data_root,
+            plugins.clone(),
         )?)
         .merge(auth::router(token, store, db));
     #[cfg(windows)]
     let (tray_exit_tx, tray_exit_rx) = tokio::sync::oneshot::channel();
     #[cfg(windows)]
     let _tray = tray::TrayHandle::start(addr, tray_exit_tx)?;
-    let scheduler = beale_sessions::start_automation_scheduler(workspaces)?;
+    let scheduler = beale_sessions::start_automation_scheduler_with_runtime(workspaces, plugins)?;
     let result = axum::serve(listener, app)
         .with_graceful_shutdown(async {
             #[cfg(windows)]

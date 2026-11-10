@@ -6,6 +6,7 @@
 
 #### Added
 
+- V2 sessions now reassert workspace `AGENTS.md` guidance on every turn. Eight tools are available initially: the four host file and shell tools, `webfetch` for JavaScript-free web search and text retrieval, result paging, `get_scope` for rules and top-level surfaces, and `load_plugin_or_feature` for scoped extension guidance. Feature tools and installed plugin skills and MCP tools load on demand; plugin calls pass through session Auto-Review.
 - Canvas now shows open runbooks as closeable squircle tabs with a runbook icon and title. Multiple runbooks retain separate view state, and closing a tab selects a neighboring runbook.
 - Runbook cell output now separates stdout and stderr, colors stderr red, and shows the exit code on the Output row. Protocol v1.66 carries structured cell streams; app-server schema 40 stores them while retaining older output text.
 - Runbook Canvas now shows saved output beneath each executed cell, a spinner in the active cell's run button, and a fixed right-side cell status strip. App-server schema 39 stores bounded per-cell output; protocol v1.65 includes it in runbook detail reads. Existing cell results have empty output.
@@ -108,7 +109,7 @@
 - Canvas runbook tabs now fit their full titles and omit the underline separator. New runbook titles are limited to 64 characters; unchanged older titles remain editable.
 - Feature cards now show whether a feature has a navigation sidebar view, beneath Prompt Extension.
 - Graph descriptions now appear as tooltips on New Research selector options instead of below the selector.
-- New Research uses the workspace Surfaces dot grid as its background when Graphs is enabled for the selected workspace.
+- New Research uses the workspace Surfaces dot grid as its background when Graphs is enabled for the selected workspace, then hides the grid once a session starts so messages use a plain background.
 - New Research graph nodes now size to their role and model labels. Additional model counts appear beside the primary model, and all agent roles show a robot icon.
 - V2 header titles now sit in wide squircle tabs with their existing icons and labels, without a preceding vertical separator, leaving room for future multiple-view headers.
 - Workspace tabs now distinguish Surfaces with a connected-node icon and Knowledge Base with a book icon.
