@@ -218,6 +218,7 @@ message SurfaceRelationship {
   string label = 2;
   string type_id = 3;
   repeated SurfaceEvidence evidence_refs = 4;
+  string source_element_id = 5;
 }
 
 message SurfaceEvidence {
@@ -306,6 +307,132 @@ message WorkspaceSurface {
   SurfaceDefinition definition = 2;
   repeated SurfaceRelationship relationships = 3;
   repeated SurfaceRevision lineage = 4;
+}
+
+enum SurfaceMapCategory {
+  SURFACE_MAP_CATEGORY_UNSPECIFIED = 0;
+  SURFACE_MAP_CATEGORY_COMPONENT = 1;
+  SURFACE_MAP_CATEGORY_INTERFACE = 2;
+  SURFACE_MAP_CATEGORY_BEHAVIOR = 3;
+  SURFACE_MAP_CATEGORY_STATE = 4;
+  SURFACE_MAP_CATEGORY_CONTROL = 5;
+}
+
+enum SurfaceMapBasis {
+  SURFACE_MAP_BASIS_UNSPECIFIED = 0;
+  SURFACE_MAP_BASIS_OBSERVED = 1;
+  SURFACE_MAP_BASIS_REPORTED = 2;
+  SURFACE_MAP_BASIS_INFERRED = 3;
+}
+
+enum SurfaceMapFlowKind {
+  SURFACE_MAP_FLOW_KIND_UNSPECIFIED = 0;
+  SURFACE_MAP_FLOW_KIND_CALL = 1;
+  SURFACE_MAP_FLOW_KIND_DATA = 2;
+  SURFACE_MAP_FLOW_KIND_CONTROL = 3;
+  SURFACE_MAP_FLOW_KIND_EVENT = 4;
+}
+
+enum SurfaceMapGapReason {
+  SURFACE_MAP_GAP_REASON_UNSPECIFIED = 0;
+  SURFACE_MAP_GAP_REASON_NOT_EXAMINED = 1;
+  SURFACE_MAP_GAP_REASON_UNAVAILABLE = 2;
+  SURFACE_MAP_GAP_REASON_AMBIGUOUS = 3;
+}
+
+message SurfaceMapElement {
+  string id = 1;
+  SurfaceMapCategory category = 2;
+  string type_id = 3;
+  string name = 4;
+  SurfaceLocator locator = 5;
+  string observation = 6;
+  SurfaceMapBasis basis = 7;
+  uint64 observed_at_ms = 8;
+  repeated SurfaceEvidence evidence_refs = 9;
+}
+
+message SurfaceMapFlow {
+  string id = 1;
+  string from_element_id = 2;
+  string to_element_id = 3;
+  SurfaceMapFlowKind kind = 4;
+  string observation = 5;
+  SurfaceMapBasis basis = 6;
+  repeated SurfaceEvidence evidence_refs = 7;
+}
+
+message SurfaceMapGap {
+  string id = 1;
+  string element_id = 2;
+  string question = 3;
+  SurfaceMapGapReason reason = 4;
+  repeated SurfaceEvidence evidence_refs = 5;
+}
+
+message WorkspaceSurfaceMapping {
+  string surface_id = 1;
+  uint64 revision = 2;
+  repeated SurfaceMapElement elements = 3;
+  repeated SurfaceMapFlow flows = 4;
+  repeated SurfaceMapGap gaps = 5;
+  uint64 next_element_number = 6;
+  uint64 next_flow_number = 7;
+  uint64 next_gap_number = 8;
+}
+
+message UpdateWorkspaceSurfaceMappingRequest {
+  uint64 expected_revision = 1;
+  repeated SurfaceMapElement elements = 2;
+  repeated SurfaceMapFlow flows = 3;
+  repeated SurfaceMapGap gaps = 4;
+}
+
+enum SurfaceThreatMapRefKind {
+  SURFACE_THREAT_MAP_REF_KIND_UNSPECIFIED = 0;
+  SURFACE_THREAT_MAP_REF_KIND_ELEMENT = 1;
+  SURFACE_THREAT_MAP_REF_KIND_FLOW = 2;
+}
+
+enum SurfaceThreatDisposition {
+  SURFACE_THREAT_DISPOSITION_UNSPECIFIED = 0;
+  SURFACE_THREAT_DISPOSITION_OPEN = 1;
+  SURFACE_THREAT_DISPOSITION_DISMISSED = 2;
+}
+
+message SurfaceThreatMapRef {
+  SurfaceThreatMapRefKind kind = 1;
+  string id = 2;
+}
+
+message SurfaceThreatScenario {
+  string id = 1;
+  string title = 2;
+  repeated SurfaceThreatMapRef map_refs = 3;
+  string attacker_position = 4;
+  repeated string preconditions = 5;
+  string suspected_failure = 6;
+  string invariant_at_risk = 7;
+  string potential_impact = 8;
+  string validation_question = 9;
+  repeated SurfaceEvidence evidence_refs = 10;
+  SurfaceThreatDisposition disposition = 11;
+  string disposition_reason = 12;
+  repeated string related_claim_ids = 13;
+}
+
+message WorkspaceSurfaceThreatModel {
+  string surface_id = 1;
+  uint64 revision = 2;
+  uint64 reviewed_mapping_revision = 3;
+  repeated SurfaceThreatScenario scenarios = 4;
+  uint64 next_scenario_number = 5;
+}
+
+message UpdateWorkspaceSurfaceThreatModelRequest {
+  uint64 expected_revision = 1;
+  uint64 reviewed_mapping_revision = 2;
+  repeated SurfaceThreatScenario scenarios = 3;
 }
 
 message WorkspaceDetails {
@@ -663,6 +790,11 @@ message PluginSummary {
   uint32 mcp_tool_count = 7;
   repeated string workspace_ids = 8;
   bool all_workspaces = 9;
+  uint32 script_count = 10;
+  uint32 reference_count = 11;
+  uint32 asset_count = 12;
+  uint32 mcp_prompt_count = 13;
+  uint32 mcp_resource_count = 14;
 }
 
 message ListPluginsResponse {

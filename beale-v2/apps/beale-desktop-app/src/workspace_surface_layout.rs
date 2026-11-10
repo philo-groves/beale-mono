@@ -2,7 +2,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use beale_contracts::v1::WorkspaceSurface;
 
-pub(crate) const NODE_LABEL_WIDTH: f32 = 112.0;
+pub(crate) const NODE_MAX_WIDTH: f32 = 180.0;
+pub(crate) const NODE_HEIGHT: f32 = 60.0;
 
 /// Place related surfaces together before isolated surfaces.
 /// An absent relationship is not inferred from a surface's type or name.
@@ -59,7 +60,7 @@ pub(crate) fn layout(surfaces: &[WorkspaceSurface], width: f32, height: f32) -> 
     let mut boxes = Vec::new();
     for members in groups {
         if members.len() == 1 {
-            let size = NODE_LABEL_WIDTH + 16.0;
+            let size = NODE_MAX_WIDTH + 24.0;
             boxes.push((size, size, vec![(members[0], [size / 2.0, size / 2.0])]));
             continue;
         }
@@ -88,15 +89,15 @@ pub(crate) fn layout(surfaces: &[WorkspaceSurface], width: f32, height: f32) -> 
                 .filter(|&index| distances[index] == ring)
                 .collect();
             ring_members.sort_by(|&left, &right| surfaces[left].id.cmp(&surfaces[right].id));
-            radius = (radius + 68.0)
-                .max(ring_members.len() as f32 * NODE_LABEL_WIDTH / std::f32::consts::TAU);
+            radius = (radius + NODE_MAX_WIDTH + 16.0)
+                .max(ring_members.len() as f32 * (NODE_MAX_WIDTH + 20.0) / std::f32::consts::TAU);
             for (slot, index) in ring_members.iter().enumerate() {
                 let angle = -std::f32::consts::FRAC_PI_2
                     + std::f32::consts::TAU * slot as f32 / ring_members.len() as f32;
                 points.push((*index, [radius * angle.cos(), radius * angle.sin()]));
             }
         }
-        let size = 2.0 * (radius + NODE_LABEL_WIDTH / 2.0 + 4.0);
+        let size = 2.0 * (radius + NODE_MAX_WIDTH / 2.0 + 4.0);
         boxes.push((
             size,
             size,
@@ -174,6 +175,7 @@ mod tests {
                     label: "calls".to_owned(),
                     type_id: String::new(),
                     evidence_refs: Vec::new(),
+                    source_element_id: String::new(),
                 })
                 .collect(),
             ..Default::default()
@@ -238,5 +240,21 @@ mod tests {
             .sqrt()
         };
         assert!(distance(0, 1) < distance(0, 2));
+    }
+
+    #[test]
+    fn dense_related_surfaces_leave_room_for_cards() {
+        let mut surfaces = vec![surface("hub", None)];
+        surfaces.extend((0..16).map(|index| surface(&format!("leaf-{index}"), Some("hub"))));
+        let positions = layout(&surfaces, 1400.0, 1000.0);
+        for (index, &[x, y]) in positions.iter().enumerate() {
+            for &[other_x, other_y] in &positions[index + 1..] {
+                assert!(
+                    (x - other_x).abs() >= NODE_MAX_WIDTH + 8.0
+                        || (y - other_y).abs() >= NODE_HEIGHT + 8.0,
+                    "cards overlap at {x}, {y} and {other_x}, {other_y}"
+                );
+            }
+        }
     }
 }

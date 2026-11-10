@@ -10669,9 +10669,12 @@ active_runbook_count: 0,
         let (title, _) = runtime.presented("workspace-title-squircle").unwrap();
         let (manage, _) = runtime.presented("workspace-surface-manage").unwrap();
         assert_eq!(stage, content);
-        assert_eq!([node_before[2], node_before[3]], [18.0, 18.0]);
-        assert!(name[1] >= node_before[1] + node_before[3]);
-        assert_eq!(name[2], workspace_surface_layout::NODE_LABEL_WIDTH);
+        assert!(node_before[2] <= workspace_surface_layout::NODE_MAX_WIDTH);
+        assert_eq!(node_before[3], workspace_surface_layout::NODE_HEIGHT);
+        assert!(name[0] >= node_before[0]);
+        assert!(name[1] >= node_before[1]);
+        assert!(name[0] + name[2] <= node_before[0] + node_before[2]);
+        assert!(name[1] + name[3] <= node_before[1] + node_before[3]);
         assert!(title[2] < content[2] / 2.0);
         assert!((manage[0] + manage[2] - content[0] - content[2] + 24.0).abs() < 2.0);
         assert!((manage[1] + manage[3] - content[1] - content[3] + 24.0).abs() < 2.0);
@@ -12698,6 +12701,23 @@ active_runbook_count: 0,
             "microsoft-security-devices",
         ] {
             assert!(runtime.find(&format!("plugin-item-{name}")).is_some());
+        }
+        for row in [
+            "skills",
+            "scripts",
+            "references",
+            "assets",
+            "skill-mcp-divider",
+            "mcp-servers",
+            "mcp-count",
+            "mcp-prompts",
+            "mcp-resources",
+        ] {
+            assert!(
+                runtime
+                    .find(&format!("plugin-{row}-apple-security-devices"))
+                    .is_some()
+            );
         }
         let (x, y) = runtime
             .find("plugin-manifest-apple-security-devices")

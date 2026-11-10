@@ -8,6 +8,8 @@ use std::{
     time::Duration,
 };
 
+mod findings;
+pub use findings::now_ms as finding_now_ms;
 mod knowledge;
 mod runbooks;
 pub use runbooks::RunbookRunRow;
@@ -369,7 +371,7 @@ impl HostDatabase {
         connection.busy_timeout(Duration::from_secs(5))?;
         connection.execute_batch("PRAGMA foreign_keys = ON;")?;
         let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version > 40 {
+        if version > 42 {
             bail!("unsupported host database schema version {version}");
         }
         connection.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;")?;
@@ -1007,6 +1009,18 @@ impl HostDatabase {
             }
             tx.execute_batch("PRAGMA user_version = 40;")?;
             tx.commit()?;
+        }
+        if version < 41 {
+            connection.execute_batch("BEGIN IMMEDIATE;
+                 CREATE TABLE IF NOT EXISTS finding_counters(workspace_id TEXT PRIMARY KEY, next_id INTEGER NOT NULL DEFAULT 1);
+                 CREATE TABLE IF NOT EXISTS findings(workspace_id TEXT NOT NULL, id TEXT NOT NULL, updated_at_ms INTEGER NOT NULL, revision INTEGER NOT NULL, record_json TEXT NOT NULL, PRIMARY KEY(workspace_id,id));
+                 CREATE INDEX IF NOT EXISTS findings_workspace_updated ON findings(workspace_id,updated_at_ms DESC,id);
+                 CREATE TABLE IF NOT EXISTS finding_tool_sources(id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, session_id TEXT NOT NULL, output_sha256 TEXT NOT NULL, created_at_ms INTEGER NOT NULL);
+                 PRAGMA user_version = 41;
+                 COMMIT;")?;
+        }
+        if version < 42 {
+            findings::migrate_state_structure(&mut connection)?;
         }
         connection.execute(
             "UPDATE runbook_runs SET status='interrupted' WHERE status='running'",
@@ -1883,8 +1897,10 @@ impl HostDatabase {
                     "SELECT EXISTS(SELECT 1 FROM runbook_runs WHERE session_id = ?1)
                      OR EXISTS(SELECT 1 FROM session_tool_calls
                  WHERE session_id = ?1 AND (name = 'graph_delegate'
-                 OR (is_error = 0 AND name IN ('memory_create', 'lead_create',
-                     'finding_create', 'runbook_create', 'runbook_edit', 'surface_add'))))",
+                 OR (is_error = 0 AND name IN ('memory_create', 'memory_save', 'lead_create',
+                     'finding_create', 'claim_create', 'runbook_create', 'runbook_edit', 'surface_add', 'surface_save',
+                     'surface_mapping_edit', 'surface_promote_element',
+                     'surface_threat_model_edit'))))",
                     [id],
                     |row| row.get(0),
                 )
@@ -3215,7 +3231,7 @@ mod tests {
                 id: "tool-example".to_owned(),
                 turn_number: number,
                 ordinal: 0,
-                name: "memory_create".to_owned(),
+                name: "memory_save".to_owned(),
                 summary: "Saved example memory".to_owned(),
                 arguments: "{}".to_owned(),
                 output: "{}".to_owned(),
@@ -3376,7 +3392,7 @@ mod tests {
         drop(db);
         let connection = Connection::open(root.join("state.sqlite")).unwrap();
         connection
-            .execute_batch("PRAGMA user_version = 41;")
+            .execute_batch("PRAGMA user_version = 43;")
             .unwrap();
         drop(connection);
         assert!(HostDatabase::open(&root).is_err());
@@ -3384,7 +3400,7 @@ mod tests {
         let version: i64 = connection
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 41);
+        assert_eq!(version, 43);
         drop(connection);
         std::fs::remove_dir_all(root).unwrap();
     }

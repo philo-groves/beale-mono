@@ -128,7 +128,7 @@ impl PluginRuntime {
                 }
             }
         }
-        timeout(Duration::from_secs(20), self.catalog.activate(name))
+        timeout(Duration::from_secs(30), self.catalog.activate(name))
             .await
             .context("plugin launch timed out")??;
         let active = self.catalog.active.lock().await;
@@ -272,6 +272,9 @@ impl Catalog {
         );
 
         let mut skill_count = 0_u32;
+        let mut script_count = 0_u32;
+        let mut reference_count = 0_u32;
+        let mut asset_count = 0_u32;
         let skills_path = root.join("skills");
         if skills_path.exists() {
             let skills = skills_path.canonicalize()?;
@@ -287,6 +290,15 @@ impl Catalog {
                     let skill = contained_file(&root, &skill_dir.join("SKILL.md"))?;
                     ensure!(skill.metadata()?.len() <= 1_000_000, "skill is too large");
                     skill_count += 1;
+                    script_count = script_count
+                        .checked_add(count_skill_files(&root, &skill_dir.join("scripts"))?)
+                        .context("too many skill scripts")?;
+                    reference_count = reference_count
+                        .checked_add(count_skill_files(&root, &skill_dir.join("references"))?)
+                        .context("too many skill references")?;
+                    asset_count = asset_count
+                        .checked_add(count_skill_files(&root, &skill_dir.join("assets"))?)
+                        .context("too many skill assets")?;
                 }
             }
         }
@@ -335,6 +347,11 @@ impl Catalog {
             has_mcp_server: mcp_server_count > 0,
             mcp_server_count,
             mcp_tool_count,
+            script_count,
+            reference_count,
+            asset_count,
+            mcp_prompt_count: 0,
+            mcp_resource_count: 0,
             workspace_ids: Vec::new(),
             all_workspaces: true,
         })
@@ -404,13 +421,23 @@ impl Catalog {
         Ok(count)
     }
 
+    async fn mcp_detail_counts(&self, name: &str) -> (u32, u32) {
+        let active = self.active.lock().await;
+        active.get(name).map_or((0, 0), |servers| {
+            (
+                servers.values().map(|server| server.prompt_count).sum(),
+                servers.values().map(|server| server.resource_count).sum(),
+            )
+        })
+    }
+
     async fn deactivate(&self, name: &str) {
         self.active.lock().await.remove(name);
     }
 
     async fn tool_names(&self, name: &str, installed: bool) -> Vec<String> {
         if installed {
-            let _ = timeout(Duration::from_secs(15), self.activate(name)).await;
+            let _ = timeout(Duration::from_secs(25), self.activate(name)).await;
             let active = self.active.lock().await;
             if let Some(servers) = active.get(name) {
                 let mut names = servers
@@ -490,6 +517,48 @@ fn contained_file(root: &Path, path: &Path) -> Result<PathBuf> {
     Ok(path)
 }
 
+fn count_skill_files(root: &Path, directory: &Path) -> Result<u32> {
+    match std::fs::symlink_metadata(directory) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(error.into()),
+        Ok(metadata) => ensure!(
+            metadata.is_dir() && !metadata.file_type().is_symlink(),
+            "invalid skill resource directory"
+        ),
+    }
+    let mut pending = vec![directory.to_path_buf()];
+    let mut visited = 0_usize;
+    let mut count = 0_u32;
+    while let Some(path) = pending.pop() {
+        for entry in std::fs::read_dir(path)? {
+            let entry = entry?;
+            let path = entry.path();
+            let metadata = std::fs::symlink_metadata(&path)?;
+            ensure!(
+                !metadata.file_type().is_symlink(),
+                "skill resource cannot be a symlink"
+            );
+            ensure!(
+                path.canonicalize()?.starts_with(root),
+                "skill resource escapes plugin root"
+            );
+            visited += 1;
+            ensure!(visited <= 8_192, "too many skill resource entries");
+            if metadata.is_dir() {
+                pending.push(path);
+            } else if metadata.is_file() {
+                count = count
+                    .checked_add(1)
+                    .context("too many skill resource files")?;
+                ensure!(count <= 4_096, "too many skill resource files");
+            } else {
+                anyhow::bail!("invalid skill resource entry");
+            }
+        }
+    }
+    Ok(count)
+}
+
 fn valid_name(name: &str) -> bool {
     let bytes = name.as_bytes();
     (1..=64).contains(&bytes.len())
@@ -564,13 +633,17 @@ async fn list_route(
     for plugin in &mut plugins {
         if plugin.installed && plugin.has_mcp_server {
             plugin.mcp_tool_count = 0;
+            plugin.mcp_prompt_count = 0;
+            plugin.mcp_resource_count = 0;
             if let Ok(Ok(count)) = timeout(
-                Duration::from_secs(15),
+                Duration::from_secs(25),
                 state.catalog.activate(&plugin.name),
             )
             .await
             {
                 plugin.mcp_tool_count = count;
+                (plugin.mcp_prompt_count, plugin.mcp_resource_count) =
+                    state.catalog.mcp_detail_counts(&plugin.name).await;
             }
         }
     }
@@ -603,13 +676,17 @@ async fn install_route(
         .ok_or(StatusCode::NOT_FOUND)?;
     if plugin.has_mcp_server {
         plugin.mcp_tool_count = 0;
+        plugin.mcp_prompt_count = 0;
+        plugin.mcp_resource_count = 0;
         if let Ok(Ok(count)) = timeout(
-            Duration::from_secs(15),
+            Duration::from_secs(25),
             state.catalog.activate(&plugin.name),
         )
         .await
         {
             plugin.mcp_tool_count = count;
+            (plugin.mcp_prompt_count, plugin.mcp_resource_count) =
+                state.catalog.mcp_detail_counts(&plugin.name).await;
         }
     }
     Ok((
@@ -765,6 +842,21 @@ mod tests {
         );
         assert!(available[0].has_mcp_server);
         assert!(!available[1].has_mcp_server);
+        assert_eq!(
+            available
+                .iter()
+                .map(|plugin| plugin.script_count)
+                .collect::<Vec<_>>(),
+            [0, 0, 2, 1]
+        );
+        assert_eq!(
+            available
+                .iter()
+                .map(|plugin| plugin.reference_count)
+                .collect::<Vec<_>>(),
+            [3, 1, 0, 2]
+        );
+        assert!(available.iter().all(|plugin| plugin.asset_count == 0));
         assert_eq!(available[0].mcp_server_count, 1);
         assert_eq!(available[1].mcp_server_count, 0);
         assert_eq!(available[0].mcp_tool_count, 19);
@@ -856,6 +948,15 @@ mod tests {
             "# Example skill\n\nUse for example.test research.",
         )
         .unwrap();
+        for (directory, file) in [
+            ("scripts", "check.sh"),
+            ("references", "notes.md"),
+            ("assets", "example.txt"),
+        ] {
+            let path = package.join("skills/example-skill").join(directory);
+            std::fs::create_dir_all(&path).unwrap();
+            std::fs::write(path.join(file), "Synthetic example content.").unwrap();
+        }
         std::fs::write(package.join("mcp.json"), format!(r#"{{"$schema":"{MCP_SCHEMA}","mcpServers":{{"example":{{"type":"stdio","command":"node","args":["${{PLUGIN_ROOT}}/server.mjs"]}}}}}}"#)).unwrap();
         std::fs::write(
             package.join("server.mjs"),
@@ -868,6 +969,12 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
     ? { supportedVersions: ['2026-07-28'] }
     : request.method === 'tools/list'
       ? { tools: [{ name: 'example_read', description: 'Read example data', inputSchema: { type: 'object', properties: {}, additionalProperties: false } }, { name: 'example_write' }] }
+      : request.method === 'prompts/list'
+        ? { prompts: [{ name: 'example_prompt' }] }
+      : request.method === 'resources/list'
+        ? { resources: [{ uri: 'example://resource' }] }
+      : request.method === 'resources/templates/list'
+        ? { resourceTemplates: [{ uriTemplate: 'example://items/{id}' }] }
       : request.method === 'tools/call'
         ? { content: [{ type: 'text', text: `Called ${request.params.name}` }] }
       : {};
@@ -885,6 +992,19 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
                 .iter()
                 .any(|plugin| plugin.name == "example-tools" && plugin.mcp_server_count == 1)
         );
+        let example = available
+            .iter()
+            .find(|plugin| plugin.name == "example-tools")
+            .unwrap();
+        assert_eq!(
+            (
+                example.skill_count,
+                example.script_count,
+                example.reference_count,
+                example.asset_count
+            ),
+            (1, 1, 1, 1)
+        );
         catalog.install(&db, "example-tools").unwrap();
         let config = mcp_runtime::configurations(&package.canonicalize().unwrap()).unwrap();
         mcp_runtime::RunningServer::launch(
@@ -895,6 +1015,7 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
         .await
         .unwrap();
         assert_eq!(catalog.activate("example-tools").await.unwrap(), 2);
+        assert_eq!(catalog.mcp_detail_counts("example-tools").await, (1, 2));
         let runtime = PluginRuntime {
             catalog: catalog.clone(),
             db: db.clone(),
@@ -1005,6 +1126,20 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
         let catalog = ListPluginsResponse::decode(body).unwrap();
         assert_eq!(catalog.plugins.len(), 4);
         assert!(catalog.plugins.iter().all(|plugin| !plugin.installed));
+        let apple = catalog
+            .plugins
+            .iter()
+            .find(|plugin| plugin.name == "apple-security-devices")
+            .unwrap();
+        assert_eq!(
+            (
+                apple.skill_count,
+                apple.script_count,
+                apple.reference_count,
+                apple.asset_count
+            ),
+            (1, 0, 3, 0)
+        );
         let manifest = app
             .clone()
             .oneshot(

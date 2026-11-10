@@ -453,15 +453,6 @@ fn surface_icon(kind: i32) -> &'static Icon {
     }
 }
 
-fn arc(cx: f32, cy: f32, radius: f32, start: f32, end: f32) -> Vec<[f32; 2]> {
-    (0..=40)
-        .map(|step| {
-            let angle = (start + (end - start) * step as f32 / 40.0).to_radians();
-            [cx + radius * angle.cos(), cy + radius * angle.sin()]
-        })
-        .collect()
-}
-
 fn surface_network_background_drag(state: &mut State, drag: &mut Drag, tx: &mut Tx) {
     tx.instant();
     match drag.phase {
@@ -527,22 +518,6 @@ fn network(
         .map(|surface| surface_revision(surface).saturating_sub(1))
         .max()
         .unwrap_or(0);
-    for (index, surface) in surfaces.iter().enumerate() {
-        let [x, y] = position(index);
-        let intensity = if max_updates == 0 {
-            0.0
-        } else {
-            surface_revision(surface).saturating_sub(1) as f32 / max_updates as f32
-        };
-        let channel = |grey: f32, red: f32| (grey + (red - grey) * intensity).round() as u8;
-        let outline = format!(
-            "#{:02x}{:02x}{:02x}",
-            channel(85.0, 220.0),
-            channel(85.0, 65.0),
-            channel(85.0, 65.0)
-        );
-        shape = shape.stroke(arc(x, y, 18.0, -90.0, 270.0), 3.0, theme.color(&outline));
-    }
     let mut stage = el()
         .key("workspace-surface-network")
         .size(width, height)
@@ -591,6 +566,7 @@ fn network(
     for (index, surface) in surfaces.iter().enumerate() {
         let [x, y] = position(index);
         let out = surface_scope(surface) == SurfaceScope::OutOfScope as i32;
+        let selected = state.workspace_surface_selected == Some(index);
         let name = surface
             .definition
             .as_ref()
@@ -606,19 +582,71 @@ fn network(
             scope_state_label(surface_scope_state(surface)),
             surface_revision(surface).saturating_sub(1),
         );
-        let node = el()
-            .key(format!("workspace-surface-node-{index}"))
-            .role("button")
-            .label(label.clone())
-            .absolute(x - 9.0, y - 9.0)
-            .size(18.0, 18.0)
-            .center()
+        let kind = draft_kind(surface_kind(surface)).label();
+        let detail = format!("{} · {kind}", surface.id);
+        let name_width = rune::text::measure(name, &[], ui_font(12.0, 400.0), None).0;
+        let detail_width = rune::text::measure(&detail, &[], ui_font(11.0, 400.0), None).0;
+        let node_width = (name_width + 15.0 + 5.0 + 18.0)
+            .max(detail_width + 18.0)
+            .ceil()
+            .clamp(118.0, crate::workspace_surface_layout::NODE_MAX_WIDTH);
+        let intensity = if max_updates == 0 {
+            0.0
+        } else {
+            surface_revision(surface).saturating_sub(1) as f32 / max_updates as f32
+        };
+        let channel = |grey: f32, red: f32| (grey + (red - grey) * intensity).round() as u8;
+        let outline = format!(
+            "#{:02x}{:02x}{:02x}",
+            channel(85.0, 220.0),
+            channel(85.0, 65.0),
+            channel(85.0, 65.0)
+        );
+        let title = row()
+            .w_full()
+            .min_w(0.0)
+            .h(18.0)
+            .center_y()
+            .gap(5.0)
             .child(
-                icon(surface_icon(surface_kind(surface)), 18.0).color(theme.color(if out {
-                    "#777777"
+                icon(surface_icon(surface_kind(surface)), 15.0).color(theme.color(if out {
+                    "#888888"
                 } else {
                     "#e0e0e0"
                 })),
+            )
+            .child(
+                text(name.to_owned())
+                    .key(format!("workspace-surface-visible-name-{index}"))
+                    .min_w(0.0)
+                    .grow(1.0)
+                    .truncate()
+                    .font(ui_font(12.0, 400.0))
+                    .color(theme.color(if out { "#888888" } else { "#eeeeee" })),
+            );
+        let node = col()
+            .key(format!("workspace-surface-node-{index}"))
+            .role("button")
+            .label(label.clone())
+            .absolute(
+                x - node_width / 2.0,
+                y - crate::workspace_surface_layout::NODE_HEIGHT / 2.0,
+            )
+            .size(node_width, crate::workspace_surface_layout::NODE_HEIGHT)
+            .padding(9.0)
+            .gap(4.0)
+            .radius(16.0)
+            .continuous_corners()
+            .fill(theme.color(if selected { "#292929" } else { "#202020" }))
+            .border(if selected { 2.0 } else { 1.0 }, theme.color(&outline))
+            .hover(theme.color("#2a2a2a"))
+            .child(title)
+            .child(
+                text(detail)
+                    .w_full()
+                    .truncate()
+                    .font(ui_font(11.0, 400.0))
+                    .color(theme.color(if out { "#777777" } else { "#999999" })),
             )
             .on_hover_change(move |state: &mut State, inside, _| {
                 if inside {
@@ -642,25 +670,10 @@ fn network(
                 }
             });
         stage = stage.child(node);
-        stage = stage.child(
-            el().key(format!("workspace-surface-visible-name-{index}"))
-                .absolute(
-                    x - crate::workspace_surface_layout::NODE_LABEL_WIDTH / 2.0,
-                    y + 25.0,
-                )
-                .w(crate::workspace_surface_layout::NODE_LABEL_WIDTH)
-                .center()
-                .child(
-                    text(name.to_owned())
-                        .truncate()
-                        .font(ui_font(12.0, 500.0))
-                        .color(theme.color(if out { "#888888" } else { "#c9c9c9" })),
-                ),
-        );
         if hovered == Some(index) {
             stage = stage.child(
                 el().key(format!("workspace-surface-name-{index}"))
-                    .absolute((x - 110.0).max(4.0).min((width - 224.0).max(4.0)), y + 48.0)
+                    .absolute((x - 110.0).max(4.0).min((width - 224.0).max(4.0)), y + 40.0)
                     .w(220.0)
                     .px(8.0)
                     .py(5.0)
@@ -1107,6 +1120,7 @@ fn commit_relationship(state: &mut State) {
         label: label.to_owned(),
         type_id: type_id.to_owned(),
         evidence_refs: Vec::new(),
+        source_element_id: String::new(),
     });
     close_relationship_dialog(state);
 }

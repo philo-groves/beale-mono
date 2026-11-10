@@ -55,12 +55,18 @@ fn activates_sidenav(name: &str) -> bool {
     matches!(
         name,
         "memory_create"
+            | "memory_save"
             | "lead_create"
             | "finding_create"
+            | "claim_create"
             | "runbook_create"
             | "runbook_edit"
             | "runbook_run"
             | "surface_add"
+            | "surface_save"
+            | "surface_mapping_edit"
+            | "surface_threat_model_edit"
+            | "surface_promote_element"
             | "graph_delegate"
     )
 }
@@ -1086,6 +1092,9 @@ mod tests {
             tool: Some(tool("runbook_edit", false)),
             ..Default::default()
         }));
+        assert!(activates_sidenav("surface_save"));
+        assert!(activates_sidenav("memory_save"));
+        assert!(activates_sidenav("claim_create"));
         assert!(!campaign_activity_event(&SessionStreamEvent {
             runbook_progress: None,
             kind: SessionStreamKind::ToolStarted as i32,

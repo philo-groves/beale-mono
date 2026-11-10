@@ -195,6 +195,7 @@ fn result_from_text(text: &str) -> Result<WorkspaceImportResult, String> {
                     label: item.label,
                     type_id: item.type_id,
                     evidence_refs: evidence_refs(item.evidence_refs),
+                    source_element_id: String::new(),
                 })
                 .collect(),
         });

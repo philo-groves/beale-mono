@@ -125,8 +125,13 @@ pub(crate) struct PluginEntry {
     pub(crate) description: String,
     pub(crate) installed: bool,
     pub(crate) skills: usize,
+    pub(crate) scripts: usize,
+    pub(crate) references: usize,
+    pub(crate) assets: usize,
     pub(crate) mcp_servers: usize,
     pub(crate) mcp_tools: usize,
+    pub(crate) mcp_prompts: usize,
+    pub(crate) mcp_resources: usize,
     pub(crate) workspace_ids: Vec<String>,
     pub(crate) all_workspaces: bool,
 }
@@ -177,6 +182,15 @@ pub(crate) fn bundled_features() -> Vec<FeatureEntry> {
         enabled: false,
         has_prompt_extension: false,
         tool_count: beale_knowledge::TOOL_COUNT as usize,
+        workspace_ids: Vec::new(),
+        all_workspaces: true,
+    }, FeatureEntry {
+        id: beale_findings::FEATURE_ID.to_owned(),
+        name: beale_findings::FEATURE_NAME.to_owned(),
+        description: beale_findings::FEATURE_DESCRIPTION.to_owned(),
+        enabled: false,
+        has_prompt_extension: beale_findings::HAS_PROMPT_EXTENSION,
+        tool_count: beale_findings::TOOL_COUNT as usize,
         workspace_ids: Vec::new(),
         all_workspaces: true,
     }, FeatureEntry {
@@ -371,13 +385,29 @@ pub(crate) fn bundled_plugins() -> Vec<PluginEntry> {
                 assert!(mcp_servers > 0, "MCP tools require a server");
                 names.len()
             });
+            let scripts = match manifest.name.as_str() {
+                "meta-skills" => 2,
+                "microsoft-security-devices" => 1,
+                _ => 0,
+            };
+            let references = match manifest.name.as_str() {
+                "apple-security-devices" => 3,
+                "apple-target-flags" => 1,
+                "microsoft-security-devices" => 2,
+                _ => 0,
+            };
             PluginEntry {
                 name: manifest.name,
                 description: manifest.description,
                 installed: false,
                 skills: 1,
+                scripts,
+                references,
+                assets: 0,
                 mcp_servers,
                 mcp_tools,
+                mcp_prompts: 0,
+                mcp_resources: 0,
                 workspace_ids: Vec::new(),
                 all_workspaces: true,
             }
@@ -390,10 +420,18 @@ fn from_wire(plugin: PluginSummary) -> Result<PluginEntry, String> {
         || plugin.name.len() > 64
         || plugin.description.len() > 2_000
         || plugin.skill_count > 128
+        || plugin.script_count > 4_096 * 128
+        || plugin.reference_count > 4_096 * 128
+        || plugin.asset_count > 4_096 * 128
         || plugin.mcp_server_count > 128
         || plugin.mcp_tool_count > 4_096 * 128
+        || plugin.mcp_prompt_count > 4_096 * 128
+        || plugin.mcp_resource_count > 8_192 * 128
         || plugin.has_mcp_server != (plugin.mcp_server_count > 0)
-        || (plugin.mcp_server_count == 0 && plugin.mcp_tool_count != 0)
+        || (plugin.mcp_server_count == 0
+            && (plugin.mcp_tool_count != 0
+                || plugin.mcp_prompt_count != 0
+                || plugin.mcp_resource_count != 0))
         || !valid_workspace_ids(&plugin.workspace_ids)
         || (plugin.all_workspaces && !plugin.workspace_ids.is_empty())
     {
@@ -404,8 +442,13 @@ fn from_wire(plugin: PluginSummary) -> Result<PluginEntry, String> {
         description: plugin.description,
         installed: plugin.installed,
         skills: plugin.skill_count as usize,
+        scripts: plugin.script_count as usize,
+        references: plugin.reference_count as usize,
+        assets: plugin.asset_count as usize,
         mcp_servers: plugin.mcp_server_count as usize,
         mcp_tools: plugin.mcp_tool_count as usize,
+        mcp_prompts: plugin.mcp_prompt_count as usize,
+        mcp_resources: plugin.mcp_resource_count as usize,
         workspace_ids: plugin.workspace_ids,
         all_workspaces: plugin.all_workspaces,
     })
@@ -1565,13 +1608,24 @@ fn feature_mark(id: &str, theme: ThemeStyle<'_>) -> El {
 fn plugin_card(index: usize, plugin: &PluginEntry, state: &State, theme: ThemeStyle<'_>) -> El {
     let stats = stat_block(
         [
-            stat_row("Skills", plugin.skills, theme),
-            stat_row(
-                "MCP Servers (Tools)",
-                format!("{} ({})", plugin.mcp_servers, plugin.mcp_tools),
-                theme,
-            )
-            .key(format!("plugin-mcp-count-{}", plugin.name)),
+            stat_row("Skills", plugin.skills, theme).key(format!("plugin-skills-{}", plugin.name)),
+            stat_row("Scripts", plugin.scripts, theme)
+                .key(format!("plugin-scripts-{}", plugin.name)),
+            stat_row("References", plugin.references, theme)
+                .key(format!("plugin-references-{}", plugin.name)),
+            stat_row("Assets", plugin.assets, theme).key(format!("plugin-assets-{}", plugin.name)),
+            el().key(format!("plugin-skill-mcp-divider-{}", plugin.name))
+                .w_full()
+                .h(1.0)
+                .fill(theme.color("#303030")),
+            stat_row("MCP Servers", plugin.mcp_servers, theme)
+                .key(format!("plugin-mcp-servers-{}", plugin.name)),
+            stat_row("Tools", plugin.mcp_tools, theme)
+                .key(format!("plugin-mcp-count-{}", plugin.name)),
+            stat_row("Prompt Templates", plugin.mcp_prompts, theme)
+                .key(format!("plugin-mcp-prompts-{}", plugin.name)),
+            stat_row("Resources", plugin.mcp_resources, theme)
+                .key(format!("plugin-mcp-resources-{}", plugin.name)),
         ],
         theme,
     );
@@ -2253,6 +2307,21 @@ mod tests {
         assert_eq!(
             plugins
                 .iter()
+                .map(|plugin| plugin.scripts)
+                .collect::<Vec<_>>(),
+            [0, 0, 2, 1]
+        );
+        assert_eq!(
+            plugins
+                .iter()
+                .map(|plugin| plugin.references)
+                .collect::<Vec<_>>(),
+            [3, 1, 0, 2]
+        );
+        assert!(plugins.iter().all(|plugin| plugin.assets == 0));
+        assert_eq!(
+            plugins
+                .iter()
                 .map(|plugin| plugin.mcp_servers)
                 .collect::<Vec<_>>(),
             [1, 0, 0, 0]
@@ -2275,8 +2344,13 @@ mod tests {
                     description: "First example".to_owned(),
                     installed: false,
                     skills: 1,
+                    scripts: 0,
+                    references: 0,
+                    assets: 0,
                     mcp_servers: 0,
                     mcp_tools: 0,
+                    mcp_prompts: 0,
+                    mcp_resources: 0,
                     workspace_ids: Vec::new(),
                     all_workspaces: true,
                 },
@@ -2285,8 +2359,13 @@ mod tests {
                     description: "Second example".to_owned(),
                     installed: true,
                     skills: 1,
+                    scripts: 0,
+                    references: 0,
+                    assets: 0,
                     mcp_servers: 0,
                     mcp_tools: 0,
+                    mcp_prompts: 0,
+                    mcp_resources: 0,
                     workspace_ids: Vec::new(),
                     all_workspaces: true,
                 },

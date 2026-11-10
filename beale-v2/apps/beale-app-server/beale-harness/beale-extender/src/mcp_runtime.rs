@@ -21,10 +21,13 @@ const MODERN_VERSION: &str = "2026-07-28";
 const LEGACY_VERSION: &str = "2025-11-25";
 const MAX_MESSAGE_BYTES: usize = 1_048_576;
 const MAX_TOOLS: usize = 4_096;
+const MAX_LIST_ENTRIES: usize = 4_096;
 
 pub(super) struct RunningServer {
     transport: Transport,
     pub(super) tool_count: u32,
+    pub(super) prompt_count: u32,
+    pub(super) resource_count: u32,
     pub(super) tool_names: Vec<String>,
     pub(super) tools: Vec<Value>,
     next_request_id: i64,
@@ -63,6 +66,8 @@ impl RunningServer {
         let mut server = Self {
             transport,
             tool_count: 0,
+            prompt_count: 0,
+            resource_count: 0,
             tool_names: Vec::new(),
             tools: Vec::new(),
             next_request_id: 67,
@@ -77,7 +82,95 @@ impl RunningServer {
             .filter_map(|tool| tool.get("name").and_then(Value::as_str).map(str::to_owned))
             .collect();
         server.tools = tools;
+        server.prompt_count = timeout(
+            Duration::from_secs(3),
+            server.discover_count("prompts/list", "prompts", "name"),
+        )
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .unwrap_or(0);
+        let resources = timeout(
+            Duration::from_secs(3),
+            server.discover_count("resources/list", "resources", "uri"),
+        )
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .unwrap_or(0);
+        let templates = timeout(
+            Duration::from_secs(3),
+            server.discover_count(
+                "resources/templates/list",
+                "resourceTemplates",
+                "uriTemplate",
+            ),
+        )
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .unwrap_or(0);
+        server.resource_count = resources + templates;
         Ok(server)
+    }
+
+    async fn discover_count(&mut self, method: &str, key: &str, identity: &str) -> Result<u32> {
+        let mut names = HashSet::new();
+        let mut cursors = HashSet::new();
+        let mut cursor: Option<String> = None;
+        for _ in 0..64 {
+            let id = self.next_request_id;
+            self.next_request_id = id.checked_add(1).context("MCP request ID exhausted")?;
+            let mut params = if self.modern_protocol {
+                modern_params()
+            } else {
+                json!({})
+            };
+            if let Some(value) = &cursor {
+                params["cursor"] = json!(value);
+            }
+            let response = self.request(id, method, params).await?;
+            if let Some(error) = response.get("error") {
+                if error.get("code").and_then(Value::as_i64) == Some(-32601) {
+                    return Ok(0);
+                }
+                bail!("MCP {method} failed: {error}");
+            }
+            let result = response
+                .get("result")
+                .context("MCP list result is missing")?;
+            let Some(items) = result.get(key) else {
+                if cursor.is_none() {
+                    return Ok(0);
+                }
+                bail!("MCP list page is missing {key}");
+            };
+            let items = items.as_array().context("invalid MCP list")?;
+            for item in items {
+                let name = item
+                    .get(identity)
+                    .and_then(Value::as_str)
+                    .context("MCP list item has no identity")?;
+                ensure!(
+                    !name.is_empty()
+                        && name.len() <= 2_048
+                        && !name.chars().any(char::is_control)
+                        && names.insert(name.to_owned()),
+                    "invalid or duplicate MCP list item"
+                );
+                ensure!(names.len() <= MAX_LIST_ENTRIES, "too many MCP list items");
+            }
+            cursor = result
+                .get("nextCursor")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned);
+            match &cursor {
+                Some(value) => ensure!(cursors.insert(value.clone()), "repeated MCP list cursor"),
+                None => return u32::try_from(names.len()).context("too many MCP list items"),
+            }
+        }
+        bail!("too many MCP list pages")
     }
 
     async fn discover_tools(&mut self) -> Result<Vec<Value>> {

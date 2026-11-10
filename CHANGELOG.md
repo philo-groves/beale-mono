@@ -4,8 +4,19 @@
 
 ### Beale
 
+#### Changed
+
+- Findings now supports an optional attack path with assumptions, evidence, limitations, preconditions, likelihood, impact, steps, and nested reachability details. Protocol 2.10 exposes it; existing records remain readable without a storage migration.
+- Findings now supports optional top-level remediation text through create, update, search, and read. Protocol 2.9 exposes it; older saved findings remain readable without a storage migration.
+- Findings now supports an optional `FindingRootCause` with a summary and typed evidence references. Create and update tools accept it, and protocol 2.8 exposes it without a storage migration.
+- Findings validation now records its method, description, result, limitations, and typed counter-evidence. New validation completions require the method, description, and result; protocol 2.7 exposes these fields while older saved findings remain readable.
+- Findings now stores a summary, multiple surface IDs, and five states under `FindingState`, each with optional typed evidence references. Changing surface IDs requires screening again. App-server schema 42 migrates existing findings, and protocol 2.6 updates the client contract.
+
 #### Added
 
+- Added a separate optional Findings feature with Candidate, Validated, Screened, Reported, and Rejected state objects. Six on-demand tools create, read, update, complete, query, and reject findings with revision checks. Triage-facing PoC details can be drafted only after screening; validation does not require a PoC. App-server schema 41 stores findings separately from Knowledge Base, and protocol 2.5 adds authenticated finding reads.
+- Plugin details now separate skill file counts from MCP inventories. Protocol 2.4 reports scripts, references, assets, prompts, and resources; installed MCP servers discover prompts and resources at launch.
+- Added per-surface threat models with local map anchors, scenario dispositions, typed evidence, related claim IDs, and mapping review revisions. Surfaces gains two on-demand tools; protocol 2.3 adds an authenticated threat-model route. New map references must resolve; existing scenarios retain and flag stale references after mapping edits.
 - V2 sessions now reassert workspace `AGENTS.md` guidance on every turn. Eight tools are available initially: the four host file and shell tools, `webfetch` for JavaScript-free web search and text retrieval, result paging, `get_scope` for rules and top-level surfaces, and `load_plugin_or_feature` for scoped extension guidance. Feature tools and installed plugin skills and MCP tools load on demand; plugin calls pass through session Auto-Review.
 - Canvas now shows open runbooks as closeable squircle tabs with a runbook icon and title. Multiple runbooks retain separate view state, and closing a tab selects a neighboring runbook.
 - Runbook cell output now separates stdout and stderr, colors stderr red, and shows the exit code on the Output row. Protocol v1.66 carries structured cell streams; app-server schema 40 stores them while retaining older output text.
@@ -99,9 +110,12 @@
 - Added a native folder picker beside the v2 New Workspace directory field, preserving manual path entry.
 - Added a centered Add a Surface dialog opened from plus buttons beside the in-scope and out-of-scope surface list headings.
 - Added a confirmation dialog before cancelling a v2 New Workspace draft, with a safe Keep Editing choice and an explicit discard action.
+- Added per-surface mapping files with local elements, flows, gaps, evidence, and revision checks. Surfaces tools can edit mappings and promote an element into a linked surface; workspace manifests migrate to schema 7 and protocol 2.2 adds the mapping route.
 
 #### Changed
 
+- Surface graph nodes now use compact rounded cards with type icons, in-card names and metadata, and revision-colored borders. Related-node spacing accounts for the wider cards.
+- Consolidated the optional Surfaces and Knowledge model tools into explicit read/save and claim-creation operations. All built-in features expose 28 tools when loaded; default sessions still start with eight base tools. Existing storage and evidence gates are unchanged.
 - Beale v2 surfaces now use `id`, a required definition, relationships, and lineage. Definitions and relationships carry typed evidence references; the former parent hierarchy and progress fields are removed. Workspace manifests migrate to schema 6, and the incompatible client contract advances to protocol 2.1.
 - Workspace surfaces now record Candidate, Approved, or Unknown scope review state alongside in-scope/out-of-scope classification. Existing manifests default to Unknown; operator edits and reviewed agent writes become Approved.
 - Auto-Review now checks feature tools, including surface, knowledge, runbook, goal, and graph delegation calls. Guardian can reconsider denials; disabled review leaves agent surface writes Candidate.

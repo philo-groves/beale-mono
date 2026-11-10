@@ -19,7 +19,7 @@ pub const FEATURE_NAME: &str = "Knowledge Base";
 pub const FEATURE_DESCRIPTION: &str =
     "Workspace findings and reusable memories in one searchable Knowledge Base.";
 pub const HAS_PROMPT_EXTENSION: bool = true;
-pub const TOOL_COUNT: u32 = 8;
+pub const TOOL_COUNT: u32 = 6;
 pub const PROMPT_EXTENSION: &str = "## Knowledge Base\n\nSearch the workspace Knowledge Base before creating a memory or security claim. Record reusable system facts, sources, sinks, trust boundaries, controls, methods, prior art, and negative results as memories. A sink or sensitive operation alone is not a security finding. Use a lead for a specific unobserved vulnerability hypothesis. Create or promote an observed finding only with a durable read or bash tool result that directly supports the claimed behavior. Link memories to claims as context, support, or contradiction; a link never advances claim maturity. Reproduction and verification remain unavailable until Knowledge can validate them independently. Keep records concise and use revisions to correct them rather than creating a duplicate.";
 
 const QUERY: &str = "knowledge_query";
@@ -30,6 +30,8 @@ const LEAD_CREATE: &str = "lead_create";
 const FINDING_CREATE: &str = "finding_create";
 const FINDING_REVISE: &str = "finding_revise";
 const FINDING_TRANSITION: &str = "finding_transition";
+const MEMORY_SAVE: &str = "memory_save";
+const CLAIM_CREATE: &str = "claim_create";
 
 pub fn definitions() -> Vec<Value> {
     let evidence = json!({"type":"object","properties":{"tool_call_id":{"type":"string"},"summary":{"type":"string"}},"required":["tool_call_id","summary"],"additionalProperties":false});
@@ -56,19 +58,19 @@ pub fn definitions() -> Vec<Value> {
     memory_edit["expected_revision"] = json!({"type":"integer","minimum":1});
     memory_edit["reason"] = json!({"type":"string"});
     memory_edit["duplicate_of"] = json!({"type":"string"});
+    memory_edit["operation"] = json!({"type":"string","enum":["create","revise"]});
     let mut finding_revise = claim.clone();
     finding_revise["id"] = json!({"type":"string"});
     finding_revise["expected_revision"] = json!({"type":"integer","minimum":1});
     finding_revise["reason"] = json!({"type":"string"});
     finding_revise["duplicate_of"] = json!({"type":"string"});
+    claim["kind"] = json!({"type":"string","enum":["lead","observed"]});
     let transition = json!({"type":"object","properties":{"id":{"type":"string"},"expected_revision":{"type":"integer","minimum":1},"to_stage":{"type":"string","enum":["observed"]},"disposition":{"type":"string","enum":["active","refuted","stale","duplicate"]},"duplicate_of":{"type":"string"},"reason":{"type":"string"},"attacker_control":{"type":"string"},"violated_invariant":{"type":"string"},"observed_behavior":{"type":"string"},"impact":{"type":"string"},"evidence":{"type":"array","items":evidence}},"required":["id","expected_revision","reason"],"additionalProperties":false});
     vec![
         json!({"type":"function","name":QUERY,"description":"Search workspace memories and claims together. A sink is a memory role, never a finding.","parameters":query}),
         json!({"type":"function","name":GET,"description":"Read a memory or claim with evidence, links, and a page of newest-first revision history by short ID.","parameters":{"type":"object","properties":{"id":{"type":"string"},"history_offset":{"type":"integer","minimum":0},"history_limit":{"type":"integer","minimum":1,"maximum":5}},"required":["id"],"additionalProperties":false}}),
-        json!({"type":"function","name":MEMORY_CREATE,"description":"Record a concise reusable memory. Security sinks, sources, invariants, and controls are system-model memories, not findings. Supported memories require a durable read or bash result.","parameters":{"type":"object","properties":memory,"required":["title","category"],"additionalProperties":false}}),
-        json!({"type":"function","name":MEMORY_EDIT,"description":"Correct a memory using its current revision; supplied links replace links, evidence appends. Use a claim tool for a security issue.","parameters":{"type":"object","properties":memory_edit,"required":["id","expected_revision","reason"],"additionalProperties":false}}),
-        json!({"type":"function","name":LEAD_CREATE,"description":"Create an unobserved, testable security claim. A sink alone is not a lead. Search before creating.","parameters":{"type":"object","properties":claim,"required":["title","summary"],"additionalProperties":false}}),
-        json!({"type":"function","name":FINDING_CREATE,"description":"Create an observed security finding with a stated attacker influence, violated boundary or invariant, observed behavior, impact, and durable read or bash evidence. A sensitive operation alone is not a finding.","parameters":{"type":"object","properties":claim,"required":["title","summary","attacker_control","violated_invariant","observed_behavior","impact","evidence"],"additionalProperties":false}}),
+        json!({"type":"function","name":MEMORY_SAVE,"description":"Create or revise a reusable memory. Create requires title and category; revise requires id, expected_revision, and reason. Supplied links replace links; evidence appends.","parameters":{"type":"object","properties":memory_edit,"required":["operation"],"additionalProperties":false}}),
+        json!({"type":"function","name":CLAIM_CREATE,"description":"Create a lead or observed claim. An observed claim requires attacker_control, violated_invariant, observed_behavior, impact, and durable read or bash evidence. A sink alone is not a claim.","parameters":{"type":"object","properties":claim,"required":["kind","title","summary"],"additionalProperties":false}}),
         json!({"type":"function","name":FINDING_REVISE,"description":"Revise claim details without changing evidence maturity; append evidence or set a canonical duplicate.","parameters":{"type":"object","properties":finding_revise,"required":["id","expected_revision","reason"],"additionalProperties":false}}),
         json!({"type":"function","name":FINDING_TRANSITION,"description":"Promote a lead to observed with durable evidence, or mark a claim refuted, stale, duplicate, or active with a reason. Reproduction and verification await Knowledge-owned validation.","parameters":transition}),
     ]
@@ -77,14 +79,7 @@ pub fn definitions() -> Vec<Value> {
 pub fn is_tool(name: &str) -> bool {
     matches!(
         name,
-        QUERY
-            | GET
-            | MEMORY_CREATE
-            | MEMORY_EDIT
-            | LEAD_CREATE
-            | FINDING_CREATE
-            | FINDING_REVISE
-            | FINDING_TRANSITION
+        QUERY | GET | MEMORY_SAVE | CLAIM_CREATE | FINDING_REVISE | FINDING_TRANSITION
     )
 }
 
@@ -222,7 +217,57 @@ pub fn execute(
     pending: &[PendingSource<'_>],
 ) -> Result<String> {
     ensure!(args.is_object(), "arguments must be an object");
-    let result = match name {
+    let action = match name {
+        MEMORY_SAVE => match required(args, "operation")? {
+            "create" => {
+                ensure!(
+                    args.get("id").is_none()
+                        && args.get("expected_revision").is_none()
+                        && args.get("reason").is_none(),
+                    "memory create does not accept revision fields"
+                );
+                required(args, "title")?;
+                required(args, "category")?;
+                MEMORY_CREATE
+            }
+            "revise" => {
+                required(args, "id")?;
+                number(args, "expected_revision")?;
+                required(args, "reason")?;
+                MEMORY_EDIT
+            }
+            _ => bail!("invalid memory operation"),
+        },
+        CLAIM_CREATE => match required(args, "kind")? {
+            "lead" => {
+                required(args, "title")?;
+                required(args, "summary")?;
+                LEAD_CREATE
+            }
+            "observed" => {
+                for key in [
+                    "title",
+                    "summary",
+                    "attacker_control",
+                    "violated_invariant",
+                    "observed_behavior",
+                    "impact",
+                ] {
+                    required(args, key)?;
+                }
+                ensure!(
+                    args.get("evidence")
+                        .and_then(Value::as_array)
+                        .is_some_and(|items| !items.is_empty()),
+                    "observed claim requires evidence"
+                );
+                FINDING_CREATE
+            }
+            _ => bail!("invalid claim kind"),
+        },
+        _ => name,
+    };
+    let result = match action {
         QUERY => {
             let kind = match text(args, "kind").as_deref() {
                 Some("memory") => Some(Kind::Memory),
@@ -268,7 +313,7 @@ pub fn execute(
                 .context("invalid history limit")?,
         )),
         MEMORY_CREATE | LEAD_CREATE | FINDING_CREATE => {
-            let data = if name == MEMORY_CREATE {
+            let data = if action == MEMORY_CREATE {
                 Data::Memory {
                     category: required(args, "category")?.to_owned(),
                     role: text(args, "role").unwrap_or_default(),
@@ -276,7 +321,7 @@ pub fn execute(
                 }
             } else {
                 Data::Claim {
-                    stage: if name == LEAD_CREATE {
+                    stage: if action == LEAD_CREATE {
                         "lead"
                     } else {
                         "observed"
@@ -310,12 +355,12 @@ pub fn execute(
                 .knowledge_get(workspace_id, id)?
                 .context("knowledge record not found")?;
             ensure!(
-                (name == MEMORY_EDIT) == (record.data.kind() == Kind::Memory)
-                    || (name != MEMORY_EDIT && record.data.kind() == Kind::Claim),
+                (action == MEMORY_EDIT) == (record.data.kind() == Kind::Memory)
+                    || (action != MEMORY_EDIT && record.data.kind() == Kind::Claim),
                 "wrong knowledge record kind"
             );
             let expected = number(args, "expected_revision")?;
-            if name == FINDING_TRANSITION {
+            if action == FINDING_TRANSITION {
                 if let Some(stage) = text(args, "to_stage") {
                     ensure!(
                         stage == "observed"
@@ -535,12 +580,18 @@ mod tests {
         }])
         .unwrap();
         assert_eq!(definitions().len(), TOOL_COUNT as usize);
-        let memory: Value = serde_json::from_str(&execute(&db,"workspace-example","session-example",MEMORY_CREATE,&json!({"title":"Example sensitive sink","category":"system_model","role":"sink","summary":"An operation that can change trust state"}),&[]).unwrap()).unwrap();
+        assert!(!is_tool(MEMORY_CREATE));
+        assert!(!is_tool(LEAD_CREATE));
+        let memory: Value = serde_json::from_str(&execute(&db,"workspace-example","session-example",MEMORY_SAVE,&json!({"operation":"create","title":"Example sensitive sink","category":"system_model","role":"sink","summary":"An operation that can change trust state"}),&[]).unwrap()).unwrap();
         assert_eq!(memory["record"]["id"], "M1");
         assert_eq!(memory["record"]["kind"], "memory");
-        let lead: Value = serde_json::from_str(&execute(&db,"workspace-example","session-example",LEAD_CREATE,&json!({"title":"Example authorization candidate","summary":"A boundary may be crossed"}),&[]).unwrap()).unwrap();
+        let revised: Value = serde_json::from_str(&execute(&db,"workspace-example","session-example",MEMORY_SAVE,&json!({"operation":"revise","id":"M1","expected_revision":1,"reason":"Clarify behavior","summary":"An example operation changes trust state"}),&[]).unwrap()).unwrap();
+        assert_eq!(revised["record"]["revision"], 2);
+        assert!(execute(&db,"workspace-example","session-example",MEMORY_SAVE,&json!({"operation":"revise","id":"M1","expected_revision":1,"reason":"Stale edit","summary":"Outdated text"}),&[]).is_err());
+        let lead: Value = serde_json::from_str(&execute(&db,"workspace-example","session-example",CLAIM_CREATE,&json!({"kind":"lead","title":"Example authorization candidate","summary":"A boundary may be crossed"}),&[]).unwrap()).unwrap();
         assert_eq!(lead["record"]["id"], "C1");
         assert_eq!(lead["record"]["status"], "lead");
+        assert!(execute(&db,"workspace-example","session-example",CLAIM_CREATE,&json!({"kind":"observed","title":"Example finding","summary":"Observed behavior","attacker_control":"Input","violated_invariant":"Boundary","observed_behavior":"Response","impact":"Disclosure"}),&[]).is_err());
         let query: Value = serde_json::from_str(
             &execute(
                 &db,

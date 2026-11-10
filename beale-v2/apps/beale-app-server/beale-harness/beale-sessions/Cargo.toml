@@ -11,6 +11,7 @@ goal-mode = ["dep:beale-goals"]
 graphs = ["dep:beale-graphs"]
 surfaces = ["dep:beale-surfaces"]
 knowledge = ["dep:beale-knowledge"]
+findings = ["dep:beale-findings"]
 runbooks = ["dep:beale-runbooks"]
 
 [dependencies]
@@ -21,6 +22,7 @@ beale-extender = { path = "../beale-extender" }
 beale-goals = { path = "../../../../extensions/features/beale-goals", optional = true }
 beale-graphs = { path = "../../../../extensions/features/beale-graphs", optional = true }
 beale-knowledge = { path = "../../../../extensions/features/beale-knowledge", optional = true }
+beale-findings = { path = "../../../../extensions/features/beale-findings", optional = true }
 beale-runbooks = { path = "../../../../extensions/features/beale-runbooks", optional = true }
 beale-surfaces = { path = "../../../../extensions/features/beale-surfaces", optional = true }
 beale-providers = { path = "../beale-providers" }

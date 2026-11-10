@@ -1,5 +1,6 @@
 //! Versioned client-to-host wire contracts. No host-only types belong here.
 
+pub mod findings;
 pub mod knowledge;
 pub mod runbooks;
 
@@ -352,6 +353,8 @@ pub mod v1 {
         pub type_id: String,
         #[prost(message, repeated, tag = "4")]
         pub evidence_refs: Vec<SurfaceEvidence>,
+        #[prost(string, tag = "5")]
+        pub source_element_id: String,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -499,6 +502,209 @@ pub mod v1 {
         pub relationships: Vec<SurfaceRelationship>,
         #[prost(message, repeated, tag = "4")]
         pub lineage: Vec<SurfaceRevision>,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum SurfaceMapCategory {
+        Unspecified = 0,
+        Component = 1,
+        Interface = 2,
+        Behavior = 3,
+        State = 4,
+        Control = 5,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum SurfaceMapBasis {
+        Unspecified = 0,
+        Observed = 1,
+        Reported = 2,
+        Inferred = 3,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum SurfaceMapFlowKind {
+        Unspecified = 0,
+        Call = 1,
+        Data = 2,
+        Control = 3,
+        Event = 4,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum SurfaceMapGapReason {
+        Unspecified = 0,
+        NotExamined = 1,
+        Unavailable = 2,
+        Ambiguous = 3,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct SurfaceMapElement {
+        #[prost(string, tag = "1")]
+        pub id: String,
+        #[prost(enumeration = "SurfaceMapCategory", tag = "2")]
+        pub category: i32,
+        #[prost(string, tag = "3")]
+        pub type_id: String,
+        #[prost(string, tag = "4")]
+        pub name: String,
+        #[prost(message, optional, tag = "5")]
+        pub locator: Option<SurfaceLocator>,
+        #[prost(string, tag = "6")]
+        pub observation: String,
+        #[prost(enumeration = "SurfaceMapBasis", tag = "7")]
+        pub basis: i32,
+        #[prost(uint64, tag = "8")]
+        pub observed_at_ms: u64,
+        #[prost(message, repeated, tag = "9")]
+        pub evidence_refs: Vec<SurfaceEvidence>,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct SurfaceMapFlow {
+        #[prost(string, tag = "1")]
+        pub id: String,
+        #[prost(string, tag = "2")]
+        pub from_element_id: String,
+        #[prost(string, tag = "3")]
+        pub to_element_id: String,
+        #[prost(enumeration = "SurfaceMapFlowKind", tag = "4")]
+        pub kind: i32,
+        #[prost(string, tag = "5")]
+        pub observation: String,
+        #[prost(enumeration = "SurfaceMapBasis", tag = "6")]
+        pub basis: i32,
+        #[prost(message, repeated, tag = "7")]
+        pub evidence_refs: Vec<SurfaceEvidence>,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct SurfaceMapGap {
+        #[prost(string, tag = "1")]
+        pub id: String,
+        #[prost(string, tag = "2")]
+        pub element_id: String,
+        #[prost(string, tag = "3")]
+        pub question: String,
+        #[prost(enumeration = "SurfaceMapGapReason", tag = "4")]
+        pub reason: i32,
+        #[prost(message, repeated, tag = "5")]
+        pub evidence_refs: Vec<SurfaceEvidence>,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct WorkspaceSurfaceMapping {
+        #[prost(string, tag = "1")]
+        pub surface_id: String,
+        #[prost(uint64, tag = "2")]
+        pub revision: u64,
+        #[prost(message, repeated, tag = "3")]
+        pub elements: Vec<SurfaceMapElement>,
+        #[prost(message, repeated, tag = "4")]
+        pub flows: Vec<SurfaceMapFlow>,
+        #[prost(message, repeated, tag = "5")]
+        pub gaps: Vec<SurfaceMapGap>,
+        #[prost(uint64, tag = "6")]
+        pub next_element_number: u64,
+        #[prost(uint64, tag = "7")]
+        pub next_flow_number: u64,
+        #[prost(uint64, tag = "8")]
+        pub next_gap_number: u64,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct UpdateWorkspaceSurfaceMappingRequest {
+        #[prost(uint64, tag = "1")]
+        pub expected_revision: u64,
+        #[prost(message, repeated, tag = "2")]
+        pub elements: Vec<SurfaceMapElement>,
+        #[prost(message, repeated, tag = "3")]
+        pub flows: Vec<SurfaceMapFlow>,
+        #[prost(message, repeated, tag = "4")]
+        pub gaps: Vec<SurfaceMapGap>,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum SurfaceThreatMapRefKind {
+        Unspecified = 0,
+        Element = 1,
+        Flow = 2,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum SurfaceThreatDisposition {
+        Unspecified = 0,
+        Open = 1,
+        Dismissed = 2,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct SurfaceThreatMapRef {
+        #[prost(enumeration = "SurfaceThreatMapRefKind", tag = "1")]
+        pub kind: i32,
+        #[prost(string, tag = "2")]
+        pub id: String,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct SurfaceThreatScenario {
+        #[prost(string, tag = "1")]
+        pub id: String,
+        #[prost(string, tag = "2")]
+        pub title: String,
+        #[prost(message, repeated, tag = "3")]
+        pub map_refs: Vec<SurfaceThreatMapRef>,
+        #[prost(string, tag = "4")]
+        pub attacker_position: String,
+        #[prost(string, repeated, tag = "5")]
+        pub preconditions: Vec<String>,
+        #[prost(string, tag = "6")]
+        pub suspected_failure: String,
+        #[prost(string, tag = "7")]
+        pub invariant_at_risk: String,
+        #[prost(string, tag = "8")]
+        pub potential_impact: String,
+        #[prost(string, tag = "9")]
+        pub validation_question: String,
+        #[prost(message, repeated, tag = "10")]
+        pub evidence_refs: Vec<SurfaceEvidence>,
+        #[prost(enumeration = "SurfaceThreatDisposition", tag = "11")]
+        pub disposition: i32,
+        #[prost(string, tag = "12")]
+        pub disposition_reason: String,
+        #[prost(string, repeated, tag = "13")]
+        pub related_claim_ids: Vec<String>,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct WorkspaceSurfaceThreatModel {
+        #[prost(string, tag = "1")]
+        pub surface_id: String,
+        #[prost(uint64, tag = "2")]
+        pub revision: u64,
+        #[prost(uint64, tag = "3")]
+        pub reviewed_mapping_revision: u64,
+        #[prost(message, repeated, tag = "4")]
+        pub scenarios: Vec<SurfaceThreatScenario>,
+        #[prost(uint64, tag = "5")]
+        pub next_scenario_number: u64,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct UpdateWorkspaceSurfaceThreatModelRequest {
+        #[prost(uint64, tag = "1")]
+        pub expected_revision: u64,
+        #[prost(uint64, tag = "2")]
+        pub reviewed_mapping_revision: u64,
+        #[prost(message, repeated, tag = "3")]
+        pub scenarios: Vec<SurfaceThreatScenario>,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1093,6 +1299,16 @@ pub mod v1 {
         pub workspace_ids: Vec<String>,
         #[prost(bool, tag = "9")]
         pub all_workspaces: bool,
+        #[prost(uint32, tag = "10")]
+        pub script_count: u32,
+        #[prost(uint32, tag = "11")]
+        pub reference_count: u32,
+        #[prost(uint32, tag = "12")]
+        pub asset_count: u32,
+        #[prost(uint32, tag = "13")]
+        pub mcp_prompt_count: u32,
+        #[prost(uint32, tag = "14")]
+        pub mcp_resource_count: u32,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1333,7 +1549,7 @@ pub mod v1 {
 }
 
 pub const PROTOCOL_MAJOR: u32 = 2;
-pub const PROTOCOL_MINOR: u32 = 1;
+pub const PROTOCOL_MINOR: u32 = 10;
 pub const SERVICE_NAME: &str = "beale-app-server";
 pub const HEALTH_PATH: &str = "/v1/health";
 pub const AUTH_STATUS_PATH: &str = "/v1/providers/status";
@@ -1357,6 +1573,10 @@ pub const WORKSPACE_DETAILS_PATH: &str = "/v1/workspaces/{id}";
 pub const WORKSPACE_CAMPAIGN_PATH: &str = "/v1/workspaces/{id}/campaign";
 pub const WORKSPACE_FOUNDATION_PATH: &str = "/v1/workspaces/{id}/foundation";
 pub const WORKSPACE_SURFACES_PATH: &str = "/v1/workspaces/{id}/surfaces";
+pub const WORKSPACE_SURFACE_MAPPING_PATH: &str =
+    "/v1/workspaces/{id}/surfaces/{surface_id}/mapping";
+pub const WORKSPACE_SURFACE_THREAT_MODEL_PATH: &str =
+    "/v1/workspaces/{id}/surfaces/{surface_id}/threat-model";
 pub const WORKSPACE_RULES_PATH: &str = "/v1/workspaces/{id}/rules";
 pub const SESSIONS_PATH: &str = "/v1/sessions";
 pub const SESSION_DETAIL_PATH: &str = "/v1/sessions/{id}";

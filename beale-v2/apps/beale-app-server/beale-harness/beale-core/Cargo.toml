@@ -6,7 +6,8 @@ rust-version.workspace = true
 license.workspace = true
 
 [features]
-default = ["goal-mode", "fleet", "graphs", "tracking", "surfaces", "knowledge", "runbooks"]
+default = ["goal-mode", "fleet", "graphs", "tracking", "surfaces", "knowledge", "findings", "runbooks"]
+findings = ["beale-sessions/findings", "dep:beale-findings"]
 knowledge = ["beale-sessions/knowledge", "dep:beale-knowledge"]
 runbooks = ["beale-sessions/runbooks", "dep:beale-runbooks"]
 surfaces = ["beale-sessions/surfaces", "dep:beale-surfaces"]
@@ -21,6 +22,7 @@ axum.workspace = true
 beale-contracts = { path = "../beale-contracts" }
 beale-extender = { path = "../beale-extender" }
 beale-fleet = { path = "../../../../extensions/features/beale-fleet", optional = true }
+beale-findings = { path = "../../../../extensions/features/beale-findings", optional = true }
 beale-graphs = { path = "../../../../extensions/features/beale-graphs", optional = true }
 beale-goals = { path = "../../../../extensions/features/beale-goals", optional = true }
 beale-knowledge = { path = "../../../../extensions/features/beale-knowledge", optional = true }

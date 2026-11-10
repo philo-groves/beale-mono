@@ -114,6 +114,19 @@ fn knowledge_feature_enabled(_db: &HostDatabase, _workspace_id: &str) -> Result<
     Ok(false)
 }
 
+#[cfg(feature = "findings")]
+fn findings_feature_enabled(db: &HostDatabase, workspace_id: &str) -> Result<bool, StatusCode> {
+    db.feature_enabled(beale_findings::FEATURE_ID)
+        .and_then(|enabled| {
+            if enabled {
+                db.extension_applies_to("feature", beale_findings::FEATURE_ID, workspace_id)
+            } else {
+                Ok(false)
+            }
+        })
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
 #[cfg(feature = "runbooks")]
 fn runbook_feature_enabled(db: &HostDatabase, workspace_id: &str) -> Result<bool, StatusCode> {
     db.feature_enabled(beale_runbooks::FEATURE_ID)
@@ -241,6 +254,10 @@ fn feature_tool_requires_review(name: &str) -> bool {
     }
     #[cfg(feature = "knowledge")]
     if beale_knowledge::is_tool(name) {
+        return true;
+    }
+    #[cfg(feature = "findings")]
+    if beale_findings::is_tool(name) {
         return true;
     }
     #[cfg(feature = "runbooks")]
@@ -1646,6 +1663,8 @@ async fn run_one_turn(
     let workspace_details = state.workspaces.details_for_host(&request.workspace_id)?;
     let surface_tools_enabled = surface_feature_enabled(&state.db, &request.workspace_id)?;
     let knowledge_tools_enabled = knowledge_feature_enabled(&state.db, &request.workspace_id)?;
+    #[cfg(feature = "findings")]
+    let findings_tools_enabled = findings_feature_enabled(&state.db, &request.workspace_id)?;
     #[cfg(feature = "runbooks")]
     let runbook_tools_enabled = runbook_feature_enabled(&state.db, &request.workspace_id)?;
     #[cfg(not(feature = "knowledge"))]
@@ -1767,6 +1786,13 @@ async fn run_one_turn(
         available_features.push((
             beale_knowledge::FEATURE_ID,
             "Use to search or record workspace memories, leads, and evidence-backed findings.",
+        ));
+    }
+    #[cfg(feature = "findings")]
+    if findings_tools_enabled {
+        available_features.push((
+            beale_findings::FEATURE_ID,
+            "Use to track candidate findings through validation, screening, and reporting.",
         ));
     }
     #[cfg(feature = "runbooks")]
@@ -2127,7 +2153,7 @@ async fn run_one_turn(
                         let result = async {
                         let request_args: LoadExtensionArgs = serde_json::from_value(args)?;
                         match request_args.kind {
-                            #[cfg(any(feature = "surfaces", feature = "knowledge", feature = "runbooks", feature = "goal-mode", feature = "graphs"))]
+                            #[cfg(any(feature = "surfaces", feature = "knowledge", feature = "findings", feature = "runbooks", feature = "goal-mode", feature = "graphs"))]
                             ExtensionKind::Feature => {
                                 anyhow::ensure!(available_features.iter().any(|(id, _)| *id == request_args.id), "feature is unavailable in this workspace");
                                 let (tools, guidance) = match request_args.id.as_str() {
@@ -2135,6 +2161,8 @@ async fn run_one_turn(
                                     beale_surfaces::FEATURE_ID => (beale_surfaces::definitions(), beale_surfaces::PROMPT_EXTENSION.to_owned()),
                                     #[cfg(feature = "knowledge")]
                                     beale_knowledge::FEATURE_ID => (beale_knowledge::definitions(), beale_knowledge::PROMPT_EXTENSION.to_owned()),
+                                    #[cfg(feature = "findings")]
+                                    beale_findings::FEATURE_ID => (beale_findings::definitions(), beale_findings::PROMPT_EXTENSION.to_owned()),
                                     #[cfg(feature = "runbooks")]
                                     beale_runbooks::FEATURE_ID => (beale_runbooks::definitions(), beale_runbooks::PROMPT_EXTENSION.to_owned()),
                                     #[cfg(feature = "goal-mode")]
@@ -2148,7 +2176,7 @@ async fn run_one_turn(
                                 }
                                 Ok::<_, anyhow::Error>(json!({"feature":request_args.id,"instructions":guidance,"tools":tools}).to_string())
                             }
-                            #[cfg(not(any(feature = "surfaces", feature = "knowledge", feature = "runbooks", feature = "goal-mode", feature = "graphs")))]
+                            #[cfg(not(any(feature = "surfaces", feature = "knowledge", feature = "findings", feature = "runbooks", feature = "goal-mode", feature = "graphs")))]
                             ExtensionKind::Feature => anyhow::bail!("feature is unavailable"),
                             ExtensionKind::Plugin => {
                                 let details = state.plugins.details(&request_args.id, &request.workspace_id).await?;
@@ -2290,6 +2318,33 @@ async fn run_one_turn(
                         ) {
                             Ok(value) => (value, false),
                             Err(error) => (format!("Knowledge tool error: {error}"), true),
+                        }
+                    }
+                    #[cfg(feature = "findings")]
+                    Ok(args)
+                        if loaded_features.contains(beale_findings::FEATURE_ID)
+                            && findings_tools_enabled
+                            && beale_findings::is_tool(&call.name) =>
+                    {
+                        let pending = tool_rows
+                            .iter()
+                            .map(|row| beale_findings::PendingSource {
+                                id: &row.id,
+                                name: &row.name,
+                                output: &row.output,
+                                is_error: row.is_error,
+                            })
+                            .collect::<Vec<_>>();
+                        match beale_findings::execute(
+                            &state.db,
+                            &request.workspace_id,
+                            &session.id,
+                            &call.name,
+                            &args,
+                            &pending,
+                        ) {
+                            Ok(value) => (value, false),
+                            Err(error) => (format!("Findings tool error: {error}"), true),
                         }
                     }
                     #[cfg(feature = "surfaces")]
@@ -2652,16 +2707,17 @@ mod tests {
     #[test]
     fn feature_tools_require_review_without_double_reviewing_base_tools() {
         #[cfg(feature = "surfaces")]
-        for name in [
-            beale_surfaces::ADD,
-            beale_surfaces::EDIT,
-            beale_surfaces::GET,
-            beale_surfaces::QUERY,
-        ] {
-            assert!(feature_tool_requires_review(name));
+        for tool in beale_surfaces::definitions() {
+            assert!(feature_tool_requires_review(tool["name"].as_str().unwrap()));
         }
         #[cfg(feature = "knowledge")]
-        assert!(feature_tool_requires_review("knowledge_query"));
+        for tool in beale_knowledge::definitions() {
+            assert!(feature_tool_requires_review(tool["name"].as_str().unwrap()));
+        }
+        #[cfg(feature = "findings")]
+        for tool in beale_findings::definitions() {
+            assert!(feature_tool_requires_review(tool["name"].as_str().unwrap()));
+        }
         #[cfg(feature = "runbooks")]
         assert!(feature_tool_requires_review(beale_runbooks::RUN));
         #[cfg(feature = "goal-mode")]
@@ -2681,6 +2737,29 @@ mod tests {
         ] {
             assert!(!feature_tool_requires_review(name));
         }
+    }
+
+    #[cfg(all(
+        feature = "surfaces",
+        feature = "knowledge",
+        feature = "findings",
+        feature = "runbooks",
+        feature = "graphs",
+        feature = "goal-mode"
+    ))]
+    #[test]
+    fn built_in_tool_budget_stays_within_target() {
+        let base = beale_tools::definitions().len();
+        assert_eq!(base, 8);
+        let all = base
+            + beale_surfaces::definitions().len()
+            + beale_knowledge::definitions().len()
+            + beale_findings::definitions().len()
+            + beale_runbooks::definitions().len()
+            + beale_graphs::TOOL_COUNT as usize
+            + beale_goals::TOOL_COUNT as usize;
+        assert_eq!(all, 34);
+        assert!((15..=36).contains(&all));
     }
 
     #[test]

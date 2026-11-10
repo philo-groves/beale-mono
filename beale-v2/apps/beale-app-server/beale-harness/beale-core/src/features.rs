@@ -26,7 +26,12 @@ struct FeatureSpec {
     tool_names: Vec<String>,
 }
 
-#[cfg(any(feature = "surfaces", feature = "knowledge", feature = "runbooks"))]
+#[cfg(any(
+    feature = "surfaces",
+    feature = "knowledge",
+    feature = "findings",
+    feature = "runbooks"
+))]
 fn definition_names(definitions: Vec<serde_json::Value>) -> Vec<String> {
     definitions
         .iter()
@@ -95,6 +100,16 @@ fn feature_specs() -> Vec<FeatureSpec> {
             tool_count: beale_knowledge::TOOL_COUNT,
             prompt_extension: beale_knowledge::PROMPT_EXTENSION,
             tool_names: definition_names(beale_knowledge::definitions()),
+        },
+        #[cfg(feature = "findings")]
+        FeatureSpec {
+            id: beale_findings::FEATURE_ID,
+            name: beale_findings::FEATURE_NAME,
+            description: beale_findings::FEATURE_DESCRIPTION,
+            has_prompt_extension: beale_findings::HAS_PROMPT_EXTENSION,
+            tool_count: beale_findings::TOOL_COUNT,
+            prompt_extension: beale_findings::PROMPT_EXTENSION,
+            tool_names: definition_names(beale_findings::definitions()),
         },
         #[cfg(feature = "runbooks")]
         FeatureSpec {
@@ -384,7 +399,7 @@ mod tests {
                 .find(|feature| feature.id == beale_surfaces::FEATURE_ID)
                 .unwrap();
             assert!(!surfaces.enabled);
-            assert_eq!(surfaces.tool_count, 4);
+            assert_eq!(surfaces.tool_count, beale_surfaces::TOOL_COUNT);
         }
         #[cfg(feature = "graphs")]
         {
