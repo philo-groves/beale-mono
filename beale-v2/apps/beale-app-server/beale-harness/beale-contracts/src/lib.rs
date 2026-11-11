@@ -1,7 +1,6 @@
 //! Versioned client-to-host wire contracts. No host-only types belong here.
 
 pub mod findings;
-pub mod knowledge;
 pub mod memories;
 pub mod runbooks;
 
@@ -1550,7 +1549,7 @@ pub mod v1 {
 }
 
 pub const PROTOCOL_MAJOR: u32 = 2;
-pub const PROTOCOL_MINOR: u32 = 12;
+pub const PROTOCOL_MINOR: u32 = 13;
 pub const SERVICE_NAME: &str = "beale-app-server";
 pub const HEALTH_PATH: &str = "/v1/health";
 pub const AUTH_STATUS_PATH: &str = "/v1/providers/status";

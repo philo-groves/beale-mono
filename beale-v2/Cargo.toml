@@ -13,7 +13,6 @@ members = [
     "extensions/features/beale-fleet",
     "extensions/features/beale-goals",
     "extensions/features/beale-graphs",
-    "extensions/features/beale-knowledge",
     "extensions/features/beale-findings",
     "extensions/features/beale-memories",
     "extensions/features/beale-runbooks",

@@ -159,12 +159,6 @@ pub(crate) static WORKSPACE_SURFACES: Icon = Icon {
     body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M5 6h14M5 6l7 12M19 6l-7 12"/><circle cx="5" cy="6" r="2.5" fill="currentColor"/><circle cx="19" cy="6" r="2.5" fill="currentColor"/><circle cx="12" cy="18" r="2.5" fill="currentColor"/>"#,
 };
 
-pub(crate) static WORKSPACE_KNOWLEDGE: Icon = Icon {
-    name: "beale-workspace-knowledge",
-    view: 24.0,
-    body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M7 3h11a2 2 0 0 1 2 2v16H7a3 3 0 0 1-3-3V6a3 3 0 0 1 3-3ZM4 18a3 3 0 0 1 3-3h13M9 7h7M9 10h5"/>"#,
-};
-
 pub(crate) static FLEET: Icon = Icon {
     name: "lucide-server",
     view: 24.0,
@@ -435,7 +429,7 @@ mod tests {
         AUTOMATION_ACTIVE, AUTOMATION_SCHEDULE, AUTOMATIONS_FILLED, CANVAS, CANVAS_FILLED,
         EXTENSIONS_FILLED, FLEET_APPLE, FLEET_FILLED, FLEET_LINUX, FLEET_WINDOWS, HOME_FILLED,
         PLUGIN_META, RUNBOOK, SESSION_CACHE_RATE, SESSION_TOKENS, SETTINGS_FILLED,
-        WORKSPACE_KNOWLEDGE, WORKSPACE_SURFACES,
+        WORKSPACE_SURFACES,
     };
 
     #[test]
@@ -481,12 +475,9 @@ mod tests {
     }
 
     #[test]
-    fn workspace_tab_icons_are_distinct_at_button_size() {
+    fn workspace_surfaces_icon_rasterizes_at_button_size() {
         let surfaces = rune::text::icon_coverage(&WORKSPACE_SURFACES, 17);
-        let knowledge = rune::text::icon_coverage(&WORKSPACE_KNOWLEDGE, 17);
         assert!(surfaces.iter().filter(|&&pixel| pixel > 0).count() > 20);
-        assert!(knowledge.iter().filter(|&&pixel| pixel > 0).count() > 20);
-        assert_ne!(surfaces, knowledge);
     }
 
     #[test]

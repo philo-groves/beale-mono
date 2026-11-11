@@ -6,7 +6,7 @@
 
 #### Changed
 
-- Findings tools now use distinct `findings_*` names while the older Knowledge Base remains available. Update advertises typed patch fields; query pages through results, and read omits revision snapshots unless requested. App-server schema 43 moves finding revisions into a separate table without losing history or limiting later edits. Protocol 2.11 updates the read contract.
+- Findings tools use distinct `findings_*` names. Update advertises typed patch fields; query pages through results, and read omits revision snapshots unless requested. App-server schema 43 moves finding revisions into a separate table without losing history or limiting later edits. Protocol 2.11 updates the read contract.
 - Findings now supports an optional attack path with assumptions, evidence, limitations, preconditions, likelihood, impact, steps, and nested reachability details. Protocol 2.10 exposes it; existing records remain readable without a storage migration.
 - Findings now supports optional top-level remediation text through create, update, search, and read. Protocol 2.9 exposes it; older saved findings remain readable without a storage migration.
 - Findings now supports an optional `FindingRootCause` with a summary and typed evidence references. Create and update tools accept it, and protocol 2.8 exposes it without a storage migration.
@@ -15,8 +15,8 @@
 
 #### Added
 
-- Added optional v2 Memories with four read-only agent tools for session transcript search, memory search, record detail, and bounded graph traversal. The app-server queues completed main and subagent turns, extracts structured memories with the default small model, and commits revisions to a separate `memories.sqlite`. Schema 44 preserves child transcript items and a durable turn-end outbox; protocol 2.12 adds authenticated memory status, retry, and disabled-workspace clear routes. Existing Knowledge Base records remain separate during the transition.
-- Added a separate optional Findings feature with Candidate, Validated, Screened, Reported, and Rejected state objects. Six on-demand tools create, read, update, complete, query, and reject findings with revision checks. Triage-facing PoC details can be drafted only after screening; validation does not require a PoC. App-server schema 41 stores findings separately from Knowledge Base, and protocol 2.5 adds authenticated finding reads.
+- Added optional v2 Memories with four read-only agent tools for session transcript search, memory search, record detail, and bounded graph traversal. The app-server queues completed main and subagent turns, extracts structured memories with the default small model, and commits revisions to a separate `memories.sqlite`. Schema 44 preserves child transcript items and a durable turn-end outbox; protocol 2.12 adds authenticated memory status, retry, and disabled-workspace clear routes.
+- Added a separate optional Findings feature with Candidate, Validated, Screened, Reported, and Rejected state objects. Six on-demand tools create, read, update, complete, query, and reject findings with revision checks. Triage-facing PoC details can be drafted only after screening; validation does not require a PoC. App-server schema 41 stores findings, and protocol 2.5 adds authenticated finding reads.
 - Plugin details now separate skill file counts from MCP inventories. Protocol 2.4 reports scripts, references, assets, prompts, and resources; installed MCP servers discover prompts and resources at launch.
 - Added per-surface threat models with local map anchors, scenario dispositions, typed evidence, related claim IDs, and mapping review revisions. Surfaces gains two on-demand tools; protocol 2.3 adds an authenticated threat-model route. New map references must resolve; existing scenarios retain and flag stale references after mapping edits.
 - V2 sessions now reassert workspace `AGENTS.md` guidance on every turn. Eight tools are available initially: the four host file and shell tools, `webfetch` for JavaScript-free web search and text retrieval, result paging, `get_scope` for rules and top-level surfaces, and `load_plugin_or_feature` for scoped extension guidance. Feature tools and installed plugin skills and MCP tools load on demand; plugin calls pass through session Auto-Review.
@@ -35,7 +35,6 @@
 - Added a content-sized inset V2 session sidenav card with a header toggle, slide animation, automatic reveal after the first successful campaign creation or subagent delegation, a duration counter, and icon rows for session tokens and cache usage with muted right-aligned stats. The cache rate uses reported cached input over input from calls with cache telemetry and displays one decimal place. App-server schema 33 and protocol v1.56 expose saved main and subagent usage. Opening Canvas closes the sidenav; Canvas also slides into view.
 - Added an empty app-global Canvas in the V2 desktop. A rounded rectangle and plus button beside the window controls toggles the right pane, with outline and filled states; it stays open while changing views and shares the window width with the main content.
 - Added the optional V2 Runbooks feature, disabled by default, with workspace-owned, revisioned Markdown and per-cell multi-language code documents. Four model tools create, edit, get, and query runbooks; authenticated read routes expose the shared JSON contract. App-server SQLite schema 32 and protocol v1.54 add the storage and client boundary. Runbook execution is not available in this first slice.
-- Added the optional V2 Knowledge Base feature with workspace-owned memories, leads, and evidence-gated observed findings. One search and detail path covers both record kinds; short IDs, revision history, links, duplicate relationships, and host-validated read/bash evidence keep reusable context distinct from security claims. Host database schema 31 and protocol v1.53 add the storage and JSON client contract. Reproduced and verified stages remain unavailable until Knowledge owns a qualifying verifier.
 - Added the optional Surfaces feature, disabled by default, with four model tools for adding, editing, getting, and querying workspace surfaces. The app-server records timestamped revisions with before and after values and retains deleted surface lineage in schema 5; protocol v1.52 exposes this history.
 - Expanded v2 surface definitions with validated specific types, typed locators, names, parent links, descriptions, scope basis, provenance, and typed connections. Custom Instructions imports carry this context through workspace creation; selected nodes and session context display it with its source.
 - Added a v2 workspace surface network with type icons, hover labels, and labeled connections between any surfaces. Protocol v1.50 introduced surface identities and relationships in workspace manifests; older manifests load with defaults.
@@ -226,6 +225,10 @@
 - Made the Home sidenav's Workspaces heading a dropdown with an empty Tasks selection, a plus button beside the selector, and a bordered search control at the far right.
 - Showed an active italic New Session row beneath the selected research workspace in the Home sidenav, reopening the same draft without duplicating it.
 - Opened the v2 desktop on Home and centered a no-workspace-selected message in its content area.
+
+#### Removed
+
+- Removed the unused v2 Knowledge Base feature, its six model tools, host routes, desktop workspace tab, and storage contract. Findings and Memories remain separate optional features. Protocol 2.13 removes the Knowledge Base client endpoints; new app-server databases no longer create its tables.
 
 #### Fixed
 

@@ -11,7 +11,7 @@ use crate::{
     FormSpec, SelectionMenu, State, ThemeStyle, ViewLocation, form_button,
     form_controls::icon_action_button,
     form_label_font,
-    icons::{PEN, PLUS, SAFETY, SETTINGS, TARGET, TRASH, WORKSPACE_KNOWLEDGE, WORKSPACE_SURFACES},
+    icons::{PEN, PLUS, SAFETY, SETTINGS, TARGET, TRASH, WORKSPACE_SURFACES},
     modal_dialog, selection_button, settings_form, settings_form_card, settings_form_with_action,
     toggle_selection_menu, ui_font, view_title_font,
     workspace_creation::{
@@ -23,7 +23,6 @@ use crate::{
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum WorkspaceTab {
     Campaign,
-    Knowledge,
     Foundation,
     Surfaces,
     #[default]
@@ -31,17 +30,11 @@ pub(crate) enum WorkspaceTab {
 }
 
 impl WorkspaceTab {
-    const ALL: [Self; 4] = [
-        Self::Knowledge,
-        Self::Surfaces,
-        Self::Rules,
-        Self::Foundation,
-    ];
+    const ALL: [Self; 3] = [Self::Surfaces, Self::Rules, Self::Foundation];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Campaign => "Campaign",
-            Self::Knowledge => "Knowledge",
             Self::Surfaces => "Surfaces",
             Self::Rules => "Rules",
             Self::Foundation => "Settings",
@@ -51,7 +44,6 @@ impl WorkspaceTab {
     fn key(self) -> &'static str {
         match self {
             Self::Campaign => "workspace-tab-campaign",
-            Self::Knowledge => "workspace-tab-knowledge",
             Self::Surfaces => "workspace-tab-surfaces",
             Self::Rules => "workspace-tab-rules",
             Self::Foundation => "workspace-tab-settings",
@@ -63,7 +55,6 @@ fn tab_button(tab: WorkspaceTab, selected: bool, id: uuid::Uuid, theme: ThemeSty
     let color = |value| theme.color(value);
     let tab_icon = match tab {
         WorkspaceTab::Surfaces => &WORKSPACE_SURFACES,
-        WorkspaceTab::Knowledge => &WORKSPACE_KNOWLEDGE,
         WorkspaceTab::Campaign => &TARGET,
         WorkspaceTab::Foundation => &SETTINGS,
         WorkspaceTab::Rules => &SAFETY,
@@ -1909,11 +1900,6 @@ pub(crate) fn render(
         {
             continue;
         }
-        if tab == WorkspaceTab::Knowledge
-            && !crate::extensions_view::knowledge_enabled(state, &id.to_string())
-        {
-            continue;
-        }
         tabs = tabs.child(tab_button(tab, state.workspace_tab == tab, id, theme));
     }
     let header = row()
@@ -1964,9 +1950,6 @@ pub(crate) fn render(
                 ),
         );
     }
-    if state.workspace_tab == WorkspaceTab::Knowledge {
-        return page.child(crate::knowledge_view::render(state, theme));
-    }
     let details = state.workspace_details.as_ref().filter(|details| {
         details
             .summary
@@ -1979,7 +1962,6 @@ pub(crate) fn render(
             WorkspaceTab::Rules => rules(state, theme),
             WorkspaceTab::Foundation => vec![foundation(state, details, theme)],
             WorkspaceTab::Campaign => Vec::new(),
-            WorkspaceTab::Knowledge => Vec::new(),
         };
         for form in forms {
             page = page.child(form);
@@ -1992,7 +1974,6 @@ pub(crate) fn render(
             WorkspaceTab::Surfaces => state.workspace_surface_edits != details.surfaces,
             WorkspaceTab::Rules => state.workspace_rule_edits != details.rules,
             WorkspaceTab::Campaign => false,
-            WorkspaceTab::Knowledge => false,
         };
         let tab = state.workspace_tab;
         let saving = state.workspace_save_busy == Some(tab);

@@ -10,11 +10,8 @@ use std::{
 
 mod findings;
 pub use findings::now_ms as finding_now_ms;
-mod knowledge;
 mod runbooks;
 pub use runbooks::RunbookRunRow;
-
-pub use knowledge::EvidenceInput;
 
 #[derive(Clone)]
 pub struct HostDatabase(Arc<Mutex<Connection>>);
@@ -822,73 +819,6 @@ impl HostDatabase {
                  PRAGMA user_version = 27;
                  COMMIT;",
             )?;
-        }
-        if version < 28 {
-            connection.execute_batch(
-                "BEGIN IMMEDIATE;
-                 CREATE TABLE IF NOT EXISTS knowledge_counters (
-                     workspace_id TEXT PRIMARY KEY,
-                     next_memory INTEGER NOT NULL DEFAULT 1,
-                     next_claim INTEGER NOT NULL DEFAULT 1,
-                     next_evidence INTEGER NOT NULL DEFAULT 1
-                 );
-                 CREATE TABLE IF NOT EXISTS knowledge_records (
-                     workspace_id TEXT NOT NULL,
-                     id TEXT NOT NULL,
-                     kind TEXT NOT NULL CHECK (kind IN ('memory', 'claim')),
-                     title TEXT NOT NULL,
-                     summary TEXT NOT NULL,
-                     category TEXT NOT NULL,
-                     role TEXT NOT NULL,
-                     status TEXT NOT NULL,
-                     surface_id TEXT NOT NULL,
-                     duplicate_of TEXT NOT NULL,
-                     updated_at_ms INTEGER NOT NULL,
-                     revision INTEGER NOT NULL,
-                     record_json TEXT NOT NULL,
-                     PRIMARY KEY(workspace_id, id)
-                 );
-                 CREATE INDEX IF NOT EXISTS knowledge_records_workspace_updated
-                     ON knowledge_records(workspace_id, updated_at_ms DESC, id);
-                 PRAGMA user_version = 28;
-                 COMMIT;",
-            )?;
-        }
-        if version < 29 {
-            connection.execute_batch(
-                "BEGIN IMMEDIATE;
-                 CREATE TABLE IF NOT EXISTS knowledge_tool_sources (
-                     id TEXT PRIMARY KEY,
-                     workspace_id TEXT NOT NULL,
-                     session_id TEXT NOT NULL,
-                     tool_name TEXT NOT NULL CHECK (tool_name IN ('read', 'bash')),
-                     output_sha256 TEXT NOT NULL,
-                     output TEXT NOT NULL DEFAULT '',
-                     created_at_ms INTEGER NOT NULL
-                 );
-                 PRAGMA user_version = 29;
-                 COMMIT;",
-            )?;
-        }
-        if version < 30 {
-            let has_output: bool = connection.query_row(
-                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('knowledge_tool_sources') WHERE name = 'output')",
-                [],
-                |row| row.get(0),
-            )?;
-            if has_output {
-                connection.execute_batch("PRAGMA user_version = 30;")?;
-            } else {
-                connection.execute_batch(
-                    "BEGIN IMMEDIATE;
-                     ALTER TABLE knowledge_tool_sources ADD COLUMN output TEXT NOT NULL DEFAULT '';
-                     PRAGMA user_version = 30;
-                     COMMIT;",
-                )?;
-            }
-        }
-        if version < 31 {
-            knowledge::migrate_revisions(&mut connection)?;
         }
         if version < 32 {
             connection.execute_batch(
@@ -2988,6 +2918,24 @@ mod tests {
 
     fn root() -> std::path::PathBuf {
         std::env::temp_dir().join(format!("beale-storage-example-{}", uuid::Uuid::new_v4()))
+    }
+
+    #[test]
+    fn new_database_has_no_retired_knowledge_tables() {
+        let root = root();
+        let db = HostDatabase::open(&root).unwrap();
+        let retired: i64 = db
+            .with_connection(|connection| {
+                Ok(connection.query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name LIKE 'knowledge_%'",
+                    [],
+                    |row| row.get(0),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(retired, 0);
+        drop(db);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

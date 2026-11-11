@@ -21,7 +21,6 @@ mod home_sidebar;
 mod icons;
 mod in_place_menu;
 mod input_history;
-mod knowledge_view;
 mod modal_dialog;
 mod new_research;
 mod permission_settings;
@@ -677,7 +676,6 @@ struct State {
     workspace_surface_relationship_type_id: TextEdit,
     workspace_surface_relationship_error: String,
     workspace_rule_edits: Vec<String>,
-    knowledge: knowledge_view::KnowledgeViewState,
     workspace_rule_input: TextEdit,
     workspace_rule_dialog_open: bool,
     workspace_rule_dialog_error: String,
@@ -911,7 +909,6 @@ impl Default for State {
             workspace_surface_relationship_type_id: TextEdit::new(""),
             workspace_surface_relationship_error: String::new(),
             workspace_rule_edits: Vec::new(),
-            knowledge: knowledge_view::KnowledgeViewState::default(),
             workspace_rule_input: TextEdit::new(""),
             workspace_rule_dialog_open: false,
             workspace_rule_dialog_error: String::new(),
@@ -1167,10 +1164,8 @@ impl State {
             }
             ViewLocation::Workspace(id, tab) => {
                 self.primary_view = PrimaryView::Workspace;
-                self.workspace_tab = if (tab == workspace_view::WorkspaceTab::Surfaces
-                    && !extensions_view::surfaces_enabled(self, &id.to_string()))
-                    || (tab == workspace_view::WorkspaceTab::Knowledge
-                        && !extensions_view::knowledge_enabled(self, &id.to_string()))
+                self.workspace_tab = if tab == workspace_view::WorkspaceTab::Surfaces
+                    && !extensions_view::surfaces_enabled(self, &id.to_string())
                 {
                     workspace_view::WorkspaceTab::Rules
                 } else {
@@ -1260,11 +1255,6 @@ impl State {
         self.workspace_save_message.clear();
         if let Some(id) = load_workspace {
             start_workspace_details(self, id);
-        }
-        if self.primary_view == PrimaryView::Workspace
-            && self.workspace_tab == workspace_view::WorkspaceTab::Knowledge
-        {
-            knowledge_view::start_load(self);
         }
         if self.primary_view == PrimaryView::Settings
             && self.settings_section == SettingsSection::Archive
@@ -2435,9 +2425,7 @@ fn start_workspace_save(state: &mut State, tab: workspace_view::WorkspaceTab) {
     let Some(id) = state.workspace_id else {
         return;
     };
-    if tab == workspace_view::WorkspaceTab::Campaign
-        || tab == workspace_view::WorkspaceTab::Knowledge
-    {
+    if tab == workspace_view::WorkspaceTab::Campaign {
         return;
     }
     if tab == workspace_view::WorkspaceTab::Foundation
@@ -10566,22 +10554,6 @@ active_runbook_count: 0,
         let mut state = State::default();
         state.open_workspace(id);
         assert_eq!(state.workspace_tab, workspace_view::WorkspaceTab::Rules);
-        state.apply_view_location(ViewLocation::Workspace(
-            id,
-            workspace_view::WorkspaceTab::Knowledge,
-        ));
-        assert_eq!(state.workspace_tab, workspace_view::WorkspaceTab::Rules);
-        state
-            .features
-            .iter_mut()
-            .find(|feature| feature.id == beale_knowledge::FEATURE_ID)
-            .unwrap()
-            .enabled = true;
-        state.apply_view_location(ViewLocation::Workspace(
-            id,
-            workspace_view::WorkspaceTab::Knowledge,
-        ));
-        assert_eq!(state.workspace_tab, workspace_view::WorkspaceTab::Knowledge);
         state.apply_view_location(ViewLocation::Workspace(
             id,
             workspace_view::WorkspaceTab::Surfaces,

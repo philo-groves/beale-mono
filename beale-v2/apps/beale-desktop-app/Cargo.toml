@@ -7,7 +7,6 @@ license.workspace = true
 
 [dependencies]
 beale-graphs = { path = "../../extensions/features/beale-graphs" }
-beale-knowledge = { path = "../../extensions/features/beale-knowledge" }
 beale-findings = { path = "../../extensions/features/beale-findings" }
 beale-memories = { path = "../../extensions/features/beale-memories" }
 beale-runbooks = { path = "../../extensions/features/beale-runbooks" }

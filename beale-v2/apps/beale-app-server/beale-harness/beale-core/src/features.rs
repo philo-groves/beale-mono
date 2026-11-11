@@ -28,7 +28,6 @@ struct FeatureSpec {
 
 #[cfg(any(
     feature = "surfaces",
-    feature = "knowledge",
     feature = "findings",
     feature = "memories",
     feature = "runbooks"
@@ -91,16 +90,6 @@ fn feature_specs() -> Vec<FeatureSpec> {
             tool_count: beale_surfaces::TOOL_COUNT,
             prompt_extension: beale_surfaces::PROMPT_EXTENSION,
             tool_names: definition_names(beale_surfaces::definitions()),
-        },
-        #[cfg(feature = "knowledge")]
-        FeatureSpec {
-            id: beale_knowledge::FEATURE_ID,
-            name: beale_knowledge::FEATURE_NAME,
-            description: beale_knowledge::FEATURE_DESCRIPTION,
-            has_prompt_extension: beale_knowledge::HAS_PROMPT_EXTENSION,
-            tool_count: beale_knowledge::TOOL_COUNT,
-            prompt_extension: beale_knowledge::PROMPT_EXTENSION,
-            tool_names: definition_names(beale_knowledge::definitions()),
         },
         #[cfg(feature = "findings")]
         FeatureSpec {
@@ -359,7 +348,9 @@ mod tests {
 
     #[test]
     fn feature_details_tool_names_match_summary_counts() {
-        for spec in feature_specs() {
+        let specs = feature_specs();
+        assert!(specs.iter().all(|spec| spec.id != "beale-knowledge"));
+        for spec in specs {
             assert_eq!(
                 spec.tool_names.len(),
                 spec.tool_count as usize,
