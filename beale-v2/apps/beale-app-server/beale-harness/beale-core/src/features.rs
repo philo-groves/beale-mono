@@ -27,6 +27,7 @@ struct FeatureSpec {
 }
 
 #[cfg(any(
+    feature = "agent-feedback",
     feature = "surfaces",
     feature = "findings",
     feature = "memories",
@@ -41,6 +42,16 @@ fn definition_names(definitions: Vec<serde_json::Value>) -> Vec<String> {
 
 fn feature_specs() -> Vec<FeatureSpec> {
     vec![
+        #[cfg(feature = "agent-feedback")]
+        FeatureSpec {
+            id: beale_agent_feedback::FEATURE_ID,
+            name: beale_agent_feedback::FEATURE_NAME,
+            description: beale_agent_feedback::FEATURE_DESCRIPTION,
+            has_prompt_extension: beale_agent_feedback::HAS_PROMPT_EXTENSION,
+            tool_count: beale_agent_feedback::TOOL_COUNT,
+            prompt_extension: beale_agent_feedback::PROMPT_EXTENSION,
+            tool_names: definition_names(vec![beale_agent_feedback::definition()]),
+        },
         #[cfg(feature = "goal-mode")]
         FeatureSpec {
             id: beale_goals::FEATURE_ID,

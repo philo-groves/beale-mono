@@ -1,5 +1,7 @@
 # v2
 
+Agent Feedback is an optional feature with one on-demand tool for agents to report observed Beale harness or runtime issues. Reports are appended as JSON Lines to the private app-server data directory at `agent-feedback.jsonl`, beneath `BEALE_V2_HOME` or `~/.beale/v2`. Each line includes the workspace, session, and agent IDs, issue kind, observation, optional workaround, and timestamp.
+
 The optional Memories feature keeps the existing session transcript in the app-server's `state.sqlite` and stores extracted workspace entities and assertions in a separate local `memories.sqlite`. Completed main and subagent turns enter a durable host queue; the configured default small model processes them asynchronously. Four read-only agent tools search the current session, search memory records, read provenance and revisions, and traverse bounded graph neighborhoods. The feature is disabled by default; disabling it stops extraction and retrieval. The host-authenticated clear route removes one disabled workspace's memories without deleting transcripts.
 
 A complete re-implementation of Beale using lessons learned from the first. This directory will be moved to the root and replace its content when it is ready.

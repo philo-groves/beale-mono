@@ -15,6 +15,7 @@
 
 #### Added
 
+- Added optional v2 Agent Feedback with one on-demand model tool for observed harness and agent runtime flaws, quirks, or limitations. Accepted reports append to a private, human-readable `agent-feedback.jsonl` in the app-server data directory; no viewer or protocol route is required.
 - Added optional v2 Memories with four read-only agent tools for session transcript search, memory search, record detail, and bounded graph traversal. The app-server queues completed main and subagent turns, extracts structured memories with the default small model, and commits revisions to a separate `memories.sqlite`. Schema 44 preserves child transcript items and a durable turn-end outbox; protocol 2.12 adds authenticated memory status, retry, and disabled-workspace clear routes.
 - Added a separate optional Findings feature with Candidate, Validated, Screened, Reported, and Rejected state objects. Six on-demand tools create, read, update, complete, query, and reject findings with revision checks. Triage-facing PoC details can be drafted only after screening; validation does not require a PoC. App-server schema 41 stores findings, and protocol 2.5 adds authenticated finding reads.
 - Plugin details now separate skill file counts from MCP inventories. Protocol 2.4 reports scripts, references, assets, prompts, and resources; installed MCP servers discover prompts and resources at launch.

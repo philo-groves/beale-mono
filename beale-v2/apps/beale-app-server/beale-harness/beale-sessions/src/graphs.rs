@@ -67,6 +67,12 @@ struct ChildOutcome {
 pub(super) struct ChildContext<'a> {
     pub state: &'a SessionState,
     pub workspace: &'a Path,
+    #[cfg(feature = "agent-feedback")]
+    pub workspace_id: &'a str,
+    #[cfg(feature = "agent-feedback")]
+    pub session_id: &'a str,
+    #[cfg(feature = "agent-feedback")]
+    pub feedback_enabled: bool,
     pub workspace_context: &'a str,
     pub base_system: &'a str,
     pub reasoning_effort: Option<&'a str>,
@@ -115,6 +121,26 @@ async fn run_child(
     (outcome, transcript)
 }
 
+fn child_tool_definitions(feedback_enabled: bool) -> Vec<Value> {
+    #[cfg(not(feature = "agent-feedback"))]
+    let _ = feedback_enabled;
+    #[allow(unused_mut)]
+    let mut tools = definitions()
+        .into_iter()
+        .filter(|tool| {
+            !matches!(
+                tool["name"].as_str(),
+                Some(beale_tools::GET_SCOPE | beale_tools::LOAD_EXTENSION)
+            )
+        })
+        .collect::<Vec<_>>();
+    #[cfg(feature = "agent-feedback")]
+    if feedback_enabled {
+        tools.push(beale_agent_feedback::definition());
+    }
+    tools
+}
+
 async fn run_child_inner(
     assignment: Assignment,
     context: &ChildContext<'_>,
@@ -131,12 +157,18 @@ async fn run_child_inner(
             tools: Vec::new(),
         };
     };
-    let system = format!(
+    #[allow(unused_mut)]
+    let mut system = format!(
         "{}\n\n## {} subagent\n\n{}\n\nYou have a fresh context. Work only on the assigned task. You cannot delegate. Return a concise result with evidence and uncertainties; the main agent owns the user-facing answer.",
         context.base_system,
         assignment.role.label(),
         assignment.role.instruction()
     );
+    #[cfg(feature = "agent-feedback")]
+    if context.feedback_enabled {
+        system.push_str("\n\n");
+        system.push_str(beale_agent_feedback::PROMPT_EXTENSION);
+    }
     let task = format!(
         "Task: {}\n\nWorkspace context:\n{}",
         assignment.task, context.workspace_context
@@ -149,15 +181,10 @@ async fn run_child_inner(
         input.insert(0, json!({"role":"system","content":system}));
     }
     let mut connection = OpenAiConnection::default();
-    let definitions = definitions()
-        .into_iter()
-        .filter(|tool| {
-            !matches!(
-                tool["name"].as_str(),
-                Some(beale_tools::GET_SCOPE | beale_tools::LOAD_EXTENSION)
-            )
-        })
-        .collect::<Vec<_>>();
+    #[cfg(feature = "agent-feedback")]
+    let definitions = child_tool_definitions(context.feedback_enabled);
+    #[cfg(not(feature = "agent-feedback"))]
+    let definitions = child_tool_definitions(false);
     let mut tools = Vec::<ToolCallRow>::new();
     let mut call_count = 0;
     for round in 0..MAX_CHILD_ROUNDS {
@@ -302,6 +329,21 @@ async fn run_child_inner(
                     .await;
             }
             let (output, is_error) = match arguments {
+                #[cfg(feature = "agent-feedback")]
+                Ok(arguments)
+                    if context.feedback_enabled && call.name == beale_agent_feedback::TOOL_NAME =>
+                {
+                    match beale_agent_feedback::execute(
+                        context.state.workspaces.root(),
+                        context.workspace_id,
+                        context.session_id,
+                        agent_id,
+                        &arguments,
+                    ) {
+                        Ok(value) => (value, false),
+                        Err(error) => (format!("Agent feedback error: {error}"), true),
+                    }
+                }
                 Ok(arguments) if call.name == "tool_result_page" => {
                     let result = (|| {
                         let source_id = arguments
@@ -559,6 +601,21 @@ pub(super) async fn delegate(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "agent-feedback")]
+    #[test]
+    fn child_catalog_includes_feedback_only_when_enabled() {
+        assert!(
+            child_tool_definitions(false)
+                .iter()
+                .all(|tool| tool["name"] != beale_agent_feedback::TOOL_NAME)
+        );
+        assert!(
+            child_tool_definitions(true)
+                .iter()
+                .any(|tool| tool["name"] == beale_agent_feedback::TOOL_NAME)
+        );
+    }
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 

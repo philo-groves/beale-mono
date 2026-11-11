@@ -6,7 +6,8 @@ rust-version.workspace = true
 license.workspace = true
 
 [features]
-default = ["goal-mode", "fleet", "graphs", "tracking", "surfaces", "findings", "memories", "runbooks"]
+default = ["goal-mode", "fleet", "graphs", "tracking", "surfaces", "findings", "memories", "runbooks", "agent-feedback"]
+agent-feedback = ["beale-sessions/agent-feedback", "dep:beale-agent-feedback"]
 findings = ["beale-sessions/findings", "dep:beale-findings"]
 memories = ["beale-sessions/memories", "dep:beale-memories"]
 runbooks = ["beale-sessions/runbooks", "dep:beale-runbooks"]
@@ -20,6 +21,7 @@ tracking = ["dep:beale-tracking"]
 anyhow.workspace = true
 axum.workspace = true
 beale-contracts = { path = "../beale-contracts" }
+beale-agent-feedback = { path = "../../../../extensions/features/beale-agent-feedback", optional = true }
 beale-extender = { path = "../beale-extender" }
 beale-fleet = { path = "../../../../extensions/features/beale-fleet", optional = true }
 beale-findings = { path = "../../../../extensions/features/beale-findings", optional = true }

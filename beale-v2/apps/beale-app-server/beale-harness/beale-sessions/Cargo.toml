@@ -7,6 +7,7 @@ license.workspace = true
 
 [features]
 default = ["goal-mode"]
+agent-feedback = ["dep:beale-agent-feedback"]
 goal-mode = ["dep:beale-goals"]
 graphs = ["dep:beale-graphs"]
 surfaces = ["dep:beale-surfaces"]
@@ -18,6 +19,7 @@ runbooks = ["dep:beale-runbooks"]
 anyhow.workspace = true
 axum.workspace = true
 beale-contracts = { path = "../beale-contracts" }
+beale-agent-feedback = { path = "../../../../extensions/features/beale-agent-feedback", optional = true }
 beale-extender = { path = "../beale-extender" }
 beale-goals = { path = "../../../../extensions/features/beale-goals", optional = true }
 beale-graphs = { path = "../../../../extensions/features/beale-graphs", optional = true }

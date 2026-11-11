@@ -158,6 +158,15 @@ pub(crate) fn bundled_features() -> Vec<FeatureEntry> {
         workspace_ids: Vec::new(),
         all_workspaces: true,
     }, FeatureEntry {
+        id: beale_agent_feedback::FEATURE_ID.to_owned(),
+        name: beale_agent_feedback::FEATURE_NAME.to_owned(),
+        description: beale_agent_feedback::FEATURE_DESCRIPTION.to_owned(),
+        enabled: false,
+        has_prompt_extension: beale_agent_feedback::HAS_PROMPT_EXTENSION,
+        tool_count: beale_agent_feedback::TOOL_COUNT as usize,
+        workspace_ids: Vec::new(),
+        all_workspaces: true,
+    }, FeatureEntry {
         id: beale_graphs::FEATURE_ID.to_owned(),
         name: beale_graphs::FEATURE_NAME.to_owned(),
         description: beale_graphs::FEATURE_DESCRIPTION.to_owned(),

@@ -116,6 +116,22 @@ fn memories_feature_enabled(_db: &HostDatabase, _workspace_id: &str) -> Result<b
     Ok(false)
 }
 
+#[cfg(feature = "agent-feedback")]
+fn agent_feedback_feature_enabled(
+    db: &HostDatabase,
+    workspace_id: &str,
+) -> Result<bool, StatusCode> {
+    db.feature_enabled(beale_agent_feedback::FEATURE_ID)
+        .and_then(|enabled| {
+            if enabled {
+                db.extension_applies_to("feature", beale_agent_feedback::FEATURE_ID, workspace_id)
+            } else {
+                Ok(false)
+            }
+        })
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
 #[cfg(feature = "findings")]
 fn findings_feature_enabled(db: &HostDatabase, workspace_id: &str) -> Result<bool, StatusCode> {
     db.feature_enabled(beale_findings::FEATURE_ID)
@@ -1674,6 +1690,9 @@ async fn run_one_turn(
     let workspace_details = state.workspaces.details_for_host(&request.workspace_id)?;
     let surface_tools_enabled = surface_feature_enabled(&state.db, &request.workspace_id)?;
     let memories_tools_enabled = memories_feature_enabled(&state.db, &request.workspace_id)?;
+    #[cfg(feature = "agent-feedback")]
+    let agent_feedback_tools_enabled =
+        agent_feedback_feature_enabled(&state.db, &request.workspace_id)?;
     #[cfg(feature = "findings")]
     let findings_tools_enabled = findings_feature_enabled(&state.db, &request.workspace_id)?;
     #[cfg(feature = "runbooks")]
@@ -1806,6 +1825,13 @@ async fn run_one_turn(
             "Use to search prior items in this session and sourced workspace research memories.",
         ));
     }
+    #[cfg(feature = "agent-feedback")]
+    if agent_feedback_tools_enabled {
+        available_features.push((
+            beale_agent_feedback::FEATURE_ID,
+            "Use to record an observed Beale harness or agent runtime issue for development review.",
+        ));
+    }
     #[cfg(feature = "runbooks")]
     if runbook_tools_enabled {
         available_features.push((
@@ -1894,6 +1920,7 @@ async fn run_one_turn(
     let mut openai_connection = OpenAiConnection::default();
     let mut definitions = definitions();
     #[cfg(any(
+        feature = "agent-feedback",
         feature = "surfaces",
         feature = "findings",
         feature = "memories",
@@ -2107,6 +2134,8 @@ async fn run_one_turn(
             let args: Result<Value, _> = serde_json::from_str(&call.arguments);
             let summary = if call.name == "goal_status" {
                 "Record Goal Mode status".to_owned()
+            } else if cfg!(feature = "agent-feedback") && call.name == "agent_feedback" {
+                "Record agent feedback".to_owned()
             } else if cfg!(feature = "surfaces") && call.name.starts_with("surface_") {
                 format!("{} surface", call.name.trim_start_matches("surface_"))
             } else if cfg!(feature = "findings") && call.name.starts_with("findings_") {
@@ -2194,10 +2223,12 @@ async fn run_one_turn(
                         let result = async {
                         let request_args: LoadExtensionArgs = serde_json::from_value(args)?;
                         match request_args.kind {
-                            #[cfg(any(feature = "surfaces", feature = "findings", feature = "memories", feature = "runbooks", feature = "goal-mode", feature = "graphs"))]
+                            #[cfg(any(feature = "agent-feedback", feature = "surfaces", feature = "findings", feature = "memories", feature = "runbooks", feature = "goal-mode", feature = "graphs"))]
                             ExtensionKind::Feature => {
                                 anyhow::ensure!(available_features.iter().any(|(id, _)| *id == request_args.id), "feature is unavailable in this workspace");
                                 let (tools, guidance) = match request_args.id.as_str() {
+                                    #[cfg(feature = "agent-feedback")]
+                                    beale_agent_feedback::FEATURE_ID => (vec![beale_agent_feedback::definition()], beale_agent_feedback::PROMPT_EXTENSION.to_owned()),
                                     #[cfg(feature = "surfaces")]
                                     beale_surfaces::FEATURE_ID => (beale_surfaces::definitions(), beale_surfaces::PROMPT_EXTENSION.to_owned()),
                                     #[cfg(feature = "findings")]
@@ -2217,7 +2248,7 @@ async fn run_one_turn(
                                 }
                                 Ok::<_, anyhow::Error>(json!({"feature":request_args.id,"instructions":guidance,"tools":tools}).to_string())
                             }
-                            #[cfg(not(any(feature = "surfaces", feature = "findings", feature = "memories", feature = "runbooks", feature = "goal-mode", feature = "graphs")))]
+                            #[cfg(not(any(feature = "agent-feedback", feature = "surfaces", feature = "findings", feature = "memories", feature = "runbooks", feature = "goal-mode", feature = "graphs")))]
                             ExtensionKind::Feature => anyhow::bail!("feature is unavailable"),
                             ExtensionKind::Plugin => {
                                 let details = state.plugins.details(&request_args.id, &request.workspace_id).await?;
@@ -2383,6 +2414,23 @@ async fn run_one_turn(
                             Err(error) => (format!("Memory tool error: {error}"), true),
                         }
                     }
+                    #[cfg(feature = "agent-feedback")]
+                    Ok(args)
+                        if loaded_features.contains(beale_agent_feedback::FEATURE_ID)
+                            && agent_feedback_tools_enabled
+                            && call.name == beale_agent_feedback::TOOL_NAME =>
+                    {
+                        match beale_agent_feedback::execute(
+                            state.workspaces.root(),
+                            &request.workspace_id,
+                            &session.id,
+                            "main",
+                            &args,
+                        ) {
+                            Ok(value) => (value, false),
+                            Err(error) => (format!("Agent feedback error: {error}"), true),
+                        }
+                    }
                     #[cfg(feature = "surfaces")]
                     Ok(args)
                         if loaded_features.contains(beale_surfaces::FEATURE_ID)
@@ -2448,6 +2496,12 @@ async fn run_one_turn(
                                 graphs::ChildContext {
                                     state,
                                     workspace: &workspace,
+                                    #[cfg(feature = "agent-feedback")]
+                                    workspace_id: &request.workspace_id,
+                                    #[cfg(feature = "agent-feedback")]
+                                    session_id: &session.id,
+                                    #[cfg(feature = "agent-feedback")]
+                                    feedback_enabled: agent_feedback_tools_enabled,
                                     workspace_context: &workspace_context,
                                     base_system: &child_system,
                                     reasoning_effort,
@@ -2729,8 +2783,47 @@ mod tests {
     use super::*;
     use axum::body::to_bytes;
     use axum::{body::Body, http::Request};
+    #[cfg(feature = "agent-feedback")]
+    use beale_storage::WorkspaceRow;
     use prost::Message;
     use tower::ServiceExt;
+
+    #[cfg(feature = "agent-feedback")]
+    #[test]
+    fn agent_feedback_respects_enablement_and_workspace_scope() {
+        let root = std::env::temp_dir().join(format!(
+            "beale-feedback-scope-example-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let db = HostDatabase::open(&root).unwrap();
+        assert!(!agent_feedback_feature_enabled(&db, "workspace-example-a").unwrap());
+        db.replace_workspaces(&[
+            WorkspaceRow {
+                id: "workspace-example-a".to_owned(),
+                name: "Example A".to_owned(),
+                directory: "example-a".to_owned(),
+            },
+            WorkspaceRow {
+                id: "workspace-example-b".to_owned(),
+                name: "Example B".to_owned(),
+                directory: "example-b".to_owned(),
+            },
+        ])
+        .unwrap();
+        db.set_feature_enabled(beale_agent_feedback::FEATURE_ID, true)
+            .unwrap();
+        db.set_extension_scope(
+            "feature",
+            beale_agent_feedback::FEATURE_ID,
+            false,
+            &["workspace-example-a".to_owned()],
+        )
+        .unwrap();
+        assert!(agent_feedback_feature_enabled(&db, "workspace-example-a").unwrap());
+        assert!(!agent_feedback_feature_enabled(&db, "workspace-example-b").unwrap());
+        drop(db);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn feature_tools_require_review_without_double_reviewing_base_tools() {
@@ -2753,6 +2846,8 @@ mod tests {
         #[cfg(feature = "graphs")]
         assert!(feature_tool_requires_review(beale_graphs::DELEGATE_TOOL));
         for name in [
+            #[cfg(feature = "agent-feedback")]
+            beale_agent_feedback::TOOL_NAME,
             "read",
             "write",
             "edit",
@@ -2768,14 +2863,16 @@ mod tests {
     }
 
     #[cfg(all(
+        feature = "agent-feedback",
         feature = "surfaces",
         feature = "findings",
+        feature = "memories",
         feature = "runbooks",
         feature = "graphs",
         feature = "goal-mode"
     ))]
     #[test]
-    fn built_in_tool_counts_include_optional_memories() {
+    fn built_in_tool_counts_include_optional_features() {
         let base = beale_tools::definitions().len();
         assert_eq!(base, 8);
         let all = base
@@ -2783,9 +2880,10 @@ mod tests {
             + beale_findings::definitions().len()
             + beale_runbooks::definitions().len()
             + beale_memories::definitions().len()
+            + beale_agent_feedback::TOOL_COUNT as usize
             + beale_graphs::TOOL_COUNT as usize
             + beale_goals::TOOL_COUNT as usize;
-        assert_eq!(all, 32);
+        assert_eq!(all, 33);
     }
 
     #[test]
