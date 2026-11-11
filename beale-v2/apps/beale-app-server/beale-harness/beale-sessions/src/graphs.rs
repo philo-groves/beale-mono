@@ -17,7 +17,7 @@ use beale_providers::{
     provider_error_message,
 };
 use beale_safety::ReviewRequest;
-use beale_storage::{ModelUsageRow, ToolCallRow};
+use beale_storage::{ChildTurnRow, ModelUsageRow, ToolCallRow};
 use beale_tools::{definitions, execute, model_preview, page, summary};
 use futures_util::future::join_all;
 use serde_json::{Value, json};
@@ -34,6 +34,7 @@ pub(super) struct DelegateOutcome {
     pub output: String,
     pub is_error: bool,
     pub tools: Vec<ToolCallRow>,
+    pub child_turns: Vec<ChildTurnRow>,
 }
 
 fn provider_for(model: &GraphNodeModel) -> Option<(Provider, AuthMode)> {
@@ -80,8 +81,49 @@ async fn run_child(
     context: &ChildContext<'_>,
     mutation_lock: &Mutex<()>,
     tool_sequence: &AtomicI64,
+) -> (ChildOutcome, ChildTurnRow) {
+    let agent_id = Uuid::new_v4().to_string();
+    let role = assignment.role.id().to_owned();
+    let task = assignment.task.clone();
+    let mut messages = Vec::new();
+    let mut reasoning = Vec::new();
+    let outcome = run_child_inner(
+        assignment,
+        context,
+        mutation_lock,
+        tool_sequence,
+        &agent_id,
+        &mut messages,
+        &mut reasoning,
+    )
+    .await;
+    let completed_at_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| {
+            duration.as_millis().min(i64::MAX as u128) as i64
+        });
+    let transcript = ChildTurnRow {
+        agent_id,
+        role,
+        task,
+        result: outcome.result.clone(),
+        is_error: outcome.is_error,
+        messages_json: serde_json::to_string(&messages).unwrap_or_else(|_| "[]".to_owned()),
+        reasoning_json: serde_json::to_string(&reasoning).unwrap_or_else(|_| "[]".to_owned()),
+        completed_at_ms,
+    };
+    (outcome, transcript)
+}
+
+async fn run_child_inner(
+    assignment: Assignment,
+    context: &ChildContext<'_>,
+    mutation_lock: &Mutex<()>,
+    tool_sequence: &AtomicI64,
+    agent_id: &str,
+    messages: &mut Vec<Value>,
+    reasoning: &mut Vec<String>,
 ) -> ChildOutcome {
-    let agent_id = uuid::Uuid::new_v4().to_string();
     let Some((provider, mode)) = provider_for(&assignment.model) else {
         return ChildOutcome {
             result: "Configured subagent provider is invalid.".to_owned(),
@@ -159,7 +201,7 @@ async fn run_child(
             }
         };
         context.model_usage.lock().await.push(ModelUsageRow {
-            agent_id: agent_id.clone(),
+            agent_id: agent_id.to_owned(),
             role: assignment.role.id().to_owned(),
             provider: assignment.model.provider,
             method: assignment.model.method,
@@ -183,6 +225,14 @@ async fn run_child(
                     duration.as_millis().min(i64::MAX as u128) as i64
                 }),
         });
+        if !step.text.is_empty() {
+            messages.push(json!({"role":"assistant","text":step.text.chars().take(32_000).collect::<String>()}));
+        }
+        reasoning.extend(
+            step.reasoning_summaries
+                .iter()
+                .map(|text| text.chars().take(8_000).collect()),
+        );
         input.extend(step.continuation);
         if step.calls.is_empty() {
             let result = step.text.trim();
@@ -343,6 +393,8 @@ async fn run_child(
                         })
                         .await;
                 }
+                messages.push(json!({"role":"tool","tool_call_id":id,"name":call.name,
+                    "summary":label,"is_error":is_error}));
                 tools.push(ToolCallRow {
                     id: id.clone(),
                     turn_number: context.turn_number,
@@ -431,6 +483,7 @@ pub(super) async fn delegate(
             output: "Graph runtime is unavailable.".to_owned(),
             is_error: true,
             tools: Vec::new(),
+            child_turns: Vec::new(),
         };
     };
     let assignments = match runtime.assignments(arguments, config, fallback) {
@@ -440,6 +493,7 @@ pub(super) async fn delegate(
                 output: format!("Invalid delegation: {error}"),
                 is_error: true,
                 tools: Vec::new(),
+                child_turns: Vec::new(),
             };
         }
     };
@@ -463,13 +517,25 @@ pub(super) async fn delegate(
     .await;
     let mut output = String::new();
     let mut tools = Vec::new();
+    let mut child_turns = Vec::new();
     let mut failed = false;
     for (index, (role, task, outcome)) in results.into_iter().enumerate() {
-        let outcome = outcome.unwrap_or_else(|| ChildOutcome {
-            result: "Subagent capacity is unavailable.".to_owned(),
-            is_error: true,
-            tools: Vec::new(),
-        });
+        let (outcome, transcript) = outcome.map_or_else(
+            || {
+                (
+                    ChildOutcome {
+                        result: "Subagent capacity is unavailable.".to_owned(),
+                        is_error: true,
+                        tools: Vec::new(),
+                    },
+                    None,
+                )
+            },
+            |(outcome, transcript)| (outcome, Some(transcript)),
+        );
+        if let Some(transcript) = transcript {
+            child_turns.push(transcript);
+        }
         failed |= outcome.is_error;
         output.push_str(&format!(
             "## {} {}: {}\n{}\n\n",
@@ -481,10 +547,12 @@ pub(super) async fn delegate(
         tools.extend(outcome.tools);
     }
     tools.sort_by_key(|tool| tool.ordinal);
+    child_turns.sort_by_key(|child| child.completed_at_ms);
     DelegateOutcome {
         output,
         is_error: failed,
         tools,
+        child_turns,
     }
 }
 

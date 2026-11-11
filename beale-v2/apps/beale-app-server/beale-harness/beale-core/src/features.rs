@@ -30,6 +30,7 @@ struct FeatureSpec {
     feature = "surfaces",
     feature = "knowledge",
     feature = "findings",
+    feature = "memories",
     feature = "runbooks"
 ))]
 fn definition_names(definitions: Vec<serde_json::Value>) -> Vec<String> {
@@ -110,6 +111,16 @@ fn feature_specs() -> Vec<FeatureSpec> {
             tool_count: beale_findings::TOOL_COUNT,
             prompt_extension: beale_findings::PROMPT_EXTENSION,
             tool_names: definition_names(beale_findings::definitions()),
+        },
+        #[cfg(feature = "memories")]
+        FeatureSpec {
+            id: beale_memories::FEATURE_ID,
+            name: beale_memories::FEATURE_NAME,
+            description: beale_memories::FEATURE_DESCRIPTION,
+            has_prompt_extension: beale_memories::HAS_PROMPT_EXTENSION,
+            tool_count: beale_memories::TOOL_COUNT,
+            prompt_extension: beale_memories::PROMPT_EXTENSION,
+            tool_names: definition_names(beale_memories::definitions()),
         },
         #[cfg(feature = "runbooks")]
         FeatureSpec {
@@ -387,7 +398,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let bytes = axum::body::to_bytes(response.into_body(), 1_024)
+        let bytes = axum::body::to_bytes(response.into_body(), 4_096)
             .await
             .unwrap();
         let catalog = ListFeaturesResponse::decode(bytes).unwrap();

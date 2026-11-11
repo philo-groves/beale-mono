@@ -239,6 +239,15 @@ pub struct QueryRequest {
     pub surface_ids: Vec<String>,
     #[serde(default)]
     pub limit: u32,
+    #[serde(default)]
+    pub offset: u32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct QueryPage {
+    pub records: Vec<Summary>,
+    pub total: usize,
+    pub next_offset: Option<u32>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -247,7 +256,7 @@ pub struct GetRequest {
     pub workspace_id: String,
     pub id: String,
     #[serde(default)]
-    pub history_offset: u32,
+    pub history_offset: Option<u32>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -255,23 +264,6 @@ pub struct GetResponse {
     pub record: Finding,
     pub history_total: usize,
     pub next_history_offset: Option<u32>,
-}
-
-pub fn page_finding(mut record: Finding, offset: u32) -> GetResponse {
-    let history_total = record.history.len();
-    record.history = record
-        .history
-        .into_iter()
-        .rev()
-        .skip(offset as usize)
-        .take(1)
-        .collect();
-    let next = (offset as usize).saturating_add(record.history.len());
-    GetResponse {
-        record,
-        history_total,
-        next_history_offset: (next < history_total).then_some(next as u32),
-    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

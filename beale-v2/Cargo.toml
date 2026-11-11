@@ -15,6 +15,7 @@ members = [
     "extensions/features/beale-graphs",
     "extensions/features/beale-knowledge",
     "extensions/features/beale-findings",
+    "extensions/features/beale-memories",
     "extensions/features/beale-runbooks",
     "extensions/features/beale-surfaces",
     "extensions/features/beale-tracking",

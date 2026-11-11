@@ -194,6 +194,15 @@ pub(crate) fn bundled_features() -> Vec<FeatureEntry> {
         workspace_ids: Vec::new(),
         all_workspaces: true,
     }, FeatureEntry {
+        id: beale_memories::FEATURE_ID.to_owned(),
+        name: beale_memories::FEATURE_NAME.to_owned(),
+        description: beale_memories::FEATURE_DESCRIPTION.to_owned(),
+        enabled: false,
+        has_prompt_extension: beale_memories::HAS_PROMPT_EXTENSION,
+        tool_count: beale_memories::TOOL_COUNT as usize,
+        workspace_ids: Vec::new(),
+        all_workspaces: true,
+    }, FeatureEntry {
         id: beale_surfaces::FEATURE_ID.to_owned(),
         name: beale_surfaces::FEATURE_NAME.to_owned(),
         description: beale_surfaces::FEATURE_DESCRIPTION.to_owned(),

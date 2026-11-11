@@ -119,6 +119,12 @@ async fn serve() -> Result<()> {
     let app = app.merge(beale_knowledge::router(token.clone(), db.clone()));
     #[cfg(feature = "findings")]
     let app = app.merge(beale_findings::router(token.clone(), db.clone()));
+    #[cfg(feature = "memories")]
+    let app = app.merge(beale_memories::router(
+        token.clone(),
+        db.clone(),
+        workspaces.root().to_path_buf(),
+    ));
     #[cfg(feature = "runbooks")]
     let app = app.merge(beale_runbooks::router(token.clone(), db.clone()));
     #[cfg(feature = "tracking")]
@@ -136,6 +142,8 @@ async fn serve() -> Result<()> {
     let (tray_exit_tx, tray_exit_rx) = tokio::sync::oneshot::channel();
     #[cfg(windows)]
     let _tray = tray::TrayHandle::start(addr, tray_exit_tx)?;
+    #[cfg(feature = "memories")]
+    let memory_worker = beale_sessions::start_memory_worker(workspaces.clone(), plugins.clone())?;
     let scheduler = beale_sessions::start_automation_scheduler_with_runtime(workspaces, plugins)?;
     let result = axum::serve(listener, app)
         .with_graceful_shutdown(async {
@@ -149,6 +157,8 @@ async fn serve() -> Result<()> {
         })
         .await;
     scheduler.abort();
+    #[cfg(feature = "memories")]
+    memory_worker.abort();
     result?;
     Ok(())
 }

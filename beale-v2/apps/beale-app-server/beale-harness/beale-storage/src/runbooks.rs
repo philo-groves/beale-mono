@@ -723,7 +723,7 @@ mod tests {
         let version: i64 = connection
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 42);
+        assert_eq!(version, 44);
         drop(connection);
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -749,7 +749,7 @@ mod tests {
         let version: i64 = connection
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 42);
+        assert_eq!(version, 44);
         let name: String = connection
             .query_row(
                 "SELECT current_cell_name FROM runbook_runs LIMIT 1",

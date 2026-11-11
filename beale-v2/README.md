@@ -1,5 +1,7 @@
 # v2
 
+The optional Memories feature keeps the existing session transcript in the app-server's `state.sqlite` and stores extracted workspace entities and assertions in a separate local `memories.sqlite`. Completed main and subagent turns enter a durable host queue; the configured default small model processes them asynchronously. Four read-only agent tools search the current session, search memory records, read provenance and revisions, and traverse bounded graph neighborhoods. The feature is disabled by default; disabling it stops extraction and retrieval. The host-authenticated clear route removes one disabled workspace's memories without deleting transcripts.
+
 A complete re-implementation of Beale using lessons learned from the first. This directory will be moved to the root and replace its content when it is ready.
 
 The Rust workspace now includes `beale-contracts`, `beale-core`, `beale-extender`, `beale-providers`, `beale-safety`, `beale-sessions`, `beale-storage`, `beale-tools`, and `beale-workspaces` under `apps/beale-app-server/beale-harness/`, plus the first Rune desktop client in `apps/beale-desktop-app/`. `beale-core` assembles the host; the session, workspace, and extension crates own their respective operations, using the shared host database for global records. Other app and extension directories remain reserved until their crate manifests exist. The workspace uses Rust edition 2024 and requires Rust 1.99.1, pinned in `rust-toolchain.toml`.

@@ -6,6 +6,7 @@
 
 #### Changed
 
+- Findings tools now use distinct `findings_*` names while the older Knowledge Base remains available. Update advertises typed patch fields; query pages through results, and read omits revision snapshots unless requested. App-server schema 43 moves finding revisions into a separate table without losing history or limiting later edits. Protocol 2.11 updates the read contract.
 - Findings now supports an optional attack path with assumptions, evidence, limitations, preconditions, likelihood, impact, steps, and nested reachability details. Protocol 2.10 exposes it; existing records remain readable without a storage migration.
 - Findings now supports optional top-level remediation text through create, update, search, and read. Protocol 2.9 exposes it; older saved findings remain readable without a storage migration.
 - Findings now supports an optional `FindingRootCause` with a summary and typed evidence references. Create and update tools accept it, and protocol 2.8 exposes it without a storage migration.
@@ -14,6 +15,7 @@
 
 #### Added
 
+- Added optional v2 Memories with four read-only agent tools for session transcript search, memory search, record detail, and bounded graph traversal. The app-server queues completed main and subagent turns, extracts structured memories with the default small model, and commits revisions to a separate `memories.sqlite`. Schema 44 preserves child transcript items and a durable turn-end outbox; protocol 2.12 adds authenticated memory status, retry, and disabled-workspace clear routes. Existing Knowledge Base records remain separate during the transition.
 - Added a separate optional Findings feature with Candidate, Validated, Screened, Reported, and Rejected state objects. Six on-demand tools create, read, update, complete, query, and reject findings with revision checks. Triage-facing PoC details can be drafted only after screening; validation does not require a PoC. App-server schema 41 stores findings separately from Knowledge Base, and protocol 2.5 adds authenticated finding reads.
 - Plugin details now separate skill file counts from MCP inventories. Protocol 2.4 reports scripts, references, assets, prompts, and resources; installed MCP servers discover prompts and resources at launch.
 - Added per-surface threat models with local map anchors, scenario dispositions, typed evidence, related claim IDs, and mapping review revisions. Surfaces gains two on-demand tools; protocol 2.3 adds an authenticated threat-model route. New map references must resolve; existing scenarios retain and flag stale references after mapping edits.

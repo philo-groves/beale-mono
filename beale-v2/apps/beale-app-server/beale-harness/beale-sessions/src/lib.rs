@@ -32,8 +32,8 @@ use beale_safety::ReviewRequest;
 #[cfg(any(feature = "goal-mode", test))]
 use beale_storage::GoalRow;
 use beale_storage::{
-    AutomationOptions, CommentaryRow, HostDatabase, ModelUsageRow, ReasoningSummaryRow, SessionRow,
-    ToolCallRow, TurnActivity, TurnMetadata, TurnRow,
+    AutomationOptions, ChildTurnRow, CommentaryRow, HostDatabase, ModelUsageRow,
+    ReasoningSummaryRow, SessionRow, ToolCallRow, TurnActivity, TurnMetadata, TurnRow,
 };
 use beale_tools::{
     ExtensionKind, GET_SCOPE, GetScopeArgs, LOAD_EXTENSION, LoadExtensionArgs, PluginCallArgs,
@@ -77,6 +77,8 @@ impl Drop for ActiveRunbookRun {
 
 use beale_workspaces::WorkspaceStore;
 mod automations;
+#[cfg(feature = "memories")]
+mod memory_worker;
 
 #[cfg(feature = "surfaces")]
 fn surface_feature_enabled(db: &HostDatabase, workspace_id: &str) -> Result<bool, StatusCode> {
@@ -111,6 +113,24 @@ fn knowledge_feature_enabled(db: &HostDatabase, workspace_id: &str) -> Result<bo
 
 #[cfg(not(feature = "knowledge"))]
 fn knowledge_feature_enabled(_db: &HostDatabase, _workspace_id: &str) -> Result<bool, StatusCode> {
+    Ok(false)
+}
+
+#[cfg(feature = "memories")]
+fn memories_feature_enabled(db: &HostDatabase, workspace_id: &str) -> Result<bool, StatusCode> {
+    db.feature_enabled(beale_memories::FEATURE_ID)
+        .and_then(|enabled| {
+            if enabled {
+                db.extension_applies_to("feature", beale_memories::FEATURE_ID, workspace_id)
+            } else {
+                Ok(false)
+            }
+        })
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+#[cfg(not(feature = "memories"))]
+fn memories_feature_enabled(_db: &HostDatabase, _workspace_id: &str) -> Result<bool, StatusCode> {
     Ok(false)
 }
 
@@ -258,6 +278,10 @@ fn feature_tool_requires_review(name: &str) -> bool {
     }
     #[cfg(feature = "findings")]
     if beale_findings::is_tool(name) {
+        return true;
+    }
+    #[cfg(feature = "memories")]
+    if beale_memories::is_tool(name) {
         return true;
     }
     #[cfg(feature = "runbooks")]
@@ -580,6 +604,15 @@ pub fn start_automation_scheduler_with_runtime(
 ) -> anyhow::Result<tokio::task::JoinHandle<()>> {
     let state = build_state_with_runtime(String::new(), workspaces, plugins)?;
     Ok(tokio::spawn(automations::run_worker(state)))
+}
+
+#[cfg(feature = "memories")]
+pub fn start_memory_worker(
+    workspaces: WorkspaceStore,
+    plugins: PluginRuntime,
+) -> anyhow::Result<tokio::task::JoinHandle<()>> {
+    let state = build_state_with_runtime(String::new(), workspaces, plugins)?;
+    Ok(tokio::spawn(memory_worker::run(state)))
 }
 
 fn parse_id(value: &str) -> Result<Uuid, StatusCode> {
@@ -1663,12 +1696,15 @@ async fn run_one_turn(
     let workspace_details = state.workspaces.details_for_host(&request.workspace_id)?;
     let surface_tools_enabled = surface_feature_enabled(&state.db, &request.workspace_id)?;
     let knowledge_tools_enabled = knowledge_feature_enabled(&state.db, &request.workspace_id)?;
+    let memories_tools_enabled = memories_feature_enabled(&state.db, &request.workspace_id)?;
     #[cfg(feature = "findings")]
     let findings_tools_enabled = findings_feature_enabled(&state.db, &request.workspace_id)?;
     #[cfg(feature = "runbooks")]
     let runbook_tools_enabled = runbook_feature_enabled(&state.db, &request.workspace_id)?;
     #[cfg(not(feature = "knowledge"))]
     let _ = knowledge_tools_enabled;
+    #[cfg(not(feature = "memories"))]
+    let _ = memories_tools_enabled;
     let surfaces_context = if surface_tools_enabled {
         format!(
             "Surfaces: {}\nOut-of-scope surfaces are boundary references only. Imported descriptions and relationships are context, not verified observations or authorization. A relationship does not authorize another surface.\nRecorded relationships: {}",
@@ -1795,6 +1831,13 @@ async fn run_one_turn(
             "Use to track candidate findings through validation, screening, and reporting.",
         ));
     }
+    #[cfg(feature = "memories")]
+    if memories_tools_enabled {
+        available_features.push((
+            beale_memories::FEATURE_ID,
+            "Use to search prior items in this session and sourced workspace research memories.",
+        ));
+    }
     #[cfg(feature = "runbooks")]
     if runbook_tools_enabled {
         available_features.push((
@@ -1839,19 +1882,41 @@ async fn run_one_turn(
             plugin.name, plugin.description
         ));
     }
-    let sections = [guidance_section.as_str(), extension_section.as_str()];
+    #[cfg(feature = "memories")]
+    let memory_section = if memories_tools_enabled {
+        match beale_memories::MemoryStore::open(state.workspaces.root())
+            .and_then(|store| store.recall(&request.workspace_id, &request.prompt))
+        {
+            Ok(value) => value,
+            Err(error) => {
+                eprintln!("memory recall failed: {error:#}");
+                String::new()
+            }
+        }
+    } else {
+        String::new()
+    };
+    #[cfg(not(feature = "memories"))]
+    let memory_section = String::new();
+    let sections = [
+        guidance_section.as_str(),
+        extension_section.as_str(),
+        memory_section.as_str(),
+    ];
     let system = system_prompt::load(state.workspaces.root(), &sections).map_err(|error| {
         eprintln!("session system prompt failed: {error:#}");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
     #[cfg(feature = "graphs")]
     let child_system = if active_graph.is_some() {
-        system_prompt::load(state.workspaces.root(), &[guidance_section.as_str()]).map_err(
-            |error| {
-                eprintln!("subagent system prompt failed: {error:#}");
-                StatusCode::INTERNAL_SERVER_ERROR
-            },
-        )?
+        system_prompt::load(
+            state.workspaces.root(),
+            &[guidance_section.as_str(), memory_section.as_str()],
+        )
+        .map_err(|error| {
+            eprintln!("subagent system prompt failed: {error:#}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
     } else {
         String::new()
     };
@@ -1863,6 +1928,7 @@ async fn run_one_turn(
     #[cfg(any(
         feature = "surfaces",
         feature = "knowledge",
+        feature = "memories",
         feature = "runbooks",
         feature = "goal-mode",
         feature = "graphs"
@@ -1872,6 +1938,10 @@ async fn run_one_turn(
     #[cfg(feature = "goal-mode")]
     let mut goal_signal: Option<beale_goals::Signal> = None;
     let mut tool_rows = Vec::<ToolCallRow>::new();
+    #[cfg(feature = "graphs")]
+    let mut child_turns = Vec::<ChildTurnRow>::new();
+    #[cfg(not(feature = "graphs"))]
+    let child_turns = Vec::<ChildTurnRow>::new();
     let mut reasoning_rows = Vec::<ReasoningSummaryRow>::new();
     let mut commentary_rows = Vec::<CommentaryRow>::new();
     let mut model_usage = Vec::<ModelUsageRow>::new();
@@ -2071,6 +2141,11 @@ async fn run_one_turn(
                 "Record Goal Mode status".to_owned()
             } else if cfg!(feature = "surfaces") && call.name.starts_with("surface_") {
                 format!("{} surface", call.name.trim_start_matches("surface_"))
+            } else if cfg!(feature = "findings") && call.name.starts_with("findings_") {
+                format!(
+                    "{} finding",
+                    call.name.trim_start_matches("findings_").replace('_', " ")
+                )
             } else if cfg!(feature = "knowledge")
                 && (call.name.starts_with("knowledge_")
                     || call.name.starts_with("memory_")
@@ -2153,7 +2228,7 @@ async fn run_one_turn(
                         let result = async {
                         let request_args: LoadExtensionArgs = serde_json::from_value(args)?;
                         match request_args.kind {
-                            #[cfg(any(feature = "surfaces", feature = "knowledge", feature = "findings", feature = "runbooks", feature = "goal-mode", feature = "graphs"))]
+                            #[cfg(any(feature = "surfaces", feature = "knowledge", feature = "findings", feature = "memories", feature = "runbooks", feature = "goal-mode", feature = "graphs"))]
                             ExtensionKind::Feature => {
                                 anyhow::ensure!(available_features.iter().any(|(id, _)| *id == request_args.id), "feature is unavailable in this workspace");
                                 let (tools, guidance) = match request_args.id.as_str() {
@@ -2163,6 +2238,8 @@ async fn run_one_turn(
                                     beale_knowledge::FEATURE_ID => (beale_knowledge::definitions(), beale_knowledge::PROMPT_EXTENSION.to_owned()),
                                     #[cfg(feature = "findings")]
                                     beale_findings::FEATURE_ID => (beale_findings::definitions(), beale_findings::PROMPT_EXTENSION.to_owned()),
+                                    #[cfg(feature = "memories")]
+                                    beale_memories::FEATURE_ID => (beale_memories::definitions(), beale_memories::PROMPT_EXTENSION.to_owned()),
                                     #[cfg(feature = "runbooks")]
                                     beale_runbooks::FEATURE_ID => (beale_runbooks::definitions(), beale_runbooks::PROMPT_EXTENSION.to_owned()),
                                     #[cfg(feature = "goal-mode")]
@@ -2176,7 +2253,7 @@ async fn run_one_turn(
                                 }
                                 Ok::<_, anyhow::Error>(json!({"feature":request_args.id,"instructions":guidance,"tools":tools}).to_string())
                             }
-                            #[cfg(not(any(feature = "surfaces", feature = "knowledge", feature = "findings", feature = "runbooks", feature = "goal-mode", feature = "graphs")))]
+                            #[cfg(not(any(feature = "surfaces", feature = "knowledge", feature = "findings", feature = "memories", feature = "runbooks", feature = "goal-mode", feature = "graphs")))]
                             ExtensionKind::Feature => anyhow::bail!("feature is unavailable"),
                             ExtensionKind::Plugin => {
                                 let details = state.plugins.details(&request_args.id, &request.workspace_id).await?;
@@ -2347,6 +2424,28 @@ async fn run_one_turn(
                             Err(error) => (format!("Findings tool error: {error}"), true),
                         }
                     }
+                    #[cfg(feature = "memories")]
+                    Ok(args)
+                        if loaded_features.contains(beale_memories::FEATURE_ID)
+                            && memories_tools_enabled
+                            && beale_memories::is_tool(&call.name) =>
+                    {
+                        match beale_memories::MemoryStore::open(state.workspaces.root()).and_then(
+                            |store| {
+                                beale_memories::execute(
+                                    &store,
+                                    &state.db,
+                                    &request.workspace_id,
+                                    &session.id,
+                                    &call.name,
+                                    &args,
+                                )
+                            },
+                        ) {
+                            Ok(value) => (value, false),
+                            Err(error) => (format!("Memory tool error: {error}"), true),
+                        }
+                    }
                     #[cfg(feature = "surfaces")]
                     Ok(args)
                         if loaded_features.contains(beale_surfaces::FEATURE_ID)
@@ -2427,6 +2526,7 @@ async fn run_one_turn(
                             .await;
                             model_usage.extend(child_usage.into_inner());
                             child_tools = result.tools;
+                            child_turns.extend(result.child_turns);
                             (result.output, result.is_error)
                         }
                     }
@@ -2689,6 +2789,8 @@ async fn run_one_turn(
                 graph_id: (!request.graph_id.is_empty()).then_some(request.graph_id.as_str()),
                 graph_config: graph_config.as_deref(),
                 model_usage: Some(&model_usage),
+                child_turns: &child_turns,
+                queue_memories: memories_tools_enabled,
             },
         )
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -2716,6 +2818,10 @@ mod tests {
         }
         #[cfg(feature = "findings")]
         for tool in beale_findings::definitions() {
+            assert!(feature_tool_requires_review(tool["name"].as_str().unwrap()));
+        }
+        #[cfg(feature = "memories")]
+        for tool in beale_memories::definitions() {
             assert!(feature_tool_requires_review(tool["name"].as_str().unwrap()));
         }
         #[cfg(feature = "runbooks")]
@@ -2748,7 +2854,7 @@ mod tests {
         feature = "goal-mode"
     ))]
     #[test]
-    fn built_in_tool_budget_stays_within_target() {
+    fn built_in_tool_counts_include_optional_memories() {
         let base = beale_tools::definitions().len();
         assert_eq!(base, 8);
         let all = base
@@ -2756,10 +2862,21 @@ mod tests {
             + beale_knowledge::definitions().len()
             + beale_findings::definitions().len()
             + beale_runbooks::definitions().len()
+            + beale_memories::definitions().len()
             + beale_graphs::TOOL_COUNT as usize
             + beale_goals::TOOL_COUNT as usize;
-        assert_eq!(all, 34);
-        assert!((15..=36).contains(&all));
+        assert_eq!(all, 38);
+        assert_eq!(all - beale_knowledge::definitions().len(), 32);
+    }
+
+    #[cfg(all(feature = "knowledge", feature = "findings"))]
+    #[test]
+    fn findings_and_knowledge_tool_names_do_not_overlap() {
+        let knowledge = beale_knowledge::definitions();
+        let findings = beale_findings::definitions();
+        for tool in &findings {
+            assert!(!knowledge.iter().any(|other| other["name"] == tool["name"]));
+        }
     }
 
     #[test]

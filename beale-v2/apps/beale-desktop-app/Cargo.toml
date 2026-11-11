@@ -9,6 +9,7 @@ license.workspace = true
 beale-graphs = { path = "../../extensions/features/beale-graphs" }
 beale-knowledge = { path = "../../extensions/features/beale-knowledge" }
 beale-findings = { path = "../../extensions/features/beale-findings" }
+beale-memories = { path = "../../extensions/features/beale-memories" }
 beale-runbooks = { path = "../../extensions/features/beale-runbooks" }
 beale-tracking = { path = "../../extensions/features/beale-tracking" }
 beale-surfaces = { path = "../../extensions/features/beale-surfaces" }

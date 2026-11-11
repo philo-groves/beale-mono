@@ -12,6 +12,7 @@ graphs = ["dep:beale-graphs"]
 surfaces = ["dep:beale-surfaces"]
 knowledge = ["dep:beale-knowledge"]
 findings = ["dep:beale-findings"]
+memories = ["dep:beale-memories"]
 runbooks = ["dep:beale-runbooks"]
 
 [dependencies]
@@ -23,6 +24,7 @@ beale-goals = { path = "../../../../extensions/features/beale-goals", optional =
 beale-graphs = { path = "../../../../extensions/features/beale-graphs", optional = true }
 beale-knowledge = { path = "../../../../extensions/features/beale-knowledge", optional = true }
 beale-findings = { path = "../../../../extensions/features/beale-findings", optional = true }
+beale-memories = { path = "../../../../extensions/features/beale-memories", optional = true }
 beale-runbooks = { path = "../../../../extensions/features/beale-runbooks", optional = true }
 beale-surfaces = { path = "../../../../extensions/features/beale-surfaces", optional = true }
 beale-providers = { path = "../beale-providers" }

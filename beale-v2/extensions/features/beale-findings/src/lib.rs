@@ -22,14 +22,14 @@ pub const FEATURE_NAME: &str = "Findings";
 pub const FEATURE_DESCRIPTION: &str = "Independent, evidence-backed findings with explicit validation, screening, and reporting states.";
 pub const HAS_PROMPT_EXTENSION: bool = true;
 pub const TOOL_COUNT: u32 = 6;
-pub const PROMPT_EXTENSION: &str = "## Findings\n\nUse Candidate for a specific hypothesis. A finding may cover multiple surfaces; keep its summary concise. Record an optional root_cause when supported, an attack_path when its reachability and steps are understood, and remediation when known. Complete Validated only after evidence establishes the behavior; name and describe the validation method, record its result and limitations, cite a successful workspace tool call in evidence_refs, and record counter_evidence when present. A local proof may help but is not required. Complete Screened only after checking validation quality, accepted risks or known issues, and scope/reportability. Prepare a triage-facing, machine-agnostic PoC and report only after Screened. Draft finding or state details with finding_update, then use finding_complete_state; it reports missing fields. Rejected records a reason without discarding earlier state. A state object is not a completed status until its completion passes the predecessor check.";
+pub const PROMPT_EXTENSION: &str = "## Findings\n\nUse Candidate for a specific hypothesis. A finding may cover multiple surfaces; keep its summary concise. Record an optional root_cause when supported, an attack_path when its reachability and steps are understood, and remediation when known. Complete Validated only after evidence establishes the behavior; name and describe the validation method, record its result and limitations, cite a successful workspace tool call in evidence_refs, and record counter_evidence when present. A local proof may help but is not required. Complete Screened only after checking validation quality, accepted risks or known issues, and scope/reportability. Prepare a triage-facing, machine-agnostic PoC and report only after Screened. Draft finding or state details with findings_update, then use findings_complete_state; it reports missing fields. Rejected records a reason without discarding earlier state. A state object is not a completed status until its completion passes the predecessor check.";
 
-const QUERY: &str = "finding_query";
-const READ: &str = "finding_read";
-const CREATE: &str = "finding_create";
-const UPDATE: &str = "finding_update";
-const COMPLETE: &str = "finding_complete_state";
-const REJECT: &str = "finding_reject";
+const QUERY: &str = "findings_query";
+const READ: &str = "findings_read";
+const CREATE: &str = "findings_create";
+const UPDATE: &str = "findings_update";
+const COMPLETE: &str = "findings_complete_state";
+const REJECT: &str = "findings_reject";
 
 pub fn definitions() -> Vec<Value> {
     let attack_path_schema = json!({
@@ -48,11 +48,40 @@ pub fn definitions() -> Vec<Value> {
         "required":["summary","assumptions","evidence_refs","limitations","preconditions","likelihood_description","impact_description","steps","reachability"],
         "additionalProperties":false
     });
+    let evidence_refs_schema = json!({"type":"array","items":{"type":"object","properties":{"kind":{"type":"string","enum":["tool_call","artifact","surface","document","url","other"]},"reference":{"type":"string"},"note":{"type":"string"}},"required":["kind","reference"],"additionalProperties":false}});
+    let root_cause_schema = json!({"type":"object","properties":{"summary":{"type":"string"},"evidence_refs":evidence_refs_schema.clone()},"required":["summary","evidence_refs"],"additionalProperties":false});
+    let screening_check_schema = json!({"type":"object","properties":{"passed":{"type":"boolean"},"method":{"type":"string"},"conclusion":{"type":"string"}},"required":["passed","method","conclusion"],"additionalProperties":false});
+    let patch_schema = json!({
+        "type":"object",
+        "description":"Set fields for the selected state. For finding, root_cause, attack_path, and remediation may be null to clear them.",
+        "properties":{
+            "title":{"type":"string"},"summary":{"type":"string"},"surface_ids":{"type":"array","items":{"type":"string"}},
+            "root_cause":{"anyOf":[root_cause_schema.clone(),{"type":"null"}]},
+            "attack_path":{"anyOf":[attack_path_schema.clone(),{"type":"null"}]},
+            "remediation":{"type":["string","null"]},
+            "hypothesis":{"type":"string"},
+            "attacker_control":{"type":"string"},"violated_invariant":{"type":"string"},
+            "observed_behavior":{"type":"string"},"impact":{"type":"string"},
+            "validation_method":{"type":"string"},"validation_description":{"type":"string"},
+            "validation_result":{"type":"string"},
+            "validation_limitations":{"type":"array","items":{"type":"string"}},
+            "counter_evidence":evidence_refs_schema.clone(),
+            "validation_review":screening_check_schema.clone(),
+            "known_issue_review":screening_check_schema.clone(),
+            "scope_review":screening_check_schema,
+            "poc_steps":{"type":"string"},"poc_result":{"type":"string"},
+            "poc_portability_notes":{"type":"string"},
+            "poc_artifact_refs":{"type":"array","items":{"type":"string"}},
+            "report_reference":{"type":"string"},
+            "evidence_refs":evidence_refs_schema
+        },
+        "additionalProperties":false
+    });
     vec![
-        json!({"type":"function","name":QUERY,"description":"Search workspace findings by text, surfaces (all listed IDs), or derived status.","parameters":{"type":"object","properties":{"text":{"type":"string"},"status":{"type":"string","enum":["candidate","validated","screened","reported","rejected"]},"surface_ids":{"type":"array","items":{"type":"string"}},"limit":{"type":"integer","minimum":1,"maximum":50}},"additionalProperties":false}}),
-        json!({"type":"function","name":READ,"description":"Read a finding and one page of newest-first revision history.","parameters":{"type":"object","properties":{"id":{"type":"string"},"history_offset":{"type":"integer","minimum":0}},"required":["id"],"additionalProperties":false}}),
+        json!({"type":"function","name":QUERY,"description":"Page through workspace findings by text, surfaces (all listed IDs), or derived status. Use next_offset for the next page.","parameters":{"type":"object","properties":{"text":{"type":"string"},"status":{"type":"string","enum":["candidate","validated","screened","reported","rejected"]},"surface_ids":{"type":"array","items":{"type":"string"}},"limit":{"type":"integer","minimum":1,"maximum":50},"offset":{"type":"integer","minimum":0}},"additionalProperties":false}}),
+        json!({"type":"function","name":READ,"description":"Read a finding. Pass history_offset (starting at 0) to include one newest-first revision; omit it for the current record only.","parameters":{"type":"object","properties":{"id":{"type":"string"},"history_offset":{"type":"integer","minimum":0}},"required":["id"],"additionalProperties":false}}),
         json!({"type":"function","name":CREATE,"description":"Create a Candidate finding with a concise summary, concrete hypothesis, and optional surface IDs, root cause, attack path, and remediation.","parameters":{"type":"object","properties":{"title":{"type":"string"},"summary":{"type":"string"},"surface_ids":{"type":"array","items":{"type":"string"}},"root_cause":{"type":"object","properties":{"summary":{"type":"string"},"evidence_refs":{"type":"array","items":{"type":"object","properties":{"kind":{"type":"string","enum":["tool_call","artifact","surface","document","url","other"]},"reference":{"type":"string"},"note":{"type":"string"}},"required":["kind","reference"],"additionalProperties":false}}},"required":["summary","evidence_refs"],"additionalProperties":false},"attack_path":attack_path_schema,"remediation":{"type":"string"},"hypothesis":{"type":"string"}},"required":["title","summary","hypothesis"],"additionalProperties":false}}),
-        json!({"type":"function","name":UPDATE,"description":"Revise finding metadata (title, summary, surface_ids, root_cause, attack_path, remediation) or one state object. Supply the complete attack_path object with its reachability object and lists when setting it; optional metadata may be cleared with null. Set state to finding, candidate, validated, screened, or reported. Validated accepts validation_method, validation_description, validation_result, validation_limitations (string list), and counter_evidence (typed reference list). Each state accepts optional typed evidence_refs entries with kind, reference, and optional note. Reported PoC details require completed screening.","parameters":{"type":"object","properties":{"id":{"type":"string"},"expected_revision":{"type":"integer","minimum":1},"state":{"type":"string","enum":["finding","candidate","validated","screened","reported"]},"patch":{"type":"object"},"reason":{"type":"string"}},"required":["id","expected_revision","state","patch","reason"],"additionalProperties":false}}),
+        json!({"type":"function","name":UPDATE,"description":"Revise finding metadata or one state object. Set state to finding, candidate, validated, screened, or reported. Supply a complete root_cause or attack_path object when setting it. State-specific fields are listed in patch; only fields belonging to the selected state are accepted. Reported PoC details require completed screening.","parameters":{"type":"object","properties":{"id":{"type":"string"},"expected_revision":{"type":"integer","minimum":1},"state":{"type":"string","enum":["finding","candidate","validated","screened","reported"]},"patch":patch_schema,"reason":{"type":"string"}},"required":["id","expected_revision","state","patch","reason"],"additionalProperties":false}}),
         json!({"type":"function","name":COMPLETE,"description":"Complete Validated, Screened, or Reported in order. Returns missing state details when incomplete. Validation evidence must cite durable successful read or bash calls in this workspace.","parameters":{"type":"object","properties":{"id":{"type":"string"},"expected_revision":{"type":"integer","minimum":1},"state":{"type":"string","enum":["validated","screened","reported"]}},"required":["id","expected_revision","state"],"additionalProperties":false}}),
         json!({"type":"function","name":REJECT,"description":"Reject a finding from its current state with a reason and optional typed evidence_refs, retaining prior state objects.","parameters":{"type":"object","properties":{"id":{"type":"string"},"expected_revision":{"type":"integer","minimum":1},"reason":{"type":"string"},"evidence_refs":{"type":"array","items":{"type":"object","properties":{"kind":{"type":"string","enum":["tool_call","artifact","surface","document","url","other"]},"reference":{"type":"string"},"note":{"type":"string"}},"required":["kind","reference"],"additionalProperties":false}}},"required":["id","expected_revision","reason"],"additionalProperties":false}}),
     ]
@@ -186,17 +215,29 @@ pub fn execute(
                     .and_then(Value::as_u64)
                     .unwrap_or(20)
                     .try_into()?,
+                offset: args
+                    .get("offset")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0)
+                    .try_into()?,
             };
-            json!({"records":db.finding_query(&request)?})
+            json!(db.finding_query(&request)?)
         }
-        READ => json!(findings::page_finding(
-            db.finding_get(workspace_id, required(args, "id")?)?
-                .context("finding not found")?,
-            args.get("history_offset")
-                .and_then(Value::as_u64)
-                .unwrap_or(0)
-                .try_into()?,
-        )),
+        READ => json!(
+            db.finding_get_page(
+                workspace_id,
+                required(args, "id")?,
+                args.get("history_offset")
+                    .map(|value| -> Result<u32> {
+                        Ok(value
+                            .as_u64()
+                            .context("invalid history_offset")?
+                            .try_into()?)
+                    })
+                    .transpose()?,
+            )?
+            .context("finding not found")?
+        ),
         CREATE => {
             let finding = Finding {
                 id: String::new(),
@@ -436,7 +477,7 @@ pub fn execute(
         _ => bail!("unknown Findings tool"),
     };
     let output = result.to_string();
-    ensure!(output.len() <= 256_000, "Findings result is too large");
+    ensure!(output.len() <= 2_000_000, "Findings result is too large");
     Ok(output)
 }
 
@@ -504,7 +545,7 @@ async fn query(
         .db
         .finding_query(&request)
         .map_err(|_| StatusCode::BAD_REQUEST)?;
-    Ok(Json(json!({"records":records})))
+    Ok(Json(json!(records)))
 }
 async fn get(
     State(state): State<HttpState>,
@@ -526,15 +567,12 @@ async fn get(
     {
         return Err(StatusCode::FORBIDDEN);
     }
-    let record = state
+    let page = state
         .db
-        .finding_get(&request.workspace_id, &request.id)
+        .finding_get_page(&request.workspace_id, &request.id, request.history_offset)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
-    Ok(Json(json!(findings::page_finding(
-        record,
-        request.history_offset
-    ))))
+    Ok(Json(json!(page)))
 }
 
 #[cfg(test)]
@@ -552,6 +590,54 @@ mod tests {
             &execute(db, "workspace-example", "session-example", name, &args, &[]).unwrap(),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn tool_contract_exposes_state_patch_fields() {
+        let definitions = definitions();
+        assert_eq!(definitions.len(), TOOL_COUNT as usize);
+        let update = definitions
+            .iter()
+            .find(|tool| tool["name"] == UPDATE)
+            .unwrap();
+        let fields = &update["parameters"]["properties"]["patch"]["properties"];
+        for name in [
+            "title",
+            "summary",
+            "surface_ids",
+            "root_cause",
+            "attack_path",
+            "remediation",
+            "hypothesis",
+            "attacker_control",
+            "violated_invariant",
+            "observed_behavior",
+            "impact",
+            "validation_method",
+            "validation_description",
+            "validation_result",
+            "validation_limitations",
+            "counter_evidence",
+            "validation_review",
+            "known_issue_review",
+            "scope_review",
+            "poc_steps",
+            "poc_result",
+            "poc_portability_notes",
+            "poc_artifact_refs",
+            "report_reference",
+            "evidence_refs",
+        ] {
+            assert!(fields.get(name).is_some(), "missing update field {name}");
+        }
+        assert_eq!(
+            fields["attack_path"]["anyOf"][0]["properties"]["reachability"]["properties"]["sink"]["type"],
+            "string"
+        );
+        assert_eq!(
+            fields["evidence_refs"]["items"]["properties"]["kind"]["enum"][0],
+            "tool_call"
+        );
     }
 
     #[test]
@@ -652,6 +738,17 @@ mod tests {
             json!({"id":id,"expected_revision":2,"state":"validated","patch":{"validation_method":"Read response comparison","validation_description":"Compare a synthetic request with its expected authorization boundary","validation_result":"The synthetic response crossed the example boundary","validation_limitations":["Only the example configuration was checked"],"counter_evidence":[{"kind":"document","reference":"example-negative-case","note":"Alternate input did not cross the boundary"}],"evidence_refs":[{"kind":"tool_call","reference":"tool-example"}]},"reason":"Attach validation details"}),
         );
         assert_eq!(updated["record"]["revision"], 3);
+        assert!(
+            execute(
+                &db,
+                "workspace-example",
+                "session-example",
+                COMPLETE,
+                &json!({"id":id,"expected_revision":3,"state":"validated"}),
+                &[]
+            )
+            .is_err()
+        );
         let validated: Value = serde_json::from_str(
             &execute(
                 &db,
@@ -786,8 +883,14 @@ mod tests {
             "example-counterexample"
         );
         assert_eq!(page["history_total"], 11);
-        assert_eq!(page["record"]["history"].as_array().unwrap().len(), 1);
-        assert_eq!(page["next_history_offset"], 1);
+        assert_eq!(page["record"]["history"].as_array().unwrap().len(), 0);
+        assert_eq!(page["next_history_offset"], 0);
+        let history_page = invoke(&db, READ, json!({"id":id,"history_offset":0}));
+        assert_eq!(
+            history_page["record"]["history"].as_array().unwrap().len(),
+            1
+        );
+        assert_eq!(history_page["next_history_offset"], 1);
         assert!(execute(&db,"workspace-example","session-example",UPDATE,&json!({"id":id,"expected_revision":11,"state":"candidate","patch":{"hypothesis":"Another"},"reason":"Edit"}),&[]).is_err());
         drop(db);
         std::fs::remove_dir_all(root).unwrap();
@@ -876,6 +979,21 @@ mod tests {
         assert_eq!(cleared["record"]["revision"], 3);
         assert!(invoke(&db, READ, json!({"id":id}))["record"]["root_cause"].is_null());
         assert!(invoke(&db, READ, json!({"id":id}))["record"]["remediation"].is_null());
+        invoke(
+            &db,
+            CREATE,
+            json!({"title":"Second example finding","summary":"Another synthetic issue","hypothesis":"Another example boundary"}),
+        );
+        let first_page = invoke(&db, QUERY, json!({"limit":1}));
+        assert_eq!(first_page["total"], 2);
+        assert_eq!(first_page["next_offset"], 1);
+        let second_page = invoke(&db, QUERY, json!({"limit":1,"offset":1}));
+        assert_eq!(second_page["total"], 2);
+        assert!(second_page["next_offset"].is_null());
+        assert_ne!(
+            first_page["records"][0]["id"],
+            second_page["records"][0]["id"]
+        );
         drop(db);
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -966,6 +1084,45 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    #[test]
+    fn finding_history_remains_editable_and_paged_after_256_revisions() {
+        let root = std::env::temp_dir().join(format!(
+            "beale-findings-history-example-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let db = HostDatabase::open(&root).unwrap();
+        db.replace_workspaces(&[WorkspaceRow {
+            id: "workspace-example".to_owned(),
+            name: "Example Workspace".to_owned(),
+            directory: "example-directory".to_owned(),
+        }])
+        .unwrap();
+        let created = invoke(
+            &db,
+            CREATE,
+            json!({"title":"Example long-running finding","summary":"Initial synthetic summary","hypothesis":"Example hypothesis"}),
+        );
+        let id = created["record"]["id"].as_str().unwrap();
+        for revision in 1..=260 {
+            invoke(
+                &db,
+                UPDATE,
+                json!({"id":id,"expected_revision":revision,"state":"finding","patch":{"summary":format!("Synthetic summary {revision}")},"reason":"Refine description"}),
+            );
+        }
+        drop(db);
+        let db = HostDatabase::open(&root).unwrap();
+        let current = invoke(&db, READ, json!({"id":id}));
+        assert_eq!(current["record"]["revision"], 261);
+        assert_eq!(current["history_total"], 261);
+        assert_eq!(current["record"]["history"], json!([]));
+        let oldest = invoke(&db, READ, json!({"id":id,"history_offset":260}));
+        assert_eq!(oldest["record"]["history"][0]["number"], 1);
+        assert!(oldest["next_history_offset"].is_null());
+        drop(db);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[tokio::test]
     async fn read_route_requires_authentication_and_feature_scope() {
         let root = std::env::temp_dir().join(format!(
@@ -1005,11 +1162,52 @@ mod tests {
             StatusCode::FORBIDDEN
         );
         db.set_feature_enabled(FEATURE_ID, true).unwrap();
-        let response = app.oneshot(request(true)).await.unwrap();
+        let response = app.clone().oneshot(request(true)).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let value: Value =
             serde_json::from_slice(&to_bytes(response.into_body(), 16_384).await.unwrap()).unwrap();
         assert_eq!(value["records"][0]["status"], "candidate");
+        assert_eq!(value["total"], 1);
+        let id = value["records"][0]["id"].as_str().unwrap();
+        let get_request = |workspace_id: &str, authorized: bool| {
+            let mut builder = Request::builder()
+                .uri(findings::GET_PATH)
+                .method("POST")
+                .header(header::CONTENT_TYPE, "application/json");
+            if authorized {
+                builder = builder.header(header::AUTHORIZATION, "Bearer example-token");
+            }
+            builder
+                .body(Body::from(
+                    json!({"workspace_id":workspace_id,"id":id}).to_string(),
+                ))
+                .unwrap()
+        };
+        assert_eq!(
+            app.clone()
+                .oneshot(get_request("workspace-example", false))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            app.clone()
+                .oneshot(get_request("workspace-other", true))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        let response = app
+            .oneshot(get_request("workspace-example", true))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let detail: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 16_384).await.unwrap()).unwrap();
+        assert_eq!(detail["record"]["id"], id);
+        assert_eq!(detail["record"]["history"], json!([]));
         drop(db);
         std::fs::remove_dir_all(root).unwrap();
     }

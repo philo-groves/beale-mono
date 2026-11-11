@@ -58,6 +58,7 @@ fn activates_sidenav(name: &str) -> bool {
             | "memory_save"
             | "lead_create"
             | "finding_create"
+            | "findings_create"
             | "claim_create"
             | "runbook_create"
             | "runbook_edit"
@@ -1094,6 +1095,7 @@ mod tests {
         }));
         assert!(activates_sidenav("surface_save"));
         assert!(activates_sidenav("memory_save"));
+        assert!(activates_sidenav("findings_create"));
         assert!(activates_sidenav("claim_create"));
         assert!(!campaign_activity_event(&SessionStreamEvent {
             runbook_progress: None,

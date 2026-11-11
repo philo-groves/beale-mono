@@ -1,6 +1,8 @@
 use super::HostDatabase;
 use anyhow::{Context, Result, ensure};
-use beale_contracts::findings::{EvidenceRef, Finding, QueryRequest, Status, Summary};
+use beale_contracts::findings::{
+    EvidenceRef, Finding, GetResponse, QueryPage, QueryRequest, Revision, Status, Summary,
+};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -106,6 +108,51 @@ pub(super) fn migrate_state_structure(connection: &mut Connection) -> Result<()>
     Ok(())
 }
 
+fn insert_revision(
+    connection: &Connection,
+    workspace_id: &str,
+    id: &str,
+    revision: &Revision,
+) -> Result<()> {
+    connection.execute(
+        "INSERT INTO finding_revisions(workspace_id,id,number,at_ms,session_id,reason,before_json,after_json) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
+        params![workspace_id,id,revision.number as i64,revision.at_ms as i64,revision.session_id,revision.reason,revision.before_json,revision.after_json],
+    )?;
+    Ok(())
+}
+
+pub(super) fn migrate_revisions(connection: &mut Connection) -> Result<()> {
+    let tx = connection.transaction()?;
+    tx.execute_batch("CREATE TABLE IF NOT EXISTS finding_revisions(workspace_id TEXT NOT NULL, id TEXT NOT NULL, number INTEGER NOT NULL, at_ms INTEGER NOT NULL, session_id TEXT NOT NULL, reason TEXT NOT NULL, before_json TEXT NOT NULL, after_json TEXT NOT NULL, PRIMARY KEY(workspace_id,id,number));")?;
+    let records = {
+        let mut statement = tx.prepare("SELECT workspace_id,id,record_json FROM findings")?;
+        statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    for (workspace_id, id, raw) in records {
+        let mut finding: Finding =
+            serde_json::from_str(&raw).context("decode finding revisions")?;
+        for revision in &finding.history {
+            insert_revision(&tx, &workspace_id, &id, revision)?;
+        }
+        finding.history.clear();
+        tx.execute(
+            "UPDATE findings SET record_json=?3 WHERE workspace_id=?1 AND id=?2",
+            params![workspace_id, id, serde_json::to_string(&finding)?],
+        )?;
+    }
+    tx.execute_batch("PRAGMA user_version = 43;")?;
+    tx.commit()?;
+    Ok(())
+}
+
 fn validate_evidence(refs: &[EvidenceRef]) -> Result<()> {
     ensure!(refs.len() <= 32, "too many finding evidence references");
     let mut seen = HashSet::new();
@@ -205,7 +252,6 @@ fn validate(finding: &Finding) -> Result<()> {
         finding.state.candidate.revision > 0 && finding.state.candidate.completed_at_ms > 0,
         "invalid candidate state"
     );
-    ensure!(finding.history.len() <= 256, "too many finding revisions");
     if let Some(state) = &finding.state.validated {
         ensure!(state.revision > 0, "invalid validated state");
         validate_evidence(state.evidence_refs.as_deref().unwrap_or(&[]))?;
@@ -331,7 +377,51 @@ impl HostDatabase {
         })
     }
 
-    pub fn finding_query(&self, request: &QueryRequest) -> Result<Vec<Summary>> {
+    pub fn finding_get_page(
+        &self,
+        workspace_id: &str,
+        id: &str,
+        history_offset: Option<u32>,
+    ) -> Result<Option<GetResponse>> {
+        self.with_connection(|connection| {
+            let raw: Option<String> = connection.query_row(
+                "SELECT record_json FROM findings WHERE workspace_id=?1 AND id=?2",
+                params![workspace_id,id],
+                |row| row.get(0),
+            ).optional()?;
+            let Some(raw) = raw else { return Ok(None); };
+            let mut record: Finding = serde_json::from_str(&raw).context("decode finding")?;
+            let history_total: i64 = connection.query_row(
+                "SELECT COUNT(*) FROM finding_revisions WHERE workspace_id=?1 AND id=?2",
+                params![workspace_id,id],
+                |row| row.get(0),
+            )?;
+            let history_total: usize = history_total.try_into()?;
+            let revision = if let Some(offset) = history_offset {
+                connection.query_row(
+                    "SELECT number,at_ms,session_id,reason,before_json,after_json FROM finding_revisions WHERE workspace_id=?1 AND id=?2 ORDER BY number DESC LIMIT 1 OFFSET ?3",
+                    params![workspace_id,id,i64::from(offset)],
+                    |row| Ok(Revision {
+                        number: row.get::<_,i64>(0)? as u64,
+                        at_ms: row.get::<_,i64>(1)? as u64,
+                        session_id: row.get(2)?,
+                        reason: row.get(3)?,
+                        before_json: row.get(4)?,
+                        after_json: row.get(5)?,
+                    }),
+                ).optional()?
+            } else { None };
+            let next_history_offset = match history_offset {
+                None if history_total > 0 => Some(0),
+                Some(offset) if revision.is_some() && (offset as usize + 1) < history_total => Some(offset + 1),
+                _ => None,
+            };
+            record.history = revision.into_iter().collect();
+            Ok(Some(GetResponse { record, history_total, next_history_offset }))
+        })
+    }
+
+    pub fn finding_query(&self, request: &QueryRequest) -> Result<QueryPage> {
         ensure!(
             !request.workspace_id.is_empty()
                 && request.text.len() <= 200
@@ -348,6 +438,7 @@ impl HostDatabase {
             let rows = statement.query_map([&request.workspace_id], |row| row.get::<_, String>(0))?;
             let needle = request.text.to_lowercase();
             let mut result = Vec::new();
+            let mut total = 0_usize;
             for row in rows {
                 let finding: Finding = serde_json::from_str(&row?)?;
                 let searchable = [
@@ -362,16 +453,23 @@ impl HostDatabase {
                 if request.status.is_some_and(|status| status != finding.status())
                     || !request.surface_ids.iter().all(|id| finding.surface_ids.contains(id))
                     || (!needle.is_empty() && !searchable.contains(&needle)) { continue; }
-                result.push(Summary::from(&finding));
-                if result.len() >= request.limit as usize { break; }
+                if total >= request.offset as usize && result.len() < request.limit as usize {
+                    result.push(Summary::from(&finding));
+                }
+                total += 1;
             }
-            Ok(result)
+            let end = (request.offset as usize).saturating_add(result.len());
+            Ok(QueryPage {
+                records: result,
+                total,
+                next_offset: if end < total { Some(end.try_into()?) } else { None },
+            })
         })
     }
 
     pub fn finding_create(&self, mut finding: Finding, session_id: &str) -> Result<Finding> {
         ensure!(
-            finding.id.is_empty() && session_id.len() <= 128,
+            finding.id.is_empty() && finding.history.is_empty() && session_id.len() <= 128,
             "invalid finding create"
         );
         let at_ms = now_ms()?;
@@ -389,11 +487,12 @@ impl HostDatabase {
             let next: i64 = tx.query_row("SELECT next_id FROM finding_counters WHERE workspace_id=?1", [&finding.workspace_id], |row| row.get(0))?;
             tx.execute("UPDATE finding_counters SET next_id=next_id+1 WHERE workspace_id=?1", [&finding.workspace_id])?;
             finding.id = format!("F{next}");
-            finding.history = vec![beale_contracts::findings::Revision {
+            let revision = Revision {
                 number: 1, at_ms, session_id: session_id.to_owned(), reason: "created".to_owned(),
                 before_json: "null".to_owned(), after_json: snapshot(&finding)?,
-            }];
+            };
             tx.execute("INSERT INTO findings(workspace_id,id,updated_at_ms,revision,record_json) VALUES(?1,?2,?3,?4,?5)", params![finding.workspace_id, finding.id, at_ms as i64, 1_i64, serde_json::to_string(&finding)?])?;
+            insert_revision(&tx, &finding.workspace_id, &finding.id, &revision)?;
             tx.commit()?;
             Ok(finding)
         })
@@ -420,10 +519,11 @@ impl HostDatabase {
             finding.revision = prior.revision.checked_add(1).context("finding revision overflow")?;
             finding.updated_at_ms = now_ms()?.max(prior.updated_at_ms.saturating_add(1));
             let before_json = snapshot(&prior)?;
-            finding.history = prior.history;
-            finding.history.push(beale_contracts::findings::Revision { number: finding.revision, at_ms: finding.updated_at_ms, session_id: session_id.to_owned(), reason: reason.to_owned(), before_json, after_json: snapshot(&finding)? });
+            ensure!(finding.history.is_empty(), "finding history is host-owned");
+            let revision = Revision { number: finding.revision, at_ms: finding.updated_at_ms, session_id: session_id.to_owned(), reason: reason.to_owned(), before_json, after_json: snapshot(&finding)? };
             validate(&finding)?;
             tx.execute("UPDATE findings SET updated_at_ms=?3,revision=?4,record_json=?5 WHERE workspace_id=?1 AND id=?2", params![finding.workspace_id, finding.id, finding.updated_at_ms as i64, finding.revision as i64, serde_json::to_string(&finding)?])?;
+            insert_revision(&tx, &finding.workspace_id, &finding.id, &revision)?;
             tx.commit()?;
             Ok(finding)
         })
@@ -480,8 +580,13 @@ mod tests {
         assert!(finding.root_cause.is_none());
         assert!(finding.attack_path.is_none());
         assert!(finding.remediation.is_none());
-        assert_eq!(finding.history.len(), 1);
-        assert_eq!(finding.history[0].session_id, "session-example");
+        assert!(finding.history.is_empty());
+        let page = migrated
+            .finding_get_page("workspace-example", "F1", Some(0))
+            .unwrap()
+            .unwrap();
+        assert_eq!(page.history_total, 1);
+        assert_eq!(page.record.history[0].session_id, "session-example");
         assert_eq!(
             finding.state.validated.as_ref().unwrap().validation_method,
             ""
@@ -526,7 +631,7 @@ mod tests {
                 Ok(connection.query_row("PRAGMA user_version", [], |row| row.get(0))?)
             })
             .unwrap();
-        assert_eq!(version, 42);
+        assert_eq!(version, 44);
         drop(migrated);
         std::fs::remove_dir_all(root).unwrap();
     }
