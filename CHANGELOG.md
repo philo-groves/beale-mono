@@ -15,6 +15,7 @@
 
 #### Added
 
+- Added a Findings workspace view with Candidate, Validated, Screened, and Reported lanes, a compact rejected list, paged loading, and read-only finding details.
 - Added optional v2 Agent Feedback with one on-demand model tool for observed harness and agent runtime flaws, quirks, or limitations. Accepted reports append to a private, human-readable `agent-feedback.jsonl` in the app-server data directory; no viewer or protocol route is required.
 - Added optional v2 Memories with four read-only agent tools for session transcript search, memory search, record detail, and bounded graph traversal. The app-server queues completed main and subagent turns, extracts structured memories with the default small model, and commits revisions to a separate `memories.sqlite`. Schema 44 preserves child transcript items and a durable turn-end outbox; protocol 2.12 adds authenticated memory status, retry, and disabled-workspace clear routes.
 - Added a separate optional Findings feature with Candidate, Validated, Screened, Reported, and Rejected state objects. Six on-demand tools create, read, update, complete, query, and reject findings with revision checks. Triage-facing PoC details can be drafted only after screening; validation does not require a PoC. App-server schema 41 stores findings, and protocol 2.5 adds authenticated finding reads.
@@ -233,6 +234,7 @@
 
 #### Fixed
 
+- `webfetch` now accepts an empty `query` or `url` alongside the populated field and reads `text/markdown` pages as text.
 - User messages in narrow V2 New Research transcripts now shrink their bubbles to the available width and wrap their text.
 - Opening the V2 Canvas now applies its layout immediately, preserving New Research's rounded right edge and outer margin when switching views.
 - Kept the V2 Canvas visible on workspace surface diagrams by removing diagram sizing from the surrounding row. Dragged nodes and connections are clipped beneath the Home sidenav and Canvas.
@@ -260,6 +262,7 @@
 
 #### Fixed
 
+- OpenAI subscription turns now use a current Codex ChatGPT sign-in when available, so the Codex Responses endpoint honors the requested Daybreak program. The host verifies the provider-selected program and fails a turn on a downgrade instead of silently treating Standard as Daybreak.
 - Reassembled streamed OpenAI output items by their output index and retained completed tool calls when the terminal response carried an empty output array, preventing reasoning-only turns caused by dropped tool items.
 - Excluded OpenAI models that require Daybreak Red from the Blue-mode model catalog and refreshed desktop model choices after changing Daybreak Mode. A blocked session turn now explains the required mode instead of showing a generic provider error.
 - Show safe provider failure codes and actionable subscription, access, rate-limit, and incomplete-response errors in streamed v2 session turns instead of a generic failure. Handle Responses stream error events, including failures after reasoning has begun.

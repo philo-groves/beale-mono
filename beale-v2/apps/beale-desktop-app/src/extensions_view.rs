@@ -254,6 +254,14 @@ pub(crate) fn surfaces_enabled(state: &State, workspace_id: &str) -> bool {
     })
 }
 
+pub(crate) fn findings_enabled(state: &State, workspace_id: &str) -> bool {
+    state.features.iter().any(|feature| {
+        feature.id == beale_findings::FEATURE_ID
+            && feature.enabled
+            && (feature.all_workspaces || feature.workspace_ids.iter().any(|id| id == workspace_id))
+    })
+}
+
 pub(crate) fn surfaces_enabled_for_creation(state: &State) -> bool {
     state.features.iter().any(|feature| {
         feature.id == beale_surfaces::FEATURE_ID && feature.enabled && feature.all_workspaces
@@ -974,8 +982,10 @@ pub(crate) fn start_feature_load(state: &mut State) {
                 state.navigate_to(ViewLocation::Home);
             }
             if let Some(id) = state.workspace_id
-                && state.workspace_tab == crate::workspace_view::WorkspaceTab::Surfaces
-                && !surfaces_enabled(state, &id.to_string())
+                && ((state.workspace_tab == crate::workspace_view::WorkspaceTab::Surfaces
+                    && !surfaces_enabled(state, &id.to_string()))
+                    || (state.workspace_tab == crate::workspace_view::WorkspaceTab::Findings
+                        && !findings_enabled(state, &id.to_string())))
             {
                 state.navigate_to(ViewLocation::Workspace(
                     id,
@@ -1044,8 +1054,11 @@ fn start_feature_toggle(state: &mut State, id: String, enabled: bool) {
                         state.navigate_to(ViewLocation::Home);
                     }
                     if let Some(id) = state.workspace_id
-                        && state.workspace_tab == crate::workspace_view::WorkspaceTab::Surfaces
-                        && !surfaces_enabled(state, &id.to_string())
+                        && ((state.workspace_tab == crate::workspace_view::WorkspaceTab::Surfaces
+                            && !surfaces_enabled(state, &id.to_string()))
+                            || (state.workspace_tab
+                                == crate::workspace_view::WorkspaceTab::Findings
+                                && !findings_enabled(state, &id.to_string())))
                     {
                         state.navigate_to(ViewLocation::Workspace(
                             id,

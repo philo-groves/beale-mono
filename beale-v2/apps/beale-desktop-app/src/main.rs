@@ -13,6 +13,7 @@ mod color_picker;
 mod connection;
 mod desktop_fonts;
 mod extensions_view;
+mod findings_view;
 mod fleet_connection;
 mod fleet_view;
 mod form_controls;
@@ -654,6 +655,7 @@ struct State {
     workspace_details: Option<WorkspaceDetails>,
     workspace_details_loading: bool,
     workspace_details_error: String,
+    workspace_findings: findings_view::FindingsBoard,
     workspace_details_generation: u64,
     workspace_foundation_revision: u64,
     workspace_surfaces_revision: u64,
@@ -887,6 +889,7 @@ impl Default for State {
             workspace_details: None,
             workspace_details_loading: false,
             workspace_details_error: String::new(),
+            workspace_findings: findings_view::FindingsBoard::default(),
             workspace_details_generation: 0,
             workspace_foundation_revision: 0,
             workspace_surfaces_revision: 0,
@@ -1171,9 +1174,15 @@ impl State {
                 } else {
                     tab
                 };
+                if self.workspace_tab == workspace_view::WorkspaceTab::Findings
+                    && !extensions_view::findings_enabled(self, &id.to_string())
+                {
+                    self.workspace_tab = workspace_view::WorkspaceTab::Rules;
+                }
                 if self.workspace_id != Some(id) {
                     self.workspace_id = Some(id);
                     self.workspace_details = None;
+                    self.workspace_findings.reset();
                     load_workspace = Some(id);
                 }
             }
@@ -1253,8 +1262,19 @@ impl State {
         self.workspace_name_dialog_value.clear();
         self.workspace_save_error.clear();
         self.workspace_save_message.clear();
+        if self.primary_view != PrimaryView::Workspace
+            || self.workspace_tab != workspace_view::WorkspaceTab::Findings
+        {
+            findings_view::close_record(self);
+        }
         if let Some(id) = load_workspace {
             start_workspace_details(self, id);
+        }
+        if self.primary_view == PrimaryView::Workspace
+            && self.workspace_tab == workspace_view::WorkspaceTab::Findings
+            && let Some(id) = self.workspace_id
+        {
+            findings_view::start_load(self, id);
         }
         if self.primary_view == PrimaryView::Settings
             && self.settings_section == SettingsSection::Archive
@@ -2425,7 +2445,10 @@ fn start_workspace_save(state: &mut State, tab: workspace_view::WorkspaceTab) {
     let Some(id) = state.workspace_id else {
         return;
     };
-    if tab == workspace_view::WorkspaceTab::Campaign {
+    if matches!(
+        tab,
+        workspace_view::WorkspaceTab::Campaign | workspace_view::WorkspaceTab::Findings
+    ) {
         return;
     }
     if tab == workspace_view::WorkspaceTab::Foundation
@@ -5958,6 +5981,14 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
         && state.workspace_rule_dialog_open
     {
         for layer in workspace_view::rule_dialog(state, theme) {
+            window = window.child(layer);
+        }
+    }
+    if state.primary_view == PrimaryView::Workspace
+        && state.workspace_tab == workspace_view::WorkspaceTab::Findings
+        && let Some(layers) = findings_view::dialog(state, theme)
+    {
+        for layer in layers {
             window = window.child(layer);
         }
     }
@@ -10557,6 +10588,11 @@ active_runbook_count: 0,
         state.apply_view_location(ViewLocation::Workspace(
             id,
             workspace_view::WorkspaceTab::Surfaces,
+        ));
+        assert_eq!(state.workspace_tab, workspace_view::WorkspaceTab::Rules);
+        state.apply_view_location(ViewLocation::Workspace(
+            id,
+            workspace_view::WorkspaceTab::Findings,
         ));
         assert_eq!(state.workspace_tab, workspace_view::WorkspaceTab::Rules);
         assert_eq!(

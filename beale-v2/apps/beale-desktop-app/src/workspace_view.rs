@@ -11,7 +11,7 @@ use crate::{
     FormSpec, SelectionMenu, State, ThemeStyle, ViewLocation, form_button,
     form_controls::icon_action_button,
     form_label_font,
-    icons::{PEN, PLUS, SAFETY, SETTINGS, TARGET, TRASH, WORKSPACE_SURFACES},
+    icons::{FINDINGS, PEN, PLUS, SAFETY, SETTINGS, TARGET, TRASH, WORKSPACE_SURFACES},
     modal_dialog, selection_button, settings_form, settings_form_card, settings_form_with_action,
     toggle_selection_menu, ui_font, view_title_font,
     workspace_creation::{
@@ -25,17 +25,24 @@ pub(crate) enum WorkspaceTab {
     Campaign,
     Foundation,
     Surfaces,
+    Findings,
     #[default]
     Rules,
 }
 
 impl WorkspaceTab {
-    const ALL: [Self; 3] = [Self::Surfaces, Self::Rules, Self::Foundation];
+    const ALL: [Self; 4] = [
+        Self::Surfaces,
+        Self::Findings,
+        Self::Rules,
+        Self::Foundation,
+    ];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Campaign => "Campaign",
             Self::Surfaces => "Surfaces",
+            Self::Findings => "Findings",
             Self::Rules => "Rules",
             Self::Foundation => "Settings",
         }
@@ -45,6 +52,7 @@ impl WorkspaceTab {
         match self {
             Self::Campaign => "workspace-tab-campaign",
             Self::Surfaces => "workspace-tab-surfaces",
+            Self::Findings => "workspace-tab-findings",
             Self::Rules => "workspace-tab-rules",
             Self::Foundation => "workspace-tab-settings",
         }
@@ -55,6 +63,7 @@ fn tab_button(tab: WorkspaceTab, selected: bool, id: uuid::Uuid, theme: ThemeSty
     let color = |value| theme.color(value);
     let tab_icon = match tab {
         WorkspaceTab::Surfaces => &WORKSPACE_SURFACES,
+        WorkspaceTab::Findings => &FINDINGS,
         WorkspaceTab::Campaign => &TARGET,
         WorkspaceTab::Foundation => &SETTINGS,
         WorkspaceTab::Rules => &SAFETY,
@@ -1900,6 +1909,11 @@ pub(crate) fn render(
         {
             continue;
         }
+        if tab == WorkspaceTab::Findings
+            && !crate::extensions_view::findings_enabled(state, &id.to_string())
+        {
+            continue;
+        }
         tabs = tabs.child(tab_button(tab, state.workspace_tab == tab, id, theme));
     }
     let header = row()
@@ -1950,6 +1964,9 @@ pub(crate) fn render(
                 ),
         );
     }
+    if state.workspace_tab == WorkspaceTab::Findings {
+        return page.child(crate::findings_view::render(state, theme, page_width));
+    }
     let details = state.workspace_details.as_ref().filter(|details| {
         details
             .summary
@@ -1959,6 +1976,7 @@ pub(crate) fn render(
     if let Some(details) = details {
         let forms = match state.workspace_tab {
             WorkspaceTab::Surfaces => surfaces(state, theme),
+            WorkspaceTab::Findings => Vec::new(),
             WorkspaceTab::Rules => rules(state, theme),
             WorkspaceTab::Foundation => vec![foundation(state, details, theme)],
             WorkspaceTab::Campaign => Vec::new(),
@@ -1972,6 +1990,7 @@ pub(crate) fn render(
                     || state.workspace_guidance_edit.text.trim_end() != details.guidance.trim_end()
             }),
             WorkspaceTab::Surfaces => state.workspace_surface_edits != details.surfaces,
+            WorkspaceTab::Findings => false,
             WorkspaceTab::Rules => state.workspace_rule_edits != details.rules,
             WorkspaceTab::Campaign => false,
         };

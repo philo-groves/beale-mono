@@ -51,6 +51,12 @@ pub(crate) static INFO: Icon = Icon {
     body: r#"<circle fill="none" stroke="currentColor" stroke-width="2" cx="12" cy="12" r="10"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 16v-4m0-4h.01"/>"#,
 };
 
+pub(crate) static FINDINGS: Icon = Icon {
+    name: "lucide-clipboard-list",
+    view: 24.0,
+    body: r#"<rect x="5" y="4" width="14" height="18" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 4.5V3a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v1.5M9 10h6M9 14h6M9 18h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>"#,
+};
+
 pub(crate) static PEN: Icon = Icon {
     name: "lucide-pen",
     view: 24.0,
@@ -427,8 +433,8 @@ pub(crate) static SETTINGS_FILLED: Icon = Icon {
 mod tests {
     use super::{
         AUTOMATION_ACTIVE, AUTOMATION_SCHEDULE, AUTOMATIONS_FILLED, CANVAS, CANVAS_FILLED,
-        EXTENSIONS_FILLED, FLEET_APPLE, FLEET_FILLED, FLEET_LINUX, FLEET_WINDOWS, HOME_FILLED,
-        PLUGIN_META, RUNBOOK, SESSION_CACHE_RATE, SESSION_TOKENS, SETTINGS_FILLED,
+        EXTENSIONS_FILLED, FINDINGS, FLEET_APPLE, FLEET_FILLED, FLEET_LINUX, FLEET_WINDOWS,
+        HOME_FILLED, PLUGIN_META, RUNBOOK, SESSION_CACHE_RATE, SESSION_TOKENS, SETTINGS_FILLED,
         WORKSPACE_SURFACES,
     };
 
@@ -475,9 +481,11 @@ mod tests {
     }
 
     #[test]
-    fn workspace_surfaces_icon_rasterizes_at_button_size() {
-        let surfaces = rune::text::icon_coverage(&WORKSPACE_SURFACES, 17);
-        assert!(surfaces.iter().filter(|&&pixel| pixel > 0).count() > 20);
+    fn workspace_view_icons_rasterize_at_button_size() {
+        for mark in [&WORKSPACE_SURFACES, &FINDINGS] {
+            let coverage = rune::text::icon_coverage(mark, 17);
+            assert!(coverage.iter().filter(|&&pixel| pixel > 0).count() > 20);
+        }
     }
 
     #[test]

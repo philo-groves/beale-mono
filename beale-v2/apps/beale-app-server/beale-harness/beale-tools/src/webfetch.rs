@@ -26,7 +26,9 @@ enum Request {
 
 fn request(args: Value) -> Result<Request> {
     let args: WebFetchArgs = serde_json::from_value(args).context("invalid webfetch arguments")?;
-    match (args.query, args.url) {
+    let query = args.query.filter(|value| !value.is_empty());
+    let url = args.url.filter(|value| !value.is_empty());
+    match (query, url) {
         (Some(query), None) => {
             let query = query.trim();
             ensure!(
@@ -94,11 +96,7 @@ pub(super) async fn fetch(args: &Value) -> Result<ToolOutcome> {
     let html =
         content_type.starts_with("text/html") || content_type.starts_with("application/xhtml+xml");
     ensure!(
-        html || content_type.starts_with("text/plain")
-            || content_type.starts_with("application/json")
-            || content_type.starts_with("application/xml")
-            || content_type.starts_with("text/xml")
-            || content_type.is_empty(),
+        supported_content_type(&content_type),
         "web content is not supported text"
     );
     let mut bytes = Vec::new();
@@ -129,6 +127,17 @@ fn bounded(value: &str, limit: usize) -> String {
         output.push_str("\n[content truncated]");
     }
     output
+}
+
+fn supported_content_type(value: &str) -> bool {
+    value.is_empty()
+        || value.starts_with("text/html")
+        || value.starts_with("application/xhtml+xml")
+        || value.starts_with("text/plain")
+        || value.starts_with("text/markdown")
+        || value.starts_with("application/json")
+        || value.starts_with("application/xml")
+        || value.starts_with("text/xml")
 }
 
 fn decode_entities(value: &str) -> String {
@@ -384,11 +393,20 @@ mod tests {
             Request::Search(_)
         ));
         assert!(matches!(
+            request(json!({"query":"example research","url":""})).unwrap(),
+            Request::Search(_)
+        ));
+        assert!(matches!(
             request(json!({"url":"https://example.test/a"})).unwrap(),
+            Request::Page(_)
+        ));
+        assert!(matches!(
+            request(json!({"query":"","url":"https://example.test/a"})).unwrap(),
             Request::Page(_)
         ));
         for args in [
             json!({}),
+            json!({"query":"","url":""}),
             json!({"query":"a","url":"https://example.test"}),
             json!({"url":"javascript:alert(1)"}),
             json!({"url":"file:///private"}),
@@ -397,6 +415,24 @@ mod tests {
         ] {
             assert!(request(args).is_err());
         }
+    }
+
+    #[test]
+    fn page_summary_uses_url_when_query_is_empty() {
+        assert_eq!(
+            crate::summary(
+                crate::WEBFETCH,
+                &json!({"query":"","url":"https://example.test/a"})
+            ),
+            "Web https://example.test/a"
+        );
+    }
+
+    #[test]
+    fn accepts_markdown_documents_as_readable_text() {
+        assert!(supported_content_type("text/markdown"));
+        assert!(supported_content_type("text/markdown; charset=utf-8"));
+        assert!(!supported_content_type("application/octet-stream"));
     }
 
     #[test]

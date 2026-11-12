@@ -56,6 +56,17 @@ impl std::error::Error for ProviderFailure {}
 #[derive(Debug)]
 struct DaybreakAccessError;
 
+#[derive(Debug)]
+struct DaybreakSelectionError;
+
+impl fmt::Display for DaybreakSelectionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("OpenAI did not select the requested Daybreak program")
+    }
+}
+
+impl std::error::Error for DaybreakSelectionError {}
+
 impl fmt::Display for DaybreakAccessError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("selected OpenAI model requires Daybreak Red access")
@@ -154,6 +165,9 @@ async fn rejected_response(mut response: reqwest::Response) -> ProviderFailure {
 }
 
 pub fn provider_error_message(provider: Provider, mode: AuthMode, error: &anyhow::Error) -> String {
+    if error.downcast_ref::<DaybreakSelectionError>().is_some() {
+        return "OpenAI selected a different cybersecurity program than Beale requested. Check the OpenAI subscription or API project used for this request.".to_owned();
+    }
     if error.downcast_ref::<DaybreakAccessError>().is_some() {
         return "This OpenAI model requires Daybreak Red. Choose another model or switch Daybreak Mode in Providers.".to_owned();
     }
@@ -580,23 +594,49 @@ fn recoverable_socket_error(error: &anyhow::Error) -> bool {
 async fn read_openai_socket<S>(
     socket: &mut WebSocketStream<S>,
     progress: Option<&mpsc::Sender<ProviderProgress>>,
+    requested_cyber_program: Option<&str>,
 ) -> Result<ProviderStep>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    let events = futures_util::stream::unfold(socket, |socket| async move {
-        loop {
-            let event = socket.next().await?;
-            match event {
-                Ok(Message::Text(value)) => {
-                    return Some((Ok(format!("data: {value}\n\n").into_bytes()), socket));
+    let events = futures_util::stream::unfold(
+        (socket, requested_cyber_program),
+        |(socket, requested_cyber_program)| async move {
+            loop {
+                let event = socket.next().await?;
+                match event {
+                    Ok(Message::Text(value)) => {
+                        if let Ok(event) = serde_json::from_str::<Value>(&value)
+                            && matches!(
+                                event["type"].as_str(),
+                                Some("response.created" | "response.completed")
+                            )
+                            && let Some(selected) =
+                                event["response"]["access_programs"]["cyber"].as_str()
+                            && Some(selected) != requested_cyber_program
+                        {
+                            return Some((
+                                Err(DaybreakSelectionError.into()),
+                                (socket, requested_cyber_program),
+                            ));
+                        }
+                        return Some((
+                            Ok(format!("data: {value}\n\n").into_bytes()),
+                            (socket, requested_cyber_program),
+                        ));
+                    }
+                    Ok(Message::Close(_)) => return None,
+                    Ok(_) => continue,
+                    Err(error) => {
+                        return Some((
+                            Err(anyhow::Error::from(error)),
+                            (socket, requested_cyber_program),
+                        ));
+                    }
                 }
-                Ok(Message::Close(_)) => return None,
-                Ok(_) => continue,
-                Err(error) => return Some((Err(anyhow::Error::from(error)), socket)),
             }
-        }
-    });
+        },
+    );
     read_tool_events(events, WireShape::Responses, progress).await
 }
 
@@ -614,15 +654,49 @@ impl ProviderClient {
             "invalid model name"
         );
         ensure!(!request.input.is_empty(), "empty provider input");
-        let token = self.token(Provider::OpenAi, mode, store).await?;
+        let codex_credential = if mode == AuthMode::Subscription {
+            store.load_codex_credential()?
+        } else {
+            None
+        };
+        let token = if let Some(credential) = &codex_credential {
+            credential.access_token.clone()
+        } else {
+            self.token(Provider::OpenAi, mode, store).await?
+        };
         let cyber_program = request_cyber_program(Provider::OpenAi, request.model, store)?;
         for attempt in 0..2 {
             if connection.socket.is_none() {
-                let mut handshake = "wss://api.openai.com/v1/responses".into_client_request()?;
+                let endpoint = if codex_credential.is_some() {
+                    "wss://chatgpt.com/backend-api/codex/responses"
+                } else {
+                    "wss://api.openai.com/v1/responses"
+                };
+                let mut handshake = endpoint.into_client_request()?;
                 handshake.headers_mut().insert(
                     "Authorization",
                     HeaderValue::from_str(&format!("Bearer {token}"))?,
                 );
+                if let Some(credential) = &codex_credential {
+                    let request_id = uuid::Uuid::new_v4().to_string();
+                    handshake.headers_mut().insert(
+                        "chatgpt-account-id",
+                        HeaderValue::from_str(&credential.account_id)?,
+                    );
+                    handshake
+                        .headers_mut()
+                        .insert("originator", HeaderValue::from_static("beale"));
+                    handshake.headers_mut().insert(
+                        "OpenAI-Beta",
+                        HeaderValue::from_static("responses_websockets=2026-02-06"),
+                    );
+                    handshake
+                        .headers_mut()
+                        .insert("x-client-request-id", HeaderValue::from_str(&request_id)?);
+                    handshake
+                        .headers_mut()
+                        .insert("session-id", HeaderValue::from_str(&request_id)?);
+                }
                 let (socket, _) = tokio::time::timeout(
                     std::time::Duration::from_secs(15),
                     connect_async(handshake),
@@ -679,7 +753,7 @@ impl ProviderClient {
             }
             let step = tokio::time::timeout(
                 std::time::Duration::from_secs(120),
-                read_openai_socket(socket, progress),
+                read_openai_socket(socket, progress, cyber_program),
             )
             .await
             .context("OpenAI response timed out")?;
@@ -932,6 +1006,17 @@ impl ProviderClient {
         store: &CredentialStore,
         progress: Option<&mpsc::Sender<ProviderProgress>>,
     ) -> Result<ProviderStep> {
+        if provider == Provider::OpenAi {
+            return self
+                .openai_tool_step(
+                    mode,
+                    request,
+                    store,
+                    progress,
+                    &mut OpenAiConnection::default(),
+                )
+                .await;
+        }
         if mode == AuthMode::Subscription {
             match provider {
                 Provider::Anthropic => return crate::subscription::claude_step(request).await,
@@ -1917,6 +2002,38 @@ mod tests {
     }
 
     #[test]
+    fn openai_daybreak_blue_marker_reaches_each_websocket_request() {
+        let input = vec![json!({"role":"user","content":"Review example.txt"})];
+        let body = tool_request_body(
+            Provider::OpenAi,
+            WireShape::Responses,
+            "gpt-5.6-sol",
+            &input,
+            &[],
+            RequestOptions {
+                instructions: None,
+                reasoning_effort: None,
+                cyber_program: Some(openai_cyber_program("gpt-5.6-sol", "blue").unwrap()),
+            },
+        );
+        for previous_response_id in [None, Some("resp-example")] {
+            let payload = websocket_body(body.clone(), &input, previous_response_id);
+            let serialized: Value = serde_json::from_str(&payload.to_string()).unwrap();
+            assert_eq!(serialized["type"], "response.create");
+            assert_eq!(
+                serialized["access_programs"],
+                json!({"cyber":"daybreak_blue"})
+            );
+            assert_eq!(
+                serialized
+                    .get("previous_response_id")
+                    .and_then(Value::as_str),
+                previous_response_id
+            );
+        }
+    }
+
+    #[test]
     fn websocket_retries_transport_loss_but_not_provider_rejection() {
         let disconnected: anyhow::Error = ProviderFailure {
             kind: FailureKind::StreamEnded,
@@ -1982,11 +2099,43 @@ mod tests {
             None,
         )
         .await;
-        let step = read_openai_socket(&mut client, None).await.unwrap();
+        let step = read_openai_socket(&mut client, None, None).await.unwrap();
         assert_eq!(step.response_id.as_deref(), Some("resp-example"));
         assert_eq!(step.calls[0].name, "read");
         assert_eq!(step.continuation.len(), 2);
         assert_eq!(step.continuation[0]["type"], "compaction");
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn websocket_rejects_a_downgraded_daybreak_response() {
+        let (client_io, server_io) = tokio::io::duplex(4096);
+        let server = tokio::spawn(async move {
+            let mut socket = WebSocketStream::from_raw_socket(
+                server_io,
+                tokio_tungstenite::tungstenite::protocol::Role::Server,
+                None,
+            )
+            .await;
+            socket
+                .send(Message::Text(
+                    json!({"type":"response.created","response":{"access_programs":{"cyber":"standard"}}})
+                        .to_string()
+                        .into(),
+                ))
+                .await
+                .unwrap();
+        });
+        let mut client = WebSocketStream::from_raw_socket(
+            client_io,
+            tokio_tungstenite::tungstenite::protocol::Role::Client,
+            None,
+        )
+        .await;
+        let error = read_openai_socket(&mut client, None, Some("daybreak_blue"))
+            .await
+            .unwrap_err();
+        assert!(error.downcast_ref::<DaybreakSelectionError>().is_some());
         server.await.unwrap();
     }
 
@@ -2254,5 +2403,39 @@ mod tests {
                 .unwrap();
             assert!(!answer.trim().is_empty());
         }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a signed-in Codex subscription and live network access"]
+    async fn codex_subscription_selects_daybreak_blue_with_tools() {
+        let store = CredentialStore::new().unwrap();
+        assert!(store.load_codex_credential().unwrap().is_some());
+        assert_eq!(store.daybreak_mode().unwrap(), "blue");
+        let client = ProviderClient::new().unwrap();
+        let input = vec![json!({"role":"user","content":"Reply with OK without using tools."})];
+        let tools = vec![json!({
+            "type":"function",
+            "name":"read",
+            "description":"Read a synthetic example file.",
+            "parameters":{"type":"object","properties":{},"additionalProperties":false}
+        })];
+        let step = client
+            .openai_tool_step(
+                AuthMode::Subscription,
+                ToolStepRequest {
+                    model: "gpt-5.6-sol",
+                    input: &input,
+                    tools: &tools,
+                    instructions: Some("This is a synthetic transport check."),
+                    reasoning_effort: None,
+                    workspace_root: None,
+                },
+                &store,
+                None,
+                &mut OpenAiConnection::default(),
+            )
+            .await
+            .unwrap();
+        assert!(!step.text.trim().is_empty());
     }
 }

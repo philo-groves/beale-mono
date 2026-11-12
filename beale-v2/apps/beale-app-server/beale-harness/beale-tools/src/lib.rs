@@ -91,8 +91,9 @@ pub fn summary(name: &str, args: &Value) -> String {
         WEBFETCH => format!(
             "Web {}",
             args.get("query")
-                .or_else(|| args.get("url"))
                 .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .or_else(|| args.get("url").and_then(Value::as_str))
                 .unwrap_or("")
                 .chars()
                 .take(120)
