@@ -1934,15 +1934,10 @@ async fn run_one_turn(
         eprintln!("agent files failed: {error:#}");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
-    let guidance_section = "## Workspace files and tool access\n\nRead RULES.md in the workspace before target operations. Read the optional AGENTS.md for workspace guidance when present; it is not injected into this prompt. Use the Surfaces tools when available to inspect current scope and relationships. Imported context is not authorization. Base tools are read, write, edit, and bash. Webfetch is available only when listed as an enabled extension. Large results include a temporary file path; use read or bash to inspect omitted content. Extensions listed below are already available; read their files for instructions before use.";
     let mut definitions = definitions();
-    let mut extension_section = String::from(
-        "## Available extensions\n\nThe following files form this turn's catalog. Only enabled features and installed plugins available in this workspace are listed. Relative references inside a skill resolve beside its SKILL.md.\n",
-    );
-    extension_section.push_str(&format!(
-        "\nCatalog file: {}\n",
-        json!(agent_files.root().join("EXTENSIONS.md").to_string_lossy())
-    ));
+    let mut extension_entries = String::new();
+    #[cfg(feature = "graphs")]
+    let mut child_extension_entries = String::new();
     for (id, use_case) in &available_features {
         let (tools, guidance): (Vec<Value>, &str) = match *id {
             #[cfg(feature = "webfetch")]
@@ -1999,10 +1994,15 @@ async fn run_one_turn(
         let path = agent_files
             .write(&format!("features/{id}/FEATURE.md"), guidance.as_bytes())
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        extension_section.push_str(&format!(
-            "\n- Feature `{id}`: {use_case} Read {}.",
+        let entry = format!(
+            "- Feature `{id}`: {use_case} Read {}.\n",
             json!(path.to_string_lossy())
-        ));
+        );
+        extension_entries.push_str(&entry);
+        #[cfg(feature = "graphs")]
+        if graphs::child_supports_feature(id) {
+            child_extension_entries.push_str(&entry);
+        }
         definitions.extend(tools);
     }
     let mut callable_plugins = HashSet::new();
@@ -2013,8 +2013,8 @@ async fn run_one_turn(
             .await
         {
             Ok((path, has_tools)) => {
-                extension_section.push_str(&format!(
-                    "\n- Plugin `{}`: {} Read {}.",
+                extension_entries.push_str(&format!(
+                    "- Plugin `{}`: {} Read {}.\n",
                     plugin.name,
                     plugin.description,
                     json!(path.to_string_lossy())
@@ -2025,16 +2025,16 @@ async fn run_one_turn(
             }
             Err(error) => {
                 eprintln!("plugin preparation failed: {error:#}");
-                extension_section.push_str(&format!("\n- Plugin `{}` is unavailable this turn because its files or servers could not be prepared.", plugin.name));
+                extension_entries.push_str(&format!("- Plugin `{}` is unavailable this turn because its files or servers could not be prepared.\n", plugin.name));
             }
         }
     }
     if !callable_plugins.is_empty() {
         definitions.push(plugin_call_definition());
     }
-    agent_files
-        .write("EXTENSIONS.md", extension_section.as_bytes())
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let catalog_section =
+        system_prompt::extension_catalog(&agent_files, "EXTENSIONS.md", &extension_entries)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     #[cfg(feature = "memories")]
     let memory_section = if memories_tools_enabled {
         match beale_memories::MemoryStore::open(state.workspaces.root())
@@ -2051,20 +2051,22 @@ async fn run_one_turn(
     };
     #[cfg(not(feature = "memories"))]
     let memory_section = String::new();
-    let sections = [
-        guidance_section,
-        extension_section.as_str(),
-        memory_section.as_str(),
-    ];
+    let sections = [catalog_section.as_str(), memory_section.as_str()];
     let system = system_prompt::load(state.workspaces.root(), &sections).map_err(|error| {
         eprintln!("session system prompt failed: {error:#}");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
     #[cfg(feature = "graphs")]
     let child_system = if active_graph.is_some() {
+        let catalog_section = system_prompt::extension_catalog(
+            &agent_files,
+            "subagents/EXTENSIONS.md",
+            &child_extension_entries,
+        )
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         system_prompt::load(
             state.workspaces.root(),
-            &[guidance_section, memory_section.as_str()],
+            &[catalog_section.as_str(), memory_section.as_str()],
         )
         .map_err(|error| {
             eprintln!("subagent system prompt failed: {error:#}");

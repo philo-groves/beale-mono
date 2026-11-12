@@ -142,6 +142,19 @@ fn child_tool_definitions(feedback_enabled: bool, webfetch_enabled: bool) -> Vec
     tools
 }
 
+pub(super) fn child_supports_feature(id: &str) -> bool {
+    let _ = id;
+    #[cfg(feature = "webfetch")]
+    if id == beale_webfetch::FEATURE_ID {
+        return true;
+    }
+    #[cfg(feature = "agent-feedback")]
+    if id == beale_agent_feedback::FEATURE_ID {
+        return true;
+    }
+    false
+}
+
 async fn run_child_inner(
     assignment: Assignment,
     context: &ChildContext<'_>,
@@ -158,35 +171,14 @@ async fn run_child_inner(
             tools: Vec::new(),
         };
     };
-    #[allow(unused_mut)]
-    let mut system = format!(
+    let system = format!(
         "{}\n\n## {} subagent\n\n{}\n\nYou have a fresh context. Work only on the assigned task. You cannot delegate. Return a concise result with evidence and uncertainties; the main agent owns the user-facing answer.",
         context.base_system,
         assignment.role.label(),
         assignment.role.instruction()
     );
-    #[cfg(feature = "agent-feedback")]
-    if context.feedback_enabled {
-        let path = context
-            .agent_files
-            .root()
-            .join("features")
-            .join(beale_agent_feedback::FEATURE_ID)
-            .join("FEATURE.md");
-        system.push_str(&format!("\n\nAgent Feedback is available. Read {} for its instructions before reporting an issue.", json!(path.to_string_lossy())));
-    }
-    #[cfg(feature = "webfetch")]
-    if context.webfetch_enabled {
-        let path = context
-            .agent_files
-            .root()
-            .join("features")
-            .join(beale_webfetch::FEATURE_ID)
-            .join("FEATURE.md");
-        system.push_str(&format!("\n\nWebfetch is available. Read {} for its instructions before searching or fetching pages.", json!(path.to_string_lossy())));
-    }
     let task = format!(
-        "Task: {}\n\nRead workspace RULES.md and optional AGENTS.md. Ask the main agent for any scope details requiring tools unavailable to you.\n\nRecorded surfaces at delegation:\n{}",
+        "Task: {}\n\nAsk the main agent for any scope details requiring tools unavailable to you.\n\nRecorded surfaces at delegation:\n{}",
         assignment.task, context.surfaces_context
     );
     let mut input = input_messages(&[TextMessage {
@@ -609,6 +601,23 @@ mod tests {
         }
         #[cfg(not(feature = "webfetch"))]
         assert_eq!(tools, base);
+    }
+
+    #[test]
+    fn child_feature_catalog_matches_supported_tools() {
+        let tools = child_tool_definitions(true, true);
+        for (id, tool) in [
+            ("webfetch", "webfetch"),
+            ("beale-agent-feedback", "agent_feedback"),
+        ] {
+            assert_eq!(
+                child_supports_feature(id),
+                tools.iter().any(|item| item["name"] == tool)
+            );
+        }
+        for id in ["goal-mode", "graphs", "surfaces", "example-plugin"] {
+            assert!(!child_supports_feature(id));
+        }
     }
 
     #[cfg(feature = "agent-feedback")]

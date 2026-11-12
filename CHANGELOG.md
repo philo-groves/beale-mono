@@ -264,6 +264,8 @@
 
 #### Changed
 
+- Streamlined the v2 system prompt around four base tools and file-based workspace and extension guidance. Removed duplicate runtime instructions and inline extension catalogs; subagents receive catalogs limited to their available features. Prior unchanged stock prompts upgrade automatically while custom edits are preserved.
+
 - Moved v2 `webfetch` from the base tools into the optional Webfetch feature with one tool, disabled by default and configurable per workspace. Main agents and Graphs subagents retain reviewed web search and page retrieval when enabled. Base tools are now `read`, `write`, `edit`, and `bash`; unchanged stock prompts upgrade automatically. No database migration is required.
 
 - Removed the v2 `tool_result_page`, `load_plugin_or_feature`, and `get_scope` base tools. Large results now include readable temporary files, enabled extensions expose tools immediately with file-based guidance, and agents read optional `AGENTS.md` plus generated `RULES.md`. Existing workspace rules are backfilled without a schema migration; only an unchanged stock `SYSTEM.md` is automatically upgraded. Desktop tool-output paging remains available.

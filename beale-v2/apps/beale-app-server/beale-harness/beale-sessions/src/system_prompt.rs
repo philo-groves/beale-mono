@@ -1,4 +1,6 @@
 use anyhow::{Context, Result, ensure};
+use beale_tools::AgentFiles;
+use serde_json::json;
 use std::{
     fs::{self, OpenOptions},
     io::{ErrorKind, Write},
@@ -7,12 +9,34 @@ use std::{
 
 const NAME: &str = "SYSTEM.md";
 const DEFAULT: &str = include_str!("../SYSTEM.default.md");
+// Migration-only snapshots; never included in model prompts.
 const LEGACY_DEFAULTS: &[&str] = &[
     include_str!("../SYSTEM.legacy.md"),
     include_str!("../SYSTEM.files.legacy.md"),
+    include_str!("../SYSTEM.webfetch.legacy.md"),
 ];
 const MAX_FILE_BYTES: usize = 65_536;
 const MAX_COMPOSED_BYTES: usize = 96_000;
+
+/// Keep extension discovery in a file; only its location belongs in the prompt.
+pub(crate) fn extension_catalog(
+    files: &AgentFiles,
+    relative: &str,
+    entries: &str,
+) -> Result<String> {
+    let entries = if entries.is_empty() {
+        "None available.\n"
+    } else {
+        entries
+    };
+    let content =
+        format!("# Extensions\n\nAvailable for this agent in this workspace:\n\n{entries}");
+    let path = files.write(relative, content.as_bytes())?;
+    Ok(format!(
+        "Extension catalog: {}",
+        json!(path.to_string_lossy())
+    ))
+}
 
 /// Create the editable host prompt once. Existing user content is never replaced.
 pub(crate) fn ensure_file(root: &Path) -> Result<()> {
@@ -103,6 +127,45 @@ pub(crate) fn load(root: &Path, runtime_sections: &[&str]) -> Result<String> {
 mod tests {
     use super::*;
     use uuid::Uuid;
+
+    #[test]
+    fn prompt_points_to_catalog_without_inlining_or_repeating_guidance() {
+        let files = AgentFiles::new().unwrap();
+        let entries = "- Feature `example-feature`: Example extension instructions.\n";
+        let section = extension_catalog(&files, "EXTENSIONS.md", entries).unwrap();
+        let path: String =
+            serde_json::from_str(section.strip_prefix("Extension catalog: ").unwrap()).unwrap();
+        assert!(fs::read_to_string(path).unwrap().contains(entries));
+        let prompt = load(files.root(), &[&section]).unwrap();
+        assert!(!prompt.contains("example-feature"));
+        assert_eq!(prompt.matches("RULES.md").count(), 1);
+        assert_eq!(prompt.matches("AGENTS.md").count(), 1);
+        assert_eq!(prompt.matches("Base tools are").count(), 1);
+        for removed in [
+            "get_scope",
+            "tool_result_page",
+            "load_plugin_or_feature",
+            "webfetch",
+        ] {
+            assert!(
+                !prompt.contains(removed),
+                "unexpected base prompt tool: {removed}"
+            );
+        }
+        fs::remove_dir_all(files.root()).unwrap();
+    }
+
+    #[test]
+    fn empty_extension_catalog_is_explicit() {
+        let files = AgentFiles::new().unwrap();
+        extension_catalog(&files, "subagents/EXTENSIONS.md", "").unwrap();
+        assert!(
+            fs::read_to_string(files.root().join("subagents/EXTENSIONS.md"))
+                .unwrap()
+                .ends_with("None available.\n")
+        );
+        fs::remove_dir_all(files.root()).unwrap();
+    }
 
     #[test]
     fn upgrades_stock_prompt_without_replacing_custom_instructions() {
