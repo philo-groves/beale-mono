@@ -7,7 +7,10 @@ use std::{
 
 const NAME: &str = "SYSTEM.md";
 const DEFAULT: &str = include_str!("../SYSTEM.default.md");
-const LEGACY_DEFAULT: &str = include_str!("../SYSTEM.legacy.md");
+const LEGACY_DEFAULTS: &[&str] = &[
+    include_str!("../SYSTEM.legacy.md"),
+    include_str!("../SYSTEM.files.legacy.md"),
+];
 const MAX_FILE_BYTES: usize = 65_536;
 const MAX_COMPOSED_BYTES: usize = 96_000;
 
@@ -38,7 +41,9 @@ pub(crate) fn ensure_file(root: &Path) -> Result<()> {
             if metadata.file_type().is_file()
                 && metadata.len() <= MAX_FILE_BYTES as u64
                 && fs::read_to_string(&path).ok().is_some_and(|text| {
-                    text.replace("\r\n", "\n") == LEGACY_DEFAULT.replace("\r\n", "\n")
+                    LEGACY_DEFAULTS
+                        .iter()
+                        .any(|legacy| text.replace("\r\n", "\n") == legacy.replace("\r\n", "\n"))
                 })
             {
                 let temporary = root.join(format!("system-{}.tmp", uuid::Uuid::new_v4()));
@@ -104,17 +109,19 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("beale-system-example-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
-        fs::write(
-            root.join(NAME),
-            LEGACY_DEFAULT.replace("\r\n", "\n").replace('\n', "\r\n"),
-        )
-        .unwrap();
-        ensure_file(&root).unwrap();
-        assert_eq!(fs::read_to_string(root.join(NAME)).unwrap(), DEFAULT);
-        let custom = format!("{LEGACY_DEFAULT}\nExample operator instruction.\n");
-        fs::write(root.join(NAME), &custom).unwrap();
-        ensure_file(&root).unwrap();
-        assert_eq!(fs::read_to_string(root.join(NAME)).unwrap(), custom);
+        for legacy in LEGACY_DEFAULTS {
+            fs::write(
+                root.join(NAME),
+                legacy.replace("\r\n", "\n").replace('\n', "\r\n"),
+            )
+            .unwrap();
+            ensure_file(&root).unwrap();
+            assert_eq!(fs::read_to_string(root.join(NAME)).unwrap(), DEFAULT);
+            let custom = format!("{legacy}\nExample operator instruction.\n");
+            fs::write(root.join(NAME), &custom).unwrap();
+            ensure_file(&root).unwrap();
+            assert_eq!(fs::read_to_string(root.join(NAME)).unwrap(), custom);
+        }
         fs::remove_dir_all(root).unwrap();
     }
 

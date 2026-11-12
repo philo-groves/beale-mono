@@ -37,7 +37,7 @@ use beale_storage::{
 };
 use beale_tools::{
     AgentFiles, PluginCallArgs, definitions, execute, model_preview, page, plugin_call_definition,
-    summary as tool_summary,
+    summary as base_tool_summary,
 };
 use futures_util::stream;
 use prost::Message;
@@ -114,6 +114,44 @@ fn memories_feature_enabled(db: &HostDatabase, workspace_id: &str) -> Result<boo
 #[cfg(not(feature = "memories"))]
 fn memories_feature_enabled(_db: &HostDatabase, _workspace_id: &str) -> Result<bool, StatusCode> {
     Ok(false)
+}
+
+#[cfg(feature = "webfetch")]
+fn webfetch_feature_enabled(db: &HostDatabase, workspace_id: &str) -> Result<bool, StatusCode> {
+    db.feature_enabled(beale_webfetch::FEATURE_ID)
+        .and_then(|enabled| {
+            if enabled {
+                db.extension_applies_to("feature", beale_webfetch::FEATURE_ID, workspace_id)
+            } else {
+                Ok(false)
+            }
+        })
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+#[cfg(feature = "webfetch")]
+async fn execute_webfetch(
+    db: &HostDatabase,
+    workspace_id: &str,
+    arguments: &Value,
+) -> anyhow::Result<beale_tools::ToolOutcome> {
+    anyhow::ensure!(
+        webfetch_feature_enabled(db, workspace_id)
+            .map_err(|_| anyhow::anyhow!("could not read Webfetch availability"))?,
+        "Webfetch is disabled or unavailable in this workspace"
+    );
+    Ok(beale_tools::ToolOutcome {
+        output: beale_webfetch::execute(arguments).await?,
+        is_error: false,
+    })
+}
+
+fn tool_summary(name: &str, arguments: &Value) -> String {
+    #[cfg(feature = "webfetch")]
+    if name == beale_webfetch::TOOL_NAME {
+        return beale_webfetch::summary(arguments);
+    }
+    base_tool_summary(name, arguments)
 }
 
 #[cfg(feature = "agent-feedback")]
@@ -266,6 +304,10 @@ fn scope_state_name(value: i32) -> &'static str {
 
 fn feature_tool_requires_review(name: &str) -> bool {
     let _ = name;
+    #[cfg(feature = "webfetch")]
+    if name == beale_webfetch::TOOL_NAME {
+        return true;
+    }
     #[cfg(feature = "surfaces")]
     if beale_surfaces::is_tool(name) {
         return true;
@@ -1707,6 +1749,8 @@ async fn run_one_turn(
     }
     let workspace = state.workspaces.directory(&request.workspace_id)?;
     let workspace_details = state.workspaces.details_for_host(&request.workspace_id)?;
+    #[cfg(feature = "webfetch")]
+    let webfetch_tools_enabled = webfetch_feature_enabled(&state.db, &request.workspace_id)?;
     let surface_tools_enabled = surface_feature_enabled(&state.db, &request.workspace_id)?;
     let memories_tools_enabled = memories_feature_enabled(&state.db, &request.workspace_id)?;
     #[cfg(feature = "agent-feedback")]
@@ -1823,6 +1867,13 @@ async fn run_one_turn(
     });
     #[allow(unused_mut)]
     let mut available_features: Vec<(&str, &str)> = Vec::new();
+    #[cfg(feature = "webfetch")]
+    if webfetch_tools_enabled {
+        available_features.push((
+            beale_webfetch::FEATURE_ID,
+            "Use to search the web or retrieve readable page text and links.",
+        ));
+    }
     #[cfg(feature = "surfaces")]
     if surface_tools_enabled {
         available_features.push((
@@ -1883,7 +1934,7 @@ async fn run_one_turn(
         eprintln!("agent files failed: {error:#}");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
-    let guidance_section = "## Workspace files and tool access\n\nRead RULES.md in the workspace before target operations. Read the optional AGENTS.md for workspace guidance when present; it is not injected into this prompt. Use the Surfaces tools when available to inspect current scope and relationships. Imported context is not authorization. Base tools are read, write, edit, bash, and webfetch. Large results include a temporary file path; use read or bash to inspect omitted content. Extensions listed below are already available; read their files for instructions before use.";
+    let guidance_section = "## Workspace files and tool access\n\nRead RULES.md in the workspace before target operations. Read the optional AGENTS.md for workspace guidance when present; it is not injected into this prompt. Use the Surfaces tools when available to inspect current scope and relationships. Imported context is not authorization. Base tools are read, write, edit, and bash. Webfetch is available only when listed as an enabled extension. Large results include a temporary file path; use read or bash to inspect omitted content. Extensions listed below are already available; read their files for instructions before use.";
     let mut definitions = definitions();
     let mut extension_section = String::from(
         "## Available extensions\n\nThe following files form this turn's catalog. Only enabled features and installed plugins available in this workspace are listed. Relative references inside a skill resolve beside its SKILL.md.\n",
@@ -1894,6 +1945,11 @@ async fn run_one_turn(
     ));
     for (id, use_case) in &available_features {
         let (tools, guidance): (Vec<Value>, &str) = match *id {
+            #[cfg(feature = "webfetch")]
+            beale_webfetch::FEATURE_ID => (
+                vec![beale_webfetch::definition()],
+                beale_webfetch::PROMPT_EXTENSION,
+            ),
             #[cfg(feature = "agent-feedback")]
             beale_agent_feedback::FEATURE_ID => (
                 vec![beale_agent_feedback::definition()],
@@ -2298,6 +2354,13 @@ async fn run_one_turn(
                 (format!("Tool denied by review: {reason}"), true)
             } else {
                 match args {
+                    #[cfg(feature = "webfetch")]
+                    Ok(args) if call.name == beale_webfetch::TOOL_NAME => {
+                        match execute_webfetch(&state.db, &request.workspace_id, &args).await {
+                            Ok(value) => (value.output, value.is_error),
+                            Err(error) => (format!("Webfetch error: {error:#}"), true),
+                        }
+                    }
                     Ok(args) if call.name == "plugin_call" => {
                         let result = async {
                         let parsed: PluginCallArgs = serde_json::from_value(args)?;
@@ -2504,8 +2567,10 @@ async fn run_one_turn(
                                     state,
                                     workspace: &workspace,
                                     agent_files: &agent_files,
-                                    #[cfg(feature = "agent-feedback")]
+                                    #[cfg(any(feature = "agent-feedback", feature = "webfetch"))]
                                     workspace_id: &request.workspace_id,
+                                    #[cfg(feature = "webfetch")]
+                                    webfetch_enabled: webfetch_tools_enabled,
                                     #[cfg(feature = "agent-feedback")]
                                     session_id: &session.id,
                                     #[cfg(feature = "agent-feedback")]
@@ -2531,29 +2596,27 @@ async fn run_one_turn(
                         }
                     }
                     Ok(args) => {
-                        let decision = if matches!(
-                            call.name.as_str(),
-                            "read" | "write" | "edit" | "bash" | "webfetch"
-                        ) {
-                            Some(
-                                beale_safety::review(
-                                    &state.db,
-                                    &state.provider,
-                                    &state.credentials,
-                                    ReviewRequest {
-                                        provider,
-                                        mode,
-                                        model: &request.model,
-                                        name: &call.name,
-                                        arguments: &args,
-                                        workspace_context: &workspace_context,
-                                    },
+                        let decision =
+                            if matches!(call.name.as_str(), "read" | "write" | "edit" | "bash") {
+                                Some(
+                                    beale_safety::review(
+                                        &state.db,
+                                        &state.provider,
+                                        &state.credentials,
+                                        ReviewRequest {
+                                            provider,
+                                            mode,
+                                            model: &request.model,
+                                            name: &call.name,
+                                            arguments: &args,
+                                            workspace_context: &workspace_context,
+                                        },
+                                    )
+                                    .await,
                                 )
-                                .await,
-                            )
-                        } else {
-                            None
-                        };
+                            } else {
+                                None
+                            };
                         if let Some(decision) = decision
                             && !decision.approved
                         {
@@ -2757,10 +2820,80 @@ mod tests {
     use super::*;
     use axum::body::to_bytes;
     use axum::{body::Body, http::Request};
-    #[cfg(feature = "agent-feedback")]
+    #[cfg(any(feature = "agent-feedback", feature = "webfetch"))]
     use beale_storage::WorkspaceRow;
     use prost::Message;
     use tower::ServiceExt;
+
+    #[cfg(feature = "webfetch")]
+    #[tokio::test]
+    async fn webfetch_rechecks_enablement_and_scope_before_execution() {
+        let root =
+            std::env::temp_dir().join(format!("beale-webfetch-example-{}", uuid::Uuid::new_v4()));
+        let db = HostDatabase::open(&root).unwrap();
+        let id = beale_webfetch::FEATURE_ID;
+        let workspace = "workspace-example-a";
+        let unavailable = "Webfetch is disabled or unavailable in this workspace";
+        assert!(!webfetch_feature_enabled(&db, workspace).unwrap());
+        assert_eq!(
+            execute_webfetch(&db, workspace, &json!({}))
+                .await
+                .err()
+                .unwrap()
+                .to_string(),
+            unavailable
+        );
+        db.replace_workspaces(&[WorkspaceRow {
+            id: workspace.to_owned(),
+            name: "Example A".to_owned(),
+            directory: "example-a".to_owned(),
+        }])
+        .unwrap();
+        db.set_feature_enabled(id, true).unwrap();
+        assert!(webfetch_feature_enabled(&db, workspace).unwrap());
+        // Invalid arguments prove enabled calls reach the feature without making a network request.
+        assert_eq!(
+            execute_webfetch(&db, workspace, &json!({}))
+                .await
+                .err()
+                .unwrap()
+                .to_string(),
+            "supply exactly one of query or url"
+        );
+        db.set_extension_scope("feature", id, false, &[workspace.to_owned()])
+            .unwrap();
+        assert!(webfetch_feature_enabled(&db, workspace).unwrap());
+        assert!(!webfetch_feature_enabled(&db, "workspace-example-b").unwrap());
+        assert_eq!(
+            execute_webfetch(&db, "workspace-example-b", &json!({}))
+                .await
+                .err()
+                .unwrap()
+                .to_string(),
+            unavailable
+        );
+        db.set_extension_scope("feature", id, false, &[]).unwrap();
+        assert_eq!(
+            execute_webfetch(&db, workspace, &json!({}))
+                .await
+                .err()
+                .unwrap()
+                .to_string(),
+            unavailable
+        );
+        db.set_extension_scope("feature", id, true, &[]).unwrap();
+        db.set_feature_enabled(id, false).unwrap();
+        assert_eq!(
+            execute_webfetch(&db, workspace, &json!({}))
+                .await
+                .err()
+                .unwrap()
+                .to_string(),
+            unavailable
+        );
+        drop(db);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[cfg(feature = "agent-feedback")]
     #[test]
@@ -2801,6 +2934,8 @@ mod tests {
 
     #[test]
     fn feature_tools_require_review_without_double_reviewing_base_tools() {
+        #[cfg(feature = "webfetch")]
+        assert!(feature_tool_requires_review(beale_webfetch::TOOL_NAME));
         #[cfg(feature = "surfaces")]
         for tool in beale_surfaces::definitions() {
             assert!(feature_tool_requires_review(tool["name"].as_str().unwrap()));
@@ -2826,7 +2961,6 @@ mod tests {
             "write",
             "edit",
             "bash",
-            "webfetch",
             "plugin_call",
         ] {
             assert!(!feature_tool_requires_review(name));
@@ -2835,6 +2969,7 @@ mod tests {
 
     #[cfg(all(
         feature = "agent-feedback",
+        feature = "webfetch",
         feature = "surfaces",
         feature = "findings",
         feature = "memories",
@@ -2845,13 +2980,14 @@ mod tests {
     #[test]
     fn built_in_tool_counts_include_optional_features() {
         let base = beale_tools::definitions().len();
-        assert_eq!(base, 5);
+        assert_eq!(base, 4);
         let all = base
             + beale_surfaces::definitions().len()
             + beale_findings::definitions().len()
             + beale_runbooks::definitions().len()
             + beale_memories::definitions().len()
             + beale_agent_feedback::TOOL_COUNT as usize
+            + beale_webfetch::TOOL_COUNT as usize
             + beale_graphs::TOOL_COUNT as usize
             + beale_goals::TOOL_COUNT as usize;
         assert_eq!(all, 30);

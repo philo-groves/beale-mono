@@ -307,7 +307,7 @@ fn icon_image(bytes: &[u8], width: u8) -> Result<&[u8]> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use windows_sys::Win32::UI::WindowsAndMessaging::FindWindowW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::EnumThreadWindows;
 
     #[test]
     fn bundled_icon_contains_a_small_tray_image() {
@@ -319,10 +319,13 @@ mod tests {
     fn exit_menu_command_requests_shutdown() {
         let (exit_tx, exit_rx) = oneshot::channel();
         let tray = TrayHandle::start("127.0.0.1:43831".parse().unwrap(), exit_tx).unwrap();
-        let window = unsafe { FindWindowW(wide(CLASS_NAME).as_ptr(), ptr::null()) };
-        assert!(!window.is_null());
+        unsafe extern "system" fn request_exit(window: HWND, _: LPARAM) -> i32 {
+            // EnumThreadWindows supplies a window owned by this test's tray thread.
+            unsafe { PostMessageW(window, WM_COMMAND, EXIT_COMMAND, 0) }
+        }
         assert_ne!(
-            unsafe { PostMessageW(window, WM_COMMAND, EXIT_COMMAND, 0) },
+            // A global class-name lookup could close a separate running host instead.
+            unsafe { EnumThreadWindows(tray.thread_id, Some(request_exit), 0) },
             0
         );
         let runtime = tokio::runtime::Builder::new_current_thread()

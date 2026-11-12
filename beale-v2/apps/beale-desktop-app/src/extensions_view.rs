@@ -167,6 +167,15 @@ pub(crate) fn bundled_features() -> Vec<FeatureEntry> {
         workspace_ids: Vec::new(),
         all_workspaces: true,
     }, FeatureEntry {
+        id: beale_webfetch::FEATURE_ID.to_owned(),
+        name: beale_webfetch::FEATURE_NAME.to_owned(),
+        description: beale_webfetch::FEATURE_DESCRIPTION.to_owned(),
+        enabled: false,
+        has_prompt_extension: beale_webfetch::HAS_PROMPT_EXTENSION,
+        tool_count: beale_webfetch::TOOL_COUNT as usize,
+        workspace_ids: Vec::new(),
+        all_workspaces: true,
+    }, FeatureEntry {
         id: beale_graphs::FEATURE_ID.to_owned(),
         name: beale_graphs::FEATURE_NAME.to_owned(),
         description: beale_graphs::FEATURE_DESCRIPTION.to_owned(),
@@ -1581,6 +1590,7 @@ fn feature_mark(id: &str, theme: ThemeStyle<'_>) -> El {
         "surfaces" => &WORKSPACE_SURFACES,
         "runbooks" => &RUNBOOK,
         "tracking" => &TRACKING,
+        "webfetch" => &FLEET_BROWSER,
         "agent-feedback" => &CHAT_BUBBLE,
         _ => &FEATURES,
     };
@@ -2373,6 +2383,21 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["example-two"]
         );
+    }
+
+    #[test]
+    fn webfetch_is_an_optional_single_tool_feature() {
+        let features = bundled_features();
+        let feature = features
+            .iter()
+            .find(|feature| feature.id == beale_webfetch::FEATURE_ID)
+            .unwrap();
+        assert_eq!(feature.name, "Webfetch");
+        assert_eq!(feature.tool_count, 1);
+        assert!(!feature.enabled);
+        assert!(feature.has_prompt_extension);
+        assert!(feature.all_workspaces);
+        assert!(!feature_has_sidebar_view(&feature.id));
     }
 
     #[test]

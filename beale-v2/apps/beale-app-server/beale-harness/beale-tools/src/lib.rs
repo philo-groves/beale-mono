@@ -10,14 +10,11 @@ use std::{
 };
 use tokio::{io::AsyncReadExt, process::Command, time::timeout};
 mod agent_files;
-mod webfetch;
 pub use agent_files::AgentFiles;
 
 pub const MAX_RESULT_BYTES: usize = 8_000_000;
 const MAX_INPUT_BYTES: usize = 8_000_000;
 const BASH_TIMEOUT: Duration = Duration::from_secs(60);
-
-pub const WEBFETCH: &str = "webfetch";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -50,7 +47,6 @@ pub fn definitions() -> Vec<Value> {
         json!({"type":"function","name":"write","description":"Write a UTF-8 file, creating parent directories if needed.","parameters":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"],"additionalProperties":false}}),
         json!({"type":"function","name":"edit","description":"Replace exactly one occurrence of old_text in a UTF-8 file.","parameters":{"type":"object","properties":{"path":{"type":"string"},"old_text":{"type":"string"},"new_text":{"type":"string"}},"required":["path","old_text","new_text"],"additionalProperties":false}}),
         json!({"type":"function","name":"bash","description":"Run a bash command in the workspace. This uses the current user's host privileges.","parameters":{"type":"object","properties":{"command":{"type":"string"}},"required":["command"],"additionalProperties":false}}),
-        json!({"type":"function","name":WEBFETCH,"description":"Search the web with a query or fetch a page by URL. Returns readable text and links without executing JavaScript. Supply exactly one of query or url.","parameters":{"type":"object","properties":{"query":{"type":"string"},"url":{"type":"string"}},"additionalProperties":false}}),
     ]
 }
 
@@ -67,17 +63,6 @@ pub fn summary(name: &str, args: &Value) -> String {
         "write" => format!("Write {short}"),
         "edit" => format!("Edit {short}"),
         "bash" => format!("Run {short}"),
-        WEBFETCH => format!(
-            "Web {}",
-            args.get("query")
-                .and_then(Value::as_str)
-                .filter(|value| !value.is_empty())
-                .or_else(|| args.get("url").and_then(Value::as_str))
-                .unwrap_or("")
-                .chars()
-                .take(120)
-                .collect::<String>()
-        ),
         "plugin_call" => format!(
             "Plugin {}: {}",
             args.get("plugin").and_then(Value::as_str).unwrap_or(""),
@@ -292,7 +277,6 @@ pub async fn execute(
                 .await
                 .context("bash timed out")?
         }
-        WEBFETCH => webfetch::fetch(args).await,
         _ => bail!("unknown tool"),
     }
 }
@@ -340,13 +324,19 @@ mod tests {
     use super::*;
     use uuid::Uuid;
 
+    #[tokio::test]
+    async fn webfetch_is_not_a_base_execution_tool() {
+        let result = execute("webfetch", &json!({}), Path::new("."), Path::new(".")).await;
+        assert!(result.err().unwrap().to_string().contains("unknown tool"));
+    }
+
     #[test]
     fn base_tools_and_extension_arguments_have_bounded_contracts() {
         let names = definitions()
             .into_iter()
             .filter_map(|item| item["name"].as_str().map(str::to_owned))
             .collect::<Vec<_>>();
-        assert_eq!(names, ["read", "write", "edit", "bash", "webfetch"]);
+        assert_eq!(names, ["read", "write", "edit", "bash"]);
         assert!(
             serde_json::from_value::<PluginCallArgs>(
                 json!({"plugin":"example","server":"main","tool":"read","arguments":{}})

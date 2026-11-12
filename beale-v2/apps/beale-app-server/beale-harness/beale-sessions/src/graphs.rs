@@ -18,13 +18,13 @@ use beale_providers::{
 };
 use beale_safety::ReviewRequest;
 use beale_storage::{ChildTurnRow, ModelUsageRow, ToolCallRow};
-use beale_tools::{AgentFiles, definitions, execute, model_preview, summary};
+use beale_tools::{AgentFiles, definitions, execute, model_preview};
 use futures_util::future::join_all;
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, Semaphore, mpsc};
 use uuid::Uuid;
 
-use super::{SessionState, append_tool_result};
+use super::{SessionState, append_tool_result, tool_summary as summary};
 
 const MAX_CHILD_ROUNDS: usize = 6;
 const MAX_CHILD_CALLS: usize = 8;
@@ -67,7 +67,9 @@ pub(super) struct ChildContext<'a> {
     pub state: &'a SessionState,
     pub workspace: &'a Path,
     pub agent_files: &'a AgentFiles,
-    #[cfg(feature = "agent-feedback")]
+    #[cfg(feature = "webfetch")]
+    pub webfetch_enabled: bool,
+    #[cfg(any(feature = "agent-feedback", feature = "webfetch"))]
     pub workspace_id: &'a str,
     #[cfg(feature = "agent-feedback")]
     pub session_id: &'a str,
@@ -122,11 +124,17 @@ async fn run_child(
     (outcome, transcript)
 }
 
-fn child_tool_definitions(feedback_enabled: bool) -> Vec<Value> {
+fn child_tool_definitions(feedback_enabled: bool, webfetch_enabled: bool) -> Vec<Value> {
     #[cfg(not(feature = "agent-feedback"))]
     let _ = feedback_enabled;
+    #[cfg(not(feature = "webfetch"))]
+    let _ = webfetch_enabled;
     #[allow(unused_mut)]
     let mut tools = definitions();
+    #[cfg(feature = "webfetch")]
+    if webfetch_enabled {
+        tools.push(beale_webfetch::definition());
+    }
     #[cfg(feature = "agent-feedback")]
     if feedback_enabled {
         tools.push(beale_agent_feedback::definition());
@@ -167,6 +175,16 @@ async fn run_child_inner(
             .join("FEATURE.md");
         system.push_str(&format!("\n\nAgent Feedback is available. Read {} for its instructions before reporting an issue.", json!(path.to_string_lossy())));
     }
+    #[cfg(feature = "webfetch")]
+    if context.webfetch_enabled {
+        let path = context
+            .agent_files
+            .root()
+            .join("features")
+            .join(beale_webfetch::FEATURE_ID)
+            .join("FEATURE.md");
+        system.push_str(&format!("\n\nWebfetch is available. Read {} for its instructions before searching or fetching pages.", json!(path.to_string_lossy())));
+    }
     let task = format!(
         "Task: {}\n\nRead workspace RULES.md and optional AGENTS.md. Ask the main agent for any scope details requiring tools unavailable to you.\n\nRecorded surfaces at delegation:\n{}",
         assignment.task, context.surfaces_context
@@ -179,10 +197,15 @@ async fn run_child_inner(
         input.insert(0, json!({"role":"system","content":system}));
     }
     let mut connection = OpenAiConnection::default();
+    #[cfg(feature = "webfetch")]
+    let webfetch_enabled = context.webfetch_enabled;
+    #[cfg(not(feature = "webfetch"))]
+    let webfetch_enabled = false;
     #[cfg(feature = "agent-feedback")]
-    let definitions = child_tool_definitions(context.feedback_enabled);
+    let feedback_enabled = context.feedback_enabled;
     #[cfg(not(feature = "agent-feedback"))]
-    let definitions = child_tool_definitions(false);
+    let feedback_enabled = false;
+    let definitions = child_tool_definitions(feedback_enabled, webfetch_enabled);
     let mut tools = Vec::<ToolCallRow>::new();
     let mut call_count = 0;
     for round in 0..MAX_CHILD_ROUNDS {
@@ -336,12 +359,7 @@ async fn run_child_inner(
                         Err(error) => (format!("Agent feedback error: {error}"), true),
                     }
                 }
-                Ok(arguments)
-                    if matches!(
-                        call.name.as_str(),
-                        "read" | "write" | "edit" | "bash" | "webfetch"
-                    ) =>
-                {
+                Ok(arguments) if definitions.iter().any(|tool| tool["name"] == call.name) => {
                     let decision = beale_safety::review(
                         &context.state.db,
                         &context.state.provider,
@@ -364,14 +382,27 @@ async fn run_child_inner(
                         } else {
                             Some(mutation_lock.lock().await)
                         };
-                        match execute(
-                            &call.name,
-                            &arguments,
-                            context.workspace,
-                            context.state.workspaces.root(),
-                        )
-                        .await
-                        {
+                        let result = match call.name.as_str() {
+                            #[cfg(feature = "webfetch")]
+                            beale_webfetch::TOOL_NAME => {
+                                super::execute_webfetch(
+                                    &context.state.db,
+                                    context.workspace_id,
+                                    &arguments,
+                                )
+                                .await
+                            }
+                            _ => {
+                                execute(
+                                    &call.name,
+                                    &arguments,
+                                    context.workspace,
+                                    context.state.workspaces.root(),
+                                )
+                                .await
+                            }
+                        };
+                        match result {
                             Ok(value) => (value.output, value.is_error),
                             Err(error) => (format!("Tool error: {error:#}"), true),
                         }
@@ -565,16 +596,31 @@ pub(super) async fn delegate(
 mod tests {
     use super::*;
 
+    #[test]
+    fn child_catalog_keeps_webfetch_optional() {
+        let base = child_tool_definitions(false, false);
+        assert_eq!(base.len(), 4);
+        assert!(base.iter().all(|tool| tool["name"] != "webfetch"));
+        let tools = child_tool_definitions(false, true);
+        #[cfg(feature = "webfetch")]
+        {
+            assert_eq!(tools.len(), 5);
+            assert_eq!(tools.last().unwrap(), &beale_webfetch::definition());
+        }
+        #[cfg(not(feature = "webfetch"))]
+        assert_eq!(tools, base);
+    }
+
     #[cfg(feature = "agent-feedback")]
     #[test]
     fn child_catalog_includes_feedback_only_when_enabled() {
         assert!(
-            child_tool_definitions(false)
+            child_tool_definitions(false, false)
                 .iter()
                 .all(|tool| tool["name"] != beale_agent_feedback::TOOL_NAME)
         );
         assert!(
-            child_tool_definitions(true)
+            child_tool_definitions(true, false)
                 .iter()
                 .any(|tool| tool["name"] == beale_agent_feedback::TOOL_NAME)
         );

@@ -253,6 +253,7 @@ dependencies = [
  "beale-storage",
  "beale-surfaces",
  "beale-tracking",
+ "beale-webfetch",
  "beale-workspaces",
  "prost",
  "serde_json",
@@ -274,6 +275,7 @@ dependencies = [
  "beale-runbooks",
  "beale-surfaces",
  "beale-tracking",
+ "beale-webfetch",
  "chrono",
  "futures-util",
  "image",
@@ -448,6 +450,7 @@ dependencies = [
  "beale-storage",
  "beale-surfaces",
  "beale-tools",
+ "beale-webfetch",
  "beale-workspaces",
  "futures-util",
  "prost",
@@ -490,7 +493,6 @@ name = "beale-tools"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "reqwest",
  "serde",
  "serde_json",
  "tokio",
@@ -505,6 +507,17 @@ dependencies = [
  "beale-contracts",
  "beale-storage",
  "prost",
+ "tokio",
+]
+
+[[package]]
+name = "beale-webfetch"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "reqwest",
+ "serde",
+ "serde_json",
  "tokio",
 ]
 

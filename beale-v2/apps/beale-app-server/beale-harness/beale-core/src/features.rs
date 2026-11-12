@@ -27,6 +27,7 @@ struct FeatureSpec {
 }
 
 #[cfg(any(
+    feature = "webfetch",
     feature = "agent-feedback",
     feature = "surfaces",
     feature = "findings",
@@ -42,6 +43,16 @@ fn definition_names(definitions: Vec<serde_json::Value>) -> Vec<String> {
 
 fn feature_specs() -> Vec<FeatureSpec> {
     vec![
+        #[cfg(feature = "webfetch")]
+        FeatureSpec {
+            id: beale_webfetch::FEATURE_ID,
+            name: beale_webfetch::FEATURE_NAME,
+            description: beale_webfetch::FEATURE_DESCRIPTION,
+            has_prompt_extension: beale_webfetch::HAS_PROMPT_EXTENSION,
+            tool_count: beale_webfetch::TOOL_COUNT,
+            prompt_extension: beale_webfetch::PROMPT_EXTENSION,
+            tool_names: definition_names(vec![beale_webfetch::definition()]),
+        },
         #[cfg(feature = "agent-feedback")]
         FeatureSpec {
             id: beale_agent_feedback::FEATURE_ID,
@@ -347,15 +358,25 @@ async fn set_scope(
     ))
 }
 
-#[cfg(all(test, any(feature = "goal-mode", feature = "fleet")))]
+#[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(any(feature = "goal-mode", feature = "fleet", feature = "webfetch"))]
     use axum::{body::Body, http::Request};
     #[cfg(feature = "goal-mode")]
     use beale_goals::FEATURE_ID;
+    #[cfg(any(feature = "goal-mode", feature = "webfetch"))]
+    use beale_storage::WorkspaceRow;
     #[cfg(feature = "goal-mode")]
-    use beale_storage::{GoalRow, SessionRow, TurnActivity, TurnRow, WorkspaceRow};
+    use beale_storage::{GoalRow, SessionRow, TurnActivity, TurnRow};
+    #[cfg(any(feature = "goal-mode", feature = "fleet", feature = "webfetch"))]
     use tower::ServiceExt;
+
+    #[cfg(not(feature = "webfetch"))]
+    #[test]
+    fn webfetch_is_absent_when_not_compiled() {
+        assert!(feature_spec("webfetch").is_none());
+    }
 
     #[test]
     fn feature_details_tool_names_match_summary_counts() {
@@ -371,182 +392,205 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "goal-mode")]
+    #[cfg(any(feature = "goal-mode", feature = "webfetch"))]
     #[tokio::test]
     async fn feature_is_off_by_default_and_toggle_is_authenticated() {
-        let root =
-            std::env::temp_dir().join(format!("beale-feature-example-{}", uuid::Uuid::new_v4()));
-        let db = HostDatabase::open(&root).unwrap();
-        let app = router("example-token".to_owned(), db.clone());
-        let denied = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(FEATURES_PATH)
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(FEATURES_PATH)
-                    .header("authorization", "Bearer example-token")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let bytes = axum::body::to_bytes(response.into_body(), 4_096)
-            .await
-            .unwrap();
-        let catalog = ListFeaturesResponse::decode(bytes).unwrap();
-        #[cfg(feature = "surfaces")]
-        {
-            let surfaces = catalog
+        for id in [
+            #[cfg(feature = "goal-mode")]
+            beale_goals::FEATURE_ID,
+            #[cfg(feature = "webfetch")]
+            beale_webfetch::FEATURE_ID,
+        ] {
+            let root = std::env::temp_dir()
+                .join(format!("beale-feature-example-{}", uuid::Uuid::new_v4()));
+            let db = HostDatabase::open(&root).unwrap();
+            let app = router("example-token".to_owned(), db.clone());
+            let denied = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(FEATURES_PATH)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(FEATURES_PATH)
+                        .header("authorization", "Bearer example-token")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let bytes = axum::body::to_bytes(response.into_body(), 4_096)
+                .await
+                .unwrap();
+            let catalog = ListFeaturesResponse::decode(bytes).unwrap();
+            #[cfg(feature = "surfaces")]
+            {
+                let surfaces = catalog
+                    .features
+                    .iter()
+                    .find(|feature| feature.id == beale_surfaces::FEATURE_ID)
+                    .unwrap();
+                assert!(!surfaces.enabled);
+                assert_eq!(surfaces.tool_count, beale_surfaces::TOOL_COUNT);
+            }
+            #[cfg(feature = "graphs")]
+            {
+                let graphs = catalog
+                    .features
+                    .iter()
+                    .find(|feature| feature.id == beale_graphs::FEATURE_ID)
+                    .unwrap();
+                assert!(!graphs.enabled);
+                assert_eq!(graphs.tool_count, 1);
+                assert!(graphs.has_prompt_extension);
+            }
+            let feature = catalog
                 .features
                 .iter()
-                .find(|feature| feature.id == beale_surfaces::FEATURE_ID)
+                .find(|feature| feature.id == id)
                 .unwrap();
-            assert!(!surfaces.enabled);
-            assert_eq!(surfaces.tool_count, beale_surfaces::TOOL_COUNT);
-        }
-        #[cfg(feature = "graphs")]
-        {
-            let graphs = catalog
-                .features
-                .iter()
-                .find(|feature| feature.id == beale_graphs::FEATURE_ID)
+            assert!(!feature.enabled);
+            assert!(feature.has_prompt_extension);
+            assert_eq!(feature.tool_count, 1);
+            let denied = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(FEATURE_DETAILS_PATH)
+                        .header("content-type", PROTOBUF_CONTENT_TYPE)
+                        .body(Body::from(
+                            GetFeatureDetailsRequest { id: id.to_owned() }.encode_to_vec(),
+                        ))
+                        .unwrap(),
+                )
+                .await
                 .unwrap();
-            assert!(!graphs.enabled);
-            assert_eq!(graphs.tool_count, 1);
-            assert!(graphs.has_prompt_extension);
+            assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(FEATURE_DETAILS_PATH)
+                        .header("authorization", "Bearer example-token")
+                        .header("content-type", PROTOBUF_CONTENT_TYPE)
+                        .body(Body::from(
+                            GetFeatureDetailsRequest { id: id.to_owned() }.encode_to_vec(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let bytes = axum::body::to_bytes(response.into_body(), 4_096)
+                .await
+                .unwrap();
+            let details = FeatureDetailsResponse::decode(bytes).unwrap();
+            assert_eq!(details.id, id);
+            let spec = feature_spec(id).unwrap();
+            assert_eq!(details.tool_names, spec.tool_names);
+            assert_eq!(details.prompt_extension, spec.prompt_extension);
+            #[cfg(feature = "goal-mode")]
+            if id == beale_goals::FEATURE_ID {
+                assert!(
+                    beale_goals::system_section(beale_goals::Limits::default(), 0, 0)
+                        .starts_with(&details.prompt_extension)
+                );
+            }
+            let denied = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(FEATURE_SET_ENABLED_PATH)
+                        .header("content-type", PROTOBUF_CONTENT_TYPE)
+                        .body(Body::from(
+                            SetFeatureEnabledRequest {
+                                id: id.to_owned(),
+                                enabled: true,
+                            }
+                            .encode_to_vec(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+            assert!(!db.feature_enabled(id).unwrap());
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(FEATURE_SET_ENABLED_PATH)
+                        .header("authorization", "Bearer example-token")
+                        .header("content-type", PROTOBUF_CONTENT_TYPE)
+                        .body(Body::from(
+                            SetFeatureEnabledRequest {
+                                id: id.to_owned(),
+                                enabled: true,
+                            }
+                            .encode_to_vec(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            assert!(db.feature_enabled(id).unwrap());
+            let workspace_id = uuid::Uuid::new_v4().to_string();
+            db.replace_workspaces(&[WorkspaceRow {
+                id: workspace_id.clone(),
+                name: "Example workspace".to_owned(),
+                directory: "example-directory".to_owned(),
+            }])
+            .unwrap();
+            let scope_request = SetExtensionWorkspaceScopeRequest {
+                id: id.to_owned(),
+                workspace_ids: vec![workspace_id.clone()],
+                all_workspaces: false,
+            };
+            let denied = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(FEATURE_SCOPE_PATH)
+                        .header("content-type", PROTOBUF_CONTENT_TYPE)
+                        .body(Body::from(scope_request.encode_to_vec()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(FEATURE_SCOPE_PATH)
+                        .header("authorization", "Bearer example-token")
+                        .header("content-type", PROTOBUF_CONTENT_TYPE)
+                        .body(Body::from(scope_request.encode_to_vec()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(
+                db.extension_scope("feature", id).unwrap().workspace_ids,
+                [workspace_id]
+            );
+            drop(db);
+            std::fs::remove_dir_all(root).unwrap();
         }
-        let goal = catalog
-            .features
-            .iter()
-            .find(|feature| feature.id == FEATURE_ID)
-            .unwrap();
-        assert!(!goal.enabled);
-        assert!(goal.has_prompt_extension);
-        assert_eq!(goal.tool_count, 1);
-        let denied = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(FEATURE_DETAILS_PATH)
-                    .header("content-type", PROTOBUF_CONTENT_TYPE)
-                    .body(Body::from(
-                        GetFeatureDetailsRequest {
-                            id: FEATURE_ID.to_owned(),
-                        }
-                        .encode_to_vec(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(FEATURE_DETAILS_PATH)
-                    .header("authorization", "Bearer example-token")
-                    .header("content-type", PROTOBUF_CONTENT_TYPE)
-                    .body(Body::from(
-                        GetFeatureDetailsRequest {
-                            id: FEATURE_ID.to_owned(),
-                        }
-                        .encode_to_vec(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let bytes = axum::body::to_bytes(response.into_body(), 4_096)
-            .await
-            .unwrap();
-        let details = FeatureDetailsResponse::decode(bytes).unwrap();
-        assert_eq!(details.id, FEATURE_ID);
-        assert_eq!(details.tool_names, [beale_goals::TOOL_NAME]);
-        assert_eq!(details.prompt_extension, beale_goals::PROMPT_EXTENSION);
-        assert!(
-            beale_goals::system_section(beale_goals::Limits::default(), 0, 0)
-                .starts_with(&details.prompt_extension)
-        );
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(FEATURE_SET_ENABLED_PATH)
-                    .header("authorization", "Bearer example-token")
-                    .header("content-type", PROTOBUF_CONTENT_TYPE)
-                    .body(Body::from(
-                        SetFeatureEnabledRequest {
-                            id: FEATURE_ID.to_owned(),
-                            enabled: true,
-                        }
-                        .encode_to_vec(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        assert!(db.feature_enabled(FEATURE_ID).unwrap());
-        let workspace_id = uuid::Uuid::new_v4().to_string();
-        db.replace_workspaces(&[WorkspaceRow {
-            id: workspace_id.clone(),
-            name: "Example workspace".to_owned(),
-            directory: "example-directory".to_owned(),
-        }])
-        .unwrap();
-        let scope_request = SetExtensionWorkspaceScopeRequest {
-            id: FEATURE_ID.to_owned(),
-            workspace_ids: vec![workspace_id.clone()],
-            all_workspaces: false,
-        };
-        let denied = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(FEATURE_SCOPE_PATH)
-                    .header("content-type", PROTOBUF_CONTENT_TYPE)
-                    .body(Body::from(scope_request.encode_to_vec()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(FEATURE_SCOPE_PATH)
-                    .header("authorization", "Bearer example-token")
-                    .header("content-type", PROTOBUF_CONTENT_TYPE)
-                    .body(Body::from(scope_request.encode_to_vec()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(
-            db.extension_scope("feature", FEATURE_ID)
-                .unwrap()
-                .workspace_ids,
-            [workspace_id]
-        );
-        drop(db);
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[cfg(feature = "goal-mode")]

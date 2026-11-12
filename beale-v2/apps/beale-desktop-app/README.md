@@ -1,5 +1,7 @@
 # Beale desktop preview
 
+Features includes optional Webfetch with a single `webfetch` tool for web search and readable page retrieval. It starts disabled, supports workspace scoping, and applies to main agents and Graphs subagents. Enable it in Extensions > Features.
+
 Features includes optional Agent Feedback with one on-demand `agent_feedback` tool. It has no desktop report viewer; the app-server writes reports to its private `agent-feedback.jsonl` for development review.
 
 The optional Memories feature appears in Features with four on-demand, read-only agent tools. The app-server processes completed main and subagent turns asynchronously using the configured default small model. Session transcript search reads the existing host transcript; long-term entities and sourced assertions live in a separate local `memories.sqlite`. Host-authenticated status, retry, and disabled-workspace clear routes are available through protocol 2.12.

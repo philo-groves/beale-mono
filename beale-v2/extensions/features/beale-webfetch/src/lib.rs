@@ -3,10 +3,35 @@
 use anyhow::{Context, Result, bail, ensure};
 use reqwest::{Client, Url, header, redirect::Policy};
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::time::Duration;
 
-use crate::{ToolOutcome, success};
+pub const FEATURE_ID: &str = "webfetch";
+pub const FEATURE_NAME: &str = "Webfetch";
+pub const FEATURE_DESCRIPTION: &str =
+    "Search the web and retrieve readable text and links from HTTP(S) pages.";
+pub const HAS_PROMPT_EXTENSION: bool = true;
+pub const TOOL_COUNT: u32 = 1;
+pub const TOOL_NAME: &str = "webfetch";
+pub const PROMPT_EXTENSION: &str = include_str!("../FEATURE.md");
+
+pub fn definition() -> Value {
+    json!({"type":"function","name":TOOL_NAME,"description":"Search the web with a query or fetch a page by URL. Returns readable text and links without executing JavaScript. Supply exactly one of query or url.","parameters":{"type":"object","properties":{"query":{"type":"string"},"url":{"type":"string"}},"additionalProperties":false}})
+}
+
+pub fn summary(args: &Value) -> String {
+    format!(
+        "Web {}",
+        args.get("query")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .or_else(|| args.get("url").and_then(Value::as_str))
+            .unwrap_or("")
+            .chars()
+            .take(120)
+            .collect::<String>()
+    )
+}
 
 const MAX_RESPONSE_BYTES: usize = 2_000_000;
 const MAX_TEXT_BYTES: usize = 128_000;
@@ -63,7 +88,7 @@ fn validate_url(url: &Url) -> Result<()> {
     Ok(())
 }
 
-pub(super) async fn fetch(args: &Value) -> Result<ToolOutcome> {
+pub async fn execute(args: &Value) -> Result<String> {
     let request = request(args.clone())?;
     let (url, label) = match request {
         Request::Search(query) => {
@@ -114,7 +139,7 @@ pub(super) async fn fetch(args: &Value) -> Result<ToolOutcome> {
         bounded(&source, MAX_TEXT_BYTES)
     };
     ensure!(!text.trim().is_empty(), "web page has no readable text");
-    Ok(success(format!("{label}\nURL: {final_url}\n\n{text}")))
+    Ok(format!("{label}\nURL: {final_url}\n\n{text}"))
 }
 
 fn bounded(value: &str, limit: usize) -> String {
@@ -387,6 +412,14 @@ mod tests {
     };
 
     #[test]
+    fn feature_exposes_one_webfetch_tool() {
+        assert_eq!(TOOL_COUNT, 1);
+        assert_eq!(definition()["name"], TOOL_NAME);
+        assert_eq!(definition()["parameters"]["additionalProperties"], false);
+        assert!(PROMPT_EXTENSION.contains("`webfetch`"));
+    }
+
+    #[test]
     fn requires_one_bounded_web_request() {
         assert!(matches!(
             request(json!({"query":"example research"})).unwrap(),
@@ -420,10 +453,7 @@ mod tests {
     #[test]
     fn page_summary_uses_url_when_query_is_empty() {
         assert_eq!(
-            crate::summary(
-                crate::WEBFETCH,
-                &json!({"query":"","url":"https://example.test/a"})
-            ),
+            summary(&json!({"query":"","url":"https://example.test/a"})),
             "Web https://example.test/a"
         );
     }
@@ -479,10 +509,9 @@ mod tests {
             );
             stream.write_all(response.as_bytes()).await.unwrap();
         });
-        let output = fetch(&json!({"url":format!("http://{address}/guide")}))
+        let output = execute(&json!({"url":format!("http://{address}/guide")}))
             .await
-            .unwrap()
-            .output;
+            .unwrap();
         server.await.unwrap();
         assert!(output.contains("Example guide"));
         assert!(output.contains("Safe text."));

@@ -19,6 +19,7 @@ members = [
     "extensions/features/beale-runbooks",
     "extensions/features/beale-surfaces",
     "extensions/features/beale-tracking",
+    "extensions/features/beale-webfetch",
 ]
 resolver = "3"
 
