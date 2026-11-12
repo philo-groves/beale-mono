@@ -82,7 +82,6 @@ impl Default for CanvasRunbookState {
 }
 
 impl CanvasRunbookState {
-    #[cfg(test)]
     pub(crate) fn with_view(view: RunbookView) -> Self {
         let mut view = view;
         view.instance_id = 1;
@@ -888,7 +887,7 @@ fn code_source(id: &str, language: &str, source: &str, theme: ThemeStyle<'_>) ->
 
 pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, height: f32) -> El {
     let Some(selected) = &state.canvas_runbook.selected else {
-        return col().w_full().grow(1.0).min_h(0.0);
+        return col().w_full().grow(1.0).min_h(0.0).center().child(crate::design::empty_state(&RUNBOOK, "Research canvas", "Open a runbook from the session panel to inspect its procedure, code, and execution results.", theme));
     };
     let current_session_matches = state
         .active_session

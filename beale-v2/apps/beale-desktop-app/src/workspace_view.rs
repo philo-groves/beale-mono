@@ -71,12 +71,13 @@ fn tab_button(tab: WorkspaceTab, selected: bool, id: uuid::Uuid, theme: ThemeSty
     el().key(tab.key())
         .role("tab")
         .label(tab.label())
+        .help(tab.label())
         .size(32.0, 32.0)
         .center()
         .radius(10.0)
         .continuous_corners()
         .fill(if selected {
-            color("#333333")
+            theme.subtle_accent()
         } else {
             Color::TRANSPARENT
         })
@@ -769,7 +770,7 @@ fn network(
     let saving = state.workspace_save_busy == Some(WorkspaceTab::Surfaces);
     let mut actions = row()
         .key("workspace-surface-actions")
-        .absolute(24.0, height - 50.0)
+        .absolute(24.0, height - 24.0 - crate::design::CONTROL_HEIGHT)
         .w((width - 48.0).max(0.0))
         .center_y()
         .gap(8.0)
@@ -860,53 +861,83 @@ fn surface_network_details(state: &State, theme: ThemeStyle<'_>) -> El {
         return col();
     };
     let out = surface_scope(surface) == SurfaceScope::OutOfScope as i32;
-    let mut details =
-        col()
-            .key("workspace-surface-network-details")
+    let mut details = col()
+        .key("workspace-surface-network-details")
+        .w_full()
+        .max_h(450.0)
+        .min_h(0.0)
+        .scroll(ScrollSpec {
+            stick_bottom: false,
+        })
+        .gap(12.0)
+        .padding(18.0)
+        .radius(crate::design::CARD_RADIUS)
+        .fill(theme.color("#191919"))
+        .border(1.0, theme.color("#2a2a2a"))
+        .child(
+            row()
+                .w_full()
+                .center_y()
+                .gap(8.0)
+                .child(
+                    icon(surface_icon(surface_kind(surface)), 17.0).color(theme.color(if out {
+                        "#777777"
+                    } else {
+                        "#e0e0e0"
+                    })),
+                )
+                .child(
+                    text(
+                        surface
+                            .definition
+                            .as_ref()
+                            .filter(|d| !d.name.is_empty())
+                            .map_or_else(|| surface_value(surface).to_owned(), |d| d.name.clone()),
+                    )
+                    .grow(1.0)
+                    .min_w(0.0)
+                    .truncate()
+                    .font(ui_font(15.0, 600.0))
+                    .color(theme.color("#e4e4e4")),
+                )
+                .child(
+                    text(format!(
+                        "{} · {}",
+                        if out { "Out of scope" } else { "In scope" },
+                        scope_state_label(surface_scope_state(surface))
+                    ))
+                    .font(ui_font(11.0, 400.0))
+                    .color(theme.color("#999999")),
+                ),
+        );
+    details = details.child(
+        row()
             .w_full()
-            .max_h(450.0)
-            .min_h(0.0)
-            .scroll(ScrollSpec {
-                stick_bottom: false,
-            })
-            .gap(10.0)
-            .padding(12.0)
-            .radius(10.0)
-            .fill(theme.color("#242424"))
+            .center_y()
+            .gap(12.0)
+            .child(crate::design::badge(
+                format!("{} / SURFACE", surface.id),
+                theme,
+            ))
+            .child(el().grow(1.0))
             .child(
-                row()
-                    .w_full()
-                    .center_y()
-                    .gap(8.0)
-                    .child(
-                        icon(surface_icon(surface_kind(surface)), 17.0)
-                            .color(theme.color(if out { "#777777" } else { "#e0e0e0" })),
-                    )
-                    .child(
-                        text(surface_value(surface).to_owned())
-                            .grow(1.0)
-                            .min_w(0.0)
-                            .truncate()
-                            .font(ui_font(13.0, 600.0))
-                            .color(theme.color("#e4e4e4")),
-                    )
-                    .child(
-                        text(format!(
-                            "{} · {}",
-                            if out { "Out of scope" } else { "In scope" },
-                            scope_state_label(surface_scope_state(surface))
-                        ))
-                        .font(ui_font(11.0, 400.0))
-                        .color(theme.color("#999999")),
-                    ),
-            );
-    details = details.child(surface_detail("ID", &surface.id, theme));
+                crate::form_controls::icon_action_button(
+                    "workspace-surface-details-close",
+                    "Close surface details",
+                    &crate::icons::CLOSE,
+                    theme,
+                )
+                .on_press(|state: &mut State| state.workspace_surface_selected = None),
+            ),
+    );
     details = details.child(surface_detail(
         "Updates",
         &surface_revision(surface).saturating_sub(1).to_string(),
         theme,
     ));
-    let updated = chrono::DateTime::from_timestamp_millis(surface_updated_at(surface) as i64)
+    let updated = (surface_updated_at(surface) > 0)
+        .then(|| surface_updated_at(surface))
+        .and_then(|ms| chrono::DateTime::from_timestamp_millis(ms as i64))
         .map_or_else(
             || "Unknown (predates tracking)".to_owned(),
             |time| time.format("%Y-%m-%d %H:%M UTC").to_string(),
@@ -1142,6 +1173,8 @@ pub(crate) fn relationship_dialog(state: &State, theme: ThemeStyle<'_>) -> [El; 
         .gap(10.0)
         .child(
             text(description)
+                .w_full()
+                .wrap()
                 .font(ui_font(13.0, 500.0))
                 .color(theme.color("#bdbdbd")),
         )
@@ -1153,7 +1186,7 @@ pub(crate) fn relationship_dialog(state: &State, theme: ThemeStyle<'_>) -> [El; 
                     field(
                         &state.workspace_surface_relationship_label,
                         "workspace-surface-relationship-input",
-                        "e.g. contains, calls, depends on",
+                        "e.g. calls",
                         theme,
                         |state| &mut state.workspace_surface_relationship_label,
                     ),
@@ -1860,8 +1893,8 @@ pub(crate) fn surface_delete_dialog(state: &State, theme: ThemeStyle<'_>) -> [El
         .child(
             form_button("Remove Surface", theme)
                 .key("saved-workspace-surface-delete-confirm")
-                .fill(theme.color("#482525"))
-                .hover(theme.color("#603030"))
+                .fill(theme.color("#e07676").alpha(0.14))
+                .hover(theme.color("#e07676").alpha(0.22))
                 .on_press(confirm_surface_delete),
         );
     modal_dialog::render(
@@ -1924,6 +1957,8 @@ pub(crate) fn render(
         .child(
             row()
                 .key("workspace-title-squircle")
+                .shrink()
+                .help(name)
                 .ml(-18.0)
                 .min_w(0.0)
                 .max_w(420.0)
@@ -1936,6 +1971,7 @@ pub(crate) fn render(
                 .child(
                     text(name)
                         .key("workspace-view-title")
+                        .min_w(0.0)
                         .truncate()
                         .font(view_title_font())
                         .color(theme.color("#f2f2f2")),
@@ -1958,9 +1994,7 @@ pub(crate) fn render(
                 .min_h(resource_height)
                 .center()
                 .child(
-                    text("No campaign features are enabled.")
-                        .font(ui_font(15.0, 400.0))
-                        .color(theme.color("#969696")),
+                    crate::design::empty_state(&TARGET, "Keep your research connected", "Open Surfaces or Findings above, or a session runbook in Canvas, to review this workspace's research. Enable additional capabilities in Extensions.", theme),
                 ),
         );
     }

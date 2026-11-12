@@ -566,12 +566,20 @@ fn repeat_label(preset: &str) -> &'static str {
 }
 
 pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
-    let mut body = col().w_full().gap(18.0).child(
-        text("Automations")
-            .key("automations-view-title")
-            .font(view_title_font())
-            .color(theme.color("#f2f2f2")),
-    );
+    let mut body =
+        col()
+            .w_full()
+            .gap(crate::design::PAGE_GAP)
+            .child(crate::design::breadcrumb_title(
+                "Workbench",
+                text("Automations")
+                    .key("automations-view-title")
+                    .role("heading")
+                    .truncate_fade()
+                    .font(view_title_font())
+                    .color(theme.color("#f2f2f2")),
+                theme,
+            ));
     if let Some(job) = selected_job(state) {
         let workspace = state
             .workspaces
@@ -591,6 +599,10 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
             col()
                 .w_full()
                 .max_w(760.0)
+                .padding(24.0)
+                .radius(crate::design::CARD_RADIUS)
+                .fill(theme.color("#191919"))
+                .border(1.0, theme.color("#2a2a2a"))
                 .gap(16.0)
                 .child(
                     text(job.title.clone())
@@ -665,9 +677,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
         );
     } else if state.automations.jobs.is_empty() {
         body = body.child(
-            text("No jobs yet. Start one with Schedule a Job.")
-                .font(ui_font(14.0, 400.0))
-                .color(theme.color("#969696")),
+            crate::design::empty_state(&AUTOMATIONS, "Keep research moving", "Schedule a recurring research session. Upcoming runs and completed work stay organized here.", theme),
         );
     } else {
         body = body.child(
@@ -726,8 +736,8 @@ pub(crate) fn confirmation(state: &State, theme: ThemeStyle<'_>) -> Option<[El; 
     .key("automations-cancel-confirm");
     if series {
         confirm = confirm
-            .fill(theme.color("#482525"))
-            .hover(theme.color("#603030"));
+            .fill(theme.color("#e07676").alpha(0.14))
+            .hover(theme.color("#e07676").alpha(0.22));
     }
     if !state.automations.busy {
         confirm = confirm.on_press(start_cancel);

@@ -297,6 +297,24 @@ pub(crate) static SESSION_TOKENS: Icon = Icon {
     body: r#"<circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2"/><path d="M18.1 10.4A6 6 0 1 1 10.4 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M8 5.5v5M17 13.5v5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>"#,
 };
 
+pub(crate) static CLOCK: Icon = Icon {
+    name: "beale-clock",
+    view: 24.0,
+    body: r#"<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 7v5l3 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>"#,
+};
+
+pub(crate) static TYPOGRAPHY: Icon = Icon {
+    name: "beale-typography",
+    view: 24.0,
+    body: r#"<path d="M4 7V4h16v3M12 4v16M8 20h8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>"#,
+};
+
+pub(crate) static STOP: Icon = Icon {
+    name: "beale-stop",
+    view: 24.0,
+    body: r#"<rect x="5" y="5" width="14" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="2"/>"#,
+};
+
 pub(crate) static SESSION_CACHE_RATE: Icon = Icon {
     name: "beale-session-cache-rate",
     view: 24.0,

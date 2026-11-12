@@ -24,7 +24,7 @@ pub(crate) fn popup_surface(panel: El, fill: Color) -> El {
         .radius(12.0)
         .continuous_corners()
         .fill(fill)
-        .shadow(8.0, 24.0, Color::BLACK.alpha(0.6))
+        .shadow(8.0, 24.0, Color::BLACK.alpha(0.22))
 }
 
 pub(crate) fn panel<S: 'static>(

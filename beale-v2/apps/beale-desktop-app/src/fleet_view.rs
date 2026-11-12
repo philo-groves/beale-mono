@@ -189,6 +189,43 @@ impl FleetSection {
 }
 
 impl FleetState {
+    pub(crate) fn preview_fixture(&mut self) {
+        self.local.host_name = "example-research-host".into();
+        self.local.display_name = "Example research host".into();
+        self.local.condition = "Connected".into();
+        self.local.os_name = "Windows".into();
+        self.local.os_vendor = "Microsoft".into();
+        for name in ["Firefox", "Chrome"] {
+            self.browsers.push(BrowserItem {
+                host_id: "local".into(),
+                host_name: "Example research host".into(),
+                browser: beale_contracts::v1::FleetBrowser {
+                    id: format!("example-{name}"),
+                    name: name.into(),
+                    available: true,
+                    enabled: true,
+                    all_workspaces: true,
+                    preferred: name == "Firefox",
+                    ..Default::default()
+                },
+            });
+        }
+        self.virtual_machines.push(VirtualMachineItem {
+            host_id: "local".into(),
+            host_name: "Example research host".into(),
+            machine: beale_contracts::v1::FleetVirtualMachine {
+                id: "example-vm".into(),
+                name: "Example analysis environment".into(),
+                provider: "Hyper-V".into(),
+                state: "Off".into(),
+                generation: 2,
+                enabled: true,
+                all_workspaces: true,
+                ..Default::default()
+            },
+        });
+    }
+
     pub(crate) fn browser_scope_enabled(&self, index: usize) -> bool {
         self.browsers
             .get(index)
@@ -764,25 +801,20 @@ fn start_qr(state: &mut State) {
     });
 }
 fn tab_button(tab: FleetTab, section: FleetSection, active: bool, theme: ThemeStyle<'_>) -> El {
-    row()
+    let glyph = match (tab, section) {
+        (FleetTab::All, _) => section.glyph(),
+        (FleetTab::Available, FleetSection::Browsers) => &crate::icons::SEARCH,
+        (FleetTab::Enabled, FleetSection::Browsers) => &crate::icons::PEN,
+        (FleetTab::Available, FleetSection::VirtualMachines) => &VM_RUN,
+        (FleetTab::Enabled, FleetSection::VirtualMachines) => &crate::icons::STOP,
+        (FleetTab::Available, FleetSection::AppServers) => &PLUS,
+        (FleetTab::Enabled, FleetSection::AppServers) => &crate::icons::CHECK,
+    };
+    crate::design::segmented_tab(tab.label(section), Some(glyph), active, true, theme)
         .key(tab.key())
-        .role("tab")
-        .label(tab.label(section))
-        .h(26.0)
-        .px(10.0)
-        .center_y()
-        .radius(9.0)
-        .continuous_corners()
-        .fill(theme.color(if active { "#414141" } else { "#242424" }))
-        .hover(theme.color("#4a4a4a"))
         .on_press(move |state: &mut State| {
             state.navigate_to(ViewLocation::Fleet(section, tab));
         })
-        .child(
-            text(tab.label(section))
-                .font(ui_font(14.0, if active { 600.0 } else { 450.0 }))
-                .color(theme.color(if active { "#f2f2f2" } else { "#c8c8c8" })),
-        )
 }
 
 fn stat_row(label: &'static str, value: String, theme: ThemeStyle<'_>) -> El {
@@ -873,9 +905,10 @@ fn server_card(server: &FleetServer, state: &State, theme: ThemeStyle<'_>) -> El
         .px(12.0)
         .pt(16.0)
         .pb(14.0)
-        .radius(24.0)
+        .radius(crate::design::CARD_RADIUS)
         .continuous_corners()
-        .border(1.0, theme.color("#303030"))
+        .fill(theme.color("#191919"))
+        .border(1.0, theme.color("#2a2a2a"))
         .child(
             row()
                 .w_full()
@@ -1100,9 +1133,10 @@ fn browser_card(index: usize, item: &BrowserItem, state: &State, theme: ThemeSty
         .px(12.0)
         .pt(16.0)
         .pb(14.0)
-        .radius(24.0)
+        .radius(crate::design::CARD_RADIUS)
         .continuous_corners()
-        .border(1.0, theme.color("#303030"))
+        .fill(theme.color("#191919"))
+        .border(1.0, theme.color("#2a2a2a"))
         .child(
             row()
                 .w_full()
@@ -1290,9 +1324,10 @@ fn virtual_machine_card(
         .px(12.0)
         .pt(16.0)
         .pb(14.0)
-        .radius(24.0)
+        .radius(crate::design::CARD_RADIUS)
         .continuous_corners()
-        .border(1.0, theme.color("#303030"))
+        .fill(theme.color("#191919"))
+        .border(1.0, theme.color("#2a2a2a"))
         .child(
             row()
                 .w_full()
@@ -1310,7 +1345,8 @@ fn virtual_machine_card(
                                 .radius(6.5)
                                 .continuous_corners()
                                 .fill(theme.color("#242424"))
-                                .border(1.0, theme.color("#303030"))
+                                .fill(theme.color("#191919"))
+                                .border(1.0, theme.color("#2a2a2a"))
                                 .child(
                                     text("VM")
                                         .font(ui_font(9.0, 650.0))
@@ -1344,20 +1380,22 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> V
     let section = state.fleet_section;
     let title = text(section.label())
         .key("fleet-view-title")
+        .role("heading")
+        .truncate_fade()
         .font(crate::view_title_font())
         .color(theme.color("#f2f2f2"));
-    let mut tabs = row()
+    let mut tabs = crate::design::segmented_control(theme)
         .key("fleet-view-tabs")
-        .role("tablist")
-        .label("Fleet views")
-        .w_full()
-        .h(26.0)
-        .gap(6.0)
-        .center_y();
+        .label("Fleet views");
     for tab in FleetTab::ALL {
         tabs = tabs.child(tab_button(tab, section, state.fleet.tab == tab, theme));
     }
-    tabs = tabs.child(el().grow(1.0));
+    let mut tabs = row()
+        .w_full()
+        .center_y()
+        .gap(12.0)
+        .child(tabs)
+        .child(el().grow(1.0));
     if section == FleetSection::AppServers {
         tabs = tabs.child(
             el().key("fleet-add-server")
@@ -1393,7 +1431,24 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> V
                 .child(icon(&PLUS, 17.0).color(theme.color("#bdbdbd"))),
         );
     }
-    let mut content = vec![title, tabs];
+    let mut content = vec![
+        crate::design::breadcrumb_title("Fleet", title, theme),
+        crate::design::subtitle(
+            match section {
+                FleetSection::AppServers => {
+                    "Manage the hosts that power your research environment."
+                }
+                FleetSection::Browsers => {
+                    "Choose available browsers and assign their workspace scope."
+                }
+                FleetSection::VirtualMachines => {
+                    "Inspect virtual machines and configure their workspace allowances."
+                }
+            },
+            theme,
+        ),
+        tabs,
+    ];
     if !state.fleet.error.is_empty() {
         content.push(
             text(state.fleet.error.clone())

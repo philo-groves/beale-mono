@@ -6,6 +6,11 @@
 
 #### Changed
 
+- Refined the v2 desktop across Light, Dark, Cream, and Midnight with shared typography, spacing, controls, theme-aware status colors, and a Beale research desk. Dark uses neutral black and charcoal surfaces with silver accents. Workspace cards, research views, Findings, Fleet, extensions, settings, and dialogs share the updated visual system. Existing appearance overrides remain compatible.
+- Improved v2 small-window layouts: Findings adapts to four, two, or one column; Canvas uses the available content area when a split would be too narrow; session telemetry stacks above the transcript; tall dialogs retain visible actions.
+- Unified v2 view tabs as inset segmented controls with contextual icons, raised selection, consistent hover states, and stable label sizing across settings, providers, extensions, Fleet, Archive, workspace setup, and Tracking. Provider tabs reflow using measured label widths and the selected text size.
+- Simplified v2 settings labels and the home wordmark, balanced sidebar action spacing, and padded empty Archive lists. Default and Theme controls share their respective tab rows when measured widths fit, and move below on smaller windows.
+- Combined v2 breadcrumb and view headings into compact single-row headers, with muted parent context and the current view as the final title. New Research keeps workspace switching in the final crumb.
 - Findings tools use distinct `findings_*` names. Update advertises typed patch fields; query pages through results, and read omits revision snapshots unless requested. App-server schema 43 moves finding revisions into a separate table without losing history or limiting later edits. Protocol 2.11 updates the read contract.
 - Findings now supports an optional attack path with assumptions, evidence, limitations, preconditions, likelihood, impact, steps, and nested reachability details. Protocol 2.10 exposes it; existing records remain readable without a storage migration.
 - Findings now supports optional top-level remediation text through create, update, search, and read. Protocol 2.9 exposes it; older saved findings remain readable without a storage migration.

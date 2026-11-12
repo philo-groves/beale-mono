@@ -219,7 +219,7 @@ fn panel_header(theme: ThemeStyle<'_>, heading: El, action: Option<El>, key: &'s
         .gap(8.0)
         .corners([17.0, 17.0, 0.0, 0.0])
         .continuous_corners()
-        .fill(theme.color(theme.palette().card))
+        .fill(rune::color::hex(theme.palette().card).unwrap_or(rune::Color::BLACK))
         .child(heading)
         .child(el().grow(1.0));
     if let Some(action) = action {
@@ -255,12 +255,12 @@ fn panel_body(theme: ThemeStyle<'_>, content: El, height: f32, prefix: &'static 
         .key(format!("{prefix}-content"))
         .w_full()
         .h(height)
-        .fill(theme.color(theme.palette().chrome))
+        .fill(rune::color::hex(theme.palette().chrome).unwrap_or(rune::Color::BLACK))
         .child(
             el().key(format!("{prefix}-content-left-border"))
                 .w(1.0)
                 .h_full()
-                .fill(theme.color(theme.palette().card)),
+                .fill(rune::color::hex(theme.palette().card).unwrap_or(rune::Color::BLACK)),
         )
         .child(
             col()
@@ -275,7 +275,7 @@ fn panel_body(theme: ThemeStyle<'_>, content: El, height: f32, prefix: &'static 
             el().key(format!("{prefix}-content-right-border"))
                 .w(1.0)
                 .h_full()
-                .fill(theme.color(theme.palette().card)),
+                .fill(rune::color::hex(theme.palette().card).unwrap_or(rune::Color::BLACK)),
         )
 }
 
@@ -289,13 +289,13 @@ fn composer_shell(theme: ThemeStyle<'_>, key: &'static str) -> El {
         .gap(7.0)
         .radius(17.0)
         .continuous_corners()
-        .fill(theme.color(theme.palette().raised))
+        .fill(rune::color::hex(theme.palette().raised).unwrap_or(rune::Color::BLACK))
 }
 
 pub(crate) fn render_import(state: &State, theme: ThemeStyle<'_>, cx: &mut Cx<State>) -> El {
     let title = text("Preparing Import")
         .font(ui_font(13.0, 550.0))
-        .color(theme.color(theme.palette().text));
+        .color(rune::color::hex(theme.palette().text).unwrap_or(rune::Color::BLACK));
     let close = el()
         .key("workspace-import-chat-close")
         .role("button")
@@ -303,9 +303,12 @@ pub(crate) fn render_import(state: &State, theme: ThemeStyle<'_>, cx: &mut Cx<St
         .size(27.0, 27.0)
         .radius(8.0)
         .center()
-        .hover(theme.color(theme.palette().border))
+        .hover(rune::color::hex(theme.palette().border).unwrap_or(rune::Color::BLACK))
         .on_press(State::cancel_workspace_import)
-        .child(icon(&CLOSE, 15.0).color(theme.color(theme.palette().muted)));
+        .child(
+            icon(&CLOSE, 15.0)
+                .color(rune::color::hex(theme.palette().muted).unwrap_or(rune::Color::BLACK)),
+        );
     let header = panel_header(theme, title, Some(close), "workspace-import-chat-ribbon");
     let window_height = cx.layout_size("app-surface").map_or(720.0, |size| size[1]);
     let body_height = (window_height - 155.0).clamp(150.0, 350.0);
@@ -337,7 +340,7 @@ pub(crate) fn render_import(state: &State, theme: ThemeStyle<'_>, cx: &mut Cx<St
         .child(
             text("Working…")
                 .font(ui_font(12.5, 400.0))
-                .color(theme.color(theme.palette().muted)),
+                .color(rune::color::hex(theme.palette().muted).unwrap_or(rune::Color::BLACK)),
         );
     panel_base(
         theme,
@@ -355,7 +358,7 @@ pub(crate) fn render_import(state: &State, theme: ThemeStyle<'_>, cx: &mut Cx<St
         composer_shell(theme, "workspace-import-chat-composer").child(
             text("Preparing workspace draft…")
                 .font(ui_font(13.5, 400.0))
-                .color(theme.color(theme.palette().muted)),
+                .color(rune::color::hex(theme.palette().muted).unwrap_or(rune::Color::BLACK)),
         ),
     )
 }
@@ -380,7 +383,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, cx: &mut Cx<State>) -
         text(state.quick_chat_title.clone())
             .key("quick-chat-title")
             .font(ui_font(13.0, 550.0))
-            .color(theme.color(palette.text))
+            .color(rune::color::hex(palette.text).unwrap_or(rune::Color::BLACK))
             .truncate()
             .min_w(0.0)
     } else {
@@ -397,19 +400,22 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, cx: &mut Cx<State>) -
             .radius(8.0)
             .continuous_corners()
             .fill(if workspace_menu_active {
-                theme.color(palette.border)
+                rune::color::hex(palette.border).unwrap_or(rune::Color::BLACK)
             } else {
                 Color::TRANSPARENT
             })
-            .hover(theme.color(palette.border))
+            .hover(rune::color::hex(palette.border).unwrap_or(rune::Color::BLACK))
             .on_press(|state: &mut State| {
                 toggle_selection_menu(state, SelectionMenu::QuickChatWorkspace)
             })
-            .child(icon(&FOLDER_OPEN, 15.0).color(theme.color(palette.muted)))
+            .child(
+                icon(&FOLDER_OPEN, 15.0)
+                    .color(rune::color::hex(palette.muted).unwrap_or(rune::Color::BLACK)),
+            )
             .child(
                 text(workspace_name)
                     .font(ui_font(13.0, 500.0))
-                    .color(theme.color(palette.text))
+                    .color(rune::color::hex(palette.text).unwrap_or(rune::Color::BLACK))
                     .truncate()
                     .min_w(0.0),
             )
@@ -422,7 +428,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, cx: &mut Cx<State>) -
                     },
                     13.0,
                 )
-                .color(theme.color(palette.muted)),
+                .color(rune::color::hex(palette.muted).unwrap_or(rune::Color::BLACK)),
             )
     };
     let close = el()
@@ -432,9 +438,11 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, cx: &mut Cx<State>) -
         .size(27.0, 27.0)
         .radius(8.0)
         .center()
-        .hover(theme.color(palette.border))
+        .hover(rune::color::hex(palette.border).unwrap_or(rune::Color::BLACK))
         .on_press(State::close_quick_chat)
-        .child(icon(&CLOSE, 15.0).color(theme.color(palette.muted)));
+        .child(
+            icon(&CLOSE, 15.0).color(rune::color::hex(palette.muted).unwrap_or(rune::Color::BLACK)),
+        );
     let header = panel_header(theme, heading, Some(close), "quick-chat-ribbon");
     let mut panel = panel_base(theme, "quick-chat-panel", "Quick Chat", header);
     if show_body {
@@ -467,7 +475,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, cx: &mut Cx<State>) -
                 text("Working…")
                     .key("quick-chat-working")
                     .font(ui_font(12.5, 400.0))
-                    .color(theme.color(palette.muted)),
+                    .color(rune::color::hex(palette.muted).unwrap_or(rune::Color::BLACK)),
             );
         }
         if !state.quick_chat_error.is_empty() {
@@ -475,7 +483,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, cx: &mut Cx<State>) -
                 text(state.quick_chat_error.clone())
                     .key("quick-chat-error")
                     .font(ui_font(12.5, 400.0))
-                    .color(theme.color(palette.error))
+                    .color(rune::color::hex(palette.error).unwrap_or(rune::Color::BLACK))
                     .wrap(),
             );
         }
@@ -496,8 +504,11 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, cx: &mut Cx<State>) -
                 .h(34.0)
                 .px(7.0)
                 .py(((34.0 - font.line_px()) * 0.5).max(0.0))
-                .color(theme.color(palette.text))
-                .placeholder("Send a quick message", theme.color(palette.muted))
+                .color(rune::color::hex(palette.text).unwrap_or(rune::Color::BLACK))
+                .placeholder(
+                    "Send a quick message",
+                    rune::color::hex(palette.muted).unwrap_or(rune::Color::BLACK),
+                )
                 .on_edit(|state: &mut State| &mut state.quick_chat_draft)
                 .on_input_change(|state: &mut State, _| state.quick_chat_input_history.reset())
                 .on_submit(|state: &mut State, _| send(state)),
@@ -536,18 +547,20 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, cx: &mut Cx<State>) -
                 .size(28.0, 28.0)
                 .center()
                 .radius(14.0)
-                .fill(theme.color(if available {
-                    palette.text
+                .fill(if available {
+                    theme.accent()
                 } else {
-                    palette.border
-                }))
-                .child(icon(&ARROW_UP, 15.0).color(theme.color(if available {
-                    palette.panel
+                    rune::color::hex(palette.border).unwrap_or(rune::Color::BLACK)
+                })
+                .child(icon(&ARROW_UP, 15.0).color(if available {
+                    theme.accent_ink()
                 } else {
-                    palette.muted
-                })));
+                    rune::color::hex(palette.muted).unwrap_or(rune::Color::BLACK)
+                }));
             if available {
-                button = button.hover(theme.color(palette.muted)).on_press(send)
+                button = button
+                    .hover(rune::color::hex(palette.muted).unwrap_or(rune::Color::BLACK))
+                    .on_press(send)
             }
             button
         });

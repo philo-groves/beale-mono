@@ -1196,62 +1196,44 @@ fn new_research_setup(state: &State, theme: ThemeStyle<'_>, available_width: f32
         .selected_research_workspace()
         .map(|workspace| workspace.name.as_str());
     let heading = if let Some(name) = workspace_name {
-        let underline_width = rune::text::measure(name, &[], ui_font(26.0, 600.0), None)
-            .0
-            .min(260.0);
-        let dot_count = ((underline_width + 2.0) / 4.0).floor() as usize;
-        let mut underline = row()
-            .key("new-research-heading-workspace-underline")
-            .w(underline_width)
-            .h(2.0)
-            .mt(-1.0)
-            .gap(2.0);
-        for _ in 0..dot_count {
-            underline =
-                underline.child(el().size(2.0, 2.0).radius(1.0).fill(theme.color("#777777")));
-        }
-        let workspace = col()
+        let workspace = row()
             .key("new-research-heading-workspace-control")
             .role("button")
             .label(format!("Choose workspace: {name}"))
+            .help(name)
             .min_w(0.0)
-            .max_w(260.0)
-            .gap(0.0)
+            .center_y()
+            .gap(6.0)
             .hover_group()
             .on_press(|state: &mut State| {
                 toggle_selection_menu(state, SelectionMenu::ResearchWorkspaceHeading)
             })
             .child(
                 text(name)
-                    .truncate()
-                    .font(ui_font(26.0, 600.0))
+                    .min_w(0.0)
+                    .truncate_fade()
+                    .font(crate::view_title_font())
                     .color(theme.color("#eeeeee"))
                     .group_color(theme.color("#aaaaaa")),
             )
-            .child(underline);
-        row()
+            .child(
+                icon(&CHEVRON_DOWN, 15.0)
+                    .key("new-research-heading-workspace-chevron")
+                    .color(theme.color("#969696")),
+            );
+        crate::design::breadcrumb_title("New Research", workspace, theme)
             .key("new-research-workspace-heading")
-            .w_full()
-            .min_w(0.0)
-            .center()
-            .child(
-                text("Conduct security research in ")
-                    .font(ui_font(26.0, 600.0))
-                    .color(theme.color("#eeeeee")),
-            )
-            .child(workspace)
-            .child(
-                text("?")
-                    .font(ui_font(26.0, 600.0))
-                    .color(theme.color("#eeeeee")),
-            )
     } else {
-        text("Conduct security research?")
-            .key("new-research-workspace-heading")
-            .w_full()
-            .align(Align::Center)
-            .font(ui_font(26.0, 600.0))
-            .color(theme.color("#eeeeee"))
+        crate::design::breadcrumb_title(
+            "Home",
+            text("New Research")
+                .role("heading")
+                .truncate_fade()
+                .font(crate::view_title_font())
+                .color(theme.color("#eeeeee")),
+            theme,
+        )
+        .key("new-research-workspace-heading")
     };
     let mut content = col()
         .key("new-research-setup")
@@ -1929,7 +1911,8 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
         .mt(-8.0)
         .radius(20.0)
         .continuous_corners()
-        .fill(theme.color(if has_workspaces { "#242424" } else { "#202020" }))
+        .fill(theme.color("#191919"))
+        .border(1.0, theme.color("#2a2a2a"))
         .child(composer_input)
         .child(
             row()
@@ -1955,12 +1938,16 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
                         .size(28.0, 28.0)
                         .center()
                         .radius(14.0)
-                        .fill(theme.color(if available { "#d0d0d0" } else { "#303030" }))
-                        .child(icon(&ARROW_UP, 16.0).color(theme.color(if available {
-                            "#1b1b1b"
+                        .fill(if available {
+                            theme.accent()
                         } else {
-                            "#777777"
-                        })));
+                            theme.color("#303030")
+                        })
+                        .child(icon(&ARROW_UP, 16.0).color(if available {
+                            theme.accent_ink()
+                        } else {
+                            theme.color("#777777")
+                        }));
                     if available {
                         button = button
                             .hover(theme.color("#eeeeee"))
@@ -2354,6 +2341,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
     composer_stack = composer_stack.child(composer);
     col()
         .key("new-research-view")
+        .min_w(0.0)
         .w_full()
         .h_full()
         .min_h(0.0)

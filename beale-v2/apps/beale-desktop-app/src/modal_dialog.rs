@@ -1,4 +1,4 @@
-use rune::{Color, El, col, el, icon, row, text};
+use rune::{Color, El, ScrollSpec, col, el, icon, row, text};
 
 use crate::{State, ThemeStyle, icons::CLOSE, ui_font};
 
@@ -30,13 +30,15 @@ pub(crate) fn render(
         .focus_return(focus_return)
         .w_full()
         .max_w(width)
-        .padding(18.0)
-        .gap(18.0)
-        .radius(14.0)
+        .shrink()
+        .min_h(0.0)
+        .padding(24.0)
+        .gap(20.0)
+        .radius(16.0)
         .continuous_corners()
         .fill(color("#191919"))
         .border(1.0, color("#303030"))
-        .shadow(8.0, 28.0, Color::BLACK.alpha(0.6))
+        .shadow(8.0, 28.0, Color::BLACK.alpha(0.24))
         .child(
             row()
                 .w_full()
@@ -60,7 +62,9 @@ pub(crate) fn render(
                         .child(icon(&CLOSE, 16.0).color(color("#bdbdbd"))),
                 ),
         )
-        .child(body)
+        .child(body.shrink().min_h(0.0).scroll(ScrollSpec {
+            stick_bottom: false,
+        }))
         .child(actions)
         .modal(true, close);
     [
@@ -69,7 +73,8 @@ pub(crate) fn render(
             .w_full()
             .h_full()
             .fill(Color::BLACK.alpha(0.55)),
-        el().key(format!("{key}-layer"))
+        col()
+            .key(format!("{key}-layer"))
             .absolute(0.0, 0.0)
             .w_full()
             .h_full()

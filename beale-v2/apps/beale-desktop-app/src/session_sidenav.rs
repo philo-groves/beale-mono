@@ -700,11 +700,8 @@ fn runbook_popup(
             let mut secondary_row = row().center_y().gap(6.0);
             if status == "running" {
                 let frame = ["◴", "◷", "◶", "◵"][(elapsed_ms / 1_000) as usize % 4];
-                secondary_row = secondary_row.child(
-                    text(frame)
-                        .font(ui_font(13.0, 400.0))
-                        .color(theme.color("#aebee5")),
-                );
+                secondary_row = secondary_row
+                    .child(text(frame).font(ui_font(13.0, 400.0)).color(theme.accent()));
             }
             secondary_row = secondary_row.child(
                 text(secondary)

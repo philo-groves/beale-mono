@@ -1,6 +1,4 @@
-use rune::{
-    Color, El, FileDialogOptions, ScrollSpec, TextEdit, Tx, col, el, icon, row, text, text_input,
-};
+use rune::{El, FileDialogOptions, ScrollSpec, TextEdit, Tx, col, el, icon, row, text, text_input};
 
 use crate::{
     FormSpec, SelectionMenu, State, ThemeStyle, ViewLocation, form_button,
@@ -643,6 +641,7 @@ fn import_source_option(state: &State, source: ImportSource, theme: ThemeStyle<'
         .child(
             col()
                 .grow(1.0)
+                .min_w(0.0)
                 .gap(4.0)
                 .child(
                     text(source.label())
@@ -651,6 +650,7 @@ fn import_source_option(state: &State, source: ImportSource, theme: ThemeStyle<'
                 )
                 .child(
                     text(description)
+                        .wrap()
                         .font(ui_font(14.0, 400.0))
                         .color(theme.color("#969696")),
                 ),
@@ -735,39 +735,21 @@ fn import(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
 fn tab_button(spec: &TabSpec, state: &State, theme: ThemeStyle<'_>) -> El {
     let selected = state.workspace_draft.tab == spec.tab;
     let unlocked = spec.tab.index() <= state.workspace_draft.unlocked;
-    let color = |value| theme.color(value);
-    let button = row()
-        .key(spec.key)
-        .role("tab")
-        .label(if unlocked {
-            spec.label.to_owned()
-        } else {
-            format!("{} locked", spec.label)
-        })
-        .h(25.0)
-        .px(12.0)
-        .center()
-        .radius(8.0)
-        .continuous_corners()
-        .fill(if selected {
-            color("#333333")
-        } else {
-            Color::TRANSPARENT
-        })
-        .child(
-            text(spec.label)
-                .font(ui_font(14.0, if selected { 600.0 } else { 450.0 }))
-                .color(color(if unlocked { "#e2e2e2" } else { "#777777" })),
-        );
+    let glyph = match spec.tab {
+        CreationTab::Import => &FOLDER_OPEN,
+        CreationTab::Foundation => &crate::icons::SETTINGS,
+        CreationTab::Surfaces => &crate::icons::WORKSPACE_SURFACES,
+        CreationTab::Rules => &crate::icons::SESSION_SIDENAV,
+    };
+    let button = crate::design::segmented_tab(spec.label, Some(glyph), selected, unlocked, theme)
+        .key(spec.key);
     if unlocked {
         let tab = spec.tab;
-        button
-            .hover(color("#303030"))
-            .on_press_tx(move |s: &mut State, tx| {
-                s.workspace_draft.error = None;
-                s.navigate_to(ViewLocation::WorkspaceCreation(tab));
-                tx.scroll_to_y("workspace-scroll", 0.0);
-            })
+        button.on_press_tx(move |s: &mut State, tx| {
+            s.workspace_draft.error = None;
+            s.navigate_to(ViewLocation::WorkspaceCreation(tab));
+            tx.scroll_to_y("workspace-scroll", 0.0);
+        })
     } else {
         button
     }
@@ -812,6 +794,7 @@ pub(crate) fn field(
     let font = ui_font(14.0, 400.0);
     text_input(edit, font)
         .key(key)
+        .clip_rounded(8.0)
         .single_line()
         .w(180.0)
         .h(32.0)
@@ -1185,8 +1168,8 @@ pub(crate) fn cancel_dialog(theme: ThemeStyle<'_>) -> [El; 2] {
         .child(
             form_button("Discard Workspace", theme)
                 .key("workspace-cancel-discard")
-                .fill(theme.color("#482525"))
-                .hover(theme.color("#603030"))
+                .fill(theme.color("#e07676").alpha(0.14))
+                .hover(theme.color("#e07676").alpha(0.22))
                 .on_press(|s: &mut State| s.cancel_workspace_creation()),
         );
     modal_dialog::render(
@@ -1398,20 +1381,40 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
     let mut page = col()
         .key("workspace-creation-page")
         .w_full()
-        .gap(20.0)
-        .child(
+        .max_w(960.0)
+        .self_center()
+        .gap(crate::design::PAGE_GAP)
+        .child(crate::design::breadcrumb_title(
+            "Home",
             text("New Workspace")
                 .key("workspace-creation-title")
+                .role("heading")
+                .truncate_fade()
                 .font(view_title_font())
                 .color(color("#f2f2f2")),
-        )
+            theme,
+        ))
+        .child(crate::design::subtitle(
+            match state.workspace_draft.tab {
+                CreationTab::Import => {
+                    "Start from existing context or define your research workspace manually."
+                }
+                CreationTab::Foundation => {
+                    "Give the research a name, a directory, and working guidance."
+                }
+                CreationTab::Surfaces => {
+                    "Record what is in scope and explicitly exclude what is not."
+                }
+                CreationTab::Rules => {
+                    "Set the authorization boundary and operating constraints for this workspace."
+                }
+            },
+            theme,
+        ))
         .child({
-            let mut tabs = row()
+            let mut tabs = crate::design::segmented_control(theme)
                 .key("workspace-creation-tabs")
-                .role("tablist")
-                .label("New Workspace views")
-                .w_full()
-                .gap(6.0);
+                .label("New Workspace views");
             for spec in &TABS {
                 if spec.tab == CreationTab::Surfaces
                     && !crate::extensions_view::surfaces_enabled_for_creation(state)
@@ -1466,7 +1469,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
         .next(crate::extensions_view::surfaces_enabled_for_creation(state))
         .is_some()
     {
-        let next = form_button(
+        let next = crate::design::primary_button(
             if state.workspace_draft.import_pending_id.is_some() {
                 "Preparing…"
             } else {
@@ -1484,7 +1487,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
         let ready = matches!(state.connection, crate::ConnectionStatus::Connected { .. })
             && !state.workspace_create_busy;
         actions = actions.child(if ready {
-            form_button("Create Workspace", theme)
+            crate::design::primary_button("Create Workspace", theme)
                 .key("workspace-create")
                 .on_press(crate::start_workspace_create)
         } else {

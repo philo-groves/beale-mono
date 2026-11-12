@@ -1,0 +1,465 @@
+//! Offline synthetic screenshot fixtures. Never reads host data or starts app-server polling.
+use crate::*;
+use beale_contracts::v1::*;
+
+pub(crate) fn enabled() -> bool {
+    std::env::var_os("BEALE_UI_PREVIEW").is_some() && std::env::args().any(|arg| arg == "--snap")
+}
+
+pub(crate) fn initial_state() -> State {
+    if !enabled() {
+        return State::load_appearance();
+    }
+    let name = std::env::var("BEALE_UI_PREVIEW").unwrap_or_default();
+    let mut s = fixture(&name);
+    s.appearance.theme = match std::env::var("BEALE_UI_THEME").as_deref() {
+        Ok("light") => AppearanceTheme::Light,
+        Ok("cream") => AppearanceTheme::Cream,
+        Ok("midnight") => AppearanceTheme::Midnight,
+        _ => AppearanceTheme::Dark,
+    };
+    s.sync_color_edits();
+    if name == "picker" {
+        s.color_picker = None;
+        toggle_color_picker(&mut s, ColorTarget::Heat(HeatLevel::Low));
+    }
+    s
+}
+
+pub(crate) fn fixture(variant: &str) -> State {
+    let name = match variant {
+        "archive-empty" => "archive",
+        "archive-chats-empty" => "archive-chats",
+        "appearance-compact" => "appearance",
+        "typography-compact" => "typography",
+        "anthropic" | "openrouter" | "xai" | "zai" | "api-key" => "providers",
+        "custom-editor" => "custom",
+        "graph-editor" | "model-menu" | "goal-menu" => "research",
+        "surface-add" | "surface-delete" | "relationship" => "surface-manage",
+        "workspace-name" => "workspace",
+        "workspace-rule" => "rules",
+        "feature-detail" => "features",
+        "plugin-add" | "plugin-detail" => "plugins",
+        "fleet-connect" | "fleet-import" | "fleet-detail" => "fleet",
+        "browser-add" => "browsers",
+        "safety-rule" => "safety",
+        "finding-detail" => "findings",
+        _ => variant,
+    };
+    let mut s = State::default();
+    s.primary_view = PrimaryView::Home;
+    s.connection = ConnectionStatus::Connected {
+        major: beale_contracts::PROTOCOL_MAJOR,
+        minor: beale_contracts::PROTOCOL_MINOR,
+    };
+    s.fleet.preview_fixture();
+    s.lead_provider = Some(Provider::OpenAi);
+    s.auth_loaded = true;
+    s.workspace_list_loaded = true;
+    s.archive_loaded = true;
+    s.permission_loaded = true;
+    for feature in &mut s.features {
+        feature.enabled = true;
+    }
+    for (i, name) in ["ExampleCo / Application", "ExampleCo / Infrastructure"]
+        .iter()
+        .enumerate()
+    {
+        s.workspaces.push(WorkspaceSummary {
+            id: format!("00000000-0000-4000-8000-{:012}", i + 1),
+            name: name.to_string(),
+            directory: format!("/example/research/workspace-{}", i + 1),
+        });
+    }
+    let workspace = s.workspaces[0].clone();
+    s.workspace_id = Some(uuid::Uuid::parse_str(&workspace.id).unwrap());
+    s.new_research_workspace_id = Some(workspace.id.clone());
+    s.workspace_name_edit = TextEdit::new(&workspace.name);
+    let guidance = "Investigate the example application within its recorded scope. Keep observations, assumptions, and evidence separate. Record reproducible results in runbooks.";
+    s.workspace_guidance_edit = TextEdit::new(guidance);
+    s.workspace_rule_edits = vec![
+        "Research is authorized only for example.test and its local synthetic fixtures.".into(),
+        "Third-party services and production user data are out of scope.".into(),
+    ];
+    s.workspace_details = Some(WorkspaceDetails {
+        summary: Some(workspace.clone()),
+        guidance: guidance.into(),
+        rules: s.workspace_rule_edits.clone(),
+        ..Default::default()
+    });
+    s.workspace_draft.name = TextEdit::new("ExampleCo / New assessment");
+    s.workspace_draft.directory = TextEdit::new("/example/research/new-assessment");
+    s.workspace_draft.guidance = TextEdit::new(guidance);
+    s.auth_status[Provider::OpenAi.index()].api_key = true;
+    s.model_catalogs[catalog_index(Provider::OpenAi, AuthMethod::ApiKey)] = Some(ModelCatalog {
+        models: vec![
+            provider_models::ModelEntry {
+                id: "example-lead".into(),
+                name: "Example Research Model".into(),
+            },
+            provider_models::ModelEntry {
+                id: "example-small".into(),
+                name: "Example Review Model".into(),
+            },
+        ],
+        lead: "example-lead".into(),
+        small: "example-small".into(),
+    });
+    for (index, title) in [
+        "Map the example trust boundary",
+        "Review request validation",
+        "Reproduce the candidate behavior",
+    ]
+    .iter()
+    .enumerate()
+    {
+        s.session_summaries.push(SessionSummary {
+            id: format!("10000000-0000-4000-8000-{:012}", index + 1),
+            workspace_id: workspace.id.clone(),
+            title: title.to_string(),
+            ..Default::default()
+        });
+    }
+    for (index, (title, instruction)) in [
+        (
+            "Authorized scope",
+            "Check operations against the recorded workspace boundary.",
+        ),
+        (
+            "Destructive changes",
+            "Review broad or irreversible changes before execution.",
+        ),
+        (
+            "Credential access",
+            "Deny access to credentials unrelated to the research task.",
+        ),
+    ]
+    .iter()
+    .enumerate()
+    {
+        s.permission_rules.push(PermissionRule {
+            id: format!("example-rule-{index}"),
+            title: title.to_string(),
+            instruction: instruction.to_string(),
+            enabled: true,
+            stage: ReviewStage::AutoReview as i32,
+        });
+    }
+    s.permission_rules.push(PermissionRule {
+        id: "example-guardian".into(),
+        title: "Review denied operations".into(),
+        instruction:
+            "Reassess the denied call using its purpose, recorded scope, and available evidence."
+                .into(),
+        enabled: true,
+        stage: ReviewStage::Guardian as i32,
+    });
+    for quick_chat in [false, true] {
+        s.archive_entries.push(ArchiveEntry {
+            id: format!("example-archive-{quick_chat}"),
+            workspace_id: workspace.id.clone(),
+            title: "Example assessment notes".into(),
+            model: "Example Research Model".into(),
+            turn_count: 8,
+            created_at_ms: 1_800_000_000_000,
+            archived_at_ms: 1_800_086_400_000,
+            quick_chat,
+            ..Default::default()
+        });
+    }
+    for (i, (title, type_id)) in [
+        ("Example API", "api.endpoint"),
+        ("Example parser", "code.module"),
+        ("Example storage", "service"),
+    ]
+    .iter()
+    .enumerate()
+    {
+        s.workspace_surface_edits.push(WorkspaceSurface {
+            id: format!("S{}", i + 1),
+            definition: Some(SurfaceDefinition {
+                name: title.to_string(),
+                type_id: type_id.to_string(),
+                scope: SurfaceScope::InScope as i32,
+                locator: Some(SurfaceLocator {
+                    kind: "url".into(),
+                    value: format!("https://example.test/fixture/{}", i + 1),
+                    ..Default::default()
+                }),
+                description: "Synthetic surface for visual review.".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+    }
+    s.workspace_surface_edits[0]
+        .relationships
+        .push(SurfaceRelationship {
+            target_id: "S2".into(),
+            label: "Parses request".into(),
+            type_id: "calls".into(),
+            ..Default::default()
+        });
+    s.workspace_surface_edits[1]
+        .relationships
+        .push(SurfaceRelationship {
+            target_id: "S3".into(),
+            label: "Stores result".into(),
+            type_id: "writes".into(),
+            ..Default::default()
+        });
+    if let Some(details) = &mut s.workspace_details {
+        details.surfaces = s.workspace_surface_edits.clone();
+    }
+    for (i, status) in [
+        beale_contracts::findings::Status::Candidate,
+        beale_contracts::findings::Status::Validated,
+        beale_contracts::findings::Status::Screened,
+    ]
+    .iter()
+    .enumerate()
+    {
+        s.workspace_findings.records.push(beale_contracts::findings::Summary { id: format!("F{}", i + 1), title: ["Example boundary mismatch", "Example input handling", "Example access control"][i].into(), summary: "Synthetic finding for layout review. Evidence and verification remain attached to the record.".into(), surface_ids: vec!["S1".into()], status: *status, updated_at_ms: 1_800_000_000_000, revision: 2 });
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    s.tracking.snapshot = Some(TrackingResponse {
+        subscriptions: (0..7)
+            .map(|i| TrackingSubscriptionPoint {
+                provider: ProviderId::Openai as i32,
+                window_id: "week".into(),
+                label: "Weekly allowance".into(),
+                observed_at_ms: now - (6 - i) * 86_400_000,
+                remaining_percent: (95 - i * 9) as u32,
+                ..Default::default()
+            })
+            .collect(),
+        model_days: (0..7)
+            .map(|i| TrackingModelDay {
+                day_start_ms: now / 86_400_000 * 86_400_000 - (6 - i) * 86_400_000,
+                model: "Example Research Model".into(),
+                role: "main".into(),
+                input_tokens: 18000 + i * 2400,
+                output_tokens: 2400,
+                duration_ms: 60000 + i * 24000,
+                measured_calls: 4,
+                total_calls: 4,
+                ..Default::default()
+            })
+            .collect(),
+    });
+    match name {
+        "home" => {}
+        "empty" => {
+            s.workspaces.clear();
+            s.session_summaries.clear();
+        }
+        "research" | "session" | "canvas" => {
+            s.primary_view = PrimaryView::NewResearch;
+            if name != "research" {
+                s.active_session = Some(SessionDetail {
+                    summary: Some(s.session_summaries[0].clone()), model: "example-lead".into(), provider: ProviderId::Openai as i32, method: AuthMethod::ApiKey as i32,
+                    total_duration_ms: 142_000,
+                    messages: vec![
+                        SessionMessage { role: SessionRole::User as i32, text: "Map the trust boundary for the local example application and identify the next verification step.".into(), ..Default::default() },
+                        SessionMessage { role: SessionRole::Assistant as i32, text: "## Boundary review\nThe example request passes through three stages: parsing, authorization, and storage.\n\n### Observations\n- The local fixture defines two caller roles.\n- The authorization check runs before the storage operation.\n- No vulnerability has been confirmed.\n\n### Next verification\nCompare both roles against the same synthetic object and preserve the results in a runbook.".into(), duration_ms: 142_000, ..Default::default() }
+                    ], token_usage: Some(SessionTokenUsage { input_tokens: 18200, output_tokens: 2400, cache_read_tokens: 12000, cache_input_tokens: 18200, measured_calls: 4, total_calls: 4, cache_measured_calls: 4 }), ..Default::default()
+                });
+                s.session_sidenav_visible = name == "session";
+                s.canvas_open = name == "canvas";
+                if name == "canvas" {
+                    s.canvas_runbook = runbook_canvas::CanvasRunbookState::with_view(runbook_canvas::RunbookView {
+                        selected: Some(SessionRunbook { id: "R1".into(), title: "Example boundary verification".into(), status: "prepared".into(), ..Default::default() }),
+                        workspace_id: workspace.id.clone(), session_id: Some(s.session_summaries[0].id.clone()),
+                        document: Some(beale_contracts::runbooks::Document { id: "R1".into(), workspace_id: workspace.id.clone(), title: "Example boundary verification".into(), purpose: "Compare synthetic inputs and preserve a reproducible observation.".into(), cells: vec![beale_contracts::runbooks::Cell::Markdown { id: "L1".into(), name: "Procedure".into(), source: "Use only the local example fixture. Record the expected and observed results.".into() }, beale_contracts::runbooks::Cell::Code { id: "L2".into(), name: "Compare inputs".into(), language: "python".into(), source: "roles = [\"reader\", \"owner\"]\nfor role in roles:\n    print(role, \"example fixture\")".into() }], next_cell_number: 3, created_at_ms: 1_800_000_000_000, updated_at_ms: 1_800_000_000_000, revision: 1 }), ..Default::default()
+                    });
+                }
+            }
+        }
+        "features" | "plugins" | "kits" => {
+            s.primary_view = PrimaryView::Extensions;
+            s.extensions_section = match name {
+                "plugins" => extensions_view::ExtensionSection::Plugins,
+                "kits" => extensions_view::ExtensionSection::ResearchKits,
+                _ => extensions_view::ExtensionSection::Features,
+            };
+        }
+        "fleet" | "browsers" | "vms" => {
+            s.primary_view = PrimaryView::Fleet;
+            s.fleet_section = match name {
+                "browsers" => fleet_view::FleetSection::Browsers,
+                "vms" => fleet_view::FleetSection::VirtualMachines,
+                _ => fleet_view::FleetSection::AppServers,
+            };
+        }
+        "automations" => {
+            s.primary_view = PrimaryView::Automations;
+            s.automations.jobs.push(AutomationJob {
+                id: "example-job".into(),
+                workspace_id: workspace.id.clone(),
+                session_id: s.session_summaries[0].id.clone(),
+                title: "Example daily boundary review".into(),
+                repeat_preset: "day".into(),
+                next_run_at_ms: now + 86_400_000,
+                ..Default::default()
+            });
+            s.automations.selected_id = Some("example-job".into());
+        }
+        "tracking" => {
+            s.primary_view = PrimaryView::Tracking;
+        }
+        "import" | "create-general" | "create-surfaces" | "create-rules" => {
+            s.primary_view = PrimaryView::WorkspaceCreation;
+            s.workspace_draft.tab = match name {
+                "create-general" => workspace_creation::CreationTab::Foundation,
+                "create-surfaces" => workspace_creation::CreationTab::Surfaces,
+                "create-rules" => workspace_creation::CreationTab::Rules,
+                _ => workspace_creation::CreationTab::Import,
+            };
+        }
+        "workspace" | "rules" | "surfaces" | "surface-detail" | "surface-manage" | "findings"
+        | "campaign" => {
+            s.primary_view = PrimaryView::Workspace;
+            s.workspace_tab = match name {
+                "workspace" => workspace_view::WorkspaceTab::Foundation,
+                "surfaces" | "surface-detail" | "surface-manage" => {
+                    workspace_view::WorkspaceTab::Surfaces
+                }
+                "findings" => workspace_view::WorkspaceTab::Findings,
+                "campaign" => workspace_view::WorkspaceTab::Campaign,
+                _ => workspace_view::WorkspaceTab::Rules,
+            };
+            s.workspace_findings.loaded = true;
+            s.workspace_surface_management_open = name == "surface-manage";
+            s.workspace_surface_selected = (name == "surface-detail").then_some(0);
+        }
+        "chat" => {
+            s.quick_chat_open = true;
+            s.quick_chat_title = "Example research notes".into();
+            s.quick_chat_id = Some("20000000-0000-4000-8000-000000000001".into());
+            s.quick_chat_workspace_id = Some(workspace.id.clone());
+            s.quick_chat_messages = vec![
+                QuickChatMessage { role: SessionRole::User as i32, text: "What belongs in a reproducible research note?".into() },
+                QuickChatMessage { role: SessionRole::Assistant as i32, text: "Keep the **authorized scope**, synthetic input, expected behavior, and observed result together. Link the runbook and distinguish evidence from assumptions.".into() }
+            ];
+        }
+        "dialog" => {
+            s.primary_view = PrimaryView::WorkspaceCreation;
+            s.workspace_draft.cancel_dialog_open = true;
+        }
+        _ => {
+            s.primary_view = PrimaryView::Settings;
+            s.settings_section = match name {
+                "providers" | "custom" => SettingsSection::Providers,
+                "appearance" | "typography" | "picker" => SettingsSection::Appearance,
+                "archive" | "archive-chats" => SettingsSection::Archive,
+                _ => SettingsSection::Safety,
+            };
+            if name == "menu" {
+                s.selection_menu = Some(SelectionMenu::ColorTheme);
+                s.settings_section = SettingsSection::Appearance;
+            }
+            if name == "picker" {
+                toggle_color_picker(&mut s, ColorTarget::Heat(HeatLevel::Low));
+            }
+            if name == "custom" {
+                s.selected = Provider::Custom;
+                s.custom_providers.push(CustomProvider {
+                    id: "example-provider".into(),
+                    name: "Example local models".into(),
+                    base_url: "https://models.example.test/v1".into(),
+                    models: vec![beale_contracts::v1::ModelEntry {
+                        id: "example-model".into(),
+                        display_name: "Example Model".into(),
+                    }],
+                    lead_model: "example-model".into(),
+                    small_model: "example-model".into(),
+                    api_key_configured: true,
+                    ..Default::default()
+                });
+            }
+            if name == "typography" {
+                s.appearance_tab = AppearanceTab::Typography;
+            }
+            if name == "guardian" {
+                s.permissions_tab = permission_settings::PermissionTab::Guardian;
+            }
+            if name == "archive-chats" {
+                s.archive_tab = archive_view::ArchiveTab::QuickChats;
+            }
+        }
+    }
+    match variant {
+        "archive-empty" | "archive-chats-empty" => s.archive_entries.clear(),
+        "appearance-compact" | "typography-compact" => {
+            s.sidenav_width = SIDENAV_MAX_WIDTH;
+            s.appearance.text_size = TextSize::ExtraLarge;
+        }
+        "anthropic" => s.selected = Provider::Anthropic,
+        "openrouter" => s.selected = Provider::OpenRouter,
+        "xai" => s.selected = Provider::Xai,
+        "zai" => s.selected = Provider::Zai,
+        "api-key" => s.api_key_dialog = true,
+        "custom-editor" => {
+            s.custom_editor_open = true;
+            s.custom_name_edit = TextEdit::new("Example inference service");
+            s.custom_url_edit = TextEdit::new("https://models.example.test/v1");
+            s.custom_models_edit = TextEdit::new("example-research, example-review");
+        }
+        "graph-editor" => {
+            s.graph_editor = Some(new_research::GraphEditor {
+                role: beale_graphs::Role::Main,
+                models: vec![],
+                model_menu_open: false,
+            })
+        }
+        "model-menu" => s.composer_menu_open = true,
+        "goal-menu" => s.selection_menu = Some(SelectionMenu::GoalMode),
+        "surface-add" => {
+            s.workspace_surface_dialog_scope = Some(workspace_creation::SurfaceScope::InScope)
+        }
+        "surface-delete" => s.workspace_surface_delete_index = Some(0),
+        "relationship" => {
+            s.workspace_surface_connecting = Some(0);
+            s.workspace_surface_selected = Some(0);
+            s.workspace_surface_relationship_target = Some(1);
+        }
+        "workspace-name" => {
+            s.workspace_name_dialog_open = true;
+            s.workspace_name_dialog_value = TextEdit::new(&workspace.name);
+        }
+        "workspace-rule" => s.workspace_rule_dialog_open = true,
+        "feature-detail" => {
+            s.feature_details_id = Some(s.features[0].id.clone());
+            s.feature_details = Some(FeatureDetailsResponse {
+                name: s.features[0].name.clone(),
+                description: s.features[0].description.clone(),
+                prompt_extension:
+                    "Keep the research objective, evidence, and next verification step explicit."
+                        .into(),
+                ..Default::default()
+            });
+        }
+        "plugin-add" => s.plugin_add_dialog_open = true,
+        "plugin-detail" => {
+            s.plugin_manifest_name = Some("Example research kit".into());
+            s.plugin_manifest_text = "# Example research kit\n\nSynthetic package for visual review.\n\n## Workflow\nRecord scope, inspect the local fixture, and preserve evidence.".into();
+        }
+        "fleet-connect" => s.fleet.connect_dialog_open = true,
+        "fleet-import" => s.fleet.import_dialog_open = true,
+        "fleet-detail" => s.fleet.details_id = Some("local".into()),
+        "browser-add" => s.fleet.browser_dialog_open = true,
+        "safety-rule" => {
+            s.permission_creating = true;
+            s.permission_name_edit = TextEdit::new("Example scope review");
+            s.permission_description_edit = TextEdit::new(
+                "Check the proposed operation against the recorded authorized scope.",
+            );
+        }
+        "finding-detail" => s.workspace_findings.preview_detail(),
+        _ => {}
+    }
+    s
+}

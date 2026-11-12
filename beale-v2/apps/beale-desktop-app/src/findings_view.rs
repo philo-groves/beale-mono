@@ -23,6 +23,18 @@ pub(crate) struct FindingsBoard {
 }
 
 impl FindingsBoard {
+    pub(crate) fn preview_detail(&mut self) {
+        let record: Finding = serde_json::from_value(serde_json::json!({
+            "id": "F1", "workspace_id": "00000000-0000-4000-8000-000000000001",
+            "title": "Example boundary mismatch", "summary": "Synthetic candidate for visual review; no vulnerability is confirmed.",
+            "surface_ids": ["S1"], "state": {"candidate": {"hypothesis": "Compare the reader and owner roles against a local synthetic object.", "revision": 1, "completed_at_ms": 1800000000000_u64}},
+            "created_at_ms": 1800000000000_u64, "updated_at_ms": 1800000000000_u64,
+            "revision": 1, "history": []
+        })).expect("valid synthetic finding");
+        self.selected_id = Some(record.id.clone());
+        self.selected = Some(record);
+    }
+
     pub(crate) fn reset(&mut self) {
         let generation = self.generation.wrapping_add(1);
         let detail_generation = self.detail_generation.wrapping_add(1);
@@ -304,6 +316,7 @@ fn lane(
     label: &str,
     accent: &str,
     records: &[Summary],
+    width: f32,
     theme: ThemeStyle<'_>,
 ) -> El {
     let items: Vec<_> = records
@@ -312,7 +325,7 @@ fn lane(
         .collect();
     let mut content = col()
         .key(format!("findings-lane-{}", label.to_lowercase()))
-        .w(272.0)
+        .w(width)
         .min_h(330.0)
         .padding(12.0)
         .gap(11.0)
@@ -352,7 +365,7 @@ fn lane(
     content
 }
 
-pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, _page_width: f32) -> El {
+pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> El {
     let board = &state.workspace_findings;
     let active = board
         .records
@@ -417,18 +430,23 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, _page_width: f32) -> 
                 .color(theme.color("#969696")),
         );
     }
-    let mut lanes = row().key("findings-lanes").gap(12.0);
-    for (status, label, accent) in LANES {
-        lanes = lanes.child(lane(status, label, accent, &board.records, theme));
+    let columns = if page_width >= 920.0 {
+        4
+    } else if page_width >= 460.0 {
+        2
+    } else {
+        1
+    };
+    let width = ((page_width - 12.0 * (columns - 1) as f32) / columns as f32).max(180.0);
+    let mut lanes = col().key("findings-lanes").w_full().gap(12.0);
+    for group in LANES.chunks(columns) {
+        let mut line = row().w_full().gap(12.0);
+        for &(status, label, accent) in group {
+            line = line.child(lane(status, label, accent, &board.records, width, theme));
+        }
+        lanes = lanes.child(line);
     }
-    page = page.child(
-        col()
-            .key("findings-lanes-scroll")
-            .w_full()
-            .min_w(0.0)
-            .scroll_x()
-            .child(lanes),
-    );
+    page = page.child(lanes);
     if !rejected.is_empty() {
         let count = rejected.len();
         page = page.child(

@@ -37,7 +37,7 @@ impl AppearanceTheme {
     pub(crate) fn description(self) -> &'static str {
         match self {
             Self::Light => "Bright with cool neutral surfaces.",
-            Self::Dark => "The default low-light interface.",
+            Self::Dark => "Black and charcoal with neutral accents.",
             Self::Cream => "Warm light with soft brown surfaces.",
             Self::Midnight => "Dark with deep blue surfaces.",
         }
@@ -46,68 +46,68 @@ impl AppearanceTheme {
     pub(crate) fn palette(self) -> Palette<'static> {
         match self {
             Self::Light => Palette {
-                chrome: "#e9edf0",
-                panel: "#ffffff",
-                sidebar: "#f4f6f7",
-                card: "#e6eaed",
-                raised: "#f1f3f5",
-                text: "#15191d",
-                muted: "#68737d",
-                border: "#ccd3d9",
-                gradient_start: "#dcebf5",
-                gradient_middle: "#ece1f4",
-                gradient_end: "#e3eaee",
-                success: "#247d3e",
-                warning: "#8a621b",
-                error: "#b8333d",
+                chrome: "#e7edeb",
+                panel: "#fafcfb",
+                sidebar: "#f0f4f2",
+                card: "#ffffff",
+                raised: "#e7efeb",
+                text: "#182923",
+                muted: "#596d64",
+                border: "#cedbd4",
+                gradient_start: "#d6e6dd",
+                gradient_middle: "#e7edeb",
+                gradient_end: "#e7edeb",
+                success: "#25734c",
+                warning: "#8b5d18",
+                error: "#b33643",
             },
             Self::Dark => Palette {
-                chrome: "#151515",
-                panel: "#0d0d0d",
-                sidebar: "#111111",
-                card: "#191919",
-                raised: "#242424",
-                text: "#f2f2f2",
-                muted: "#969696",
-                border: "#2a2a2a",
-                gradient_start: "#2a2a2a",
-                gradient_middle: "#1d1d1d",
-                gradient_end: "#151515",
-                success: "#72b783",
-                warning: "#dca15f",
-                error: "#e07676",
+                chrome: "#141414",
+                panel: "#101010",
+                sidebar: "#171717",
+                card: "#1e1e1e",
+                raised: "#2b2b2b",
+                text: "#eeeeee",
+                muted: "#adadad",
+                border: "#393939",
+                gradient_start: "#282828",
+                gradient_middle: "#141414",
+                gradient_end: "#141414",
+                success: "#8bd8aa",
+                warning: "#e4b46d",
+                error: "#f39197",
             },
             Self::Cream => Palette {
-                chrome: "#eadfce",
-                panel: "#fffaf1",
-                sidebar: "#f6eee2",
-                card: "#e6dac8",
-                raised: "#f1e7d8",
-                text: "#211a14",
-                muted: "#746453",
-                border: "#cdbb9f",
-                gradient_start: "#f4d9bd",
-                gradient_middle: "#eadfd0",
-                gradient_end: "#d9c7ac",
-                success: "#397744",
-                warning: "#8a611c",
-                error: "#a53b3b",
+                chrome: "#e9e2d4",
+                panel: "#faf7ef",
+                sidebar: "#f1ecdf",
+                card: "#fffcf5",
+                raised: "#eae1d0",
+                text: "#302c24",
+                muted: "#736856",
+                border: "#d9cdb8",
+                gradient_start: "#e7dbc0",
+                gradient_middle: "#e9e2d4",
+                gradient_end: "#e9e2d4",
+                success: "#4c713f",
+                warning: "#88591c",
+                error: "#ad3c3c",
             },
             Self::Midnight => Palette {
-                chrome: "#091321",
-                panel: "#08111f",
-                sidebar: "#0a1424",
-                card: "#192a43",
-                raised: "#182a46",
-                text: "#edf4fb",
-                muted: "#8194aa",
-                border: "#2a4264",
-                gradient_start: "#18365a",
-                gradient_middle: "#242047",
-                gradient_end: "#07111f",
-                success: "#72d3a0",
-                warning: "#ddb768",
-                error: "#f47888",
+                chrome: "#101a2c",
+                panel: "#0e1727",
+                sidebar: "#142034",
+                card: "#1a2940",
+                raised: "#263b57",
+                text: "#e8eef8",
+                muted: "#a6b8d0",
+                border: "#344963",
+                gradient_start: "#203c58",
+                gradient_middle: "#101a2c",
+                gradient_end: "#101a2c",
+                success: "#83d6bd",
+                warning: "#e7bc7c",
+                error: "#f39aa9",
             },
         }
     }
@@ -126,31 +126,43 @@ fn mapped_color(theme: AppearanceTheme, dark: &str, p: Palette<'_>) -> Color {
         "#2a2a2a" => p.border,
         "#969696" => p.muted,
         "#f2f2f2" => p.text,
-        "#72b783" => p.success,
-        "#b9a15e" | "#dca15f" => p.warning,
-        "#a83232" | "#cf7777" | "#e07676" => p.error,
+        "#72b783" | "#8cbe98" | "#76c98d" | "#77bf93" | "#92c4a8" => p.success,
+        "#b9a15e" | "#dca15f" | "#c6a976" | "#e9c873" | "#d9a27e" => p.warning,
+        "#a83232" | "#cf7777" | "#e07676" | "#c4a0a0" => p.error,
+        "#a9b9ad" => p.muted,
+        "#7aa9e6" | "#aebee5" | "#8dabef" => {
+            if matches!(theme, AppearanceTheme::Light | AppearanceTheme::Cream) {
+                "#365fb0"
+            } else {
+                "#a9c7eb"
+            }
+        }
+        "#bba3e5" => {
+            if matches!(theme, AppearanceTheme::Light | AppearanceTheme::Cream) {
+                "#78549f"
+            } else {
+                "#bba3e5"
+            }
+        }
         _ => {
-            let shades = match dark {
-                "#171717" => Some(["#e6eaed", dark, "#e6dac8", "#15253d"]),
-                "#1d1d1d" => Some(["#dbe1e5", dark, "#dacbb5", "#1b2d47"]),
-                "#222222" => Some(["#d6dce1", dark, "#d5c4ac", "#1e314c"]),
-                "#282828" => Some(["#d1d8de", dark, "#cfbca2", "#223652"]),
-                "#2c2c2c" => Some(["#c3ccd3", dark, "#c3ad90", "#2d4565"]),
-                "#303030" => Some(["#c3ccd3", dark, "#c3ad90", "#2d4565"]),
-                "#323232" | "#333333" | "#383838" => Some(["#b9c2ca", dark, "#b8a387", "#334b6b"]),
-                "#414141" | "#424242" => Some(["#b9c2ca", dark, "#b8a387", "#334b6b"]),
-                "#4a4a4a" | "#555555" => Some(["#929ca5", dark, "#948067", "#536b87"]),
-                "#777777" => Some(["#68737d", dark, "#6f604f", "#7489a1"]),
-                "#888888" | "#929292" => Some(["#58636d", dark, "#605244", "#879bb1"]),
-                "#a8a8a8" => Some(["#454d55", dark, "#4d4136", "#a5b7c9"]),
-                "#aaaaaa" => Some(["#414950", dark, "#493d33", "#aabaca"]),
-                "#b8b8b8" | "#bcbcbc" | "#bdbdbd" => Some(["#353c43", dark, "#3d332b", "#bbc9d7"]),
-                "#c8c8c8" => Some(["#2c3238", dark, "#342b25", "#ccd7e2"]),
-                "#e2e2e2" => Some(["#171c20", dark, "#1e1915", "#e6edf3"]),
-                "#eeeeee" => Some(["#111519", dark, "#17130f", "#f2f6fa"]),
-                _ => None,
-            };
-            shades.map_or(dark, |values| values[theme.index()])
+            let gray = dark
+                .strip_prefix('#')
+                .filter(|hex| hex.len() == 6 && hex.is_ascii())
+                .and_then(|hex| {
+                    let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+                    let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+                    let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+                    (r == g && g == b).then_some(r)
+                });
+            match gray {
+                Some(0..=18) => p.panel,
+                Some(19..=29) => p.card,
+                Some(30..=47) => p.raised,
+                Some(48..=110) => p.border,
+                Some(111..=175) => p.muted,
+                Some(_) => p.text,
+                None => dark,
+            }
         }
     };
     rune::color::hex(mapped).unwrap_or(Color::BLACK)
@@ -681,6 +693,49 @@ mod tests {
         }
         assert_eq!(normalize_hex("#12abcd"), Some("#12abcd".to_owned()));
         assert_eq!(normalize_hex("#abc"), None);
+    }
+
+    #[test]
+    fn default_text_and_status_tokens_meet_reading_contrast() {
+        fn luminance(hex: &str) -> f64 {
+            let channels: Vec<_> = [1, 3, 5]
+                .into_iter()
+                .map(|i| {
+                    let c = u8::from_str_radix(&hex[i..i + 2], 16).unwrap() as f64 / 255.0;
+                    if c <= 0.04045 {
+                        c / 12.92
+                    } else {
+                        ((c + 0.055) / 1.055).powf(2.4)
+                    }
+                })
+                .collect();
+            channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722
+        }
+        for theme in AppearanceTheme::ALL {
+            let p = theme.palette();
+            for foreground in [p.text, p.muted, p.success, p.warning, p.error] {
+                for background in [p.panel, p.card, p.sidebar] {
+                    let a = luminance(foreground);
+                    let b = luminance(background);
+                    let contrast = (a.max(b) + 0.05) / (a.min(b) + 0.05);
+                    assert!(
+                        contrast >= 4.5,
+                        "{theme:?}: {foreground} on {background}: {contrast}"
+                    );
+                }
+            }
+            let prefs = AppearancePreferences {
+                theme,
+                ..Default::default()
+            };
+            // These text grays formerly bypassed theme translation entirely.
+            for value in ["#dddddd", "#ededed", "#d4d4d4", "#dedede"] {
+                assert_eq!(
+                    prefs.style().color(value),
+                    rune::color::hex(p.text).unwrap()
+                );
+            }
+        }
     }
 
     #[test]

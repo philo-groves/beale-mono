@@ -136,27 +136,13 @@ pub(crate) async fn load_quick_chat(
 }
 
 fn tab_button(tab: ArchiveTab, selected: bool, theme: ThemeStyle<'_>) -> El {
-    row()
+    let glyph = match tab {
+        ArchiveTab::Sessions => &crate::icons::CHAT_BUBBLE,
+        ArchiveTab::QuickChats => &crate::icons::QUICK_CHAT,
+    };
+    crate::design::segmented_tab(tab.label(), Some(glyph), selected, true, theme)
         .key(tab.key())
-        .role("tab")
-        .label(format!(
-            "{} archive view{}",
-            tab.label(),
-            if selected { ", selected" } else { "" }
-        ))
-        .h(26.0)
-        .px(10.0)
-        .center_y()
-        .radius(9.0)
-        .continuous_corners()
-        .fill(theme.color(if selected { "#414141" } else { "#242424" }))
-        .hover(theme.color("#4a4a4a"))
         .on_press(move |state: &mut State| state.archive_tab = tab)
-        .child(
-            text(tab.label())
-                .font(ui_font(14.0, if selected { 600.0 } else { 450.0 }))
-                .color(theme.color(if selected { "#f2f2f2" } else { "#c8c8c8" })),
-        )
 }
 
 fn item_stats(state: &State, entry: &ArchiveEntry) -> String {
@@ -181,11 +167,9 @@ fn item_stats(state: &State, entry: &ArchiveEntry) -> String {
 }
 
 pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
-    let mut tabs = row()
+    let mut tabs = crate::design::segmented_control(theme)
         .key("archive-view-tabs")
-        .role("tablist")
-        .label("Archive views")
-        .gap(6.0);
+        .label("Archive views");
     for tab in ArchiveTab::ALL {
         tabs = tabs.child(tab_button(tab, state.archive_tab == tab, theme));
     }
@@ -204,9 +188,15 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
         .filter(|entry| !entry.quick_chat || state.quick_chat_id.as_deref() != Some(&entry.id))
         .collect();
     let has_rows = !rows.is_empty();
-    let mut list = col().key("archive-list").w_full().mt(6.0);
+    let mut list = col()
+        .key("archive-list")
+        .w_full()
+        .mt(6.0)
+        .px(16.0)
+        .radius(crate::design::CARD_RADIUS)
+        .fill(theme.color("#191919"));
     if rows.is_empty() {
-        list = list.child(
+        list = list.py(12.0).child(
             text(if state.archive_loading && !state.archive_loaded {
                 "Loading archive…"
             } else if state.archive_tab == ArchiveTab::Sessions {
@@ -215,8 +205,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
                 "No archived Quick Chats."
             })
             .font(ui_font(14.0, 400.0))
-            .color(theme.color("#969696"))
-            .mt(12.0),
+            .color(theme.color("#969696")),
         );
     }
     for entry in rows {

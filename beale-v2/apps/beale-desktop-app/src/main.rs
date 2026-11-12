@@ -11,6 +11,7 @@ mod automations_view;
 mod browser_logos;
 mod color_picker;
 mod connection;
+mod design;
 mod desktop_fonts;
 mod extensions_view;
 mod findings_view;
@@ -19,6 +20,7 @@ mod fleet_view;
 mod form_controls;
 mod grid_background;
 mod home_sidebar;
+mod home_view;
 mod icons;
 mod in_place_menu;
 mod input_history;
@@ -36,6 +38,7 @@ mod session_sidenav;
 mod sessions;
 mod settings_scroll;
 mod tracking_view;
+mod visual_preview;
 mod workspace_creation;
 mod workspace_surface_layout;
 mod workspace_view;
@@ -89,7 +92,7 @@ fn ui_font(size: f32, weight: f32) -> TextStyle {
 }
 
 fn view_title_font() -> TextStyle {
-    ui_font(27.0, 600.0)
+    ui_font(24.0, 600.0)
 }
 
 fn form_label_font() -> TextStyle {
@@ -99,7 +102,7 @@ fn form_label_font() -> TextStyle {
 fn sidenav_heading(label: &'static str, theme: ThemeStyle<'_>) -> El {
     row().h(30.0).center_y().child(
         text(label)
-            .font(ui_font(18.0, 500.0))
+            .font(ui_font(16.0, 600.0))
             .color(theme.color("#aaaaaa")),
     )
 }
@@ -511,7 +514,7 @@ const TYPOGRAPHY_ROWS: [TypographyRowSpec; 2] = [
 
 const NAVIGATION_RAIL_WIDTH: f32 = 50.0;
 const NAVIGATION_DIVIDER_COLOR: &str = "#555555";
-const SIDENAV_DEFAULT_WIDTH: f32 = 292.0;
+const SIDENAV_DEFAULT_WIDTH: f32 = 264.0;
 const SIDENAV_MIN_WIDTH: f32 = 240.0;
 const SIDENAV_MAX_WIDTH: f32 = 420.0;
 const CANVAS_MIN_CONTENT_WIDTH: f32 = 320.0;
@@ -3922,7 +3925,7 @@ fn nav_button(
         .center()
         .radius(12.0)
         .fill(if active {
-            color("#333333")
+            theme.subtle_accent()
         } else {
             Color::TRANSPARENT
         })
@@ -3936,7 +3939,7 @@ fn nav_button(
         })
         .hover_delays(Duration::from_millis(350), Duration::ZERO)
         .child(icon(glyph, 20.0).color(if active {
-            color("#f2f2f2")
+            theme.accent()
         } else {
             color("#aaaaaa")
         }));
@@ -4095,13 +4098,13 @@ fn settings_nav_button(spec: &SettingsSectionSpec, active: bool, theme: ThemeSty
         .role("button")
         .label(format!("{} settings", spec.label))
         .w_full()
-        .h(30.0)
+        .h(36.0)
         .px(8.0)
         .center_y()
         .gap(12.0)
         .radius(8.0)
         .fill(if active {
-            color("#282828")
+            theme.subtle_accent()
         } else {
             Color::TRANSPARENT
         })
@@ -4110,7 +4113,7 @@ fn settings_nav_button(spec: &SettingsSectionSpec, active: bool, theme: ThemeSty
             s.show_section(section);
         })
         .child(icon(spec.icon, 16.0).color(if active {
-            color("#f2f2f2")
+            theme.accent()
         } else {
             color("#bdbdbd")
         }))
@@ -4118,7 +4121,7 @@ fn settings_nav_button(spec: &SettingsSectionSpec, active: bool, theme: ThemeSty
             text(spec.label)
                 .font(ui_font(14.0, if active { 550.0 } else { 400.0 }))
                 .color(if active {
-                    color("#f2f2f2")
+                    theme.accent()
                 } else {
                     color("#c8c8c8")
                 }),
@@ -4210,76 +4213,31 @@ fn sidenav_resize_handle(width: f32) -> El {
 }
 
 fn provider_tab(provider: Provider, selected: bool, theme: ThemeStyle<'_>) -> El {
-    let color = |value| theme.color(value);
-    let name = provider.name();
-    row()
+    let glyph = if provider == Provider::Custom {
+        &icons::PLUGINS
+    } else {
+        provider.logo()
+    };
+    design::segmented_tab(provider.name(), Some(glyph), selected, true, theme)
         .key(format!("provider-{}", provider.key()))
-        .role("tab")
-        .label(format!(
-            "{name} provider view{}",
-            if selected { ", selected" } else { "" }
-        ))
-        .h(26.0)
-        .px(10.0)
-        .center_y()
-        .radius(9.0)
-        .continuous_corners()
-        .fill(if selected {
-            color("#414141")
-        } else {
-            color("#242424")
-        })
-        .hover(color("#4a4a4a"))
         .on_press(move |s: &mut State| {
             s.navigate_to(ViewLocation::Providers(provider));
         })
-        .child(
-            text(name)
-                .font(ui_font(14.0, if selected { 600.0 } else { 450.0 }))
-                .color(if selected {
-                    color("#f2f2f2")
-                } else {
-                    color("#c8c8c8")
-                }),
-        )
 }
 
 fn appearance_tab_button(tab: AppearanceTab, selected: bool, theme: ThemeStyle<'_>) -> El {
-    let color = |value| theme.color(value);
-    row()
+    let glyph = match tab {
+        AppearanceTab::Colors => &icons::APPEARANCE,
+        AppearanceTab::Typography => &icons::TYPOGRAPHY,
+    };
+    design::segmented_tab(tab.label(), Some(glyph), selected, true, theme)
         .key(tab.key())
-        .role("tab")
-        .label(format!(
-            "{} appearance view{}",
-            tab.label(),
-            if selected { ", selected" } else { "" }
-        ))
-        .h(26.0)
-        .px(10.0)
-        .center_y()
-        .radius(9.0)
-        .continuous_corners()
-        .fill(if selected {
-            color("#414141")
-        } else {
-            color("#242424")
-        })
-        .hover(color("#4a4a4a"))
         .on_press(move |s: &mut State| {
             s.navigate_to(ViewLocation::Appearance(tab));
         })
-        .child(
-            text(tab.label())
-                .font(ui_font(14.0, if selected { 600.0 } else { 450.0 }))
-                .color(if selected {
-                    color("#f2f2f2")
-                } else {
-                    color("#c8c8c8")
-                }),
-        )
 }
 
-fn lead_provider_controls(state: &State) -> El {
+fn lead_provider_controls(state: &State) -> (El, f32) {
     let theme = state.appearance.style();
     let color = |value| theme.color(value);
     let configured = state
@@ -4296,15 +4254,30 @@ fn lead_provider_controls(state: &State) -> El {
     } else {
         state.lead_provider.map_or("None", Provider::name)
     };
-    row()
+    let selectable = state.auth_loaded && configured && !state.lead_busy;
+    let label = if state.lead_busy { "Saving" } else { label };
+    let value_font = if selectable {
+        ui_font(13.0, 550.0)
+    } else {
+        ui_font(13.5, 400.0)
+    };
+    let value_width = if selectable {
+        selection_button_width(label)
+    } else {
+        rune::text::measure(label, &[], value_font, None).0
+    };
+    let width =
+        rune::text::measure("Default", &[], ui_font(14.0, 500.0), None).0 + 7.0 + value_width;
+    let control = row()
+        .key("lead-provider-controls")
         .center_y()
         .gap(7.0)
         .child(
-            text("Default Provider")
+            text("Default")
                 .font(ui_font(14.0, 500.0))
                 .color(color("#a8a8a8")),
         )
-        .child(if state.auth_loaded && configured && !state.lead_busy {
+        .child(if selectable {
             selection_button(
                 label,
                 state.selection_menu == Some(SelectionMenu::LeadProvider),
@@ -4313,23 +4286,23 @@ fn lead_provider_controls(state: &State) -> El {
             )
             .key("lead-provider-control")
         } else {
-            el().child(
-                text(if state.lead_busy { "Saving" } else { label })
-                    .font(ui_font(13.5, 400.0))
-                    .color(color("#888888")),
-            )
-        })
+            el().child(text(label).font(value_font).color(color("#888888")))
+        });
+    (control, width.ceil())
 }
 
-fn color_theme_controls(state: &State) -> El {
+fn color_theme_controls(state: &State) -> (El, f32) {
     let theme = state.appearance.style();
     let color = |value| theme.color(value);
-    row()
+    let width = rune::text::measure("Theme", &[], ui_font(14.0, 500.0), None).0
+        + 7.0
+        + selection_button_width(theme.name());
+    let control = row()
         .key("color-theme-selector")
         .center_y()
         .gap(7.0)
         .child(
-            text("Color Theme")
+            text("Theme")
                 .font(ui_font(14.0, 500.0))
                 .color(color("#a8a8a8")),
         )
@@ -4341,23 +4314,25 @@ fn color_theme_controls(state: &State) -> El {
                 theme,
             )
             .key("color-theme-control"),
-        )
+        );
+    (control, width.ceil())
 }
 
 fn form_button(label: impl Into<String>, theme: ThemeStyle<'_>) -> El {
     let color = |value| theme.color(value);
     row()
-        .h(26.0)
+        .h(design::CONTROL_HEIGHT)
         .px(12.0)
         .center()
         .gap(6.0)
         .radius(8.0)
         .continuous_corners()
-        .fill(color("#303030"))
+        .fill(color("#242424"))
+        .border(1.0, color("#2a2a2a"))
         .hover(color("#414141"))
         .child(
             text(label.into())
-                .font(ui_font(14.0, 550.0))
+                .font(ui_font(13.0, 550.0))
                 .min_w(0.0)
                 .truncate()
                 .color(color("#eeeeee")),
@@ -4370,6 +4345,12 @@ fn credential_button(
     theme: ThemeStyle<'_>,
 ) -> El {
     form_button(label, theme).on_press(action)
+}
+
+fn selection_button_width(label: &str) -> f32 {
+    let text_width = rune::text::measure(label, &[], ui_font(13.0, 550.0), None).0;
+    // Match selection_button's padding, border, icon gap, and chevron.
+    (text_width + 24.0 + 2.0 + 6.0 + 13.0).min(220.0)
 }
 
 fn selection_button(
@@ -4392,7 +4373,7 @@ fn selection_button(
 }
 
 fn form_item_row() -> El {
-    row().w_full().h(62.0).center_y().gap(12.0)
+    row().w_full().min_h(68.0).py(12.0).center_y().gap(12.0)
 }
 
 fn authentication_row(
@@ -4498,7 +4479,12 @@ fn settings_form(spec: FormSpec, rows: impl IntoIterator<Item = El>, theme: Them
 
 fn settings_form_card(rows: impl IntoIterator<Item = El>, theme: ThemeStyle<'_>) -> El {
     let color = |value| theme.color(value);
-    let mut items = col().w_full().px(16.0).radius(10.0).fill(color("#191919"));
+    let mut items = col()
+        .w_full()
+        .px(20.0)
+        .radius(design::CARD_RADIUS)
+        .fill(color("#191919"))
+        .border(1.0, color("#2a2a2a"));
     for (index, item) in rows.into_iter().enumerate() {
         if index > 0 {
             items = items.child(el().w_full().h(1.0).fill(color("#2c2c2c")));
@@ -4544,6 +4530,7 @@ fn source_priority_row(state: &State, provider: Provider, spec: &ModelRowSpec) -
         .child(
             col()
                 .grow(1.0)
+                .min_w(0.0)
                 .gap(4.0)
                 .child(
                     text(spec.label)
@@ -4552,6 +4539,8 @@ fn source_priority_row(state: &State, provider: Provider, spec: &ModelRowSpec) -
                 )
                 .child(
                     text(spec.description)
+                        .w_full()
+                        .wrap()
                         .font(ui_font(14.0, 400.0))
                         .color(color("#969696")),
                 ),
@@ -4612,6 +4601,7 @@ fn model_default_row(
         .child(
             col()
                 .grow(1.0)
+                .min_w(0.0)
                 .gap(4.0)
                 .child(
                     text(spec.label)
@@ -4620,6 +4610,8 @@ fn model_default_row(
                 )
                 .child(
                     text(spec.description)
+                        .w_full()
+                        .wrap()
                         .font(ui_font(14.0, 400.0))
                         .color(color("#969696")),
                 ),
@@ -5448,52 +5440,33 @@ fn providers_settings_view(state: &State, cx: &mut Cx<State>) -> Vec<El> {
         Provider::Zai,
         Provider::Custom,
     ];
-    let tabs = if tabs_width < 530.0 {
-        let mut rows = col().gap(6.0);
-        for chunk in providers.chunks(3) {
-            let mut tab_row = row().gap(6.0);
-            for &provider in chunk {
-                tab_row = tab_row.child(provider_tab(provider, state.selected == provider, theme));
-            }
-            rows = rows.child(tab_row);
-        }
-        rows
-    } else {
-        let mut tab_row = row().gap(6.0);
-        for provider in providers {
-            tab_row = tab_row.child(provider_tab(provider, state.selected == provider, theme));
-        }
-        col().child(tab_row)
-    };
-    let controls = if tabs_width < 780.0 {
-        col()
-            .key("provider-view-tabs")
-            .role("tablist")
-            .label("Provider views")
-            .w_full()
-            .gap(8.0)
-            .child(tabs)
-            .child(
-                row()
-                    .w_full()
-                    .child(el().grow(1.0))
-                    .child(lead_provider_controls(state)),
-            )
-    } else {
-        col()
-            .key("provider-view-tabs")
-            .role("tablist")
-            .label("Provider views")
-            .w_full()
-            .child(
-                row()
-                    .w_full()
-                    .h(26.0)
-                    .child(tabs)
-                    .child(el().grow(1.0))
-                    .child(lead_provider_controls(state)),
-            )
-    };
+    let mut tabs = design::segmented_control(theme)
+        .key("provider-tab-group")
+        .label("Provider views");
+    let available_width = tabs_width.min(760.0);
+    let tab_widths = providers.map(|provider| design::segmented_tab_width(provider.name(), true));
+    let row_width = design::segmented_group_width(&tab_widths);
+    if available_width < row_width {
+        let column_width = tab_widths.iter().copied().fold(0.0_f32, f32::max);
+        let columns = if available_width >= design::segmented_group_width(&[column_width; 3]) {
+            3
+        } else {
+            2
+        };
+        tabs = tabs.w_full().equal_columns(columns);
+    }
+    for provider in providers {
+        tabs = tabs.child(provider_tab(provider, state.selected == provider, theme));
+    }
+    let (default_control, default_width) = lead_provider_controls(state);
+    let controls = design::tabs_with_control(
+        tabs,
+        row_width,
+        default_control,
+        default_width,
+        available_width,
+    )
+    .key("provider-view-tabs");
     let mut content = vec![controls];
     if !state.lead_error.is_empty() {
         content.push(
@@ -5508,11 +5481,9 @@ fn providers_settings_view(state: &State, cx: &mut Cx<State>) -> Vec<El> {
 
 fn appearance_settings_view(state: &State, cx: &mut Cx<State>) -> Vec<El> {
     let theme = state.appearance.style();
-    let mut tabs = row()
+    let mut tabs = crate::design::segmented_control(theme)
         .key("appearance-view-tabs")
-        .role("tablist")
-        .label("Appearance views")
-        .gap(6.0);
+        .label("Appearance views");
     for tab in AppearanceTab::ALL {
         tabs = tabs.child(appearance_tab_button(
             tab,
@@ -5528,21 +5499,15 @@ fn appearance_settings_view(state: &State, cx: &mut Cx<State>) -> Vec<El> {
             0.0
         }
         - 78.0;
-    let controls = if tabs_width < 380.0 {
-        col().w_full().gap(8.0).child(tabs).child(
-            row()
-                .w_full()
-                .child(el().grow(1.0))
-                .child(color_theme_controls(state)),
-        )
-    } else {
-        row()
-            .w_full()
-            .h(26.0)
-            .child(tabs)
-            .child(el().grow(1.0))
-            .child(color_theme_controls(state))
-    };
+    let tab_widths = AppearanceTab::ALL.map(|tab| design::segmented_tab_width(tab.label(), true));
+    let (theme_control, theme_width) = color_theme_controls(state);
+    let controls = design::tabs_with_control(
+        tabs,
+        design::segmented_group_width(&tab_widths),
+        theme_control,
+        theme_width,
+        tabs_width.min(760.0),
+    );
     let detail = match state.appearance_tab {
         AppearanceTab::Colors => appearance_colors_settings(state),
         AppearanceTab::Typography => appearance_text_settings(state),
@@ -5563,6 +5528,14 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
     let theme = state.appearance.style();
     let palette = theme.palette();
     let color = |value| theme.color(value);
+    let window_width = cx.layout_size("app-surface").map_or(1040.0, |size| size[0]);
+    let sidenav_width = if state.sidenav_visible && state.primary_view != PrimaryView::Tracking {
+        state.sidenav_width + 1.0
+    } else {
+        0.0
+    };
+    let available_width = (window_width - NAVIGATION_RAIL_WIDTH - sidenav_width - 8.0).max(0.0);
+    let compact_auxiliary = available_width < 680.0;
     let mut content = col()
         .key("settings-page")
         .w_full()
@@ -5572,14 +5545,33 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
             _ => 1300.0,
         })
         .self_center()
-        .gap(20.0);
+        .gap(design::PAGE_GAP);
     if state.primary_view == PrimaryView::Settings {
-        content = content.child(
+        content = content.child(design::breadcrumb_title(
+            "Settings",
             text(state.settings_section.label())
                 .key("settings-view-title")
+                .role("heading")
+                .truncate_fade()
                 .font(view_title_font())
                 .color(color("#f2f2f2")),
-        );
+            theme,
+        ));
+        content = content.child(design::subtitle(
+            match state.settings_section {
+                SettingsSection::Providers => {
+                    "Connect models and choose the defaults for research and review."
+                }
+                SettingsSection::Appearance => {
+                    "Tune the workbench to your environment and reading preferences."
+                }
+                SettingsSection::Archive => {
+                    "Revisit saved work and restore a conversation when you need it."
+                }
+                _ => "Configure the review rules used before tool execution.",
+            },
+            theme,
+        ));
         for item in (state.settings_section.spec().render)(state, cx) {
             content = content.child(item);
         }
@@ -5591,12 +5583,20 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
             );
         }
     } else if state.primary_view == PrimaryView::Extensions {
-        content = content.child(
+        content = content.child(design::breadcrumb_title(
+            "Extensions",
             text(state.extensions_section.label())
                 .key("extensions-view-title")
+                .role("heading")
+                .truncate_fade()
                 .font(view_title_font())
                 .color(color("#f2f2f2")),
-        );
+            theme,
+        ));
+        content = content.child(design::subtitle(
+            "Build your research toolkit. Enable capabilities for the workspaces that need them.",
+            theme,
+        ));
         let page_width = cx
             .layout_size("content-surface")
             .map_or(1040.0, |size| (size[0] - 48.0).min(1300.0));
@@ -5641,6 +5641,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
     body = body.child(rail(state, theme));
     let mut settings_surface = row()
         .key("settings-surface")
+        .min_w(0.0)
         .grow(1.0)
         .h_full()
         .radius(16.0)
@@ -5677,6 +5678,29 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
         .h_full()
         .min_h(0.0)
         .fill(color(CONTENT_SURFACE_COLOR));
+    if compact_auxiliary && in_session(state) && state.session_sidenav_visible && !state.canvas_open
+    {
+        main_content = main_content.child(
+            row()
+                .key("session-summary-inline")
+                .w_full()
+                .padding(12.0)
+                .child(
+                    session_sidenav::render(
+                        state.active_session.as_ref(),
+                        &state.session_live_events,
+                        if state.session_busy {
+                            state.session_elapsed_ms
+                        } else {
+                            0
+                        },
+                        state.session_usage_menu,
+                        theme,
+                    )
+                    .w_full(),
+                ),
+        );
+    }
     if state.primary_view == PrimaryView::NewResearch {
         let [width, height] = cx.layout_size("content-surface").unwrap_or([720.0, 600.0]);
         let graph_width = (width - 80.0).max(180.0);
@@ -5688,20 +5712,9 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
                     .size(width, height),
             );
         }
-        main_content = main_content.child(new_research::render(state, theme, graph_width));
+        main_content = main_content.child(new_research::render(state, theme, graph_width).shrink());
     } else if state.primary_view == PrimaryView::Home {
-        main_content = main_content.child(
-            el().key("home-no-workspace")
-                .w_full()
-                .grow(1.0)
-                .center()
-                .child(
-                    text("No workspace is selected.")
-                        .key("home-no-workspace-message")
-                        .font(ui_font(14.0, 400.0))
-                        .color(color("#969696")),
-                ),
-        );
+        main_content = main_content.child(home_view::render(state, theme));
     } else if workspace_view::graph_open(state) {
         let [width, height] = cx.layout_size("content-surface").unwrap_or([840.0, 600.0]);
         main_content = main_content
@@ -5773,8 +5786,14 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
             )
             .child(scroll_bar.bar(theme));
     }
-    settings_surface = settings_surface.child(main_content);
-    if in_session(state) && state.session_sidenav_visible && !state.canvas_open {
+    if !(state.canvas_open && compact_auxiliary) {
+        settings_surface = settings_surface.child(main_content);
+    }
+    if in_session(state)
+        && state.session_sidenav_visible
+        && !state.canvas_open
+        && !compact_auxiliary
+    {
         settings_surface = settings_surface.child(
             col()
                 .key("session-sidenav-slot")
@@ -5807,7 +5826,11 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
         } else {
             0.0
         };
-        let width = canvas_width(window_width, sidenav_width);
+        let width = if compact_auxiliary {
+            (available_width - 1.0).max(0.0)
+        } else {
+            canvas_width(window_width, sidenav_width)
+        };
         let window_height = cx.layout_size("window").map_or(720.0, |size| size[1]);
         let surface_top = cx.layout("settings-surface").map_or(0.0, |rect| rect[1]);
         let canvas_height = (window_height - surface_top - 6.0).max(0.0);
@@ -5866,12 +5889,18 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
         .key("app-surface")
         .w_full()
         .grow(1.0)
-        .fill(color(palette.chrome))
+        .fill(rune::color::hex(palette.chrome).unwrap_or(rune::Color::BLACK))
         .linear_gradient(
             145.0_f32.to_radians(),
             [
-                (0.0, color(palette.gradient_middle)),
-                (1.0, color(palette.gradient_end)),
+                (
+                    0.0,
+                    rune::color::hex(palette.gradient_middle).unwrap_or(rune::Color::BLACK),
+                ),
+                (
+                    1.0,
+                    rune::color::hex(palette.gradient_end).unwrap_or(rune::Color::BLACK),
+                ),
             ],
         )
         .child(
@@ -5880,7 +5909,10 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
                     [0.88, 0.92],
                     lower_right_radius,
                     [
-                        (0.0, color(palette.gradient_middle)),
+                        (
+                            0.0,
+                            rune::color::hex(palette.gradient_middle).unwrap_or(rune::Color::BLACK),
+                        ),
                         (1.0, Color::TRANSPARENT),
                     ],
                 ),
@@ -5891,7 +5923,10 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
                     [0.12, 0.08],
                     upper_left_radius,
                     [
-                        (0.0, color(palette.gradient_start)),
+                        (
+                            0.0,
+                            rune::color::hex(palette.gradient_start).unwrap_or(rune::Color::BLACK),
+                        ),
                         (1.0, Color::TRANSPARENT),
                     ],
                 ),
@@ -6150,8 +6185,8 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
                     SelectionMenu::QuickChatWorkspace => ("Quick Chat workspace", 280.0),
                     SelectionMenu::SurfaceKind => ("Surface Type", 178.0),
                     SelectionMenu::WorkspaceSurfaceKind => ("Surface Type", 178.0),
-                    SelectionMenu::LeadProvider => ("Default Provider", 178.0),
-                    SelectionMenu::ColorTheme => ("Color Theme", 178.0),
+                    SelectionMenu::LeadProvider => ("Default", 178.0),
+                    SelectionMenu::ColorTheme => ("Theme", 178.0),
                     SelectionMenu::InterfaceFont => ("Interface Font", 178.0),
                     SelectionMenu::TextSize => ("Text Size", 178.0),
                     SelectionMenu::PluginWorkspaces { .. }
@@ -6258,7 +6293,7 @@ fn main() -> std::process::ExitCode {
         eprintln!("Beale app icon could not be loaded: {error}");
     }
     let font_spec = desktop_fonts::v1_font_spec();
-    let saved_font = State::load_appearance().appearance.interface_font;
+    let saved_font = visual_preview::initial_state().appearance.interface_font;
     let spec = AppSpec {
         scenes: &[
             ("home", |s: &mut State| s.primary_view = PrimaryView::Home),
@@ -6267,22 +6302,26 @@ fn main() -> std::process::ExitCode {
             }),
             ("xai", |s: &mut State| s.selected = Provider::Xai),
             ("appearance-dark", |s: &mut State| {
+                s.primary_view = PrimaryView::Settings;
                 s.settings_section = SettingsSection::Appearance;
                 s.appearance.theme = AppearanceTheme::Dark;
                 s.sync_color_edits();
             }),
             ("appearance-light", |s: &mut State| {
+                s.primary_view = PrimaryView::Settings;
                 s.settings_section = SettingsSection::Appearance;
                 s.appearance.theme = AppearanceTheme::Light;
                 s.sync_color_edits();
             }),
             ("appearance-narrow-nav", |s: &mut State| {
+                s.primary_view = PrimaryView::Settings;
                 s.settings_section = SettingsSection::Appearance;
                 s.sidenav_width = 420.0;
                 s.appearance.theme = AppearanceTheme::Light;
                 s.sync_color_edits();
             }),
             ("appearance-narrow-nav-large", |s: &mut State| {
+                s.primary_view = PrimaryView::Settings;
                 s.settings_section = SettingsSection::Appearance;
                 s.sidenav_width = SIDENAV_MAX_WIDTH;
                 s.appearance.theme = AppearanceTheme::Light;
@@ -6290,6 +6329,7 @@ fn main() -> std::process::ExitCode {
                 s.sync_color_edits();
             }),
             ("appearance-custom-heat", |s: &mut State| {
+                s.primary_view = PrimaryView::Settings;
                 s.settings_section = SettingsSection::Appearance;
                 s.sidenav_width = SIDENAV_MAX_WIDTH;
                 s.appearance.theme = AppearanceTheme::Light;
@@ -6317,6 +6357,7 @@ fn main() -> std::process::ExitCode {
                 s.sync_color_edits();
             }),
             ("appearance-picker", |s: &mut State| {
+                s.primary_view = PrimaryView::Settings;
                 s.settings_section = SettingsSection::Appearance;
                 s.sidenav_width = SIDENAV_MAX_WIDTH;
                 s.appearance.theme = AppearanceTheme::Light;
@@ -6325,31 +6366,37 @@ fn main() -> std::process::ExitCode {
                 toggle_color_picker(s, ColorTarget::Heat(HeatLevel::Low));
             }),
             ("appearance-cream", |s: &mut State| {
+                s.primary_view = PrimaryView::Settings;
                 s.settings_section = SettingsSection::Appearance;
                 s.appearance.theme = AppearanceTheme::Cream;
                 s.sync_color_edits();
             }),
             ("appearance-midnight", |s: &mut State| {
+                s.primary_view = PrimaryView::Settings;
                 s.settings_section = SettingsSection::Appearance;
                 s.appearance.theme = AppearanceTheme::Midnight;
                 s.sync_color_edits();
             }),
             ("appearance-text", |s: &mut State| {
+                s.primary_view = PrimaryView::Settings;
                 s.settings_section = SettingsSection::Appearance;
                 s.appearance_tab = AppearanceTab::Typography;
             }),
             ("appearance-text-large", |s: &mut State| {
+                s.primary_view = PrimaryView::Settings;
                 s.settings_section = SettingsSection::Appearance;
                 s.appearance_tab = AppearanceTab::Typography;
                 s.appearance.text_size = TextSize::Large;
             }),
             ("appearance-text-extra-large", |s: &mut State| {
+                s.primary_view = PrimaryView::Settings;
                 s.settings_section = SettingsSection::Appearance;
                 s.appearance_tab = AppearanceTab::Typography;
                 s.sidenav_width = SIDENAV_MAX_WIDTH;
                 s.appearance.text_size = TextSize::ExtraLarge;
             }),
             ("appearance-text-light", |s: &mut State| {
+                s.primary_view = PrimaryView::Settings;
                 s.settings_section = SettingsSection::Appearance;
                 s.appearance_tab = AppearanceTab::Typography;
                 s.sidenav_width = SIDENAV_MAX_WIDTH;
@@ -6367,7 +6414,12 @@ fn main() -> std::process::ExitCode {
         fonts: font_spec.fonts,
         families: desktop_fonts::families(saved_font),
         on_key: Some(selection_menu_key),
-        ..AppSpec::new("Beale", (1040.0, 720.0), State::load_appearance, view)
+        ..AppSpec::new(
+            "Beale",
+            (1040.0, 720.0),
+            visual_preview::initial_state,
+            view,
+        )
     };
     let app = rune::App::new(spec).chrome(rune::Chrome {
         drag_regions: true,
@@ -6392,6 +6444,10 @@ fn main() -> std::process::ExitCode {
                 handle.update(move |state, _| state.native_window_border = native_border);
             }
         });
+    if visual_preview::enabled() {
+        app.run();
+        return std::process::ExitCode::SUCCESS;
+    }
     let handle = app.handle();
     let _ = AUTH_HANDLE.set(handle.clone());
     std::thread::spawn(move || {
@@ -6958,7 +7014,7 @@ mod tests {
                 .presented("permission-edit-guardian-risk")
                 .unwrap()
                 .0[2],
-            26.0
+            30.0
         );
         assert_eq!(
             runtime
@@ -7317,11 +7373,11 @@ mod tests {
                 .state
                 .appearance
                 .palette_color(AppearanceTheme::Light, PaletteColor::Panel),
-            "#ffffff"
+            AppearanceTheme::Light.palette().panel
         );
         assert_eq!(
             runtime.state.palette_edits[PaletteColor::Panel.index()].text,
-            "#ffffff"
+            AppearanceTheme::Light.palette().panel
         );
         assert!(runtime.find("palette-revert-panel").is_none());
     }
@@ -7425,7 +7481,7 @@ mod tests {
                 .state
                 .appearance
                 .palette_color(AppearanceTheme::Dark, PaletteColor::Panel),
-            "#0d0d0d"
+            AppearanceTheme::Dark.palette().panel
         );
     }
 
@@ -7910,12 +7966,12 @@ mod tests {
         assert_eq!(state.primary_view, PrimaryView::Home);
         let mut runtime = Runtime::new(state, view, (1040.0, 720.0), Env::new(true, 1.0));
         runtime.frame(0.0);
-        assert!(runtime.find("home-no-workspace-message").is_some());
+        assert!(runtime.find("home-overview").is_some());
         assert!(runtime.find("settings-sidenav").is_none());
     }
 
     #[test]
-    fn home_uses_its_sidebar_and_centers_empty_workspace_message() {
+    fn home_uses_its_sidebar_and_exposes_research_actions() {
         let mut runtime =
             Runtime::new(State::default(), view, (1040.0, 720.0), Env::new(true, 1.0));
         runtime.frame(0.0);
@@ -7934,7 +7990,7 @@ mod tests {
             "home-search-workspaces",
             "home-add-workspace",
             "home-workspaces-empty",
-            "home-no-workspace-message",
+            "home-overview",
             "content-surface",
         ] {
             assert!(runtime.find(key).is_some(), "{key} is visible");
@@ -7948,22 +8004,24 @@ mod tests {
             assert!(runtime.find(key).is_none(), "{key} is absent from Home");
         }
         let (surface, _) = runtime.presented("content-surface").unwrap();
-        let (message, _) = runtime.presented("home-no-workspace-message").unwrap();
+        let (message, _) = runtime.presented("home-overview").unwrap();
         let (selector, _) = runtime.presented("home-collection-control").unwrap();
         let (add, _) = runtime.presented("home-add-workspace").unwrap();
         let (search, _) = runtime.presented("home-search-workspaces").unwrap();
         assert!(selector[0] + selector[2] < add[0]);
         assert!(add[0] + add[2] <= search[0]);
         assert!((search[0] - add[0] - add[2] - 4.0).abs() < 1.0);
-        assert!((message[0] + message[2] / 2.0 - surface[0] - surface[2] / 2.0).abs() < 1.0);
-        assert!((message[1] + message[3] / 2.0 - surface[1] - surface[3] / 2.0).abs() < 1.0);
+        assert!(message[0] >= surface[0]);
+        assert!(message[0] + message[2] <= surface[0] + surface[2] + 1.0);
+        assert!(runtime.find("overview-new-research").is_some());
+        assert!(runtime.find("overview-new-workspace").is_some());
         let history = runtime.state.view_history.back.len();
         let (x, y) = runtime.find("home-new-research").unwrap();
         runtime.pointer_down(x, y);
         runtime.pointer_up(x, y);
         runtime.frame(1.0);
         assert_eq!(runtime.state.primary_view, PrimaryView::NewResearch);
-        assert!(runtime.find("home-no-workspace-message").is_none());
+        assert!(runtime.find("home-overview").is_none());
         assert!(runtime.find("new-research-composer-input").is_some());
         assert!(runtime.find("new-research-model-control").is_some());
         assert!(runtime.find("new-research-workspace-control").is_some());
@@ -9110,7 +9168,7 @@ mod tests {
         runtime.frame(0.0);
         assert!(
             runtime
-                .find("new-research-heading-workspace-underline")
+                .find("new-research-heading-workspace-chevron")
                 .is_some()
         );
         let (x, y) = runtime
@@ -10879,6 +10937,11 @@ active_runbook_count: 0,
     #[test]
     fn new_workspace_draft_moves_through_foundation_surfaces_and_rules() {
         fn click(runtime: &mut Runtime<State>, key: &str) {
+            runtime.update(|_, tx| {
+                tx.instant();
+                tx.scroll_into_view(key);
+            });
+            runtime.frame(0.0);
             let (x, y) = runtime.find(key).unwrap();
             runtime.pointer_down(x, y);
             runtime.pointer_up(x, y);
@@ -10897,7 +10960,7 @@ active_runbook_count: 0,
         assert_eq!(runtime.state.primary_view, PrimaryView::WorkspaceCreation);
         assert!(runtime.find("workspace-creation-title").is_some());
         let (creation_title, _) = runtime.presented("workspace-creation-title").unwrap();
-        assert!((creation_title[1] - settings_title[1]).abs() < 1.0);
+        assert!(creation_title[1] >= 60.0);
         assert!((creation_title[3] - settings_title[3]).abs() < 1.0);
         assert_eq!(
             runtime.state.workspace_draft.tab,
@@ -11330,8 +11393,12 @@ active_runbook_count: 0,
         narrow.frame(0.0);
         let (content, _) = narrow.presented("content-surface").unwrap();
         let (sidenav, _) = narrow.presented("session-sidenav").unwrap();
-        assert!(content[2] >= 160.0);
-        assert!(content[0] + content[2] <= sidenav[0] + 1.0);
+        assert!(content[2] >= 500.0);
+        assert!(narrow.presented("session-summary-inline").is_some());
+        assert!(sidenav[0] >= content[0]);
+        assert!(sidenav[0] + sidenav[2] <= content[0] + content[2]);
+        let (transcript, _) = narrow.presented("session-transcript-scroll").unwrap();
+        assert!(transcript[1] >= sidenav[1] + sidenav[3]);
         runtime.update(|state, _| state.finish_session_turn(1, Ok(detail)));
         runtime.frame(0.0);
         assert!(runtime.find("session-sidenav").is_none());
@@ -12191,10 +12258,68 @@ active_runbook_count: 0,
         );
         narrow.frame(0.0);
         narrow.frame(0.0);
-        let (main, _) = narrow.presented("content-surface").unwrap();
+        assert!(narrow.presented("content-surface").is_none());
         let (canvas, _) = narrow.presented("canvas").unwrap();
-        assert!(main[2] >= CANVAS_MIN_CONTENT_WIDTH - 2.0);
-        assert!(canvas[2] >= 160.0);
+        assert!(canvas[2] >= 500.0);
+        assert!(canvas[0] + canvas[2] <= 834.0);
+        click(&mut narrow, "header-canvas-toggle");
+        assert!(narrow.presented("content-surface").is_some());
+    }
+
+    #[test]
+    fn workspace_navigation_and_provider_actions_fit_small_windows() {
+        for (scene, keys) in [
+            (
+                "findings",
+                ["workspace-view-tabs", "workspace-tab-settings"],
+            ),
+            (
+                "custom",
+                [
+                    "custom-provider-example-provider",
+                    "custom-provider-remove-example-provider",
+                ],
+            ),
+        ] {
+            let mut runtime = Runtime::new(
+                visual_preview::fixture(scene),
+                view,
+                (840.0, 600.0),
+                Env::new(true, 1.0),
+            );
+            runtime.frame(0.0);
+            for key in keys {
+                let (bounds, _) = runtime.presented(key).unwrap();
+                assert!(bounds[0] + bounds[2] <= 834.0, "{key}: {bounds:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn tall_editors_keep_their_title_and_actions_inside_small_windows() {
+        for theme in [
+            AppearanceTheme::Light,
+            AppearanceTheme::Dark,
+            AppearanceTheme::Cream,
+            AppearanceTheme::Midnight,
+        ] {
+            let mut state = visual_preview::fixture("surface-add");
+            state.appearance.theme = theme;
+            let mut runtime = Runtime::new(state, view, (840.0, 600.0), Env::new(true, 1.0));
+            runtime.frame(0.0);
+            for key in [
+                "saved-workspace-surface-dialog",
+                "saved-workspace-surface-dialog-close",
+                "saved-workspace-add-surface",
+            ] {
+                let (bounds, _) = runtime.presented(key).unwrap();
+                assert!(bounds[0] >= 16.0 && bounds[1] >= 16.0, "{key}: {bounds:?}");
+                assert!(
+                    bounds[0] + bounds[2] <= 824.0 && bounds[1] + bounds[3] <= 584.0,
+                    "{key}: {bounds:?}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -12594,7 +12719,7 @@ active_runbook_count: 0,
         runtime.pointer_down(x, y);
         runtime.pointer_move(x + 60.0, y);
         runtime.frame(0.0);
-        assert_eq!(runtime.state.sidenav_width, 352.0);
+        assert_eq!(runtime.state.sidenav_width, SIDENAV_DEFAULT_WIDTH + 60.0);
         aligned(&runtime);
         runtime.pointer_move(x + 300.0, y);
         runtime.frame(0.0);
@@ -12653,7 +12778,8 @@ active_runbook_count: 0,
         assert!(providers_title[1] + providers_title[3] < tabs[1]);
         let gap_above_tabs = tabs[1] - (providers_title[1] + providers_title[3]);
         let gap_below_tabs = provider_header[1] - (tabs[1] + tabs[3]);
-        assert!((gap_below_tabs - gap_above_tabs - 6.0).abs() < 1.0);
+        assert!(gap_above_tabs >= design::PAGE_GAP);
+        assert!(gap_below_tabs >= 16.0);
         let (x, y) = runtime.find("settings-appearance").unwrap();
         runtime.pointer_down(x, y);
         runtime.pointer_up(x, y);

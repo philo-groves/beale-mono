@@ -24,6 +24,18 @@ const COLORS: [&str; 8] = [
     "#82a7ed", "#d99d78", "#8fbfa2", "#c1a0df", "#d7c078", "#82bfc7", "#d888aa", "#aab18a",
 ];
 
+fn chart_color(index: usize, theme: ThemeStyle<'_>) -> Color {
+    const LIGHT: [&str; 8] = [
+        "#365fb0", "#985626", "#34704d", "#78549f", "#7b651f", "#2b737d", "#a24670", "#59672d",
+    ];
+    let palette = if matches!(theme.name(), "Light" | "Cream") {
+        &LIGHT
+    } else {
+        &COLORS
+    };
+    rune::color::hex(palette[index % palette.len()]).unwrap()
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum Measure {
     #[default]
@@ -213,7 +225,7 @@ fn subscription_chart(
     let mut legend = col().w_full().gap(6.0);
     for (index, ((provider, _, label), values)) in series.iter_mut().enumerate() {
         values.sort_by_key(|point| point.observed_at_ms);
-        let color = theme.color(COLORS[index % COLORS.len()]);
+        let color = chart_color(index, theme);
         let vertices: Vec<[f32; 2]> = values
             .iter()
             .map(|point| {
@@ -312,13 +324,18 @@ fn model_chart(
                         .color(theme.color("#eeeeee")),
                 )
                 .child(el().grow(1.0))
-                .child(measure_button(
-                    "Duration",
-                    Measure::Duration,
-                    measure,
-                    theme,
-                ))
-                .child(measure_button("Tokens", Measure::Tokens, measure, theme)),
+                .child(
+                    crate::design::segmented_control(theme)
+                        .key("tracking-measure-tabs")
+                        .label("Usage measure")
+                        .child(measure_button(
+                            "Duration",
+                            Measure::Duration,
+                            measure,
+                            theme,
+                        ))
+                        .child(measure_button("Tokens", Measure::Tokens, measure, theme)),
+                ),
         );
     if series.is_empty()
         || series
@@ -363,7 +380,7 @@ fn model_chart(
     }
     let mut legend = col().w_full().gap(6.0);
     for (index, ((provider, model, role), values)) in series.iter().enumerate() {
-        let color = theme.color(COLORS[index % COLORS.len()]);
+        let color = chart_color(index, theme);
         for day in 0..7 {
             let prior: u64 = series
                 .iter()
@@ -426,33 +443,31 @@ fn measure_button(
     selected: Measure,
     theme: ThemeStyle<'_>,
 ) -> El {
-    el().key(format!("tracking-measure-{}", label.to_ascii_lowercase()))
-        .role("button")
-        .label(format!("Show {label}"))
-        .px(10.0)
-        .h(28.0)
-        .center()
-        .radius(8.0)
-        .fill(if value == selected {
-            theme.color("#303030")
-        } else {
-            Color::TRANSPARENT
-        })
-        .hover(theme.color("#383838"))
+    let glyph = match value {
+        Measure::Duration => &crate::icons::CLOCK,
+        Measure::Tokens => &crate::icons::SESSION_TOKENS,
+    };
+    crate::design::segmented_tab(label, Some(glyph), value == selected, true, theme)
+        .key(format!("tracking-measure-{}", label.to_ascii_lowercase()))
         .on_press(move |state: &mut State| state.tracking.measure = value)
-        .child(
-            text(label)
-                .font(ui_font(12.0, 500.0))
-                .color(theme.color("#dddddd")),
-        )
 }
 
 pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> Vec<El> {
     let mut content = vec![
-        text("Tracking")
-            .key("tracking-title")
-            .font(view_title_font())
-            .color(theme.color("#f2f2f2")),
+        crate::design::breadcrumb_title(
+            "Workbench",
+            text("Tracking")
+                .key("tracking-title")
+                .role("heading")
+                .truncate_fade()
+                .font(view_title_font())
+                .color(theme.color("#f2f2f2")),
+            theme,
+        ),
+        crate::design::subtitle(
+            "Understand your research activity, model consumption, and subscription headroom.",
+            theme,
+        ),
     ];
     if !state.tracking.error.is_empty() {
         content.push(

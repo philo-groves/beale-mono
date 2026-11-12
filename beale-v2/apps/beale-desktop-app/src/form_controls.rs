@@ -13,7 +13,7 @@ pub(crate) fn icon_action_button(
         .role("button")
         .label(label.clone())
         .help(label)
-        .size(26.0, 26.0)
+        .size(30.0, 30.0)
         .center()
         .radius(8.0)
         .continuous_corners()
@@ -31,7 +31,11 @@ pub(crate) fn toggle_button(
     let key = key.into();
     let status = if checked { "on" } else { "off" };
     let label = label.into();
-    let track = if checked { "#f2f2f2" } else { "#414141" };
+    let track = if checked {
+        theme.accent()
+    } else {
+        theme.color("#414141")
+    };
     let thumb = if checked {
         "#0d0d0d"
     } else if available {
@@ -51,17 +55,25 @@ pub(crate) fn toggle_button(
         .center_y()
         .radius(11.0)
         .continuous_corners()
-        .fill(theme.color(track))
+        .fill(track)
         .border(
             1.0,
-            theme.color(if checked { "#f2f2f2" } else { "#555555" }),
+            if checked {
+                theme.accent()
+            } else {
+                theme.color("#555555")
+            },
         )
         .child(
             el().key(format!("{key}-thumb"))
                 .size(16.0, 16.0)
                 .ml(if checked { 19.0 } else { 3.0 })
                 .radius(8.0)
-                .fill(theme.color(thumb)),
+                .fill(if checked {
+                    theme.accent_ink()
+                } else {
+                    theme.color(thumb)
+                }),
         );
     if available {
         toggle = toggle.hover(theme.color(if checked { "#eeeeee" } else { "#4a4a4a" }));

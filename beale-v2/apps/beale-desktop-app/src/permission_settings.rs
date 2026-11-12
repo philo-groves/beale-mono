@@ -251,25 +251,15 @@ fn start_write(state: &mut State, request: RuleWrite) {
 }
 
 fn tab_button(tab: PermissionTab, selected: bool, theme: ThemeStyle<'_>) -> El {
-    row()
+    let glyph = match tab {
+        PermissionTab::AutoReview => &crate::icons::CHECK,
+        PermissionTab::Guardian => &crate::icons::REVERT,
+    };
+    crate::design::segmented_tab(tab.label(), Some(glyph), selected, true, theme)
         .key(tab.key())
-        .role("tab")
-        .label(tab.label())
-        .h(26.0)
-        .px(10.0)
-        .center_y()
-        .radius(9.0)
-        .continuous_corners()
-        .fill(theme.color(if selected { "#414141" } else { "#242424" }))
-        .hover(theme.color("#4a4a4a"))
         .on_press(move |state: &mut State| {
             state.navigate_to(crate::ViewLocation::Safety(tab));
         })
-        .child(
-            text(tab.label())
-                .font(ui_font(14.0, if selected { 600.0 } else { 450.0 }))
-                .color(theme.color(if selected { "#f2f2f2" } else { "#c8c8c8" })),
-        )
 }
 
 fn rule_row(state: &State, rule: &PermissionRule, theme: ThemeStyle<'_>) -> El {
@@ -481,11 +471,9 @@ pub(crate) fn edit_dialog(state: &State, theme: ThemeStyle<'_>) -> [El; 2] {
 }
 
 pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
-    let mut tabs = row()
+    let mut tabs = crate::design::segmented_control(theme)
         .key("safety-view-tabs")
-        .role("tablist")
-        .label("Safety views")
-        .gap(6.0);
+        .label("Safety views");
     for tab in PermissionTab::ALL {
         tabs = tabs.child(tab_button(tab, state.permissions_tab == tab, theme));
     }

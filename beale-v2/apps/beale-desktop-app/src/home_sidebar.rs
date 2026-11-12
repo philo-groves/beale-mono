@@ -6,9 +6,8 @@ use crate::icons::{
     SEARCH,
 };
 use crate::{
-    SelectionMenu, State, ThemeStyle, form_button, modal_dialog, sidenav_heading,
-    start_session_archive, start_session_load, toggle_selection_menu, ui_font,
-    workspace_creation::display_directory,
+    SelectionMenu, State, ThemeStyle, form_button, modal_dialog, start_session_archive,
+    start_session_load, toggle_selection_menu, ui_font, workspace_creation::display_directory,
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -79,7 +78,7 @@ struct HomeSidebarSpec {
 
 const HOME_SIDEBAR: HomeSidebarSpec = HomeSidebarSpec {
     title: "Beale",
-    empty_workspaces: "No Workspaces Yet...",
+    empty_workspaces: "No workspaces yet",
 };
 
 fn primary_action(spec: &SidebarAction, state: &State, theme: ThemeStyle<'_>) -> El {
@@ -98,7 +97,7 @@ fn primary_action(spec: &SidebarAction, state: &State, theme: ThemeStyle<'_>) ->
             format!("{} unavailable", spec.label)
         })
         .w_full()
-        .h(30.0)
+        .h(34.0)
         .px(4.0)
         .center_y()
         .gap(12.0)
@@ -177,7 +176,7 @@ fn session_row(key: String, label: &str, italic: bool, active: bool, theme: Them
 
 pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
     let color = |value| theme.color(value);
-    let mut primary = col().w_full().gap(2.0);
+    let mut primary = col().w_full().my(12.0).gap(2.0);
     for spec in &PRIMARY_ACTIONS {
         primary = primary.child(primary_action(spec, state, theme));
     }
@@ -240,7 +239,6 @@ pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
         .scroll(ScrollSpec {
             stick_bottom: false,
         })
-        .mt(12.0)
         .gap(6.0)
         .child(header);
     if state.home_collection == HomeCollection::Workspaces && state.workspaces.is_empty() {
@@ -280,7 +278,7 @@ pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
                 .label(format!("Open {}", workspace.name))
                 .grow(1.0)
                 .min_w(0.0)
-                .h(30.0)
+                .h(34.0)
                 .center_y()
                 .gap(10.0)
                 .child(icon(&FOLDER_OPEN, 15.0).color(color("#9d9d9d")))
@@ -372,7 +370,7 @@ pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
                         .key(format!("home-session-empty-{}", workspace.id))
                         .inert()
                         .w_full()
-                        .h(30.0)
+                        .h(34.0)
                         .px(4.0)
                         .center_y()
                         .gap(10.0)
@@ -521,9 +519,26 @@ pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
         .pt(12.0)
         .fill(color("#111111"))
         .child(
-            sidenav_heading(HOME_SIDEBAR.title, theme)
+            row()
                 .key("home-wordmark")
-                .mb(12.0),
+                .h(32.0)
+                .gap(10.0)
+                .center_y()
+                .child(
+                    row()
+                        .size(32.0, 32.0)
+                        .center()
+                        .gap(4.0)
+                        .radius(10.0)
+                        .fill(theme.subtle_accent())
+                        .child(el().size(5.0, 8.0).radius(3.0).fill(theme.accent()))
+                        .child(el().size(7.0, 11.0).radius(4.0).fill(theme.accent())),
+                )
+                .child(
+                    text(HOME_SIDEBAR.title)
+                        .font(ui_font(18.0, 600.0))
+                        .color(theme.color("#f2f2f2")),
+                ),
         )
         .child(primary)
         .child(collection)
@@ -757,8 +772,8 @@ pub(crate) fn archive_dialog(state: &State, theme: ThemeStyle<'_>) -> [El; 2] {
         theme,
     )
     .key("home-session-archive-confirm")
-    .fill(theme.color("#482525"))
-    .hover(theme.color("#603030"));
+    .fill(theme.color("#e07676").alpha(0.14))
+    .hover(theme.color("#e07676").alpha(0.22));
     if !state.archive_session_busy {
         confirm = confirm.on_press(start_session_archive);
     }

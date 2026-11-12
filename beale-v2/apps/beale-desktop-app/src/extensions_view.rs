@@ -20,9 +20,9 @@ use crate::{
     form_button,
     form_controls::toggle_button,
     icons::{
-        CHEVRON_DOWN, CHEVRON_UP, EXTENSION_DEVICE, EXTENSION_FLAG, FEATURES, FLEET, FLEET_APPLE,
+        CHEVRON_DOWN, CHEVRON_UP, EXTENSION_DEVICE, EXTENSION_FLAG, FEATURES, FLEET_APPLE,
         FLEET_VIRTUAL_MACHINE, FLEET_WINDOWS, INFO, PLUGIN_META, PLUGINS, PLUS, RESEARCH_KITS,
-        TARGET, WRENCH,
+        WRENCH,
     },
     in_place_menu, modal_dialog, sidenav_heading, ui_font,
     workspace_creation::field,
@@ -1321,21 +1321,13 @@ pub(crate) fn sidenav(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
 }
 
 fn tab_button(tab: PluginTab, selected: bool, theme: ThemeStyle<'_>) -> El {
-    row()
+    let glyph = match tab {
+        PluginTab::All => &PLUGINS,
+        PluginTab::Available => &PLUS,
+        PluginTab::Installed => &crate::icons::CHECK,
+    };
+    crate::design::segmented_tab(tab.label(), Some(glyph), selected, true, theme)
         .key(tab.key())
-        .role("tab")
-        .label(format!(
-            "{} plugins{}",
-            tab.label(),
-            if selected { ", selected" } else { "" }
-        ))
-        .h(26.0)
-        .px(10.0)
-        .center_y()
-        .radius(9.0)
-        .continuous_corners()
-        .fill(theme.color(if selected { "#414141" } else { "#242424" }))
-        .hover(theme.color("#4a4a4a"))
         .on_press(move |state: &mut State| {
             state.navigate_to(ViewLocation::Extensions(
                 ExtensionSection::Plugins,
@@ -1343,11 +1335,6 @@ fn tab_button(tab: PluginTab, selected: bool, theme: ThemeStyle<'_>) -> El {
                 state.feature_tab,
             ));
         })
-        .child(
-            text(tab.label())
-                .font(ui_font(14.0, if selected { 600.0 } else { 450.0 }))
-                .color(theme.color(if selected { "#f2f2f2" } else { "#c8c8c8" })),
-        )
 }
 
 fn plugin_rows(state: &State) -> impl Iterator<Item = (usize, &PluginEntry)> {
@@ -1363,21 +1350,13 @@ fn plugin_rows(state: &State) -> impl Iterator<Item = (usize, &PluginEntry)> {
 }
 
 fn feature_tab_button(tab: FeatureTab, selected: bool, theme: ThemeStyle<'_>) -> El {
-    row()
+    let glyph = match tab {
+        FeatureTab::All => &FEATURES,
+        FeatureTab::Available => &PLUS,
+        FeatureTab::Enabled => &crate::icons::CHECK,
+    };
+    crate::design::segmented_tab(tab.label(), Some(glyph), selected, true, theme)
         .key(tab.key())
-        .role("tab")
-        .label(format!(
-            "{} features{}",
-            tab.label(),
-            if selected { ", selected" } else { "" }
-        ))
-        .h(26.0)
-        .px(10.0)
-        .center_y()
-        .radius(9.0)
-        .continuous_corners()
-        .fill(theme.color(if selected { "#414141" } else { "#242424" }))
-        .hover(theme.color("#4a4a4a"))
         .on_press(move |state: &mut State| {
             state.navigate_to(ViewLocation::Extensions(
                 ExtensionSection::Features,
@@ -1385,11 +1364,6 @@ fn feature_tab_button(tab: FeatureTab, selected: bool, theme: ThemeStyle<'_>) ->
                 tab,
             ));
         })
-        .child(
-            text(tab.label())
-                .font(ui_font(14.0, if selected { 600.0 } else { 450.0 }))
-                .color(theme.color(if selected { "#f2f2f2" } else { "#c8c8c8" })),
-        )
 }
 
 fn feature_rows(state: &State) -> impl Iterator<Item = (usize, &FeatureEntry)> {
@@ -1590,19 +1564,31 @@ fn plugin_mark(name: &str, theme: ThemeStyle<'_>) -> El {
                 .radius(6.0)
                 .continuous_corners()
                 .fill(theme.color("#242424"))
-                .border(1.0, theme.color("#303030"))
+                .fill(theme.color("#191919"))
+                .border(1.0, theme.color("#2a2a2a"))
                 .child(icon(badge, 12.0).color(theme.color("#f2f2f2"))),
         )
 }
 
 fn feature_mark(id: &str, theme: ThemeStyle<'_>) -> El {
-    let (glyph, background, foreground) = match id {
-        "goal-mode" => (&TARGET, "#4b3b2b", "#f2d6a2"),
-        "graphs" => (&FEATURES, "#37414b", "#d4e6f2"),
-        "fleet" => (&FLEET, "#34404b", "#c9deeb"),
-        _ => (&FEATURES, "#303030", "#e2e2e2"),
+    use crate::icons::*;
+    let glyph = match id {
+        "goal-mode" => &TARGET,
+        "graphs" => &AGENT,
+        "fleet" => &FLEET,
+        "findings" => &FINDINGS,
+        "memories" => &BRAIN,
+        "surfaces" => &WORKSPACE_SURFACES,
+        "runbooks" => &RUNBOOK,
+        "tracking" => &TRACKING,
+        "agent-feedback" => &CHAT_BUBBLE,
+        _ => &FEATURES,
     };
-    extension_mark(glyph, background, foreground, theme)
+    el().size(40.0, 40.0)
+        .center()
+        .radius(11.0)
+        .fill(theme.subtle_accent())
+        .child(icon(glyph, 21.0).color(theme.accent()))
 }
 
 fn plugin_card(index: usize, plugin: &PluginEntry, state: &State, theme: ThemeStyle<'_>) -> El {
@@ -1658,9 +1644,10 @@ fn plugin_card(index: usize, plugin: &PluginEntry, state: &State, theme: ThemeSt
         .px(12.0)
         .pt(16.0)
         .pb(14.0)
-        .radius(24.0)
+        .radius(crate::design::CARD_RADIUS)
         .continuous_corners()
-        .border(1.0, theme.color("#303030"))
+        .fill(theme.color("#191919"))
+        .border(1.0, theme.color("#2a2a2a"))
         .child(
             row()
                 .w_full()
@@ -1738,32 +1725,33 @@ fn plugin_columns(page_width: f32) -> usize {
 }
 
 fn plugins(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> Vec<El> {
-    let mut tabs = row()
+    let mut tabs = crate::design::segmented_control(theme)
         .key("plugin-view-tabs")
-        .role("tablist")
-        .label("Plugin views")
-        .w_full()
-        .h(26.0)
-        .gap(6.0)
-        .center_y();
+        .label("Plugin views");
     for tab in PluginTab::ALL {
         tabs = tabs.child(tab_button(tab, state.plugin_tab == tab, theme));
     }
-    tabs = tabs.child(el().grow(1.0)).child(
-        el().key("plugin-add-source")
-            .role("button")
-            .label("Add a plugin from an external source")
-            .size(26.0, 26.0)
-            .center()
-            .radius(8.0)
-            .continuous_corners()
-            .hover(theme.color("#303030"))
-            .on_press(|state: &mut State| {
-                state.plugin_add_dialog_open = true;
-                state.plugin_source_edit.clear();
-            })
-            .child(icon(&PLUS, 17.0).color(theme.color("#c8c8c8"))),
-    );
+    let tabs = row()
+        .w_full()
+        .center_y()
+        .gap(12.0)
+        .child(tabs)
+        .child(el().grow(1.0))
+        .child(
+            el().key("plugin-add-source")
+                .role("button")
+                .label("Add a plugin from an external source")
+                .size(26.0, 26.0)
+                .center()
+                .radius(8.0)
+                .continuous_corners()
+                .hover(theme.color("#303030"))
+                .on_press(|state: &mut State| {
+                    state.plugin_add_dialog_open = true;
+                    state.plugin_source_edit.clear();
+                })
+                .child(icon(&PLUS, 17.0).color(theme.color("#c8c8c8"))),
+        );
     let mut list = row()
         .key("plugin-cards")
         .w_full()
@@ -1862,9 +1850,10 @@ fn feature_card(index: usize, feature: &FeatureEntry, state: &State, theme: Them
         .px(12.0)
         .pt(16.0)
         .pb(14.0)
-        .radius(24.0)
+        .radius(crate::design::CARD_RADIUS)
         .continuous_corners()
-        .border(1.0, theme.color("#303030"))
+        .fill(theme.color("#191919"))
+        .border(1.0, theme.color("#2a2a2a"))
         .child(
             row()
                 .w_full()
@@ -1939,14 +1928,9 @@ fn feature_card(index: usize, feature: &FeatureEntry, state: &State, theme: Them
 }
 
 fn features(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> Vec<El> {
-    let mut tabs = row()
+    let mut tabs = crate::design::segmented_control(theme)
         .key("feature-view-tabs")
-        .role("tablist")
-        .label("Feature views")
-        .w_full()
-        .h(26.0)
-        .gap(6.0)
-        .center_y();
+        .label("Feature views");
     for tab in FeatureTab::ALL {
         tabs = tabs.child(feature_tab_button(tab, state.feature_tab == tab, theme));
     }
@@ -1989,11 +1973,12 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> V
     match state.extensions_section {
         ExtensionSection::Plugins => plugins(state, theme, page_width),
         ExtensionSection::Features => features(state, theme, page_width),
-        ExtensionSection::ResearchKits => vec![
-            text("No Research Kits available yet.")
-                .font(ui_font(14.0, 400.0))
-                .color(theme.color("#969696")),
-        ],
+        ExtensionSection::ResearchKits => vec![crate::design::empty_state(
+            &crate::icons::EXTENSIONS,
+            "Research kits are not available yet",
+            "Use Features and Plugins to configure your research toolkit. Kits will appear here when available.",
+            theme,
+        )],
     }
 }
 

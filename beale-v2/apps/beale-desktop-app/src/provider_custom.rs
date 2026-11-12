@@ -510,71 +510,75 @@ pub(crate) fn render(state: &State) -> El {
             .child(form_button("Add Provider", theme).on_press(|s: &mut State| { clear_editor(s); s.custom_editor_open = true; })));
     for provider in &state.custom_providers {
         let id = provider.id.clone();
-        let name = provider.name.clone();
+        let edit_id = id.clone();
+        let key_id = id.clone();
+        let remove_id = id.clone();
         let model_count = provider.models.len();
-        detail =
-            detail.child(
-                col()
-                    .key(format!("custom-provider-{id}"))
-                    .w_full()
-                    .gap(10.0)
-                    .padding(13.0)
-                    .radius(12.0)
-                    .border(1.0, color("#303030"))
-                    .child(
-                        row()
-                            .w_full()
-                            .center_y()
-                            .gap(10.0)
-                            .child(
-                                text(name)
-                                    .grow(1.0)
-                                    .font(ui_font(15.0, 550.0))
-                                    .color(color("#e2e2e2")),
-                            )
-                            .child(
-                                text(if provider.api_key_configured {
-                                    "Configured"
-                                } else {
-                                    "No API Key"
-                                })
-                                .font(ui_font(13.5, 400.0))
-                                .color(color(
-                                    if provider.api_key_configured {
-                                        "#8cbe98"
-                                    } else {
-                                        "#969696"
-                                    },
-                                )),
-                            )
-                            .child(form_button("Edit", theme).on_press({
-                                let id = id.clone();
-                                move |s: &mut State| edit_provider(s, &id)
-                            }))
-                            .child(if provider.api_key_configured {
-                                form_button("Forget Key", theme).on_press({
-                                    let id = id.clone();
-                                    move |s: &mut State| start_remove_key(s, id.clone())
-                                })
-                            } else {
-                                rune::el().w(0.0)
-                            })
-                            .child(form_button("Remove", theme).on_press(move |s: &mut State| {
-                                s.custom_delete_id = Some(id.clone())
-                            })),
-                    )
-                    .child(
-                        text(format!(
-                            "{} · {model_count} model{}",
-                            provider.base_url,
-                            if model_count == 1 { "" } else { "s" }
-                        ))
-                        .w_full()
-                        .wrap()
-                        .font(ui_font(13.5, 400.0))
-                        .color(color("#969696")),
-                    ),
+        let mut actions = row().w_full().flex_wrap().gap(8.0).child(
+            form_button("Edit", theme).on_press(move |s: &mut State| edit_provider(s, &edit_id)),
+        );
+        if provider.api_key_configured {
+            actions = actions.child(
+                form_button("Forget Key", theme)
+                    .on_press(move |s: &mut State| start_remove_key(s, key_id.clone())),
             );
+        }
+        actions = actions.child(
+            form_button("Remove", theme)
+                .key(format!("custom-provider-remove-{id}"))
+                .on_press(move |s: &mut State| s.custom_delete_id = Some(remove_id.clone())),
+        );
+        detail = detail.child(
+            col()
+                .key(format!("custom-provider-{id}"))
+                .w_full()
+                .gap(12.0)
+                .padding(16.0)
+                .radius(crate::design::CARD_RADIUS)
+                .fill(color("#191919"))
+                .border(1.0, color("#303030"))
+                .child(
+                    row()
+                        .w_full()
+                        .center_y()
+                        .gap(12.0)
+                        .child(
+                            text(provider.name.clone())
+                                .grow(1.0)
+                                .min_w(0.0)
+                                .wrap()
+                                .font(ui_font(15.0, 550.0))
+                                .color(color("#e2e2e2")),
+                        )
+                        .child(
+                            text(if provider.api_key_configured {
+                                "Configured"
+                            } else {
+                                "No API Key"
+                            })
+                            .font(ui_font(13.0, 400.0))
+                            .color(color(
+                                if provider.api_key_configured {
+                                    "#8cbe98"
+                                } else {
+                                    "#969696"
+                                },
+                            )),
+                        ),
+                )
+                .child(
+                    text(format!(
+                        "{} / {model_count} model{}",
+                        provider.base_url,
+                        if model_count == 1 { "" } else { "s" }
+                    ))
+                    .w_full()
+                    .wrap()
+                    .font(ui_font(13.0, 400.0))
+                    .color(color("#969696")),
+                )
+                .child(actions),
+        );
     }
     if let Some(id) = &state.custom_delete_id
         && let Some(provider) = state
