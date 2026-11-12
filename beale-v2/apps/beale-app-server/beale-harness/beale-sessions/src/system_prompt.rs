@@ -7,6 +7,7 @@ use std::{
 
 const NAME: &str = "SYSTEM.md";
 const DEFAULT: &str = include_str!("../SYSTEM.default.md");
+const LEGACY_DEFAULT: &str = include_str!("../SYSTEM.legacy.md");
 const MAX_FILE_BYTES: usize = 65_536;
 const MAX_COMPOSED_BYTES: usize = 96_000;
 
@@ -31,7 +32,30 @@ pub(crate) fn ensure_file(root: &Path) -> Result<()> {
             }
             Ok(())
         }
-        Err(error) if error.kind() == ErrorKind::AlreadyExists => Ok(()),
+        Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+            // Upgrade only the byte-for-byte stock prompt; preserve every user edit.
+            let metadata = fs::symlink_metadata(&path).context("inspect system prompt")?;
+            if metadata.file_type().is_file()
+                && metadata.len() <= MAX_FILE_BYTES as u64
+                && fs::read_to_string(&path).ok().is_some_and(|text| {
+                    text.replace("\r\n", "\n") == LEGACY_DEFAULT.replace("\r\n", "\n")
+                })
+            {
+                let temporary = root.join(format!("system-{}.tmp", uuid::Uuid::new_v4()));
+                let mut file = options
+                    .open(&temporary)
+                    .context("create updated system prompt")?;
+                file.write_all(DEFAULT.as_bytes())
+                    .context("write updated system prompt")?;
+                file.sync_all().context("sync updated system prompt")?;
+                drop(file);
+                if let Err(error) = fs::rename(&temporary, &path) {
+                    let _ = fs::remove_file(temporary);
+                    return Err(error).context("replace stock system prompt");
+                }
+            }
+            Ok(())
+        }
         Err(error) => Err(error).context("create system prompt"),
     }
 }
@@ -74,6 +98,25 @@ pub(crate) fn load(root: &Path, runtime_sections: &[&str]) -> Result<String> {
 mod tests {
     use super::*;
     use uuid::Uuid;
+
+    #[test]
+    fn upgrades_stock_prompt_without_replacing_custom_instructions() {
+        let root =
+            std::env::temp_dir().join(format!("beale-system-example-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join(NAME),
+            LEGACY_DEFAULT.replace("\r\n", "\n").replace('\n', "\r\n"),
+        )
+        .unwrap();
+        ensure_file(&root).unwrap();
+        assert_eq!(fs::read_to_string(root.join(NAME)).unwrap(), DEFAULT);
+        let custom = format!("{LEGACY_DEFAULT}\nExample operator instruction.\n");
+        fs::write(root.join(NAME), &custom).unwrap();
+        ensure_file(&root).unwrap();
+        assert_eq!(fs::read_to_string(root.join(NAME)).unwrap(), custom);
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn initializes_once_and_reloads_user_edits_without_substitution() {

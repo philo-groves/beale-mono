@@ -18,7 +18,7 @@ use beale_providers::{
 };
 use beale_safety::ReviewRequest;
 use beale_storage::{ChildTurnRow, ModelUsageRow, ToolCallRow};
-use beale_tools::{definitions, execute, model_preview, page, summary};
+use beale_tools::{AgentFiles, definitions, execute, model_preview, summary};
 use futures_util::future::join_all;
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, Semaphore, mpsc};
@@ -28,7 +28,6 @@ use super::{SessionState, append_tool_result};
 
 const MAX_CHILD_ROUNDS: usize = 6;
 const MAX_CHILD_CALLS: usize = 8;
-const TOOL_PAGE_BYTES: usize = 8_000;
 
 pub(super) struct DelegateOutcome {
     pub output: String,
@@ -67,6 +66,7 @@ struct ChildOutcome {
 pub(super) struct ChildContext<'a> {
     pub state: &'a SessionState,
     pub workspace: &'a Path,
+    pub agent_files: &'a AgentFiles,
     #[cfg(feature = "agent-feedback")]
     pub workspace_id: &'a str,
     #[cfg(feature = "agent-feedback")]
@@ -74,6 +74,7 @@ pub(super) struct ChildContext<'a> {
     #[cfg(feature = "agent-feedback")]
     pub feedback_enabled: bool,
     pub workspace_context: &'a str,
+    pub surfaces_context: &'a str,
     pub base_system: &'a str,
     pub reasoning_effort: Option<&'a str>,
     pub turn_number: i64,
@@ -125,15 +126,7 @@ fn child_tool_definitions(feedback_enabled: bool) -> Vec<Value> {
     #[cfg(not(feature = "agent-feedback"))]
     let _ = feedback_enabled;
     #[allow(unused_mut)]
-    let mut tools = definitions()
-        .into_iter()
-        .filter(|tool| {
-            !matches!(
-                tool["name"].as_str(),
-                Some(beale_tools::GET_SCOPE | beale_tools::LOAD_EXTENSION)
-            )
-        })
-        .collect::<Vec<_>>();
+    let mut tools = definitions();
     #[cfg(feature = "agent-feedback")]
     if feedback_enabled {
         tools.push(beale_agent_feedback::definition());
@@ -166,12 +159,17 @@ async fn run_child_inner(
     );
     #[cfg(feature = "agent-feedback")]
     if context.feedback_enabled {
-        system.push_str("\n\n");
-        system.push_str(beale_agent_feedback::PROMPT_EXTENSION);
+        let path = context
+            .agent_files
+            .root()
+            .join("features")
+            .join(beale_agent_feedback::FEATURE_ID)
+            .join("FEATURE.md");
+        system.push_str(&format!("\n\nAgent Feedback is available. Read {} for its instructions before reporting an issue.", json!(path.to_string_lossy())));
     }
     let task = format!(
-        "Task: {}\n\nWorkspace context:\n{}",
-        assignment.task, context.workspace_context
+        "Task: {}\n\nRead workspace RULES.md and optional AGENTS.md. Ask the main agent for any scope details requiring tools unavailable to you.\n\nRecorded surfaces at delegation:\n{}",
+        assignment.task, context.surfaces_context
     );
     let mut input = input_messages(&[TextMessage {
         role: TextRole::User,
@@ -298,20 +296,14 @@ async fn run_child_inner(
                 };
             }
             let id = Uuid::new_v4().to_string();
-            let ordinal = if call.name != "tool_result_page" {
-                tool_sequence.fetch_add(1, Ordering::SeqCst)
-            } else {
-                0
-            };
+            let ordinal = tool_sequence.fetch_add(1, Ordering::SeqCst);
             let arguments: Result<Value, _> = serde_json::from_str(&call.arguments);
             let label = format!(
                 "{}: {}",
                 assignment.role.label(),
                 summary(&call.name, arguments.as_ref().unwrap_or(&Value::Null))
             );
-            if call.name != "tool_result_page"
-                && let Some(tx) = context.progress
-            {
+            if let Some(tx) = context.progress {
                 let _ = tx
                     .send(SessionStreamEvent {
                         runbook_progress: None,
@@ -342,33 +334,6 @@ async fn run_child_inner(
                     ) {
                         Ok(value) => (value, false),
                         Err(error) => (format!("Agent feedback error: {error}"), true),
-                    }
-                }
-                Ok(arguments) if call.name == "tool_result_page" => {
-                    let result = (|| {
-                        let source_id = arguments
-                            .get("tool_call_id")
-                            .and_then(Value::as_str)
-                            .ok_or("tool_call_id is required")?;
-                        let offset = arguments
-                            .get("offset")
-                            .and_then(Value::as_u64)
-                            .and_then(|value| usize::try_from(value).ok())
-                            .ok_or("offset is required")?;
-                        let source = tools
-                            .iter()
-                            .find(|tool| tool.id == source_id)
-                            .ok_or("tool result is unavailable")?;
-                        let (chunk, next) = page(&source.output, offset, TOOL_PAGE_BYTES)
-                            .map_err(|_| "invalid page offset")?;
-                        Ok::<_, &'static str>(format!(
-                            "{chunk}\n[next_offset={next}; total_bytes={}]",
-                            source.output.len()
-                        ))
-                    })();
-                    match result {
-                        Ok(value) => (value, false),
-                        Err(error) => (format!("Tool error: {error}"), true),
                     }
                 }
                 Ok(arguments)
@@ -415,9 +380,7 @@ async fn run_child_inner(
                 Ok(_) => ("Tool error: unavailable in a subagent".to_owned(), true),
                 Err(_) => ("Tool error: invalid JSON arguments".to_owned(), true),
             };
-            let model_output = if call.name == "tool_result_page" {
-                output.clone()
-            } else {
+            let model_output = {
                 if let Some(tx) = context.progress {
                     let _ = tx
                         .send(SessionStreamEvent {
@@ -447,7 +410,7 @@ async fn run_child_inner(
                     output: output.clone(),
                     is_error,
                 });
-                model_preview(&output, &id)
+                model_preview(&output, context.agent_files)
             };
             append_tool_result(
                 &mut input,

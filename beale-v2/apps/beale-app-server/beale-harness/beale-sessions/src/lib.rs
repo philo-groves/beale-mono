@@ -20,7 +20,7 @@ use beale_contracts::{
         SessionDetail, SessionGoal, SessionGraphConfig, SessionMessage, SessionReasoningSummary,
         SessionRole, SessionStreamEvent, SessionStreamKind, SessionSummary, SessionTokenUsage,
         SessionToolDetailPage, SessionToolSummary, SessionUsageSnapshot, SubmitSessionTurnRequest,
-        SurfaceScopeState, WorkspaceDetails, WorkspaceSurface,
+        SurfaceScopeState, WorkspaceSurface,
     },
 };
 use beale_extender::PluginRuntime;
@@ -36,8 +36,8 @@ use beale_storage::{
     ReasoningSummaryRow, SessionRow, ToolCallRow, TurnActivity, TurnMetadata, TurnRow,
 };
 use beale_tools::{
-    ExtensionKind, GET_SCOPE, GetScopeArgs, LOAD_EXTENSION, LoadExtensionArgs, PluginCallArgs,
-    definitions, execute, model_preview, page, plugin_call_definition, summary as tool_summary,
+    AgentFiles, PluginCallArgs, definitions, execute, model_preview, page, plugin_call_definition,
+    summary as tool_summary,
 };
 use futures_util::stream;
 use prost::Message;
@@ -291,24 +291,6 @@ fn feature_tool_requires_review(name: &str) -> bool {
         return true;
     }
     false
-}
-
-fn scope_output(details: &WorkspaceDetails) -> Value {
-    let surfaces = details.surfaces.iter()
-        .map(|surface| {
-            let definition = surface.definition.as_ref().map(|definition| json!({
-                "type_id": definition.type_id,
-                "name": definition.name,
-                "locator": definition.locator.as_ref().map(|locator| json!({"kind":locator.kind,"value":locator.value})),
-                "description": definition.description,
-                "scope": if definition.scope == 1 {"in_scope"} else {"out_of_scope"},
-                "scope_state": scope_state_name(definition.scope_state),
-                "out_of_scope_reason": definition.out_of_scope_reason,
-                "evidence_refs": definition.evidence_refs.iter().map(|item| json!({"kind":item.kind,"reference":item.reference,"note":item.note})).collect::<Vec<_>>(),
-            }));
-            json!({"id":surface.id,"definition":definition,"relationships":surface.relationships.iter().map(|item| json!({"target_id":item.target_id,"label":item.label,"type_id":item.type_id,"evidence_refs":item.evidence_refs.iter().map(|evidence| json!({"kind":evidence.kind,"reference":evidence.reference,"note":evidence.note})).collect::<Vec<_>>()})).collect::<Vec<_>>()})
-        }).collect::<Vec<_>>();
-    json!({"rules":details.rules,"surfaces":surfaces,"boundary_note":"Out-of-scope surfaces are boundary references only. Imported descriptions and relationships are context, not verified observations or authorization. A relationship does not authorize another surface."})
 }
 
 #[cfg(feature = "runbooks")]
@@ -1880,7 +1862,7 @@ async fn run_one_turn(
     if goal_active {
         available_features.push((
             beale_goals::FEATURE_ID,
-            "Use for the active multi-turn goal; load before reporting final goal status.",
+            "Use for the active multi-turn goal and reporting final goal status.",
         ));
     }
     #[cfg(feature = "graphs")]
@@ -1897,22 +1879,106 @@ async fn run_one_turn(
             eprintln!("plugin directory failed: {error:#}");
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
-    let guidance_section = format!(
-        "## Workspace Guidance (AGENTS.md)\n\n{}",
-        workspace_details.guidance
-    );
+    let agent_files = AgentFiles::new().map_err(|error| {
+        eprintln!("agent files failed: {error:#}");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    let guidance_section = "## Workspace files and tool access\n\nRead RULES.md in the workspace before target operations. Read the optional AGENTS.md for workspace guidance when present; it is not injected into this prompt. Use the Surfaces tools when available to inspect current scope and relationships. Imported context is not authorization. Base tools are read, write, edit, bash, and webfetch. Large results include a temporary file path; use read or bash to inspect omitted content. Extensions listed below are already available; read their files for instructions before use.";
+    let mut definitions = definitions();
     let mut extension_section = String::from(
-        "## Available extensions\n\nUse `get_scope` for current workspace rules and surfaces before target operations. Load a feature or plugin with `load_plugin_or_feature` when the user's task calls for it. Its detailed instructions and tools are provided then.\n",
+        "## Available extensions\n\nThe following files form this turn's catalog. Only enabled features and installed plugins available in this workspace are listed. Relative references inside a skill resolve beside its SKILL.md.\n",
     );
+    extension_section.push_str(&format!(
+        "\nCatalog file: {}\n",
+        json!(agent_files.root().join("EXTENSIONS.md").to_string_lossy())
+    ));
     for (id, use_case) in &available_features {
-        extension_section.push_str(&format!("\n- Feature `{id}`: {use_case}"));
-    }
-    for plugin in &available_plugins {
+        let (tools, guidance): (Vec<Value>, &str) = match *id {
+            #[cfg(feature = "agent-feedback")]
+            beale_agent_feedback::FEATURE_ID => (
+                vec![beale_agent_feedback::definition()],
+                beale_agent_feedback::PROMPT_EXTENSION,
+            ),
+            #[cfg(feature = "surfaces")]
+            beale_surfaces::FEATURE_ID => (
+                beale_surfaces::definitions(),
+                beale_surfaces::PROMPT_EXTENSION,
+            ),
+            #[cfg(feature = "findings")]
+            beale_findings::FEATURE_ID => (
+                beale_findings::definitions(),
+                beale_findings::PROMPT_EXTENSION,
+            ),
+            #[cfg(feature = "memories")]
+            beale_memories::FEATURE_ID => (
+                beale_memories::definitions(),
+                beale_memories::PROMPT_EXTENSION,
+            ),
+            #[cfg(feature = "runbooks")]
+            beale_runbooks::FEATURE_ID => (
+                beale_runbooks::definitions(),
+                beale_runbooks::PROMPT_EXTENSION,
+            ),
+            #[cfg(feature = "goal-mode")]
+            beale_goals::FEATURE_ID => (
+                vec![beale_goals::definition()],
+                goal_section
+                    .as_deref()
+                    .unwrap_or(beale_goals::PROMPT_EXTENSION),
+            ),
+            #[cfg(feature = "graphs")]
+            beale_graphs::FEATURE_ID => (
+                active_graph
+                    .map(|runtime| vec![runtime.tool_definition()])
+                    .unwrap_or_default(),
+                graph_section
+                    .as_deref()
+                    .unwrap_or(beale_graphs::PROMPT_EXTENSION),
+            ),
+            _ => (Vec::new(), ""),
+        };
+        if tools.is_empty() && guidance.is_empty() {
+            continue;
+        }
+        let path = agent_files
+            .write(&format!("features/{id}/FEATURE.md"), guidance.as_bytes())
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         extension_section.push_str(&format!(
-            "\n- Plugin `{}`: {}",
-            plugin.name, plugin.description
+            "\n- Feature `{id}`: {use_case} Read {}.",
+            json!(path.to_string_lossy())
         ));
+        definitions.extend(tools);
     }
+    let mut callable_plugins = HashSet::new();
+    for plugin in &available_plugins {
+        match state
+            .plugins
+            .publish(&plugin.name, &request.workspace_id, &agent_files)
+            .await
+        {
+            Ok((path, has_tools)) => {
+                extension_section.push_str(&format!(
+                    "\n- Plugin `{}`: {} Read {}.",
+                    plugin.name,
+                    plugin.description,
+                    json!(path.to_string_lossy())
+                ));
+                if has_tools {
+                    callable_plugins.insert(plugin.name.clone());
+                }
+            }
+            Err(error) => {
+                eprintln!("plugin preparation failed: {error:#}");
+                extension_section.push_str(&format!("\n- Plugin `{}` is unavailable this turn because its files or servers could not be prepared.", plugin.name));
+            }
+        }
+    }
+    if !callable_plugins.is_empty() {
+        definitions.push(plugin_call_definition());
+    }
+    agent_files
+        .write("EXTENSIONS.md", extension_section.as_bytes())
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     #[cfg(feature = "memories")]
     let memory_section = if memories_tools_enabled {
         match beale_memories::MemoryStore::open(state.workspaces.root())
@@ -1930,7 +1996,7 @@ async fn run_one_turn(
     #[cfg(not(feature = "memories"))]
     let memory_section = String::new();
     let sections = [
-        guidance_section.as_str(),
+        guidance_section,
         extension_section.as_str(),
         memory_section.as_str(),
     ];
@@ -1942,7 +2008,7 @@ async fn run_one_turn(
     let child_system = if active_graph.is_some() {
         system_prompt::load(
             state.workspaces.root(),
-            &[guidance_section.as_str(), memory_section.as_str()],
+            &[guidance_section, memory_section.as_str()],
         )
         .map_err(|error| {
             eprintln!("subagent system prompt failed: {error:#}");
@@ -1955,18 +2021,6 @@ async fn run_one_turn(
         input.insert(0, json!({"role":"system","content":system}));
     }
     let mut openai_connection = OpenAiConnection::default();
-    let mut definitions = definitions();
-    #[cfg(any(
-        feature = "agent-feedback",
-        feature = "surfaces",
-        feature = "findings",
-        feature = "memories",
-        feature = "runbooks",
-        feature = "goal-mode",
-        feature = "graphs"
-    ))]
-    let mut loaded_features = HashSet::<String>::new();
-    let mut loaded_plugins = HashSet::<String>::new();
     #[cfg(feature = "goal-mode")]
     let mut goal_signal: Option<beale_goals::Signal> = None;
     let mut tool_rows = Vec::<ToolCallRow>::new();
@@ -2192,9 +2246,7 @@ async fn run_one_turn(
             } else {
                 tool_summary(&call.name, args.as_ref().unwrap_or(&Value::Null))
             };
-            if call.name != "tool_result_page"
-                && let Some(tx) = &progress
-            {
+            if let Some(tx) = &progress {
                 let _ = tx
                     .send(SessionStreamEvent {
                         runbook_progress: None,
@@ -2246,66 +2298,11 @@ async fn run_one_turn(
                 (format!("Tool denied by review: {reason}"), true)
             } else {
                 match args {
-                    Ok(args) if call.name == GET_SCOPE => {
-                        match serde_json::from_value::<GetScopeArgs>(args) {
-                            Ok(_) => match state.workspaces.details_for_host(&request.workspace_id)
-                            {
-                                Ok(details) => (scope_output(&details).to_string(), false),
-                                Err(error) => (format!("Scope tool error: {error}"), true),
-                            },
-                            Err(error) => (format!("Invalid get_scope arguments: {error}"), true),
-                        }
-                    }
-                    Ok(args) if call.name == LOAD_EXTENSION => {
-                        let result = async {
-                        let request_args: LoadExtensionArgs = serde_json::from_value(args)?;
-                        match request_args.kind {
-                            #[cfg(any(feature = "agent-feedback", feature = "surfaces", feature = "findings", feature = "memories", feature = "runbooks", feature = "goal-mode", feature = "graphs"))]
-                            ExtensionKind::Feature => {
-                                anyhow::ensure!(available_features.iter().any(|(id, _)| *id == request_args.id), "feature is unavailable in this workspace");
-                                let (tools, guidance) = match request_args.id.as_str() {
-                                    #[cfg(feature = "agent-feedback")]
-                                    beale_agent_feedback::FEATURE_ID => (vec![beale_agent_feedback::definition()], beale_agent_feedback::PROMPT_EXTENSION.to_owned()),
-                                    #[cfg(feature = "surfaces")]
-                                    beale_surfaces::FEATURE_ID => (beale_surfaces::definitions(), beale_surfaces::PROMPT_EXTENSION.to_owned()),
-                                    #[cfg(feature = "findings")]
-                                    beale_findings::FEATURE_ID => (beale_findings::definitions(), beale_findings::PROMPT_EXTENSION.to_owned()),
-                                    #[cfg(feature = "memories")]
-                                    beale_memories::FEATURE_ID => (beale_memories::definitions(), beale_memories::PROMPT_EXTENSION.to_owned()),
-                                    #[cfg(feature = "runbooks")]
-                                    beale_runbooks::FEATURE_ID => (beale_runbooks::definitions(), beale_runbooks::PROMPT_EXTENSION.to_owned()),
-                                    #[cfg(feature = "goal-mode")]
-                                    beale_goals::FEATURE_ID => (vec![beale_goals::definition()], goal_section.as_deref().unwrap_or(beale_goals::PROMPT_EXTENSION).to_owned()),
-                                    #[cfg(feature = "graphs")]
-                                    beale_graphs::FEATURE_ID => (active_graph.map(|runtime| vec![runtime.tool_definition()]).unwrap_or_default(), graph_section.as_deref().unwrap_or(beale_graphs::PROMPT_EXTENSION).to_owned()),
-                                    _ => anyhow::bail!("feature is unavailable"),
-                                };
-                                if loaded_features.insert(request_args.id.clone()) {
-                                    definitions.extend(tools.iter().cloned());
-                                }
-                                Ok::<_, anyhow::Error>(json!({"feature":request_args.id,"instructions":guidance,"tools":tools}).to_string())
-                            }
-                            #[cfg(not(any(feature = "agent-feedback", feature = "surfaces", feature = "findings", feature = "memories", feature = "runbooks", feature = "goal-mode", feature = "graphs")))]
-                            ExtensionKind::Feature => anyhow::bail!("feature is unavailable"),
-                            ExtensionKind::Plugin => {
-                                let details = state.plugins.details(&request_args.id, &request.workspace_id).await?;
-                                if loaded_plugins.insert(request_args.id) && !definitions.iter().any(|definition| definition["name"] == "plugin_call") {
-                                    definitions.push(plugin_call_definition());
-                                }
-                                Ok(details.to_string())
-                            }
-                        }
-                    }.await;
-                        match result {
-                            Ok(value) => (value, false),
-                            Err(error) => (format!("Extension load error: {error}"), true),
-                        }
-                    }
                     Ok(args) if call.name == "plugin_call" => {
                         let result = async {
                         let parsed: PluginCallArgs = serde_json::from_value(args)?;
                         anyhow::ensure!(parsed.arguments.is_object(), "arguments must be an object");
-                        anyhow::ensure!(loaded_plugins.contains(&parsed.plugin), "load the plugin before calling its tools");
+                        anyhow::ensure!(callable_plugins.contains(&parsed.plugin), "plugin tools are unavailable in this workspace");
                         let review_args = json!({"plugin":parsed.plugin,"server":parsed.server,"tool":parsed.tool,"arguments":parsed.arguments});
                         let decision = beale_safety::review(&state.db, &state.provider, &state.credentials, ReviewRequest {
                             provider, mode, model: &request.model, name: "plugin_call", arguments: &review_args, workspace_context: &workspace_context,
@@ -2320,11 +2317,7 @@ async fn run_one_turn(
                         }
                     }
                     #[cfg(feature = "runbooks")]
-                    Ok(args)
-                        if loaded_features.contains(beale_runbooks::FEATURE_ID)
-                            && runbook_tools_enabled
-                            && call.name == beale_runbooks::RUN =>
-                    {
+                    Ok(args) if runbook_tools_enabled && call.name == beale_runbooks::RUN => {
                         let result: anyhow::Result<(String, bool)> = async {
                         let runbook_id = args.get("id").and_then(Value::as_str)
                             .ok_or_else(|| anyhow::anyhow!("id is required"))?;
@@ -2386,11 +2379,7 @@ async fn run_one_turn(
                         }
                     }
                     #[cfg(feature = "runbooks")]
-                    Ok(args)
-                        if loaded_features.contains(beale_runbooks::FEATURE_ID)
-                            && runbook_tools_enabled
-                            && beale_runbooks::is_tool(&call.name) =>
-                    {
+                    Ok(args) if runbook_tools_enabled && beale_runbooks::is_tool(&call.name) => {
                         match beale_runbooks::execute(
                             &state.db,
                             &request.workspace_id,
@@ -2403,11 +2392,7 @@ async fn run_one_turn(
                         }
                     }
                     #[cfg(feature = "findings")]
-                    Ok(args)
-                        if loaded_features.contains(beale_findings::FEATURE_ID)
-                            && findings_tools_enabled
-                            && beale_findings::is_tool(&call.name) =>
-                    {
+                    Ok(args) if findings_tools_enabled && beale_findings::is_tool(&call.name) => {
                         let pending = tool_rows
                             .iter()
                             .map(|row| beale_findings::PendingSource {
@@ -2430,11 +2415,7 @@ async fn run_one_turn(
                         }
                     }
                     #[cfg(feature = "memories")]
-                    Ok(args)
-                        if loaded_features.contains(beale_memories::FEATURE_ID)
-                            && memories_tools_enabled
-                            && beale_memories::is_tool(&call.name) =>
-                    {
+                    Ok(args) if memories_tools_enabled && beale_memories::is_tool(&call.name) => {
                         match beale_memories::MemoryStore::open(state.workspaces.root()).and_then(
                             |store| {
                                 beale_memories::execute(
@@ -2453,8 +2434,7 @@ async fn run_one_turn(
                     }
                     #[cfg(feature = "agent-feedback")]
                     Ok(args)
-                        if loaded_features.contains(beale_agent_feedback::FEATURE_ID)
-                            && agent_feedback_tools_enabled
+                        if agent_feedback_tools_enabled
                             && call.name == beale_agent_feedback::TOOL_NAME =>
                     {
                         match beale_agent_feedback::execute(
@@ -2469,11 +2449,7 @@ async fn run_one_turn(
                         }
                     }
                     #[cfg(feature = "surfaces")]
-                    Ok(args)
-                        if loaded_features.contains(beale_surfaces::FEATURE_ID)
-                            && surface_tools_enabled
-                            && beale_surfaces::is_tool(&call.name) =>
-                    {
+                    Ok(args) if surface_tools_enabled && beale_surfaces::is_tool(&call.name) => {
                         match beale_surfaces::execute(
                             &state.workspaces,
                             &request.workspace_id,
@@ -2486,11 +2462,7 @@ async fn run_one_turn(
                         }
                     }
                     #[cfg(feature = "goal-mode")]
-                    Ok(args)
-                        if loaded_features.contains(beale_goals::FEATURE_ID)
-                            && call.name == beale_goals::TOOL_NAME
-                            && goal_active =>
-                    {
+                    Ok(args) if call.name == beale_goals::TOOL_NAME && goal_active => {
                         if goal_signal.is_some() {
                             (
                                 "Goal status was already recorded for this turn.".to_owned(),
@@ -2508,9 +2480,7 @@ async fn run_one_turn(
                     }
                     #[cfg(feature = "graphs")]
                     Ok(args)
-                        if loaded_features.contains(beale_graphs::FEATURE_ID)
-                            && call.name == beale_graphs::DELEGATE_TOOL
-                            && active_graph.is_some() =>
+                        if call.name == beale_graphs::DELEGATE_TOOL && active_graph.is_some() =>
                     {
                         let count = args
                             .get("assignments")
@@ -2533,6 +2503,7 @@ async fn run_one_turn(
                                 graphs::ChildContext {
                                     state,
                                     workspace: &workspace,
+                                    agent_files: &agent_files,
                                     #[cfg(feature = "agent-feedback")]
                                     workspace_id: &request.workspace_id,
                                     #[cfg(feature = "agent-feedback")]
@@ -2540,6 +2511,7 @@ async fn run_one_turn(
                                     #[cfg(feature = "agent-feedback")]
                                     feedback_enabled: agent_feedback_tools_enabled,
                                     workspace_context: &workspace_context,
+                                    surfaces_context: &surfaces_context,
                                     base_system: &child_system,
                                     reasoning_effort,
                                     turn_number: next_turn_number,
@@ -2556,39 +2528,6 @@ async fn run_one_turn(
                             child_tools = result.tools;
                             child_turns.extend(result.child_turns);
                             (result.output, result.is_error)
-                        }
-                    }
-                    Ok(args) if call.name == "tool_result_page" => {
-                        let result = (|| {
-                            let source_id = args
-                                .get("tool_call_id")
-                                .and_then(Value::as_str)
-                                .ok_or_else(|| anyhow::anyhow!("tool_call_id is required"))?;
-                            let offset = args
-                                .get("offset")
-                                .and_then(Value::as_u64)
-                                .ok_or_else(|| anyhow::anyhow!("offset is required"))?;
-                            let offset = usize::try_from(offset)?;
-                            let value = if let Some(row) =
-                                tool_rows.iter().find(|row| row.id == source_id)
-                            {
-                                row.output.clone()
-                            } else {
-                                state
-                                    .db
-                                    .tool_call(&session.id, source_id)?
-                                    .ok_or_else(|| anyhow::anyhow!("tool result is unavailable"))?
-                                    .output
-                            };
-                            let (chunk, next) = page(&value, offset, TOOL_PAGE_BYTES)?;
-                            Ok::<_, anyhow::Error>(format!(
-                                "{chunk}\n[next_offset={next}; total_bytes={}]",
-                                value.len()
-                            ))
-                        })();
-                        match result {
-                            Ok(value) => (value, false),
-                            Err(error) => (format!("Tool error: {error}"), true),
                         }
                     }
                     Ok(args) => {
@@ -2631,9 +2570,7 @@ async fn run_one_turn(
                     Err(_) => ("Tool error: invalid JSON arguments".to_owned(), true),
                 }
             };
-            let model_output = if call.name == "tool_result_page" {
-                output.clone()
-            } else {
+            let model_output = {
                 if let Some(tx) = &progress {
                     let _ = tx
                         .send(SessionStreamEvent {
@@ -2666,7 +2603,7 @@ async fn run_one_turn(
                     child.ordinal = tool_rows.len() as i64;
                     tool_rows.push(child);
                 }
-                model_preview(&output, &id)
+                model_preview(&output, &agent_files)
             };
             append_tool_result(
                 &mut input,
@@ -2891,9 +2828,6 @@ mod tests {
             "bash",
             "webfetch",
             "plugin_call",
-            GET_SCOPE,
-            LOAD_EXTENSION,
-            "tool_result_page",
         ] {
             assert!(!feature_tool_requires_review(name));
         }
@@ -2911,7 +2845,7 @@ mod tests {
     #[test]
     fn built_in_tool_counts_include_optional_features() {
         let base = beale_tools::definitions().len();
-        assert_eq!(base, 8);
+        assert_eq!(base, 5);
         let all = base
             + beale_surfaces::definitions().len()
             + beale_findings::definitions().len()
@@ -2920,54 +2854,7 @@ mod tests {
             + beale_agent_feedback::TOOL_COUNT as usize
             + beale_graphs::TOOL_COUNT as usize
             + beale_goals::TOOL_COUNT as usize;
-        assert_eq!(all, 33);
-    }
-
-    #[test]
-    fn scope_tool_returns_rules_and_all_network_surfaces() {
-        let mut details = WorkspaceDetails {
-            rules: vec!["Only example.test is authorized".to_owned()],
-            ..Default::default()
-        };
-        details.surfaces.push(WorkspaceSurface {
-            id: "surface-root".to_owned(),
-            definition: Some(beale_contracts::v1::SurfaceDefinition {
-                name: "Example root".to_owned(),
-                type_id: "domain".to_owned(),
-                locator: Some(beale_contracts::v1::SurfaceLocator {
-                    kind: "domain".to_owned(),
-                    value: "example.test".to_owned(),
-                }),
-                scope: 1,
-                scope_state: SurfaceScopeState::Candidate as i32,
-                ..Default::default()
-            }),
-            ..Default::default()
-        });
-        details.surfaces.push(WorkspaceSurface {
-            id: "surface-child".to_owned(),
-            definition: Some(beale_contracts::v1::SurfaceDefinition {
-                name: "Example service".to_owned(),
-                type_id: "service".to_owned(),
-                locator: Some(beale_contracts::v1::SurfaceLocator {
-                    kind: "domain".to_owned(),
-                    value: "child.example.test".to_owned(),
-                }),
-                scope: 1,
-                ..Default::default()
-            }),
-            ..Default::default()
-        });
-        let output = scope_output(&details);
-        assert_eq!(output["rules"][0], "Only example.test is authorized");
-        assert_eq!(output["surfaces"].as_array().unwrap().len(), 2);
-        assert_eq!(output["surfaces"][0]["id"], "surface-root");
-        assert_eq!(output["surfaces"][0]["definition"]["scope"], "in_scope");
-        assert_eq!(
-            output["surfaces"][0]["definition"]["scope_state"],
-            "candidate"
-        );
-        assert!(output.get("guidance").is_none());
+        assert_eq!(all, 30);
     }
 
     #[cfg(feature = "graphs")]

@@ -1,4 +1,4 @@
-//! Host-executed base tools. The caller owns result retention and pagination.
+//! Host-executed base tools and model-readable temporary context files.
 
 use anyhow::{Context, Result, bail, ensure};
 use serde::Deserialize;
@@ -9,33 +9,15 @@ use std::{
     time::Duration,
 };
 use tokio::{io::AsyncReadExt, process::Command, time::timeout};
+mod agent_files;
 mod webfetch;
+pub use agent_files::AgentFiles;
 
 pub const MAX_RESULT_BYTES: usize = 8_000_000;
 const MAX_INPUT_BYTES: usize = 8_000_000;
 const BASH_TIMEOUT: Duration = Duration::from_secs(60);
 
-pub const GET_SCOPE: &str = "get_scope";
-pub const LOAD_EXTENSION: &str = "load_plugin_or_feature";
 pub const WEBFETCH: &str = "webfetch";
-
-#[derive(Debug, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct GetScopeArgs {}
-
-#[derive(Debug, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct LoadExtensionArgs {
-    pub kind: ExtensionKind,
-    pub id: String,
-}
-
-#[derive(Debug, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ExtensionKind {
-    Feature,
-    Plugin,
-}
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -47,7 +29,7 @@ pub struct PluginCallArgs {
 }
 
 pub fn plugin_call_definition() -> Value {
-    json!({"type":"function","name":"plugin_call","description":"Call a tool from a plugin loaded in this turn. Use the plugin's discovered server and tool names.","parameters":{"type":"object","properties":{"plugin":{"type":"string"},"server":{"type":"string"},"tool":{"type":"string"},"arguments":{"type":"object"}},"required":["plugin","server","tool","arguments"],"additionalProperties":false}})
+    json!({"type":"function","name":"plugin_call","description":"Call an available plugin tool. Read its PLUGIN.md for discovered server names, tool names, and argument schemas.","parameters":{"type":"object","properties":{"plugin":{"type":"string"},"server":{"type":"string"},"tool":{"type":"string"},"arguments":{"type":"object"}},"required":["plugin","server","tool","arguments"],"additionalProperties":false}})
 }
 
 pub struct ToolOutcome {
@@ -68,9 +50,6 @@ pub fn definitions() -> Vec<Value> {
         json!({"type":"function","name":"write","description":"Write a UTF-8 file, creating parent directories if needed.","parameters":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"],"additionalProperties":false}}),
         json!({"type":"function","name":"edit","description":"Replace exactly one occurrence of old_text in a UTF-8 file.","parameters":{"type":"object","properties":{"path":{"type":"string"},"old_text":{"type":"string"},"new_text":{"type":"string"}},"required":["path","old_text","new_text"],"additionalProperties":false}}),
         json!({"type":"function","name":"bash","description":"Run a bash command in the workspace. This uses the current user's host privileges.","parameters":{"type":"object","properties":{"command":{"type":"string"}},"required":["command"],"additionalProperties":false}}),
-        json!({"type":"function","name":"tool_result_page","description":"Read another bounded page of a previous tool result by tool_call_id and byte offset.","parameters":{"type":"object","properties":{"tool_call_id":{"type":"string"},"offset":{"type":"integer","minimum":0}},"required":["tool_call_id","offset"],"additionalProperties":false}}),
-        json!({"type":"function","name":GET_SCOPE,"description":"Read the current workspace's recorded rules and surfaces, including authorization boundaries. Use before target operations or when scope is uncertain.","parameters":{"type":"object","properties":{},"additionalProperties":false}}),
-        json!({"type":"function","name":LOAD_EXTENSION,"description":"Load the instructions and tools for an available feature or installed plugin when the user's task calls for it.","parameters":{"type":"object","properties":{"kind":{"type":"string","enum":["feature","plugin"]},"id":{"type":"string"}},"required":["kind","id"],"additionalProperties":false}}),
         json!({"type":"function","name":WEBFETCH,"description":"Search the web with a query or fetch a page by URL. Returns readable text and links without executing JavaScript. Supply exactly one of query or url.","parameters":{"type":"object","properties":{"query":{"type":"string"},"url":{"type":"string"}},"additionalProperties":false}}),
     ]
 }
@@ -98,15 +77,6 @@ pub fn summary(name: &str, args: &Value) -> String {
                 .chars()
                 .take(120)
                 .collect::<String>()
-        ),
-        "tool_result_page" => "Read more tool output".to_owned(),
-        GET_SCOPE => "Read workspace scope".to_owned(),
-        LOAD_EXTENSION => format!(
-            "Load {} {}",
-            args.get("kind")
-                .and_then(Value::as_str)
-                .unwrap_or("extension"),
-            args.get("id").and_then(Value::as_str).unwrap_or("")
         ),
         "plugin_call" => format!(
             "Plugin {}: {}",
@@ -344,7 +314,7 @@ pub fn page(value: &str, offset: usize, max_bytes: usize) -> Result<(String, usi
     Ok((value[offset..end].to_owned(), end))
 }
 
-pub fn model_preview(value: &str, tool_call_id: &str) -> String {
+pub fn model_preview(value: &str, files: &AgentFiles) -> String {
     const HALF: usize = 4_000;
     if value.len() <= HALF * 2 {
         return value.to_owned();
@@ -354,8 +324,12 @@ pub fn model_preview(value: &str, tool_call_id: &str) -> String {
     while tail_start < value.len() && !value.is_char_boundary(tail_start) {
         tail_start += 1;
     }
+    let location = match files.write(&format!("results/{}.txt", uuid::Uuid::new_v4()), value.as_bytes()) {
+        Ok(path) => format!("Full output: {}. Read it with read (line offset/limit), or use bash to select a bounded range.", serde_json::to_string(&path.to_string_lossy()).unwrap_or_default()),
+        Err(_) => "Could not save the full output to a temporary file. Full output remains in the session tool details.".to_owned(),
+    };
     format!(
-        "{head}\n[{} bytes omitted. Call tool_result_page with tool_call_id={tool_call_id:?} and offset={first}; continue at each next_offset.]\n{}",
+        "{head}\n[{} bytes omitted. {location}]\n{}",
         tail_start.saturating_sub(first),
         &value[tail_start..]
     )
@@ -372,12 +346,7 @@ mod tests {
             .into_iter()
             .filter_map(|item| item["name"].as_str().map(str::to_owned))
             .collect::<Vec<_>>();
-        assert_eq!(names.len(), 8);
-        assert!(names.contains(&GET_SCOPE.to_owned()));
-        assert!(names.contains(&LOAD_EXTENSION.to_owned()));
-        assert!(names.contains(&WEBFETCH.to_owned()));
-        assert!(serde_json::from_value::<GetScopeArgs>(json!({})).is_ok());
-        assert!(serde_json::from_value::<GetScopeArgs>(json!({"extra":true})).is_err());
+        assert_eq!(names, ["read", "write", "edit", "bash", "webfetch"]);
         assert!(
             serde_json::from_value::<PluginCallArgs>(
                 json!({"plugin":"example","server":"main","tool":"read","arguments":{}})
@@ -386,30 +355,77 @@ mod tests {
         );
         assert!(serde_json::from_value::<PluginCallArgs>(json!({"plugin":"example","server":"main","tool":"read","arguments":{},"extra":true})).is_err());
         assert_eq!(plugin_call_definition()["name"], "plugin_call");
-        assert_eq!(
-            serde_json::from_value::<LoadExtensionArgs>(
-                json!({"kind":"feature","id":"beale-runbooks"})
-            )
-            .unwrap(),
-            LoadExtensionArgs {
-                kind: ExtensionKind::Feature,
-                id: "beale-runbooks".to_owned(),
-            }
-        );
-        assert!(
-            serde_json::from_value::<LoadExtensionArgs>(json!({"kind":"unknown","id":"x"}))
-                .is_err()
-        );
     }
 
     #[test]
     fn preview_and_pages_recover_middle_without_utf8_loss() {
         let value = format!("{}é{}", "a".repeat(12000), "z".repeat(12000));
-        let preview = model_preview(&value, "example-id");
-        assert!(preview.contains("tool_result_page"));
+        let files = AgentFiles::new().unwrap();
+        let preview = model_preview(&value, &files);
+        assert!(preview.contains("Full output:"));
+        let result = std::fs::read_dir(files.root().join("results"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        assert_eq!(std::fs::read_to_string(&result).unwrap(), value);
+        assert!(preview.contains(&serde_json::to_string(&result.to_string_lossy()).unwrap()));
+        assert_eq!(model_preview("small", &files), "small");
+        std::fs::remove_dir_all(files.root()).unwrap();
         let (first, next) = page(&value, 12000, 8000).unwrap();
         assert!(first.starts_with('é'));
         assert!(next > 12000);
+    }
+
+    #[tokio::test]
+    async fn spilled_output_can_be_read_by_line_without_exposing_private_host_data() {
+        let root = std::env::temp_dir().join(format!("beale-tools-example-{}", Uuid::new_v4()));
+        let workspace = root.join("workspace");
+        let host = root.join("host");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::create_dir_all(&host).unwrap();
+        std::fs::write(host.join("private.txt"), "Synthetic private host value").unwrap();
+        let files = AgentFiles::new().unwrap();
+        let output = (0..2000)
+            .map(|i| format!("Example line {i}: é\n"))
+            .collect::<String>();
+        let preview = model_preview(&output, &files);
+        assert!(preview.contains("bytes omitted"));
+        let path = std::fs::read_dir(files.root().join("results"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let result = execute(
+            "read",
+            &json!({"path":path,"offset":1000,"limit":2}),
+            &workspace,
+            &host,
+        )
+        .await
+        .unwrap();
+        assert!(result.output.contains("1000\tExample line 999: é"));
+        assert!(result.output.contains("1001\tExample line 1000: é"));
+        assert!(!result.output.contains("Example line 1001: é"));
+        assert!(
+            execute(
+                "read",
+                &json!({"path":host.join("private.txt")}),
+                &workspace,
+                &host
+            )
+            .await
+            .is_err()
+        );
+        std::fs::remove_dir_all(files.root().join("results")).unwrap();
+        std::fs::write(files.root().join("results"), "Blocked destination").unwrap();
+        let failed = model_preview(&output, &files);
+        assert!(failed.contains("Could not save the full output"));
+        assert!(!failed.contains("Full output:"));
+        std::fs::remove_dir_all(files.root()).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]

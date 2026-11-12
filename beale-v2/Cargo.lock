@@ -299,6 +299,7 @@ dependencies = [
  "axum",
  "beale-contracts",
  "beale-storage",
+ "beale-tools",
  "prost",
  "reqwest",
  "serde",

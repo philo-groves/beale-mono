@@ -264,6 +264,9 @@
 
 #### Changed
 
+- Removed the v2 `tool_result_page`, `load_plugin_or_feature`, and `get_scope` base tools. Large results now include readable temporary files, enabled extensions expose tools immediately with file-based guidance, and agents read optional `AGENTS.md` plus generated `RULES.md`. Existing workspace rules are backfilled without a schema migration; only an unchanged stock `SYSTEM.md` is automatically upgraded. Desktop tool-output paging remains available.
+
+
 - Protocol 2.16 includes session-scoped model/role token and cache aggregates plus main/subagent activity samples in session detail, including turns outside the recent transcript. Existing storage is reused without a migration; rebuild and restart host and desktop together.
 
 - Protocol 2.14 adds cache-read, cache-covered input, and measured-call aggregates to Tracking history using existing persisted columns. No database migration is needed; rebuild and restart the host with the updated desktop.

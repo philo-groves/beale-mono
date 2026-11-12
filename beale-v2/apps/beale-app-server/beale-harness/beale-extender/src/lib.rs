@@ -70,6 +70,105 @@ pub struct PluginRuntime {
 }
 
 impl PluginRuntime {
+    /// Publish only model-facing guidance, skill resources, and discovered tool schemas.
+    /// Host package paths, MCP launch configuration, and credentials stay private.
+    pub async fn publish(
+        &self,
+        name: &str,
+        workspace_id: &str,
+        files: &beale_tools::AgentFiles,
+    ) -> Result<(PathBuf, bool)> {
+        let details = self.details(name, workspace_id).await?;
+        let root = self
+            .catalog
+            .package(name)?
+            .context("plugin package is unavailable")?
+            .canonicalize()?;
+        let prefix = format!("plugins/{name}");
+        let mut document = format!(
+            "# {}\n\n{}\n\n## Skills\n",
+            name,
+            details["description"].as_str().unwrap_or_default()
+        );
+        let mut total_bytes = 0_u64;
+        if let Some(skills) = details["skills"].as_array() {
+            for skill in skills {
+                let skill_name = skill["name"].as_str().context("invalid skill name")?;
+                let relative = format!("skills/{skill_name}/SKILL.md");
+                let source = contained_file(&root, &root.join(&relative))?;
+                let path = files.write(&format!("{prefix}/{relative}"), &std::fs::read(source)?)?;
+                document.push_str(&format!(
+                    "\n- {}: {}",
+                    skill_name,
+                    serde_json::to_string(&path.to_string_lossy())?
+                ));
+                for resource in ["scripts", "references", "assets"] {
+                    let directory = root.join("skills").join(skill_name).join(resource);
+                    count_skill_files(&root, &directory)?;
+                    if !directory.exists() {
+                        continue;
+                    }
+                    let mut pending = vec![directory];
+                    while let Some(directory) = pending.pop() {
+                        for entry in std::fs::read_dir(directory)? {
+                            let path = entry?.path();
+                            let metadata = std::fs::symlink_metadata(&path)?;
+                            ensure!(
+                                !metadata.file_type().is_symlink(),
+                                "skill resource cannot be a symlink"
+                            );
+                            if metadata.is_dir() {
+                                pending.push(path);
+                            } else {
+                                let source = contained_file(&root, &path)?;
+                                total_bytes = total_bytes
+                                    .checked_add(metadata.len())
+                                    .context("skill resources are too large")?;
+                                ensure!(
+                                    total_bytes <= 64_000_000 && metadata.len() <= 8_000_000,
+                                    "skill resources are too large"
+                                );
+                                let relative = path
+                                    .strip_prefix(&root)?
+                                    .to_str()
+                                    .context("invalid skill resource path")?;
+                                let output = files.write(
+                                    &format!("{prefix}/{relative}"),
+                                    &std::fs::read(source)?,
+                                )?;
+                                #[cfg(unix)]
+                                {
+                                    use std::os::unix::fs::PermissionsExt;
+                                    let mode = if metadata.permissions().mode() & 0o111 != 0 {
+                                        0o700
+                                    } else {
+                                        0o600
+                                    };
+                                    std::fs::set_permissions(
+                                        output,
+                                        std::fs::Permissions::from_mode(mode),
+                                    )?;
+                                }
+                                #[cfg(not(unix))]
+                                let _ = output;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        document.push_str("\n\n## Tools\n\nCall these with plugin_call using this plugin name, the server, tool name, and arguments matching its input schema.\n\n```json\n");
+        document.push_str(&serde_json::to_string_pretty(&details["tools"])?);
+        document.push_str("\n```\n");
+        let path = files.write(&format!("{prefix}/PLUGIN.md"), document.as_bytes())?;
+        Ok((
+            path,
+            details["tools"]
+                .as_array()
+                .is_some_and(|tools| !tools.is_empty()),
+        ))
+    }
+
     pub fn new(db: HostDatabase, data_root: PathBuf) -> Result<Self> {
         Ok(Self {
             catalog: Catalog::bundled(data_root)?,
@@ -179,7 +278,7 @@ impl PluginRuntime {
         let server = active
             .get_mut(plugin)
             .and_then(|servers| servers.get_mut(server))
-            .context("plugin server is unavailable; load the plugin again")?;
+            .context("plugin server is unavailable; retry on the next turn")?;
         server.call_tool(tool, arguments).await
     }
 }
@@ -1029,6 +1128,40 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
             "Read example data"
         );
         assert_eq!(details["skills"][0]["name"], "example-skill");
+        let files = beale_tools::AgentFiles::new().unwrap();
+        let (guide, has_tools) = runtime
+            .publish("example-tools", "example-workspace", &files)
+            .await
+            .unwrap();
+        assert!(has_tools);
+        let guide = std::fs::read_to_string(guide).unwrap();
+        assert!(guide.contains("example_read"));
+        assert!(guide.contains("inputSchema"));
+        assert!(!guide.contains("${PLUGIN_ROOT}"));
+        let published = files.root().join("plugins/example-tools");
+        assert!(published.join("skills/example-skill/SKILL.md").is_file());
+        for file in [
+            "scripts/check.sh",
+            "references/notes.md",
+            "assets/example.txt",
+        ] {
+            assert_eq!(
+                std::fs::read_to_string(published.join("skills/example-skill").join(file)).unwrap(),
+                "Synthetic example content."
+            );
+        }
+        assert!(!published.join("mcp.json").exists());
+        assert!(!published.join("server.mjs").exists());
+        assert!(!published.join("plugin.json").exists());
+        let read = beale_tools::execute(
+            "read",
+            &serde_json::json!({"path":published.join("skills/example-skill/SKILL.md")}),
+            files.root(),
+            &root,
+        )
+        .await
+        .unwrap();
+        assert!(read.output.contains("Use for example.test research."));
         let result = runtime
             .call_tool(
                 "example-tools",
@@ -1054,6 +1187,12 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
         );
         db.set_extension_scope("plugin", "example-tools", false, &[])
             .unwrap();
+        assert!(
+            runtime
+                .publish("example-tools", "example-workspace", &files)
+                .await
+                .is_err()
+        );
         assert!(
             runtime
                 .details("example-tools", "example-workspace")
@@ -1085,6 +1224,7 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
         );
         catalog.deactivate("example-tools").await;
         catalog.deactivate("apple-security-devices").await;
+        std::fs::remove_dir_all(files.root()).unwrap();
         drop(runtime);
         drop(db);
         std::fs::remove_dir_all(root).unwrap();

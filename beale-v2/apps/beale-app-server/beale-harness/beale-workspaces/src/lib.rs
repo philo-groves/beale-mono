@@ -50,7 +50,7 @@ const DIRECTORIES: [&str; 10] = [
     "scratch",
     "cache",
 ];
-const DEFAULT_GUIDANCE: &str = "# Beale research workspace\n\nFollow the workspace scope and rules recorded in workspace.json.\n";
+const DEFAULT_GUIDANCE: &str = "# Beale research workspace\n\nRead RULES.md before target operations. Use the Surfaces tools when enabled to inspect recorded scope.\n";
 const MAX_MANIFEST_BYTES: usize = 8_000_000;
 
 #[derive(Clone)]
@@ -419,6 +419,10 @@ impl WorkspaceStore {
     }
 
     fn details(&self, id: &str) -> Result<WorkspaceDetails, WorkspaceError> {
+        let _guard = self
+            .write_lock
+            .lock()
+            .map_err(|_| WorkspaceError::Internal("workspace write lock"))?;
         Uuid::parse_str(id).map_err(|_| WorkspaceError::Invalid)?;
         let entry = self
             .read_registry()?
@@ -447,15 +451,8 @@ impl WorkspaceStore {
         }
         mapping::validate_surface_anchors(&manifest.surfaces, directory)
             .map_err(|_| WorkspaceError::Internal("invalid surface relationship anchor"))?;
-        let guidance = fs::read(directory.join("AGENTS.md"))
-            .map_err(|_| WorkspaceError::Internal("read workspace guidance"))?;
-        if guidance.len() > 20_001 {
-            return Err(WorkspaceError::Internal(
-                "workspace guidance exceeds size limit",
-            ));
-        }
-        let guidance = String::from_utf8(guidance)
-            .map_err(|_| WorkspaceError::Internal("decode workspace guidance"))?;
+        let guidance = Self::guidance(&entry)?;
+        sync_rules_file(directory, &manifest.rules)?;
         let surfaces = manifest
             .surfaces
             .into_iter()
@@ -514,8 +511,11 @@ impl WorkspaceStore {
     }
 
     fn guidance(entry: &RegistryEntry) -> Result<String, WorkspaceError> {
-        let bytes = fs::read(Path::new(&entry.directory).join("AGENTS.md"))
-            .map_err(|_| WorkspaceError::Internal("read workspace guidance"))?;
+        let bytes = match fs::read(Path::new(&entry.directory).join("AGENTS.md")) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(String::new()),
+            Err(_) => return Err(WorkspaceError::Internal("read workspace guidance")),
+        };
         if bytes.len() > 20_001 {
             return Err(WorkspaceError::Internal(
                 "workspace guidance exceeds size limit",
@@ -1007,6 +1007,10 @@ impl WorkspaceStore {
             format!("{}\n", input.guidance)
         };
         write_new(&input.directory.join("AGENTS.md"), guidance.as_bytes())?;
+        write_new(
+            &input.directory.join("RULES.md"),
+            rules_document(&manifest.rules).as_bytes(),
+        )?;
         let mut manifest_bytes = serde_json::to_vec_pretty(&manifest)
             .map_err(|_| WorkspaceError::Internal("encode workspace manifest"))?;
         manifest_bytes.push(b'\n');
@@ -1839,6 +1843,29 @@ fn validate_rules(inputs: Vec<String>) -> Result<Vec<String>, WorkspaceError> {
     Ok(result)
 }
 
+fn rules_document(rules: &[String]) -> String {
+    let mut content = String::from(
+        "# Workspace rules\n\nMaintained by Beale from workspace.json. Change these rules in the workspace Rules view.\n",
+    );
+    if rules.is_empty() {
+        content.push_str("\nNo workspace rules are recorded. Use the enabled Surfaces tools to inspect recorded scope; absence of rules does not grant authorization.\n");
+    } else {
+        for (index, rule) in rules.iter().enumerate() {
+            content.push_str(&format!("\n## Rule {}\n\n{}\n", index + 1, rule));
+        }
+    }
+    content
+}
+
+fn sync_rules_file(directory: &Path, rules: &[String]) -> Result<(), WorkspaceError> {
+    let content = rules_document(rules);
+    let path = directory.join("RULES.md");
+    if fs::read(&path).ok().as_deref() != Some(content.as_bytes()) {
+        write_replace(&path, content.as_bytes())?;
+    }
+    Ok(())
+}
+
 fn write_manifest(directory: &Path, manifest: &StoredManifest) -> Result<(), WorkspaceError> {
     let mut bytes = serde_json::to_vec_pretty(manifest)
         .map_err(|_| WorkspaceError::Internal("encode workspace manifest"))?;
@@ -1846,7 +1873,15 @@ fn write_manifest(directory: &Path, manifest: &StoredManifest) -> Result<(), Wor
     if bytes.len() > MAX_MANIFEST_BYTES {
         return Err(WorkspaceError::Invalid);
     }
-    write_replace(&directory.join("workspace.json"), &bytes)
+    let path = directory.join("workspace.json");
+    let previous =
+        fs::read(&path).map_err(|_| WorkspaceError::Internal("read workspace manifest"))?;
+    write_replace(&path, &bytes)?;
+    if let Err(error) = sync_rules_file(directory, &manifest.rules) {
+        write_replace(&path, &previous)?;
+        return Err(error);
+    }
+    Ok(())
 }
 
 fn write_replace(path: &Path, bytes: &[u8]) -> Result<(), WorkspaceError> {
@@ -2276,6 +2311,98 @@ mod tests {
             ],
             rules: vec!["Do not contact excluded third parties.".to_owned()],
         }
+    }
+
+    #[test]
+    fn rules_file_tracks_creation_updates_and_legacy_backfill_with_optional_guidance() {
+        let base = std::env::temp_dir().join(format!("beale-rules-example-{}", Uuid::new_v4()));
+        fs::create_dir_all(&base).unwrap();
+        let directory = base.join("workspace");
+        let store = WorkspaceStore::at(base.join("host")).unwrap();
+        let summary = store.create(example_request(&directory)).unwrap();
+        let original = fs::read_to_string(directory.join("RULES.md")).unwrap();
+        assert!(original.contains("Do not contact excluded third parties."));
+        fs::remove_file(directory.join("RULES.md")).unwrap();
+        fs::remove_file(directory.join("AGENTS.md")).unwrap();
+        assert!(
+            store
+                .details_for_host(&summary.id)
+                .unwrap()
+                .guidance
+                .is_empty()
+        );
+        assert!(store.foundation(&summary.id).unwrap().guidance.is_empty());
+        assert_eq!(
+            fs::read_to_string(directory.join("RULES.md")).unwrap(),
+            original
+        );
+        let rules = vec!["Only example.test is authorized.\nKeep verification evidence.".into()];
+        let updated = store
+            .update_rules(
+                &summary.id,
+                UpdateWorkspaceRulesRequest {
+                    expected_revision: 1,
+                    rules: rules.clone(),
+                },
+            )
+            .unwrap();
+        assert_eq!(updated.revision, 2);
+        assert_eq!(
+            fs::read_to_string(directory.join("RULES.md")).unwrap(),
+            rules_document(&rules)
+        );
+        assert!(matches!(
+            store.update_rules(
+                &summary.id,
+                UpdateWorkspaceRulesRequest {
+                    expected_revision: 1,
+                    rules: vec!["Stale example rule".into()]
+                }
+            ),
+            Err(WorkspaceError::Conflict)
+        ));
+        assert_eq!(
+            fs::read_to_string(directory.join("RULES.md")).unwrap(),
+            rules_document(&rules)
+        );
+        fs::write(directory.join("RULES.md"), "Stale projection").unwrap();
+        store.details_for_host(&summary.id).unwrap();
+        assert_eq!(
+            fs::read_to_string(directory.join("RULES.md")).unwrap(),
+            rules_document(&rules)
+        );
+        fs::remove_file(directory.join("RULES.md")).unwrap();
+        fs::create_dir(directory.join("RULES.md")).unwrap();
+        assert!(
+            store
+                .update_rules(
+                    &summary.id,
+                    UpdateWorkspaceRulesRequest {
+                        expected_revision: 2,
+                        rules: vec!["New example rule".into()]
+                    }
+                )
+                .is_err()
+        );
+        assert_eq!(store.rules(&summary.id).unwrap().revision, 2);
+        assert_eq!(store.rules(&summary.id).unwrap().rules, rules);
+        fs::remove_dir(directory.join("RULES.md")).unwrap();
+        store
+            .update_rules(
+                &summary.id,
+                UpdateWorkspaceRulesRequest {
+                    expected_revision: 2,
+                    rules: vec![],
+                },
+            )
+            .unwrap();
+        assert!(
+            fs::read_to_string(directory.join("RULES.md"))
+                .unwrap()
+                .contains("No workspace rules are recorded")
+        );
+        drop(store);
+        fs::remove_dir_all(base).unwrap();
     }
 
     #[test]
