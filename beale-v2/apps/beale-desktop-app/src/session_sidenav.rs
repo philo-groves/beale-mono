@@ -43,14 +43,6 @@ fn open_menu(state: &mut State, menu: UsageMenu) {
     }
 }
 
-fn toggle_menu(state: &mut State, menu: UsageMenu) {
-    if state.session_usage_menu == Some(menu) {
-        state.session_usage_menu = None;
-    } else {
-        open_menu(state, menu);
-    }
-}
-
 fn activates_sidenav(name: &str) -> bool {
     matches!(
         name,
@@ -341,13 +333,13 @@ pub(crate) fn render(
                 .child(
                     el().key("session-sidenav-chart-button")
                         .role("button")
-                        .label("Open session usage chart")
-                        .help("Open session usage chart")
+                        .label("Open session insights")
+                        .help("Open session insights")
                         .size(24.0, 24.0)
                         .center()
                         .radius(6.0)
                         .hover(theme.color("#303030"))
-                        .on_press(|state: &mut State| toggle_menu(state, UsageMenu::Tokens))
+                        .on_press(crate::session_insights::open)
                         .child(icon(&TRACKING, 14.0).color(theme.color("#aaaaaa"))),
                 )
                 .child(row().grow(1.0))

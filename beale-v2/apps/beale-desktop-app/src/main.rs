@@ -34,9 +34,12 @@ mod provider_models;
 mod provider_usage;
 mod quick_chat;
 mod runbook_canvas;
+mod session_insights;
 mod session_sidenav;
 mod sessions;
 mod settings_scroll;
+mod token_charts;
+mod tracking_data;
 mod tracking_view;
 mod visual_preview;
 mod workspace_creation;
@@ -632,6 +635,8 @@ struct State {
     session_sidenav_visible: bool,
     session_sidenav_triggered: bool,
     session_usage_menu: Option<session_sidenav::UsageMenu>,
+    session_insights_open: bool,
+    session_insights_filter: tracking_data::AgentFilter,
     session_usage_row_hovered: Option<session_sidenav::UsageMenu>,
     session_usage_popup_hovered: bool,
     session_usage_snapshot_index: usize,
@@ -866,6 +871,8 @@ impl Default for State {
             session_sidenav_visible: false,
             session_sidenav_triggered: false,
             session_usage_menu: None,
+            session_insights_open: false,
+            session_insights_filter: tracking_data::AgentFilter::All,
             session_usage_row_hovered: None,
             session_usage_popup_hovered: false,
             session_usage_snapshot_index: 0,
@@ -1143,6 +1150,7 @@ impl State {
     }
 
     fn apply_view_location(&mut self, location: ViewLocation) {
+        self.session_insights_open = false;
         let mut load_workspace = None;
         match location {
             ViewLocation::Home => self.primary_view = PrimaryView::Home,
@@ -1348,6 +1356,7 @@ impl State {
         self.session_usage_row_hovered = None;
         self.session_usage_popup_hovered = false;
         self.session_usage_snapshot_index = 0;
+        self.session_insights_open = false;
         self.session_runbook_expanded = [false; 3];
         self.session_work_expanded.clear();
         let had_session = self.active_session.take().is_some();
@@ -1423,6 +1432,7 @@ impl State {
         self.session_usage_row_hovered = None;
         self.session_usage_popup_hovered = false;
         self.session_usage_snapshot_index = 0;
+        self.session_insights_open = false;
         self.session_runbook_expanded = [false; 3];
         match result {
             Ok(detail) => {
@@ -2152,6 +2162,7 @@ fn start_session_load(state: &mut State, id: String) {
     state.session_usage_row_hovered = None;
     state.session_usage_popup_hovered = false;
     state.session_usage_snapshot_index = 0;
+    state.session_insights_open = false;
     state.session_turn_started = None;
     state.session_elapsed_ms = 0;
     state.session_error.clear();
@@ -3796,11 +3807,21 @@ fn header(state: &State, prefix_width: f32) -> El {
             );
     } else if state.primary_view == PrimaryView::Tracking {
         title = title
+            .shrink()
+            .min_w(0.0)
             .child(icon(&TRACKING, 16.0).color(color("#c8c8c8")))
             .child(
                 text("Tracking")
                     .font(ui_font(13.0, 500.0))
                     .color(color("#e2e2e2")),
+            )
+            .child(
+                text("Token Tracking")
+                    .min_w(0.0)
+                    .shrink()
+                    .truncate_fade()
+                    .font(ui_font(13.0, 400.0))
+                    .color(color("#aaaaaa")),
             );
     } else if state.primary_view == PrimaryView::WorkspaceCreation {
         title = title
@@ -5529,7 +5550,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
     let palette = theme.palette();
     let color = |value| theme.color(value);
     let window_width = cx.layout_size("app-surface").map_or(1040.0, |size| size[0]);
-    let sidenav_width = if state.sidenav_visible && state.primary_view != PrimaryView::Tracking {
+    let sidenav_width = if state.sidenav_visible {
         state.sidenav_width + 1.0
     } else {
         0.0
@@ -5541,6 +5562,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
         .w_full()
         .max_w(match state.primary_view {
             PrimaryView::Settings => 760.0,
+            PrimaryView::Tracking => 1100.0,
             PrimaryView::Workspace => f32::MAX,
             _ => 1300.0,
         })
@@ -5651,7 +5673,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
         } else {
             "#111111"
         }));
-    if state.sidenav_visible && state.primary_view != PrimaryView::Tracking {
+    if state.sidenav_visible {
         settings_surface = settings_surface
             .child(match state.primary_view {
                 PrimaryView::Settings => settings_sidenav(
@@ -5667,6 +5689,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
                 PrimaryView::Automations => {
                     automations_view::sidenav(state, state.sidenav_width, theme)
                 }
+                PrimaryView::Tracking => tracking_view::sidenav(state, state.sidenav_width, theme),
                 _ => home_sidebar::render(state, state.sidenav_width, theme),
             })
             .child(el().w(1.0).h_full().fill(color("#2a2a2a")));
@@ -5820,8 +5843,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
     }
     if state.canvas_open {
         let window_width = cx.layout_size("app-surface").map_or(1040.0, |size| size[0]);
-        let sidenav_width = if state.sidenav_visible && state.primary_view != PrimaryView::Tracking
-        {
+        let sidenav_width = if state.sidenav_visible {
             state.sidenav_width + 1.0
         } else {
             0.0
@@ -6249,6 +6271,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
     if in_session(state)
         && state.session_sidenav_visible
         && !state.canvas_open
+        && !state.session_insights_open
         && let Some(menu) = state.session_usage_menu
     {
         window = window.child(session_sidenav::popup(
@@ -6276,6 +6299,11 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
         && state.appearance_tab == AppearanceTab::Colors
     {
         window = window.child(color_picker_menu(state));
+    }
+    if in_session(state) && state.session_insights_open {
+        for item in session_insights::dialog(state, theme, window_width) {
+            window = window.child(item);
+        }
     }
     window
 }
@@ -6868,15 +6896,116 @@ mod tests {
                 duration_ms: 800,
                 measured_calls: 1,
                 total_calls: 1,
+                ..Default::default()
             }],
         });
         let mut runtime = Runtime::new(state, view, (1040.0, 720.0), Env::new(true, 1.0));
         runtime.frame(0.0);
         assert!(runtime.find("nav-tracking").is_some());
         assert!(runtime.find("tracking-title").is_some());
-        assert!(runtime.find("tracking-subscription-chart").is_some());
-        assert!(runtime.find("tracking-model-chart").is_some());
-        assert!(runtime.find("tracking-measure-tokens").is_some());
+        assert!(runtime.find("tracking-sidenav").is_some());
+        assert!(runtime.find("tracking-tokens-nav").is_some());
+        assert!(runtime.find("tracking-metrics").is_some());
+        assert!(runtime.find("tracking-agent-filters").is_some());
+    }
+
+    #[test]
+    fn tracking_day_and_agent_filters_update_the_breakdown() {
+        let state = visual_preview::fixture("tracking");
+        let mut runtime = Runtime::new(state, view, (1440.0, 1500.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        assert!(runtime.find("tracking-model-row-2").is_some());
+        let (x, y) = runtime.find("tracking-day-5").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+        assert!(runtime.state.tracking.selected_day.is_some());
+        let selected = runtime.state.tracking.selected_day;
+        let (x, y) = runtime.find("tracking-filter-Main").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+        assert_eq!(
+            runtime.state.tracking.filter,
+            tracking_data::AgentFilter::Main
+        );
+        assert_eq!(runtime.state.tracking.selected_day, selected);
+        assert!(runtime.find("tracking-model-row-0").is_some());
+        assert!(runtime.find("tracking-model-row-1").is_none());
+        let (x, y) = runtime.find("tracking-clear-day").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+        assert_eq!(runtime.state.tracking.selected_day, None);
+        let (x, y) = runtime.find("tracking-filter-Subagents").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+        assert!(runtime.find("tracking-model-row-1").is_some());
+        assert!(runtime.find("tracking-model-row-2").is_none());
+        let (x, y) = runtime.find("tracking-day-5").unwrap();
+        for _ in 0..2 {
+            runtime.pointer_down(x, y);
+            runtime.pointer_up(x, y);
+            runtime.frame(0.0);
+        }
+        assert_eq!(runtime.state.tracking.selected_day, None);
+    }
+
+    #[test]
+    fn tracking_cards_fit_all_themes_and_responsive_layouts() {
+        for theme in [
+            AppearanceTheme::Light,
+            AppearanceTheme::Dark,
+            AppearanceTheme::Cream,
+            AppearanceTheme::Midnight,
+        ] {
+            for (width, large) in [(840.0, false), (840.0, true), (1440.0, false)] {
+                let mut state = visual_preview::fixture("tracking");
+                state.appearance.theme = theme;
+                if large {
+                    state.appearance.text_size = TextSize::ExtraLarge;
+                    state.sidenav_width = SIDENAV_MAX_WIDTH;
+                }
+                let mut runtime = Runtime::new(state, view, (width, 2400.0), Env::new(true, 1.0));
+                runtime.frame(0.0);
+                let (header_tab, _) = runtime.presented("header-view-tab").unwrap();
+                let (canvas, _) = runtime.presented("header-canvas-toggle").unwrap();
+                assert!(
+                    header_tab[0] + header_tab[2] <= canvas[0] + 1.0,
+                    "Tracking header leaves Canvas reachable at {width}, large={large}"
+                );
+                let (page, _) = runtime.presented("settings-page").unwrap();
+                for key in [
+                    "tracking-metrics",
+                    "tracking-metric-0",
+                    "tracking-metric-3",
+                    "tracking-model-card",
+                    "tracking-model-chart",
+                    "tracking-mix-card",
+                    "tracking-model-breakdown",
+                    "tracking-agent-filters",
+                    "tracking-clear-day",
+                ] {
+                    let (bounds, _) = runtime.presented(key).unwrap();
+                    assert!(
+                        bounds[0] >= page[0] - 1.0,
+                        "{key} starts inside page at {width}, large={large}"
+                    );
+                    assert!(
+                        bounds[0] + bounds[2] <= page[0] + page[2] + 1.0,
+                        "{key} ends inside page at {width}, large={large}: {bounds:?}, page={page:?}"
+                    );
+                }
+                let (trend, _) = runtime.presented("tracking-model-card").unwrap();
+                let (mix, _) = runtime.presented("tracking-mix-card").unwrap();
+                if width > 1000.0 {
+                    assert!((trend[1] - mix[1]).abs() < 1.0);
+                } else {
+                    assert!(mix[1] >= trend[1] + trend[3]);
+                }
+            }
+        }
     }
 
     #[test]
@@ -9246,6 +9375,7 @@ mod tests {
             has_campaign_activity: false,
             token_usage: None,
             usage_snapshots: Vec::new(),
+            model_usage: Vec::new(),
             runbook_count: 0,
             active_runbook_count: 0,
             runbooks: Vec::new(),
@@ -9450,6 +9580,7 @@ mod tests {
             has_campaign_activity: false,
             token_usage: None,
             usage_snapshots: Vec::new(),
+            model_usage: Vec::new(),
             runbook_count: 0,
             active_runbook_count: 0,
             runbooks: Vec::new(),
@@ -9566,6 +9697,7 @@ mod tests {
                     has_campaign_activity: false,
                     token_usage: None,
                     usage_snapshots: Vec::new(),
+                    model_usage: Vec::new(),
                     runbook_count: 0,
                     active_runbook_count: 0,
                     runbooks: Vec::new(),
@@ -9685,6 +9817,7 @@ mod tests {
                 has_campaign_activity: false,
                 token_usage: None,
                 usage_snapshots: Vec::new(),
+            model_usage: Vec::new(),
 runbook_count: 0,
 active_runbook_count: 0,
             runbooks: Vec::new(),
@@ -9756,6 +9889,7 @@ active_runbook_count: 0,
                 has_campaign_activity: false,
                 token_usage: None,
                 usage_snapshots: Vec::new(),
+            model_usage: Vec::new(),
 runbook_count: 0,
 active_runbook_count: 0,
             runbooks: Vec::new(),
@@ -9829,6 +9963,7 @@ active_runbook_count: 0,
                 has_campaign_activity: false,
                 token_usage: None,
                 usage_snapshots: Vec::new(),
+                model_usage: Vec::new(),
                 runbook_count: 0,
                 active_runbook_count: 0,
                 runbooks: Vec::new(),
@@ -12113,6 +12248,7 @@ active_runbook_count: 0,
                     measured_calls: 1,
                     total_calls: 1,
                     cache_measured_calls: 1,
+                    ..Default::default()
                 },
                 SessionUsageSnapshot {
                     work_duration_ms: 600_000,
@@ -12123,6 +12259,7 @@ active_runbook_count: 0,
                     measured_calls: 3,
                     total_calls: 4,
                     cache_measured_calls: 2,
+                    ..Default::default()
                 },
             ],
             ..Default::default()

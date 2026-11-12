@@ -28,8 +28,26 @@ pub(crate) fn initial_state() -> State {
 
 pub(crate) fn fixture(variant: &str) -> State {
     let name = match variant {
+        "session-insights"
+        | "session-insights-empty"
+        | "session-insights-missing"
+        | "session-insights-compact"
+        | "session-insights-running"
+        | "session-insights-main"
+        | "session-insights-subagents"
+        | "session-insights-no-subagents" => "session",
         "archive-empty" => "archive",
         "archive-chats-empty" => "archive-chats",
+        "tracking-selected"
+        | "tracking-subagents"
+        | "tracking-empty"
+        | "tracking-legacy"
+        | "tracking-unmeasured"
+        | "tracking-compact"
+        | "tracking-loading"
+        | "tracking-offline"
+        | "tracking-error"
+        | "tracking-headroom" => "tracking",
         "appearance-compact" => "appearance",
         "typography-compact" => "typography",
         "anthropic" | "openrouter" | "xai" | "zai" | "api-key" => "providers",
@@ -46,11 +64,13 @@ pub(crate) fn fixture(variant: &str) -> State {
         "finding-detail" => "findings",
         _ => variant,
     };
-    let mut s = State::default();
-    s.primary_view = PrimaryView::Home;
-    s.connection = ConnectionStatus::Connected {
-        major: beale_contracts::PROTOCOL_MAJOR,
-        minor: beale_contracts::PROTOCOL_MINOR,
+    let mut s = State {
+        primary_view: PrimaryView::Home,
+        connection: ConnectionStatus::Connected {
+            major: beale_contracts::PROTOCOL_MAJOR,
+            minor: beale_contracts::PROTOCOL_MINOR,
+        },
+        ..Default::default()
     };
     s.fleet.preview_fixture();
     s.lead_provider = Some(Provider::OpenAi);
@@ -184,7 +204,6 @@ pub(crate) fn fixture(variant: &str) -> State {
                 locator: Some(SurfaceLocator {
                     kind: "url".into(),
                     value: format!("https://example.test/fixture/{}", i + 1),
-                    ..Default::default()
                 }),
                 description: "Synthetic surface for visual review.".into(),
                 ..Default::default()
@@ -237,19 +256,60 @@ pub(crate) fn fixture(variant: &str) -> State {
             })
             .collect(),
         model_days: (0..7)
-            .map(|i| TrackingModelDay {
-                day_start_ms: now / 86_400_000 * 86_400_000 - (6 - i) * 86_400_000,
-                model: "Example Research Model".into(),
-                role: "main".into(),
-                input_tokens: 18000 + i * 2400,
-                output_tokens: 2400,
-                duration_ms: 60000 + i * 24000,
-                measured_calls: 4,
-                total_calls: 4,
-                ..Default::default()
+            .flat_map(|i| {
+                let wave = [2, 4, 3, 7, 5, 9, 6][i as usize];
+                [
+                    (
+                        ProviderId::Openai,
+                        AuthMethod::Subscription,
+                        "Example Research",
+                        "main",
+                        16_400,
+                        2_400,
+                    ),
+                    (
+                        ProviderId::Anthropic,
+                        AuthMethod::ApiKey,
+                        "Example Analyst",
+                        "reviewer",
+                        8_200,
+                        1_900,
+                    ),
+                    (
+                        ProviderId::Openai,
+                        AuthMethod::ApiKey,
+                        "Example Scout",
+                        "scout",
+                        4_800,
+                        900,
+                    ),
+                ]
+                .into_iter()
+                .enumerate()
+                .map(
+                    move |(index, (provider, method, model, role, input, output))| {
+                        let calls = (wave * (4 - index as u64)) as u32;
+                        TrackingModelDay {
+                            day_start_ms: now / 86_400_000 * 86_400_000 - (6 - i) * 86_400_000,
+                            provider: provider as i32,
+                            method: method as i32,
+                            model: model.into(),
+                            role: role.into(),
+                            input_tokens: input * wave,
+                            output_tokens: output * wave,
+                            duration_ms: 42_000 * wave,
+                            measured_calls: calls,
+                            total_calls: calls + if i == 3 { 1 } else { 0 },
+                            cache_read_tokens: Some(input * wave * (50 + index as u64 * 12) / 100),
+                            cache_input_tokens: Some(input * wave),
+                            cache_measured_calls: Some(calls),
+                        }
+                    },
+                )
             })
             .collect(),
     });
+    s.tracking.updated_at = Some(now);
     match name {
         "home" => {}
         "empty" => {
@@ -391,7 +451,192 @@ pub(crate) fn fixture(variant: &str) -> State {
             }
         }
     }
+    if variant.starts_with("session-insights") {
+        s.session_insights_open = true;
+        let detail = s.active_session.as_mut().unwrap();
+        detail.total_duration_ms = 1_800_000;
+        detail.model_usage = [
+            (
+                ProviderId::Openai,
+                AuthMethod::Subscription,
+                "Example Research",
+                "main",
+                18_000,
+                2_400,
+                12_000,
+                9,
+            ),
+            (
+                ProviderId::Anthropic,
+                AuthMethod::ApiKey,
+                "Example Analyst",
+                "reviewer",
+                9_000,
+                1_800,
+                4_000,
+                5,
+            ),
+            (
+                ProviderId::Openai,
+                AuthMethod::ApiKey,
+                "Example Scout",
+                "scout",
+                3_000,
+                800,
+                2_000,
+                4,
+            ),
+        ]
+        .into_iter()
+        .map(
+            |(provider, method, model, role, input, output, cached, calls)| SessionModelUsage {
+                provider: provider as i32,
+                method: method as i32,
+                model: model.into(),
+                role: role.into(),
+                usage: Some(SessionTokenUsage {
+                    input_tokens: input,
+                    output_tokens: output,
+                    cache_read_tokens: cached,
+                    cache_input_tokens: input,
+                    measured_calls: calls,
+                    total_calls: calls,
+                    cache_measured_calls: calls,
+                }),
+            },
+        )
+        .collect();
+        detail.token_usage = Some(SessionTokenUsage {
+            input_tokens: 30_000,
+            output_tokens: 5_000,
+            cache_read_tokens: 18_000,
+            cache_input_tokens: 30_000,
+            measured_calls: 18,
+            total_calls: 18,
+            cache_measured_calls: 18,
+        });
+        detail.usage_snapshots = (0..=6)
+            .map(|i| SessionUsageSnapshot {
+                work_duration_ms: i * 300_000,
+                main_usage: Some(SessionTokenUsage {
+                    input_tokens: i * 3_000,
+                    output_tokens: i * 400,
+                    cache_read_tokens: i * 2_000,
+                    cache_input_tokens: i * 3_000,
+                    measured_calls: i * 9 / 6,
+                    total_calls: i * 9 / 6,
+                    cache_measured_calls: i * 9 / 6,
+                }),
+                subagent_usage: Some(SessionTokenUsage {
+                    input_tokens: i * 2_000,
+                    output_tokens: i * 2_600 / 6,
+                    cache_read_tokens: i * 1_000,
+                    cache_input_tokens: i * 2_000,
+                    measured_calls: i * 3 - i * 9 / 6,
+                    total_calls: i * 3 - i * 9 / 6,
+                    cache_measured_calls: i * 3 - i * 9 / 6,
+                }),
+                input_tokens: i * 5_000,
+                output_tokens: i * 5_000 / 6,
+                cache_read_tokens: i * 3_000,
+                cache_input_tokens: i * 5_000,
+                measured_calls: i * 3,
+                total_calls: i * 3,
+                cache_measured_calls: i * 3,
+            })
+            .collect();
+        if variant == "session-insights-empty" {
+            detail.token_usage = None;
+            detail.model_usage.clear();
+            detail.usage_snapshots.clear();
+        } else if variant == "session-insights-missing" {
+            for source in &mut detail.model_usage {
+                let calls = source.usage.as_ref().unwrap().total_calls;
+                source.usage = Some(SessionTokenUsage {
+                    total_calls: calls,
+                    ..Default::default()
+                });
+            }
+            detail.token_usage = Some(SessionTokenUsage {
+                total_calls: 18,
+                ..Default::default()
+            });
+            for point in &mut detail.usage_snapshots {
+                *point = SessionUsageSnapshot {
+                    work_duration_ms: point.work_duration_ms,
+                    total_calls: point.total_calls,
+                    main_usage: point.main_usage.as_ref().map(|u| SessionTokenUsage {
+                        total_calls: u.total_calls,
+                        ..Default::default()
+                    }),
+                    subagent_usage: point.subagent_usage.as_ref().map(|u| SessionTokenUsage {
+                        total_calls: u.total_calls,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                };
+            }
+        }
+        if variant == "session-insights-main" {
+            s.session_insights_filter = tracking_data::AgentFilter::Main;
+        } else if matches!(
+            variant,
+            "session-insights-subagents" | "session-insights-no-subagents"
+        ) {
+            s.session_insights_filter = tracking_data::AgentFilter::Subagents;
+            if variant == "session-insights-no-subagents" {
+                detail.model_usage.retain(|source| source.role == "main");
+                detail.token_usage = detail.model_usage[0].usage.clone();
+                for point in &mut detail.usage_snapshots {
+                    let main = point.main_usage.as_ref().unwrap();
+                    point.input_tokens = main.input_tokens;
+                    point.output_tokens = main.output_tokens;
+                    point.measured_calls = main.measured_calls;
+                    point.total_calls = main.total_calls;
+                    point.cache_read_tokens = main.cache_read_tokens;
+                    point.cache_input_tokens = main.cache_input_tokens;
+                    point.cache_measured_calls = main.cache_measured_calls;
+                    point.subagent_usage = Some(SessionTokenUsage::default());
+                }
+            }
+        }
+        s.session_busy = variant == "session-insights-running";
+        if variant == "session-insights-compact" {
+            s.appearance.text_size = TextSize::ExtraLarge;
+        }
+    }
     match variant {
+        "tracking-selected" => {
+            s.tracking.selected_day = Some(now / 86_400_000 * 86_400_000 - 86_400_000)
+        }
+        "tracking-subagents" => s.tracking.filter = tracking_data::AgentFilter::Subagents,
+        "tracking-compact" => {
+            s.sidenav_width = SIDENAV_MAX_WIDTH;
+            s.appearance.text_size = TextSize::ExtraLarge;
+        }
+        "tracking-empty" => s.tracking.snapshot.as_mut().unwrap().model_days.clear(),
+        "tracking-legacy" | "tracking-unmeasured" => {
+            for day in &mut s.tracking.snapshot.as_mut().unwrap().model_days {
+                if variant == "tracking-unmeasured" {
+                    day.measured_calls = 0;
+                    day.input_tokens = 0;
+                    day.output_tokens = 0;
+                }
+                day.cache_read_tokens = None;
+                day.cache_input_tokens = None;
+                day.cache_measured_calls = None;
+            }
+        }
+        "tracking-loading" => {
+            s.tracking.snapshot = None;
+            s.tracking.loading = true;
+        }
+        "tracking-offline" => {
+            s.tracking.snapshot = None;
+            s.connection = ConnectionStatus::Offline;
+        }
+        "tracking-error" => s.tracking.error = "Tracking is unavailable".into(),
+        "tracking-headroom" => s.tracking.show_subscriptions = true,
         "archive-empty" | "archive-chats-empty" => s.archive_entries.clear(),
         "appearance-compact" | "typography-compact" => {
             s.sidenav_width = SIDENAV_MAX_WIDTH;

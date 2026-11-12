@@ -123,6 +123,15 @@ pub mod v1 {
         pub measured_calls: u32,
         #[prost(uint32, tag = "10")]
         pub total_calls: u32,
+        /// Included in input_tokens. Absent before protocol 2.14.
+        #[prost(uint64, optional, tag = "11")]
+        pub cache_read_tokens: Option<u64>,
+        /// Input only from calls with cache telemetry; hit-rate denominator.
+        #[prost(uint64, optional, tag = "12")]
+        pub cache_input_tokens: Option<u64>,
+        /// Zero means cache usage is unknown, rather than a zero hit rate.
+        #[prost(uint32, optional, tag = "13")]
+        pub cache_measured_calls: Option<u32>,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -974,6 +983,23 @@ pub mod v1 {
         pub active_runbook_count: u64,
         #[prost(message, repeated, tag = "17")]
         pub runbooks: Vec<SessionRunbook>,
+        /// All recorded calls in this session, independent of transcript pagination.
+        #[prost(message, repeated, tag = "18")]
+        pub model_usage: Vec<SessionModelUsage>,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct SessionModelUsage {
+        #[prost(enumeration = "ProviderId", tag = "1")]
+        pub provider: i32,
+        #[prost(enumeration = "AuthMethod", tag = "2")]
+        pub method: i32,
+        #[prost(string, tag = "3")]
+        pub model: String,
+        #[prost(string, tag = "4")]
+        pub role: String,
+        #[prost(message, optional, tag = "5")]
+        pub usage: Option<SessionTokenUsage>,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1030,6 +1056,10 @@ pub mod v1 {
         pub total_calls: u64,
         #[prost(uint64, tag = "8")]
         pub cache_measured_calls: u64,
+        #[prost(message, optional, tag = "9")]
+        pub main_usage: Option<SessionTokenUsage>,
+        #[prost(message, optional, tag = "10")]
+        pub subagent_usage: Option<SessionTokenUsage>,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1549,7 +1579,7 @@ pub mod v1 {
 }
 
 pub const PROTOCOL_MAJOR: u32 = 2;
-pub const PROTOCOL_MINOR: u32 = 13;
+pub const PROTOCOL_MINOR: u32 = 16;
 pub const SERVICE_NAME: &str = "beale-app-server";
 pub const HEALTH_PATH: &str = "/v1/health";
 pub const AUTH_STATUS_PATH: &str = "/v1/providers/status";
@@ -1634,4 +1664,89 @@ pub fn control_proof(token: &str, nonce: &[u8]) -> [u8; 32] {
     hasher.update(token.as_bytes());
     hasher.update(nonce);
     hasher.finalize().into()
+}
+
+#[cfg(test)]
+mod tracking_tests {
+    use super::v1::TrackingModelDay;
+    use prost::Message;
+
+    #[test]
+    fn scoped_usage_samples_append_fields_and_preserve_legacy_absence() {
+        use super::v1::{SessionTokenUsage, SessionUsageSnapshot};
+        let legacy = SessionUsageSnapshot::decode(&[0x10, 100, 0x18, 20][..]).unwrap();
+        assert_eq!(legacy.input_tokens, 100);
+        assert_eq!(legacy.output_tokens, 20);
+        assert!(legacy.main_usage.is_none());
+        assert!(legacy.subagent_usage.is_none());
+        let sample = SessionUsageSnapshot {
+            main_usage: Some(SessionTokenUsage {
+                input_tokens: 100,
+                ..Default::default()
+            }),
+            subagent_usage: Some(SessionTokenUsage::default()),
+            ..legacy
+        };
+        let bytes = sample.encode_to_vec();
+        assert!(bytes.ends_with(&[0x4a, 2, 8, 100, 0x52, 0]));
+        assert_eq!(
+            SessionUsageSnapshot::decode(bytes.as_slice()).unwrap(),
+            sample
+        );
+    }
+
+    #[test]
+    fn session_model_usage_appends_at_tag_eighteen_and_old_details_remain_readable() {
+        use super::v1::{SessionDetail, SessionModelUsage, SessionTokenUsage};
+        assert!(
+            SessionDetail::decode(&[][..])
+                .unwrap()
+                .model_usage
+                .is_empty()
+        );
+        let source = SessionModelUsage {
+            provider: 1,
+            method: 1,
+            model: "example-model".into(),
+            role: "main".into(),
+            usage: Some(SessionTokenUsage {
+                input_tokens: 100,
+                total_calls: 1,
+                ..Default::default()
+            }),
+        };
+        let body = source.encode_to_vec();
+        assert!(body.len() < 128);
+        let mut bytes = vec![0x92, 0x01, body.len() as u8];
+        bytes.extend(body);
+        assert_eq!(
+            SessionDetail::decode(bytes.as_slice()).unwrap().model_usage,
+            [source]
+        );
+    }
+
+    #[test]
+    fn tracking_cache_fields_preserve_absence_and_explicit_zero() {
+        // The existing wire tags must retain their meaning without new fields.
+        let legacy = [0x30, 100, 0x38, 20, 0x48, 1, 0x50, 1];
+        let mut day = TrackingModelDay::decode(legacy.as_slice()).unwrap();
+        assert_eq!(
+            (
+                day.input_tokens,
+                day.output_tokens,
+                day.measured_calls,
+                day.total_calls
+            ),
+            (100, 20, 1, 1)
+        );
+        assert_eq!(day.cache_read_tokens, None);
+        assert_eq!(day.cache_input_tokens, None);
+        assert_eq!(day.cache_measured_calls, None);
+        day.cache_read_tokens = Some(0);
+        day.cache_input_tokens = Some(100);
+        day.cache_measured_calls = Some(1);
+        let encoded = day.encode_to_vec();
+        assert!(encoded.ends_with(&[0x58, 0, 0x60, 100, 0x68, 1]));
+        assert_eq!(TrackingModelDay::decode(encoded.as_slice()).unwrap(), day);
+    }
 }

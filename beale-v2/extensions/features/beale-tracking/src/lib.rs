@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 pub const FEATURE_ID: &str = "tracking";
 pub const FEATURE_NAME: &str = "Tracking";
 pub const FEATURE_DESCRIPTION: &str =
-    "See observed subscription limits and Beale session model usage over the past week.";
+    "Explore daily tokens, model usage, cache reuse, and subscription headroom over the past week.";
 pub const HAS_PROMPT_EXTENSION: bool = false;
 pub const TOOL_COUNT: u32 = 0;
 pub const PROMPT_EXTENSION: &str = "";
@@ -145,6 +145,18 @@ async fn history(
                     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
                 total_calls: u32::try_from(day.total_calls)
                     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+                cache_read_tokens: Some(
+                    u64::try_from(day.cache_read_tokens)
+                        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+                ),
+                cache_input_tokens: Some(
+                    u64::try_from(day.cache_input_tokens)
+                        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+                ),
+                cache_measured_calls: Some(
+                    u32::try_from(day.cache_measured_calls)
+                        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+                ),
             })
         })
         .collect::<Result<Vec<_>, StatusCode>>()?;
@@ -226,10 +238,71 @@ mod tests {
             resets_at_unix: 0,
         }])
         .unwrap();
+        use beale_storage::{ModelUsageRow, SessionRow, TurnActivity, TurnMetadata, TurnRow};
+        let session = SessionRow {
+            id: "session-example".into(),
+            workspace_id: "workspace-example".into(),
+            title: "Example session".into(),
+            created_at_ms: now_ms,
+            last_message_at_ms: now_ms,
+        };
+        let turn = TurnRow {
+            number: 1,
+            provider: 1,
+            method: 1,
+            model: "example-model".into(),
+            prompt: "Example prompt".into(),
+            answer: "Example answer".into(),
+            duration_ms: 100,
+            internal_prompt: false,
+        };
+        // Missing cache telemetry must not dilute the cache hit-rate denominator.
+        let usage: Vec<_> = [Some(40), None]
+            .into_iter()
+            .map(|cached| ModelUsageRow {
+                agent_id: "main".into(),
+                role: "main".into(),
+                provider: 1,
+                method: 1,
+                model: "example-model".into(),
+                input_tokens: Some(100),
+                output_tokens: Some(20),
+                cache_read_tokens: cached,
+                work_elapsed_ms: Some(50),
+                duration_ms: 50,
+                observed_at_ms: now_ms,
+            })
+            .collect();
+        db.append_turn_with_metadata(
+            &session,
+            &turn,
+            true,
+            TurnActivity {
+                tools: &[],
+                reasoning: &[],
+                commentary: &[],
+                goal: None,
+            },
+            None,
+            TurnMetadata {
+                model_usage: Some(&usage),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         let (_, body) = history(State(state), headers).await.unwrap();
         let response = TrackingResponse::decode(body.as_slice()).unwrap();
         assert_eq!(response.subscriptions.len(), 1);
         assert_eq!(response.subscriptions[0].remaining_percent, 65);
+        assert_eq!(response.model_days.len(), 1);
+        let day = &response.model_days[0];
+        assert_eq!(day.input_tokens, 200);
+        assert_eq!(day.output_tokens, 40);
+        assert_eq!(day.total_calls, 2);
+        assert_eq!(day.measured_calls, 2);
+        assert_eq!(day.cache_read_tokens, Some(40));
+        assert_eq!(day.cache_input_tokens, Some(100));
+        assert_eq!(day.cache_measured_calls, Some(1));
         drop(db);
         std::fs::remove_dir_all(root).unwrap();
     }

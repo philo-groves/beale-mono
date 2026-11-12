@@ -853,6 +853,40 @@ fn detail(
         .session_usage_snapshots(&session.id)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let count = |value| u64::try_from(value).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR);
+    let scoped_usage =
+        |totals: beale_storage::SessionUsageTotals| -> Result<SessionTokenUsage, StatusCode> {
+            Ok(SessionTokenUsage {
+                input_tokens: count(totals.input_tokens)?,
+                output_tokens: count(totals.output_tokens)?,
+                measured_calls: count(totals.measured_calls)?,
+                total_calls: count(totals.total_calls)?,
+                cache_read_tokens: count(totals.cache_read_tokens)?,
+                cache_input_tokens: count(totals.cache_input_tokens)?,
+                cache_measured_calls: count(totals.cache_measured_calls)?,
+            })
+        };
+    let model_usage = db
+        .session_model_totals(&session.id)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .into_iter()
+        .map(|row| {
+            Ok(beale_contracts::v1::SessionModelUsage {
+                provider: row.provider,
+                method: row.method,
+                model: row.model,
+                role: row.role,
+                usage: Some(SessionTokenUsage {
+                    input_tokens: count(row.totals.input_tokens)?,
+                    output_tokens: count(row.totals.output_tokens)?,
+                    measured_calls: count(row.totals.measured_calls)?,
+                    total_calls: count(row.totals.total_calls)?,
+                    cache_read_tokens: count(row.totals.cache_read_tokens)?,
+                    cache_input_tokens: count(row.totals.cache_input_tokens)?,
+                    cache_measured_calls: count(row.totals.cache_measured_calls)?,
+                }),
+            })
+        })
+        .collect::<Result<Vec<_>, StatusCode>>()?;
     let (runbook_count, active_runbook_count) = db
         .session_runbook_counts(&session.id)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -860,6 +894,7 @@ fn detail(
         .session_runbooks(&session.workspace_id, &session.id)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(SessionDetail {
+        model_usage,
         summary: Some(summary(session)),
         messages,
         provider: latest.provider,
@@ -893,6 +928,8 @@ fn detail(
             .into_iter()
             .map(|snapshot| {
                 Ok(SessionUsageSnapshot {
+                    main_usage: Some(scoped_usage(snapshot.main_totals)?),
+                    subagent_usage: Some(scoped_usage(snapshot.subagent_totals)?),
                     work_duration_ms: snapshot.work_duration_ms,
                     input_tokens: count(snapshot.totals.input_tokens)?,
                     output_tokens: count(snapshot.totals.output_tokens)?,
@@ -3551,6 +3588,25 @@ mod tests {
         assert_eq!(transcript.usage_snapshots[0].work_duration_ms, 0);
         assert_eq!(transcript.usage_snapshots[1].work_duration_ms, 1_234);
         assert_eq!(transcript.usage_snapshots[1].input_tokens, 300);
+        let encoded = transcript
+            .model_usage
+            .iter()
+            .map(|source| (source.role.as_str(), source.usage.as_ref().unwrap()))
+            .collect::<Vec<_>>();
+        assert_eq!(encoded.len(), 2);
+        assert_eq!(encoded[0].0, "main");
+        assert_eq!(encoded[0].1.input_tokens, 100);
+        assert_eq!(encoded[0].1.cache_read_tokens, 25);
+        assert_eq!(encoded[0].1.cache_input_tokens, 100);
+        assert_eq!(encoded[1].0, "scout");
+        assert_eq!(encoded[1].1.input_tokens, 200);
+        assert_eq!(encoded[1].1.cache_measured_calls, 0);
+        let first = &transcript.usage_snapshots[0];
+        assert_eq!(first.main_usage.as_ref().unwrap().total_calls, 0);
+        assert_eq!(first.subagent_usage.as_ref().unwrap().total_calls, 0);
+        let last = &transcript.usage_snapshots[1];
+        assert_eq!(last.main_usage.as_ref(), Some(encoded[0].1));
+        assert_eq!(last.subagent_usage.as_ref(), Some(encoded[1].1));
         drop(db);
         std::fs::remove_dir_all(root).unwrap();
     }

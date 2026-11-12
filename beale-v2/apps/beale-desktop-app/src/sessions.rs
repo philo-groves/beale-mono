@@ -100,6 +100,112 @@ async fn decode<T: Message + Default>(response: reqwest::Response) -> Result<T, 
     T::decode(bytes).map_err(|_| "Invalid app-server session response".to_owned())
 }
 
+fn usage_values(usage: &beale_contracts::v1::SessionTokenUsage) -> [u128; 7] {
+    [
+        usage.input_tokens,
+        usage.output_tokens,
+        usage.measured_calls,
+        usage.total_calls,
+        usage.cache_read_tokens,
+        usage.cache_input_tokens,
+        usage.cache_measured_calls,
+    ]
+    .map(u128::from)
+}
+
+fn valid_model_usage(detail: &SessionDetail) -> bool {
+    if detail.model_usage.len() > 1024 {
+        return false;
+    }
+    let mut total = [0u128; 7];
+    let mut sources = std::collections::BTreeSet::new();
+    for model in &detail.model_usage {
+        let Some(usage) = &model.usage else {
+            return false;
+        };
+        if !(1..=6).contains(&model.provider)
+            || !(1..=2).contains(&model.method)
+            || model.model.is_empty()
+            || model.model.len() > 200
+            || model.role.len() > 20
+            || !sources.insert((model.provider, model.method, &model.model, &model.role))
+            || usage.measured_calls > usage.total_calls
+            || usage.cache_measured_calls > usage.measured_calls
+            || usage.cache_read_tokens > usage.cache_input_tokens
+            || usage.cache_input_tokens > usage.input_tokens
+            || (usage.cache_measured_calls == 0 && usage.cache_input_tokens != 0)
+        {
+            return false;
+        }
+        for (sum, value) in total.iter_mut().zip(usage_values(usage)) {
+            *sum += value;
+        }
+    }
+    // An omitted breakdown remains readable; a supplied breakdown must reconcile.
+    detail.model_usage.is_empty()
+        || detail
+            .token_usage
+            .as_ref()
+            .is_some_and(|usage| usage_values(usage) == total)
+}
+
+fn valid_scoped_snapshots(detail: &SessionDetail) -> bool {
+    use beale_contracts::v1::SessionTokenUsage;
+    // Legacy samples omit both scopes. Never infer their values from overall usage.
+    if detail
+        .usage_snapshots
+        .iter()
+        .all(|p| p.main_usage.is_none() && p.subagent_usage.is_none())
+    {
+        return true;
+    }
+    let mut previous = [[0u128; 7]; 2];
+    for point in &detail.usage_snapshots {
+        let (Some(main), Some(subagents)) = (&point.main_usage, &point.subagent_usage) else {
+            return false;
+        };
+        let all = usage_values(&SessionTokenUsage {
+            input_tokens: point.input_tokens,
+            output_tokens: point.output_tokens,
+            measured_calls: point.measured_calls,
+            total_calls: point.total_calls,
+            cache_read_tokens: point.cache_read_tokens,
+            cache_input_tokens: point.cache_input_tokens,
+            cache_measured_calls: point.cache_measured_calls,
+        });
+        let scopes = [usage_values(main), usage_values(subagents)];
+        if [main, subagents].iter().any(|usage| {
+            usage.measured_calls > usage.total_calls
+                || usage.cache_measured_calls > usage.measured_calls
+                || usage.cache_read_tokens > usage.cache_input_tokens
+                || usage.cache_input_tokens > usage.input_tokens
+                || (usage.cache_measured_calls == 0 && usage.cache_input_tokens != 0)
+        }) || (0..7).any(|i| {
+            scopes[0][i] + scopes[1][i] > all[i]
+                || scopes[0][i] < previous[0][i]
+                || scopes[1][i] < previous[1][i]
+        }) {
+            return false;
+        }
+        previous = scopes;
+    }
+    let mut expected = [[0u128; 7]; 2];
+    for source in &detail.model_usage {
+        let index = match source.role.as_str() {
+            "main" => 0,
+            "" => continue,
+            _ => 1,
+        };
+        let Some(usage) = &source.usage else {
+            return false;
+        };
+        for (sum, value) in expected[index].iter_mut().zip(usage_values(usage)) {
+            *sum += value;
+        }
+    }
+    previous == expected
+}
+
 pub(crate) fn valid_detail(detail: &SessionDetail) -> bool {
     let Some(summary) = &detail.summary else {
         return false;
@@ -137,6 +243,8 @@ pub(crate) fn valid_detail(detail: &SessionDetail) -> bool {
                 && usage.cache_read_tokens <= usage.cache_input_tokens
                 && usage.cache_input_tokens <= usage.input_tokens
         })
+        && valid_model_usage(detail)
+        && valid_scoped_snapshots(detail)
         && detail.usage_snapshots.len() <= 2_048
         && detail.usage_snapshots.iter().all(|point| {
             point.work_duration_ms <= detail.total_duration_ms
@@ -455,6 +563,89 @@ pub(crate) async fn submit_stream(
 mod tests {
     use super::*;
     use beale_contracts::session_stream_frame;
+
+    #[test]
+    fn model_breakdown_validates_coverage_and_reconciles_with_session_totals() {
+        use beale_contracts::v1::{SessionModelUsage, SessionTokenUsage};
+        let usage = SessionTokenUsage {
+            input_tokens: 100,
+            output_tokens: 20,
+            measured_calls: 1,
+            total_calls: 2,
+            cache_read_tokens: 40,
+            cache_input_tokens: 100,
+            cache_measured_calls: 1,
+        };
+        let mut detail = SessionDetail {
+            token_usage: Some(usage.clone()),
+            model_usage: vec![SessionModelUsage {
+                provider: 1,
+                method: 1,
+                model: "example-model".into(),
+                role: "main".into(),
+                usage: Some(usage),
+            }],
+            ..Default::default()
+        };
+        assert!(valid_model_usage(&detail));
+        detail.model_usage[0].usage.as_mut().unwrap().input_tokens += 1;
+        assert!(!valid_model_usage(&detail));
+        detail.model_usage[0].usage.as_mut().unwrap().input_tokens -= 1;
+        detail.model_usage.push(detail.model_usage[0].clone());
+        assert!(!valid_model_usage(&detail));
+        detail.model_usage.pop();
+        detail.model_usage[0]
+            .usage
+            .as_mut()
+            .unwrap()
+            .cache_read_tokens = 101;
+        assert!(!valid_model_usage(&detail));
+        detail.model_usage.clear();
+        assert!(valid_model_usage(&detail));
+    }
+
+    #[test]
+    fn scoped_activity_reconciles_with_roles_and_rejects_partial_or_decreasing_samples() {
+        let state = crate::visual_preview::fixture("session-insights");
+        let detail = state.active_session.unwrap();
+        assert!(valid_scoped_snapshots(&detail));
+        let mut invalid = detail.clone();
+        invalid.usage_snapshots[1].main_usage = None;
+        assert!(!valid_scoped_snapshots(&invalid));
+        invalid = detail.clone();
+        invalid.usage_snapshots[2]
+            .main_usage
+            .as_mut()
+            .unwrap()
+            .input_tokens = 1;
+        assert!(!valid_scoped_snapshots(&invalid));
+        invalid = detail.clone();
+        invalid
+            .usage_snapshots
+            .last_mut()
+            .unwrap()
+            .subagent_usage
+            .as_mut()
+            .unwrap()
+            .total_calls -= 1;
+        assert!(!valid_scoped_snapshots(&invalid));
+        invalid = detail.clone();
+        invalid.model_usage[0].role = "scout".into();
+        assert!(!valid_scoped_snapshots(&invalid));
+        invalid = detail.clone();
+        invalid.usage_snapshots[1]
+            .main_usage
+            .as_mut()
+            .unwrap()
+            .cache_read_tokens = 100_000;
+        assert!(!valid_scoped_snapshots(&invalid));
+        invalid = detail;
+        for point in &mut invalid.usage_snapshots {
+            point.main_usage = None;
+            point.subagent_usage = None;
+        }
+        assert!(valid_scoped_snapshots(&invalid));
+    }
 
     #[test]
     fn stream_decoder_handles_fragmented_and_adjacent_frames() {

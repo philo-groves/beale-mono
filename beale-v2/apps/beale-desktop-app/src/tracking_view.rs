@@ -1,11 +1,20 @@
+use crate::token_charts::{
+    self, card, chart_color, copy, exact, legend_item, metrics, mix_chart, model_breakdown, muted,
+    provider_name,
+};
+use crate::{
+    design,
+    icons::*,
+    tracking_data::{self, AgentFilter, Summary},
+};
 use beale_contracts::{
     PROTOBUF_CONTENT_TYPE, TRACKING_PATH,
-    v1::{ProviderId, TrackingModelDay, TrackingResponse, TrackingSubscriptionPoint},
+    v1::{TrackingResponse, TrackingSubscriptionPoint},
 };
 use chrono::{DateTime, Utc};
 use prost::Message;
 use reqwest::{Client, StatusCode, header::CONTENT_TYPE};
-use rune::{Color, El, LineCap, Shape, canvas, col, el, row, text};
+use rune::{El, LineCap, Shape, canvas, col, el, icon, row, text};
 use std::{
     collections::BTreeMap,
     net::SocketAddr,
@@ -20,36 +29,16 @@ use crate::{
 const DAY_MS: u64 = 86_400_000;
 const WEEK_MS: u64 = 7 * DAY_MS;
 const CHART_HEIGHT: f32 = 188.0;
-const COLORS: [&str; 8] = [
-    "#82a7ed", "#d99d78", "#8fbfa2", "#c1a0df", "#d7c078", "#82bfc7", "#d888aa", "#aab18a",
-];
-
-fn chart_color(index: usize, theme: ThemeStyle<'_>) -> Color {
-    const LIGHT: [&str; 8] = [
-        "#365fb0", "#985626", "#34704d", "#78549f", "#7b651f", "#2b737d", "#a24670", "#59672d",
-    ];
-    let palette = if matches!(theme.name(), "Light" | "Cream") {
-        &LIGHT
-    } else {
-        &COLORS
-    };
-    rune::color::hex(palette[index % palette.len()]).unwrap()
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) enum Measure {
-    #[default]
-    Duration,
-    Tokens,
-}
-
 #[derive(Default)]
 pub(crate) struct TrackingState {
     pub(crate) snapshot: Option<TrackingResponse>,
     pub(crate) loading: bool,
     pub(crate) error: String,
     pub(crate) generation: u64,
-    pub(crate) measure: Measure,
+    pub(crate) filter: AgentFilter,
+    pub(crate) selected_day: Option<u64>,
+    pub(crate) show_subscriptions: bool,
+    pub(crate) updated_at: Option<u64>,
 }
 
 async fn fetch(client: &Client, addr: SocketAddr) -> Result<TrackingResponse, String> {
@@ -84,7 +73,11 @@ async fn fetch(client: &Client, addr: SocketAddr) -> Result<TrackingResponse, St
             point.remaining_percent > 100 || point.window_id.len() > 40 || point.label.len() > 40
         })
         || value.model_days.iter().any(|day| {
-            day.model.len() > 200 || day.role.len() > 20 || day.measured_calls > day.total_calls
+            day.day_start_ms % DAY_MS != 0
+                || day.model.len() > 200
+                || day.role.len() > 20
+                || day.measured_calls > day.total_calls
+                || !tracking_data::valid_cache(day)
         })
     {
         return Err("Invalid tracking data".to_owned());
@@ -122,6 +115,7 @@ pub(crate) fn start_load(state: &mut State) {
             match result {
                 Ok(snapshot) => {
                     state.tracking.snapshot = Some(snapshot);
+                    state.tracking.updated_at = Some(now_ms());
                     state.tracking.error.clear();
                 }
                 Err(error) => state.tracking.error = error,
@@ -136,40 +130,9 @@ fn now_ms() -> u64 {
         .map_or(0, |duration| duration.as_millis() as u64)
 }
 
-fn provider_name(provider: i32) -> &'static str {
-    match ProviderId::try_from(provider) {
-        Ok(ProviderId::Openai) => "OpenAI",
-        Ok(ProviderId::Xai) => "xAI",
-        Ok(ProviderId::Anthropic) => "Anthropic",
-        Ok(ProviderId::Zai) => "Z.ai",
-        Ok(ProviderId::Openrouter) => "OpenRouter",
-        Ok(ProviderId::Custom) => "Custom",
-        _ => "Provider",
-    }
-}
-
 fn date_label(ms: u64) -> String {
     DateTime::<Utc>::from_timestamp_millis(ms.min(i64::MAX as u64) as i64)
         .map_or_else(|| "—".to_owned(), |date| date.format("%b %-d").to_string())
-}
-
-fn measure_label(value: u64, measure: Measure) -> String {
-    match measure {
-        Measure::Duration => format!("{:.1} s", value as f64 / 1000.0),
-        Measure::Tokens => format!("{value} tokens"),
-    }
-}
-
-fn legend_item(label: String, color: Color, theme: ThemeStyle<'_>) -> El {
-    row()
-        .gap(7.0)
-        .center_y()
-        .child(el().size(9.0, 9.0).radius(4.5).fill(color))
-        .child(
-            text(label)
-                .font(ui_font(12.0, 400.0))
-                .color(theme.color("#b8b8b8")),
-        )
 }
 
 fn subscription_chart(
@@ -277,229 +240,277 @@ fn subscription_chart(
     .child(legend)
 }
 
-fn model_chart(
-    days: &[TrackingModelDay],
-    measure: Measure,
-    width: f32,
-    theme: ThemeStyle<'_>,
-) -> El {
-    let today = now_ms() / DAY_MS * DAY_MS;
-    let first = today.saturating_sub(6 * DAY_MS);
-    let mut series: BTreeMap<(i32, String, String), [u64; 7]> = BTreeMap::new();
-    let mut measured = 0_u64;
-    let mut total = 0_u64;
-    for day in days {
-        if day.day_start_ms < first || day.day_start_ms > today {
-            continue;
-        }
-        let index = ((day.day_start_ms - first) / DAY_MS) as usize;
-        let value = match measure {
-            Measure::Duration => day.duration_ms,
-            Measure::Tokens => day.input_tokens.saturating_add(day.output_tokens),
-        };
-        series
-            .entry((day.provider, day.model.clone(), day.role.clone()))
-            .or_default()[index] += value;
-        measured += u64::from(day.measured_calls);
-        total += u64::from(day.total_calls);
-    }
-    let title = match measure {
-        Measure::Duration => "Model time by day",
-        Measure::Tokens => "Model tokens by day",
-    };
-    let mut card = col()
-        .key("tracking-model-card")
-        .w_full()
-        .gap(12.0)
-        .padding(18.0)
-        .radius(12.0)
-        .fill(theme.color("#1b1b1b"))
+pub(crate) fn sidenav(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
+    let connected = matches!(state.connection, ConnectionStatus::Connected { .. });
+    col()
+        .key("tracking-sidenav")
+        .role("navigation")
+        .label("Tracking sections")
+        .w(width)
+        .h_full()
+        .px(8.0)
+        .pt(12.0)
+        .pb(18.0)
+        .fill(theme.color("#111111"))
+        .child(crate::sidenav_heading("Tracking", theme).ml(4.0).mb(12.0))
         .child(
             row()
+                .key("tracking-tokens-nav")
+                .role("button")
+                .label("Token Tracking, selected")
                 .w_full()
+                .h(34.0)
+                .px(8.0)
                 .center_y()
+                .gap(12.0)
+                .radius(8.0)
+                .fill(theme.subtle_accent())
+                .hover(theme.color("#303030"))
+                .on_press(|state: &mut State| state.navigate_to(crate::ViewLocation::Tracking))
+                .child(icon(&SESSION_TOKENS, 16.0).color(theme.accent()))
+                .child(copy("Token Tracking", 14.0, 550.0, theme).color(theme.accent())),
+        )
+        .child(el().grow(1.0))
+        .child(
+            col()
+                .w_full()
+                .px(12.0)
+                .gap(8.0)
+                .child(design::eyebrow("RESEARCH ACTIVITY", theme))
+                .child(muted(
+                    "All workspaces on this app server. Main and subagent calls are included.",
+                    theme,
+                ))
                 .child(
-                    text(title)
-                        .font(ui_font(16.0, 550.0))
-                        .color(theme.color("#eeeeee")),
-                )
-                .child(el().grow(1.0))
-                .child(
-                    crate::design::segmented_control(theme)
-                        .key("tracking-measure-tabs")
-                        .label("Usage measure")
-                        .child(measure_button(
-                            "Duration",
-                            Measure::Duration,
-                            measure,
+                    row()
+                        .center_y()
+                        .gap(6.0)
+                        .mt(8.0)
+                        .child(
+                            el().size(6.0, 6.0)
+                                .radius(3.0)
+                                .fill(theme.color(if connected { "#8fd0a8" } else { "#969696" })),
+                        )
+                        .child(muted(
+                            if connected {
+                                "Connected"
+                            } else {
+                                "Disconnected"
+                            },
                             theme,
-                        ))
-                        .child(measure_button("Tokens", Measure::Tokens, measure, theme)),
+                        )),
                 ),
-        );
-    if series.is_empty()
-        || series
-            .values()
-            .all(|values| values.iter().all(|&value| value == 0))
-    {
-        return card.child(
-            text("No measured model usage for this view yet.")
-                .font(ui_font(13.0, 400.0))
-                .color(theme.color("#969696")),
-        );
-    }
-    let width = (width - 36.0).max(260.0);
-    let top = 8.0;
-    let bottom = CHART_HEIGHT - 12.0;
-    let plot_height = bottom - top;
-    let slot = (width - 24.0) / 7.0;
-    let bar_width = slot * 0.56;
-    let max_total = (0..7)
-        .map(|day| series.values().map(|values| values[day]).sum::<u64>())
-        .max()
-        .unwrap_or(1)
-        .max(1);
-    card = card.child(
-        text(format!(
-            "Peak daily total: {}",
-            measure_label(max_total, measure)
-        ))
-        .font(ui_font(12.0, 400.0))
-        .color(theme.color("#969696")),
-    );
-    let mut shape = Shape::new();
-    for level in [0.0, 0.25, 0.5, 0.75, 1.0] {
-        let y = bottom - level * plot_height;
-        shape = shape.line(
-            [12.0, y],
-            [width - 12.0, y],
-            0.7,
-            LineCap::Butt,
-            theme.color("#343434"),
-        );
-    }
-    let mut legend = col().w_full().gap(6.0);
-    for (index, ((provider, model, role), values)) in series.iter().enumerate() {
-        let color = chart_color(index, theme);
-        for day in 0..7 {
-            let prior: u64 = series
-                .iter()
-                .take(index)
-                .map(|(_, previous)| previous[day])
-                .sum();
-            let lower = bottom - prior as f32 / max_total as f32 * plot_height;
-            let upper =
-                bottom - prior.saturating_add(values[day]) as f32 / max_total as f32 * plot_height;
-            if values[day] > 0 {
-                let x = 12.0 + (day as f32 + 0.5) * slot;
-                shape = shape.fill(
-                    vec![
-                        [x - bar_width / 2.0, lower],
-                        [x + bar_width / 2.0, lower],
-                        [x + bar_width / 2.0, upper],
-                        [x - bar_width / 2.0, upper],
-                    ],
-                    color,
-                );
-            }
-        }
-        legend = legend.child(legend_item(
-            format!(
-                "{} · {} · {} · {}",
-                provider_name(*provider),
-                model,
-                role,
-                measure_label(values.iter().sum(), measure)
-            ),
-            color,
-            theme,
-        ));
-    }
-    card = card.child(
-        canvas(shape.view_box(width, CHART_HEIGHT))
-            .key("tracking-model-chart")
-            .size(width, CHART_HEIGHT),
-    );
-    let mut dates = row().w_full();
-    for day in 0..7 {
-        dates = dates.child(
-            text(date_label(first + day * DAY_MS))
-                .grow(1.0)
-                .font(ui_font(11.0, 400.0))
-                .color(theme.color("#777777")),
-        );
-    }
-    card = card.child(dates).child(legend);
-    if measure == Measure::Tokens && measured < total {
-        card = card.child(text(format!("Token counts reported for {measured} of {total} model calls; unreported calls are excluded."))
-            .font(ui_font(12.0, 400.0)).color(theme.color("#969696")));
-    }
-    card
+        )
 }
 
-fn measure_button(
-    label: &'static str,
-    value: Measure,
-    selected: Measure,
-    theme: ThemeStyle<'_>,
-) -> El {
-    let glyph = match value {
-        Measure::Duration => &crate::icons::CLOCK,
-        Measure::Tokens => &crate::icons::SESSION_TOKENS,
-    };
-    crate::design::segmented_tab(label, Some(glyph), value == selected, true, theme)
-        .key(format!("tracking-measure-{}", label.to_ascii_lowercase()))
-        .on_press(move |state: &mut State| state.tracking.measure = value)
+fn filter_tabs(state: &State, theme: ThemeStyle<'_>) -> El {
+    token_charts::agent_filters(
+        state.tracking.filter,
+        "tracking",
+        |state, filter| state.tracking.filter = filter,
+        theme,
+    )
 }
 
 pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> Vec<El> {
+    let now = now_ms();
     let mut content = vec![
-        crate::design::breadcrumb_title(
-            "Workbench",
-            text("Tracking")
+        design::breadcrumb_title(
+            "Tracking",
+            copy("Token Tracking", 24.0, 600.0, theme)
                 .key("tracking-title")
-                .role("heading")
-                .truncate_fade()
                 .font(view_title_font())
-                .color(theme.color("#f2f2f2")),
+                .role("heading")
+                .truncate_fade(),
             theme,
         ),
-        crate::design::subtitle(
-            "Understand your research activity, model consumption, and subscription headroom.",
+        design::subtitle(
+            "Follow the tokens behind your research. See what went in, what came out, and what was reused.",
             theme,
         ),
     ];
     if !state.tracking.error.is_empty() {
         content.push(
-            text(state.tracking.error.clone())
-                .font(ui_font(13.0, 400.0))
-                .color(theme.color("#e07676")),
+            muted(
+                format!(
+                    "{}{}",
+                    state.tracking.error,
+                    if state.tracking.snapshot.is_some() {
+                        " · Showing the last received snapshot."
+                    } else {
+                        ""
+                    }
+                ),
+                theme,
+            )
+            .color(theme.color("#e07676")),
         );
     }
-    if let Some(snapshot) = &state.tracking.snapshot {
+    let Some(snapshot) = &state.tracking.snapshot else {
+        content.push(design::empty_state(
+            &TRACKING,
+            if state.tracking.loading {
+                "Gathering your activity"
+            } else if matches!(state.connection, ConnectionStatus::Connected { .. }) {
+                "Token history is unavailable"
+            } else {
+                "Connect to see your token usage"
+            },
+            if state.tracking.loading {
+                "Your token history will appear here when the app server responds."
+            } else if matches!(state.connection, ConnectionStatus::Connected { .. }) {
+                "We'll retry automatically while this view is open."
+            } else {
+                "Token Tracking uses the model calls recorded by your connected app server."
+            },
+            theme,
+        ));
+        return content;
+    };
+    let summary = tracking_data::summarize(
+        &snapshot.model_days,
+        now,
+        state.tracking.filter,
+        state.tracking.selected_day,
+    );
+    let selection = summary.selected_day.map_or_else(
+        || "Past 7 days · UTC".into(),
+        |day| format!("{} · Clear", date_label(day)),
+    );
+    let control = if summary.selected_day.is_some() {
+        crate::form_button(selection, theme)
+            .child(icon(&CLOSE, 13.0).color(theme.color("#969696")))
+            .label("Clear day selection and show all seven days")
+            .on_press(|state: &mut State| state.tracking.selected_day = None)
+    } else {
+        row()
+            .h(32.0)
+            .px(10.0)
+            .gap(7.0)
+            .center_y()
+            .child(icon(&CLOCK, 13.0).color(theme.color("#969696")))
+            .child(muted(selection, theme))
+    }
+    .key("tracking-clear-day");
+    let widths = AgentFilter::ALL.map(|filter| design::segmented_tab_width(filter.label(), true));
+    content.push(design::tabs_with_control(
+        filter_tabs(state, theme),
+        design::segmented_group_width(&widths),
+        control,
+        165.0,
+        page_width,
+    ));
+    if snapshot.model_days.is_empty() {
+        content.push(card(theme).key("tracking-empty")
+            .child(design::empty_state(&SESSION_TOKENS, "Your token story starts here", "Run a research session to see daily usage, model breakdowns, and cache reuse. Only reported token counts appear here.", theme)
+                .child(design::primary_button("Start research", theme).self_start().mt(8.0).on_press(State::start_new_research))));
+    } else {
+        content.push(metrics(summary.total, &summary.days, page_width, theme));
+        if page_width >= 900.0 {
+            let trend_width = (page_width - 16.0) * 0.66;
+            content.push(
+                row()
+                    .w_full()
+                    .gap(16.0)
+                    .child(activity_chart(&summary, trend_width, theme))
+                    .child(mix_chart(
+                        summary.total,
+                        page_width - 16.0 - trend_width,
+                        theme,
+                    )),
+            );
+        } else {
+            content.push(activity_chart(&summary, page_width, theme));
+            content.push(mix_chart(summary.total, page_width, theme));
+        }
+        content.push(model_breakdown(
+            summary.total,
+            &summary.models,
+            page_width,
+            theme,
+        ));
+        let total = summary.total;
+        content.push(muted(format!("Reporting coverage · {} of {} calls include token counts. Cache telemetry is available for {} calls. Missing counts are excluded, not estimated.", total.measured, total.calls, total.cache_calls), theme));
+    }
+    content.push(
+        row()
+            .key("tracking-subscription-toggle")
+            .role("button")
+            .label("Subscription headroom")
+            .w_full()
+            .h(38.0)
+            .center_y()
+            .gap(8.0)
+            .radius(8.0)
+            .hover(theme.color("#242424"))
+            .on_press(|state: &mut State| {
+                state.tracking.show_subscriptions = !state.tracking.show_subscriptions
+            })
+            .child(
+                icon(
+                    if state.tracking.show_subscriptions {
+                        &CHEVRON_DOWN
+                    } else {
+                        &CHEVRON_RIGHT
+                    },
+                    14.0,
+                )
+                .color(theme.color("#969696")),
+            )
+            .child(copy("Subscription headroom", 14.0, 550.0, theme))
+            .child(el().grow(1.0))
+            .child(muted("Past 7 days", theme)),
+    );
+    if state.tracking.show_subscriptions {
         content.push(subscription_chart(
             &snapshot.subscriptions,
             page_width,
             theme,
         ));
-        content.push(model_chart(
-            &snapshot.model_days,
-            state.tracking.measure,
-            page_width,
+    }
+    if let Some(at) = state.tracking.updated_at {
+        let time = DateTime::<Utc>::from_timestamp_millis(at as i64)
+            .map_or_else(|| "—".into(), |v| v.format("%H:%M UTC").to_string());
+        content.push(muted(
+            format!(
+                "{} · Last received {time}",
+                if state.tracking.loading {
+                    "Updating"
+                } else if !matches!(state.connection, ConnectionStatus::Connected { .. }) {
+                    "Offline"
+                } else {
+                    "Refreshes automatically"
+                }
+            ),
             theme,
         ));
-    } else if state.tracking.loading {
-        content.push(
-            text("Loading tracking data…")
-                .font(ui_font(13.0, 400.0))
-                .color(theme.color("#969696")),
-        );
-    } else {
-        content.push(
-            text("Tracking data is available while connected to the app-server.")
-                .font(ui_font(13.0, 400.0))
-                .color(theme.color("#969696")),
-        );
     }
     content
+}
+
+fn activity_chart(summary: &Summary, width: f32, theme: ThemeStyle<'_>) -> El {
+    let points: Vec<_> = summary.days.iter().enumerate().map(|(index, day)| {
+        let at = summary.first_day + index as u64 * DAY_MS;
+        let label = DateTime::<Utc>::from_timestamp_millis(at as i64).map_or_else(
+            || "—".into(), |d| d.format(if width < 520.0 { "%-d" } else { "%a" }).to_string());
+        let description = if day.tokens_unreported() {
+            format!("{} UTC: {} calls. Token counts were not reported. Select to focus this day.", date_label(at), day.calls)
+        } else {
+            format!("{} UTC: {} input, {} output, {} total tokens. {} of {} calls reported tokens. Select to focus this day.", date_label(at), exact(day.input), exact(day.output), exact(day.tokens()), day.measured, day.calls)
+        };
+        token_charts::ActivityPoint { id: at, key: format!("tracking-day-{index}"), label, description, total: *day, selected: summary.selected_day == Some(at) }
+    }).collect();
+    token_charts::activity_chart(
+        &points,
+        "Select a day to focus the breakdown below.",
+        Some(|state, at| {
+            state.tracking.selected_day = if state.tracking.selected_day == Some(at) {
+                None
+            } else {
+                Some(at)
+            };
+        }),
+        width,
+        theme,
+    )
 }

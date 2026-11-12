@@ -6,6 +6,10 @@
 
 #### Changed
 
+- The v2 session Insights icon now opens a modal using the shared token dashboard cards, cumulative activity bars, token mix, and model breakdown. Values cover the selected session across all recorded turns. All agents, Main, and Subagents filters scope every chart and model list; hover usage popouts remain available.
+
+- Expanded v2 Tracking with a Token Tracking sidenav, responsive token and cache summaries, selectable daily bars, an input/output ring, agent filters, and ranked model usage. Missing telemetry stays distinct from zero; subscription headroom remains available in a disclosure.
+
 - Refined the v2 desktop across Light, Dark, Cream, and Midnight with shared typography, spacing, controls, theme-aware status colors, and a Beale research desk. Dark uses neutral black and charcoal surfaces with silver accents. Workspace cards, research views, Findings, Fleet, extensions, settings, and dialogs share the updated visual system. Existing appearance overrides remain compatible.
 - Improved v2 small-window layouts: Findings adapts to four, two, or one column; Canvas uses the available content area when a split would be too narrow; session telemetry stacks above the transcript; tall dialogs retain visible actions.
 - Unified v2 view tabs as inset segmented controls with contextual icons, raised selection, consistent hover states, and stable label sizing across settings, providers, extensions, Fleet, Archive, workspace setup, and Tracking. Provider tabs reflow using measured label widths and the selected text size.
@@ -259,6 +263,10 @@
 ### app-server
 
 #### Changed
+
+- Protocol 2.16 includes session-scoped model/role token and cache aggregates plus main/subagent activity samples in session detail, including turns outside the recent transcript. Existing storage is reused without a migration; rebuild and restart host and desktop together.
+
+- Protocol 2.14 adds cache-read, cache-covered input, and measured-call aggregates to Tracking history using existing persisted columns. No database migration is needed; rebuild and restart the host with the updated desktop.
 
 - Protocol v1.57 adds cumulative session usage snapshots at five-minute active-work intervals. SQLite schema 34 stores per-call work offsets; older calls are placed at their completed-turn boundary.
 - Protocol v1.56 adds all-session model token and measured cache totals to session detail. SQLite schema 33 preserves nullable cache-read counts per call; existing calls retain unknown cache telemetry.

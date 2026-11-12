@@ -292,6 +292,17 @@ pub struct SessionUsageTotals {
 pub struct SessionUsageSnapshotRow {
     pub work_duration_ms: u64,
     pub totals: SessionUsageTotals,
+    pub main_totals: SessionUsageTotals,
+    pub subagent_totals: SessionUsageTotals,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionModelUsageRow {
+    pub provider: i32,
+    pub method: i32,
+    pub model: String,
+    pub role: String,
+    pub totals: SessionUsageTotals,
 }
 
 fn add_usage_totals(total: &mut SessionUsageTotals, delta: &SessionUsageTotals) {
@@ -322,6 +333,9 @@ pub struct ModelUsageDayRow {
     pub duration_ms: i64,
     pub measured_calls: i64,
     pub total_calls: i64,
+    pub cache_read_tokens: i64,
+    pub cache_input_tokens: i64,
+    pub cache_measured_calls: i64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1114,7 +1128,10 @@ impl HostDatabase {
             let mut statement = connection.prepare(
                 "SELECT (observed_at_ms / 86400000) * 86400000 AS day, role, provider, method, model,
                         SUM(COALESCE(input_tokens, 0)), SUM(COALESCE(output_tokens, 0)),
-                        SUM(duration_ms), SUM(CASE WHEN input_tokens IS NOT NULL AND output_tokens IS NOT NULL THEN 1 ELSE 0 END), COUNT(*)
+                        SUM(duration_ms), SUM(CASE WHEN input_tokens IS NOT NULL AND output_tokens IS NOT NULL THEN 1 ELSE 0 END), COUNT(*),
+                        SUM(COALESCE(cache_read_tokens, 0)),
+                        SUM(CASE WHEN cache_read_tokens IS NOT NULL THEN COALESCE(input_tokens, 0) ELSE 0 END),
+                        COUNT(cache_read_tokens)
                  FROM session_model_usage WHERE observed_at_ms >= ?1
                  GROUP BY day, role, provider, method, model ORDER BY day, provider, model, role LIMIT 2001")?;
             let rows = statement.query_map([since_ms], |row| Ok(ModelUsageDayRow {
@@ -1122,6 +1139,8 @@ impl HostDatabase {
                 method: row.get(3)?, model: row.get(4)?, input_tokens: row.get(5)?,
                 output_tokens: row.get(6)?, duration_ms: row.get(7)?,
                 measured_calls: row.get(8)?, total_calls: row.get(9)?,
+                cache_read_tokens: row.get(10)?, cache_input_tokens: row.get(11)?,
+                cache_measured_calls: row.get(12)?,
             }))?.collect::<rusqlite::Result<Vec<_>>>()?;
             ensure!(rows.len() <= 2000, "too many model usage day rows");
             Ok(rows)
@@ -1183,6 +1202,30 @@ impl HostDatabase {
         })
     }
 
+    pub fn session_model_totals(&self, session_id: &str) -> Result<Vec<SessionModelUsageRow>> {
+        self.with_connection(|connection| {
+            let mut statement = connection.prepare(
+                "SELECT provider, method, model, role,
+                        SUM(COALESCE(input_tokens, 0)), SUM(COALESCE(output_tokens, 0)),
+                        COUNT(CASE WHEN input_tokens IS NOT NULL AND output_tokens IS NOT NULL THEN 1 END), COUNT(*),
+                        SUM(COALESCE(cache_read_tokens, 0)),
+                        SUM(CASE WHEN cache_read_tokens IS NOT NULL THEN COALESCE(input_tokens, 0) ELSE 0 END),
+                        COUNT(cache_read_tokens)
+                 FROM session_model_usage WHERE session_id = ?1
+                 GROUP BY provider, method, model, role ORDER BY provider, method, model, role LIMIT 1025",
+            )?;
+            let rows = statement.query_map([session_id], |row| Ok(SessionModelUsageRow {
+                provider: row.get(0)?, method: row.get(1)?, model: row.get(2)?, role: row.get(3)?,
+                totals: SessionUsageTotals {
+                    input_tokens: row.get(4)?, output_tokens: row.get(5)?, measured_calls: row.get(6)?,
+                    total_calls: row.get(7)?, cache_read_tokens: row.get(8)?, cache_input_tokens: row.get(9)?, cache_measured_calls: row.get(10)?,
+                },
+            }))?.collect::<rusqlite::Result<Vec<_>>>()?;
+            ensure!(rows.len() <= 1024, "too many session model sources");
+            Ok(rows)
+        })
+    }
+
     pub fn session_usage_snapshots(
         &self,
         session_id: &str,
@@ -1197,7 +1240,7 @@ impl HostDatabase {
                      FROM session_turns WHERE session_id = ?1
                  )
                  SELECT t.prior_ms, t.duration_ms, m.ordinal, m.input_tokens,
-                        m.output_tokens, m.cache_read_tokens, m.work_elapsed_ms
+                        m.output_tokens, m.cache_read_tokens, m.work_elapsed_ms, m.role
                  FROM turn_work t LEFT JOIN session_model_usage m
                    ON m.session_id = ?1 AND m.turn_number = t.number
                  ORDER BY t.number, m.ordinal",
@@ -1211,12 +1254,14 @@ impl HostDatabase {
                     row.get::<_, Option<i64>>(4)?,
                     row.get::<_, Option<i64>>(5)?,
                     row.get::<_, Option<i64>>(6)?,
+                    row.get::<_, Option<String>>(7)?,
                 ))
             })?;
-            let mut changes = BTreeMap::<u64, SessionUsageTotals>::new();
+            // All three scopes share the same work clock and sampling boundaries.
+            let mut changes = BTreeMap::<u64, [SessionUsageTotals; 3]>::new();
             let mut total_work_ms = 0_u64;
             for row in rows {
-                let (prior, duration, ordinal, input, output, cached, elapsed) = row?;
+                let (prior, duration, ordinal, input, output, cached, elapsed, role) = row?;
                 let prior = u64::try_from(prior)?;
                 let duration = u64::try_from(duration)?;
                 total_work_ms = total_work_ms.max(prior.saturating_add(duration));
@@ -1226,7 +1271,7 @@ impl HostDatabase {
                 let offset = elapsed.map_or(duration, |value| value.max(0) as u64).min(duration);
                 let work_ms = prior.saturating_add(offset);
                 let bucket = if work_ms == 0 { 0 } else { (work_ms - 1) / INTERVAL_MS + 1 };
-                let delta = changes.entry(bucket).or_default();
+                let mut delta = SessionUsageTotals::default();
                 delta.total_calls += 1;
                 if let (Some(input), Some(output)) = (input, output) {
                     delta.input_tokens = delta.input_tokens.saturating_add(input);
@@ -1238,21 +1283,34 @@ impl HostDatabase {
                     delta.cache_input_tokens = delta.cache_input_tokens.saturating_add(input);
                     delta.cache_measured_calls += 1;
                 }
+                let scopes = changes.entry(bucket).or_default();
+                add_usage_totals(&mut scopes[0], &delta);
+                match role.as_deref() {
+                    Some("main") => add_usage_totals(&mut scopes[1], &delta),
+                    Some(role) if !role.is_empty() => add_usage_totals(&mut scopes[2], &delta),
+                    _ => {}
+                }
             }
             let last_bucket = if total_work_ms == 0 { 0 } else { (total_work_ms - 1) / INTERVAL_MS + 1 };
             let first_bucket = last_bucket.saturating_sub(MAX_SNAPSHOTS - 1);
-            let mut totals = SessionUsageTotals::default();
+            let mut totals: [SessionUsageTotals; 3] = Default::default();
             for delta in changes.range(..first_bucket).map(|(_, delta)| delta) {
-                add_usage_totals(&mut totals, delta);
+                for (total, delta) in totals.iter_mut().zip(delta) {
+                    add_usage_totals(total, delta);
+                }
             }
             let mut snapshots = Vec::with_capacity((last_bucket - first_bucket + 1) as usize);
             for bucket in first_bucket..=last_bucket {
                 if let Some(delta) = changes.get(&bucket) {
-                    add_usage_totals(&mut totals, delta);
+                    for (total, delta) in totals.iter_mut().zip(delta) {
+                        add_usage_totals(total, delta);
+                    }
                 }
                 snapshots.push(SessionUsageSnapshotRow {
                     work_duration_ms: bucket.saturating_mul(INTERVAL_MS).min(total_work_ms),
-                    totals: totals.clone(),
+                    totals: totals[0].clone(),
+                    main_totals: totals[1].clone(),
+                    subagent_totals: totals[2].clone(),
                 });
             }
             Ok(snapshots)
@@ -3193,9 +3251,69 @@ mod tests {
         assert_eq!(rows[0].role, "main");
         assert_eq!((rows[0].input_tokens, rows[0].output_tokens), (100, 20));
         assert_eq!((rows[0].measured_calls, rows[0].total_calls), (1, 1));
+        assert_eq!(
+            (
+                rows[0].cache_read_tokens,
+                rows[0].cache_input_tokens,
+                rows[0].cache_measured_calls
+            ),
+            (37, 100, 1)
+        );
         assert_eq!(rows[1].role, "scout");
         assert_eq!((rows[1].duration_ms, rows[1].measured_calls), (500, 0));
+        assert_eq!(
+            (
+                rows[1].cache_read_tokens,
+                rows[1].cache_input_tokens,
+                rows[1].cache_measured_calls
+            ),
+            (0, 0, 0)
+        );
         assert!(db.model_usage_days(day + 86_400_000).unwrap().is_empty());
+        let other = SessionRow {
+            id: "other-session-example".into(),
+            ..session.clone()
+        };
+        db.append_turn_with_metadata(
+            &other,
+            &turn,
+            true,
+            TurnActivity {
+                tools: &[],
+                reasoning: &[],
+                commentary: &[],
+                goal: None,
+            },
+            None,
+            TurnMetadata {
+                model_usage: Some(&usage),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let sources = db.session_model_totals(&session.id).unwrap();
+        assert_eq!(sources.len(), 2);
+        assert_eq!(sources[0].role, "main");
+        assert_eq!(sources[0].totals.input_tokens, 100);
+        assert_eq!(sources[0].totals.cache_read_tokens, 37);
+        assert_eq!(sources[0].totals.cache_input_tokens, 100);
+        assert_eq!(sources[0].totals.total_calls, 1);
+        assert_eq!(sources[1].role, "scout");
+        assert_eq!(sources[1].totals.measured_calls, 0);
+        assert_eq!(sources[1].totals.total_calls, 1);
+        assert_eq!(sources[1].totals.cache_measured_calls, 0);
+        let points = db.session_usage_snapshots(&session.id).unwrap();
+        let last = points.last().unwrap();
+        assert_eq!(last.main_totals.input_tokens, 100);
+        assert_eq!(last.main_totals.total_calls, 1);
+        assert_eq!(last.subagent_totals.input_tokens, 0);
+        assert_eq!(last.subagent_totals.measured_calls, 0);
+        assert_eq!(last.subagent_totals.total_calls, 1);
+        assert!(
+            db.session_model_totals("missing-session-example")
+                .unwrap()
+                .is_empty()
+        );
         drop(db);
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -3280,6 +3398,27 @@ mod tests {
             [0, 20, 20, 30]
         );
         assert_eq!(snapshots.last().unwrap().totals.cache_input_tokens, 150);
+        assert_eq!(
+            snapshots
+                .iter()
+                .map(|p| p.main_totals.input_tokens)
+                .collect::<Vec<_>>(),
+            [0, 100, 100, 150]
+        );
+        assert_eq!(
+            snapshots
+                .iter()
+                .map(|p| p.subagent_totals.input_tokens)
+                .collect::<Vec<_>>(),
+            [0, 0, 200, 200]
+        );
+        let last = snapshots.last().unwrap();
+        assert_eq!(last.main_totals.cache_read_tokens, 30);
+        assert_eq!(last.main_totals.cache_input_tokens, 150);
+        assert_eq!(last.main_totals.total_calls, 2);
+        assert_eq!(last.subagent_totals.measured_calls, 1);
+        assert_eq!(last.subagent_totals.cache_measured_calls, 0);
+        assert_eq!(last.subagent_totals.cache_input_tokens, 0);
         drop(db);
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -3666,11 +3805,44 @@ mod tests {
                 output: "{}".to_owned(),
                 is_error: false,
             });
-            db.append_turn_with_tools(&session, &turn, number == 1, tools.as_slice())
-                .unwrap();
+            let usage = [ModelUsageRow {
+                agent_id: "main".into(),
+                role: "main".into(),
+                provider: 1,
+                method: 1,
+                model: "model-example".into(),
+                input_tokens: Some(100),
+                output_tokens: Some(20),
+                cache_read_tokens: Some(40),
+                work_elapsed_ms: Some(500),
+                duration_ms: 500,
+                observed_at_ms: number,
+            }];
+            db.append_turn_with_metadata(
+                &session,
+                &turn,
+                number == 1,
+                TurnActivity {
+                    tools: tools.as_slice(),
+                    reasoning: &[],
+                    commentary: &[],
+                    goal: None,
+                },
+                None,
+                TurnMetadata {
+                    model_usage: Some(&usage),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
         }
         assert_eq!(db.session(&session.id).unwrap().unwrap().turns.len(), 64);
         assert_eq!(db.session_total_duration_ms(&session.id).unwrap(), 65_000);
+        let models = db.session_model_totals(&session.id).unwrap();
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].totals.total_calls, 65);
+        assert_eq!(models[0].totals.input_tokens, 6_500);
+        assert_eq!(models[0].totals.cache_read_tokens, 2_600);
         assert!(db.session_has_campaign_activity(&session.id).unwrap());
         drop(db);
         std::fs::remove_dir_all(root).unwrap();

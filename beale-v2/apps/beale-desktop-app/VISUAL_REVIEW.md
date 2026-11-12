@@ -8,9 +8,12 @@ This is an implementation-time designer self-review of the native Rune desktop, 
 - 16 representative states also checked at 840 x 600 in all four themes: research desk, graph, transcript, Canvas, Findings, providers, custom providers, surface editor, finding details, graph editor, host connection, browser editor, safety rule, Features, Tracking, and confirmation dialog.
 - The tab-icon follow-up rendered 15 affected states at 1440 x 960 and 10 at 840 x 600 in all four themes: 100 additional screenshots in `target/ui-tab-icons/` and `target/ui-tab-icons-narrow/`. These check icon alignment, theme colors, disabled workspace steps, and provider-tab reflow.
 - The combined breadcrumb/title follow-up rendered 18 states at 1440 x 960 and 12 at 840 x 600 in all four themes: 120 screenshots in `target/ui-breadcrumbs/` and `target/ui-breadcrumbs-narrow/`. Narrow Appearance fixtures include extra-large text and the widest sidenav.
+- Token Tracking was reviewed with synthetic daily/model usage, selected days, subagent filtering, empty history, missing cache/token telemetry, loading, offline, and stale-error states. All four themes were rendered at 1440 x 960, with full-page 1440 x 1500 and 840 x 1800 captures. Additional 840 x 600 and 840 x 3000 captures cover extra-large text and the widest sidenav. Evidence is in `target/ui-token-tracking/`, `target/ui-token-tracking-final/`, `target/ui-token-tracking-narrow/`, `target/ui-token-tracking-compact/`, `target/ui-token-tracking-small/`, and `target/ui-token-tracking-tall/`.
+- Session Insights reuses the Tracking charts in a session-scoped modal. Populated, empty, missing-telemetry, and running-turn fixtures were rendered in all four themes, with 1440 x 960, 1440 x 1600, and 840 x 600 captures including extra-large text. Evidence is in `target/ui-session-insights-final/`, `target/ui-session-insights-small/`, and `target/ui-session-insights-full/`; `target/ui-session-insights/` includes Tracking regression captures.
+- Session Insights agent filters reuse the Tracking segmented control and icons. All/Main/Subagents and the empty-subagent state were reviewed at 1440 x 960 in all four themes, with 840 x 600 normal and extra-large text captures. Evidence: `target/ui-session-filters/` and `target/ui-session-filters-small/`. The shared controls remain within bounds and the body scrolls independently of the close actions; the 8.5/10 rating remains unchanged in each theme.
 - Native Rune snapshots use the same renderers as the desktop. Fixtures contain only synthetic workspaces, records, hosts, conversations, and example domains. Preview mode does not load saved desktop state or start app-server polling.
 - Artifacts are reproducible with the commands in [README.md](README.md#visual-system-and-review). Full-size PNGs are `target/ui-audit/{scene}-{theme}.png`; contact sheets are `sheet-{theme}-{1..8}.png`. Small-window captures are in `target/ui-audit-narrow/`. These paths are relative to `beale-v2/` and ignored by Git.
-- Interaction and layout checks complement the images: 161 desktop tests pass. Theme tests require at least 4.5:1 contrast for default body, secondary, success, warning, and error text against panel, card, and sidebar surfaces. Custom palette overrides are operator choices and are not constrained by that test.
+- Interaction and layout checks complement the images: 170 desktop tests pass. Tracking adds selection/filter interaction checks, responsive chart/card bounds, and header-control separation in every theme, plus aggregation tests for UTC windows, source identity, missing telemetry, and saturating totals. Theme tests require at least 4.5:1 contrast for default body, secondary, success, warning, and error text against panel, card, and sidebar surfaces. Custom palette overrides are operator choices and are not constrained by that test.
 
 ## Corrections driven by screenshots
 
@@ -21,6 +24,10 @@ Dark uses a neutral black and charcoal palette with silver accents. Its surfaces
 Breadcrumbs and view titles now occupy one row, with muted parent context, a chevron separator, and a 24px current-view title. This removes the separate eyebrow row and its gap. New Research keeps its workspace picker in the final crumb, with a dropdown chevron. Titles remain single-line in constrained layouts.
 
 Text-based view tabs now share an inset segmented control with raised selection, a restrained border and shadow, stable label widths, and consistent hover feedback. Contextual icons use a shared size, spacing, foreground color, and disabled state. Provider tabs reflow into balanced groups based on measured label widths, available space, and text size. Settings, extension filters, Fleet filters, Archive, workspace setup, and Tracking use the same treatment across all four themes.
+
+Token Tracking now has a dedicated sidenav, four summary cards, selectable daily input/output bars, a token-mix ring, and ranked model sources. Input includes cached tokens; cache hit rate uses only input from calls with cache telemetry. Missing telemetry renders as unavailable. Screenshot review aligned the empty-state action with its content and fixed the Tracking header overlapping Canvas with extra-large text and a wide sidenav. The cards reflow from four to two to one column; charts stack at narrow widths. The current Token Tracking review is 8.5/10 in each default theme and 8/10 in the most constrained extra-large-text fixture.
+
+The first Session Insights screenshots exposed the raised research composer drawing over the modal. Its scrim and dialog now share the raised layer, above the composer. The modal retains visible close controls, scrolls to the full model breakdown, and preserves the same chart typography and colors across themes. Values come from the selected session, independently of Tracking enablement; older transcript turns remain represented.
 
 Populated fixtures exposed clipped Findings lanes, crowded surface details, faint status labels, overly heavy menu shadows, and low-contrast destructive actions. Findings now reflows, surface details use a clear name and ID with an explicit close action, and missing timestamps no longer display the Unix epoch.
 
@@ -55,7 +62,8 @@ Each row identifies a screenshot scene; all four themes were visually reviewed. 
 | Fleet / Browsers | `browsers` | 8.0 | 8.0 | 8.0 | 8.0 |
 | Fleet / Virtual Machines | `vms` | 8.0 | 8.0 | 8.0 | 8.0 |
 | Automation job | `automations` | 8.0 | 8.0 | 8.0 | 8.0 |
-| Tracking | `tracking` | 8.5 | 8.5 | 8.5 | 8.5 |
+| Session Insights | `session-insights` | 8.5 | 8.5 | 8.5 | 8.5 |
+| Tracking / Token Tracking | `tracking` | 8.5 | 8.5 | 8.5 | 8.5 |
 | OpenAI provider | `providers` | 8.0 | 8.0 | 8.0 | 8.0 |
 | Custom providers | `custom` | 8.0 | 8.0 | 8.0 | 8.0 |
 | Safety / Auto-Review | `safety` | 8.0 | 8.0 | 8.0 | 8.0 |
