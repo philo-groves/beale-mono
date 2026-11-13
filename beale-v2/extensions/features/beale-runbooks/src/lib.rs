@@ -247,9 +247,8 @@ async fn get(
         return Err(StatusCode::UNAUTHORIZED);
     }
     let input: GetRequest = decode_json(&headers, &body)?;
-    if !available(&state, &input.workspace_id).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)? {
-        return Err(StatusCode::FORBIDDEN);
-    }
+    // Saved session artifacts remain readable when the feature is disabled or
+    // removed from this workspace. Tools, queries, and edits still require it.
     let runbook = state
         .db
         .runbook_get(&input.workspace_id, &input.id)
@@ -567,7 +566,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn read_routes_require_auth_and_feature_scope() {
+    async fn saved_runbook_reads_survive_feature_disable_and_workspace_exclusion() {
         let db = database();
         db.set_feature_enabled(FEATURE_ID, true).unwrap();
         execute(
@@ -588,21 +587,25 @@ mod tests {
         db.runbook_run_finish(&run.id, true, "Example output")
             .unwrap();
         let app = router("example-token".into(), db.clone());
-        let request = |workspace_id: &str, token: &str| {
+        let request = |workspace_id: &str, token: &str, session_id: Option<&str>| {
             Request::builder()
                 .method("POST")
                 .uri(runbooks::GET_PATH)
                 .header("content-type", "application/json")
                 .header("authorization", format!("Bearer {token}"))
                 .body(Body::from(
-                    json!({"workspace_id":workspace_id,"id":"R1","session_id":"session-example"})
+                    json!({"workspace_id":workspace_id,"id":"R1","session_id":session_id})
                         .to_string(),
                 ))
                 .unwrap()
         };
         assert_eq!(
             app.clone()
-                .oneshot(request("workspace-example-a", "wrong"))
+                .oneshot(request(
+                    "workspace-example-a",
+                    "wrong",
+                    Some("session-example")
+                ))
                 .await
                 .unwrap()
                 .status(),
@@ -610,7 +613,11 @@ mod tests {
         );
         let response = app
             .clone()
-            .oneshot(request("workspace-example-a", "example-token"))
+            .oneshot(request(
+                "workspace-example-a",
+                "example-token",
+                Some("session-example"),
+            ))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
@@ -624,20 +631,114 @@ mod tests {
         assert_eq!(data.cell_results[0].status, "completed");
         assert_eq!(data.cell_results[0].stdout, "Example output");
         assert_eq!(data.cell_results[0].exit_code, Some(0));
-        db.set_extension_scope(
-            "feature",
-            FEATURE_ID,
-            false,
-            &["workspace-example-b".to_owned()],
-        )
-        .unwrap();
-        assert_eq!(
-            app.oneshot(request("workspace-example-a", "example-token"))
+        let other_workspaces = ["workspace-example-b".to_owned()];
+        for (enabled, all_workspaces) in [(false, true), (true, false)] {
+            db.set_feature_enabled(FEATURE_ID, enabled).unwrap();
+            db.set_extension_scope(
+                "feature",
+                FEATURE_ID,
+                all_workspaces,
+                if all_workspaces {
+                    &[]
+                } else {
+                    &other_workspaces
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                db.session_runbooks("workspace-example-a", "session-example")
+                    .unwrap()
+                    .len(),
+                1,
+            );
+            let response = app
+                .clone()
+                .oneshot(request(
+                    "workspace-example-a",
+                    "example-token",
+                    Some("session-example"),
+                ))
                 .await
-                .unwrap()
-                .status(),
-            StatusCode::FORBIDDEN
-        );
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::OK,
+                "enabled={enabled}, all_workspaces={all_workspaces}"
+            );
+            let body = to_bytes(response.into_body(), 128_000).await.unwrap();
+            let saved: GetResponse = serde_json::from_slice(&body).unwrap();
+            assert_eq!(saved, data);
+
+            assert_eq!(
+                app.clone()
+                    .oneshot(request(
+                        "workspace-example-a",
+                        "wrong",
+                        Some("session-example")
+                    ))
+                    .await
+                    .unwrap()
+                    .status(),
+                StatusCode::UNAUTHORIZED,
+            );
+            assert_eq!(
+                app.clone()
+                    .oneshot(request(
+                        "workspace-example-b",
+                        "example-token",
+                        Some("session-example")
+                    ))
+                    .await
+                    .unwrap()
+                    .status(),
+                StatusCode::NOT_FOUND,
+            );
+            for session_id in [None, Some("session-example-other")] {
+                let response = app
+                    .clone()
+                    .oneshot(request("workspace-example-a", "example-token", session_id))
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::OK);
+                let body = to_bytes(response.into_body(), 128_000).await.unwrap();
+                let saved: GetResponse = serde_json::from_slice(&body).unwrap();
+                assert_eq!(saved.runbook, data.runbook);
+                assert!(saved.runs.is_empty());
+                assert!(saved.cell_results.is_empty());
+            }
+
+            let edit = Request::builder()
+                .method("POST")
+                .uri(runbooks::CELL_EDIT_PATH)
+                .header("content-type", "application/json")
+                .header("authorization", "Bearer example-token")
+                .body(Body::from(
+                    json!({
+                        "workspace_id":"workspace-example-a",
+                        "session_id":"session-example",
+                        "id":"R1",
+                        "cell_id":"L1",
+                        "expected_revision":1,
+                        "change":{"kind":"set_name","name":"Updated example check"}
+                    })
+                    .to_string(),
+                ))
+                .unwrap();
+            assert_eq!(
+                app.clone().oneshot(edit).await.unwrap().status(),
+                StatusCode::FORBIDDEN
+            );
+            assert!(
+                execute(
+                    &db,
+                    "workspace-example-a",
+                    "session-example",
+                    GET,
+                    &json!({"id":"R1"})
+                )
+                .is_err()
+            );
+        }
     }
 
     #[tokio::test]

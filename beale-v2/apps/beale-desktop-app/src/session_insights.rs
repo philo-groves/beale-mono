@@ -125,6 +125,16 @@ pub(crate) fn dialog(state: &State, theme: ThemeStyle<'_>, window_width: f32) ->
     let title = detail
         .and_then(|d| d.summary.as_ref())
         .map_or("Current session", |s| s.title.as_str());
+    let main_label = if detail.is_some_and(|detail| {
+        matches!(
+            detail.graph_id.as_str(),
+            beale_graphs::CLOUDFLARE_ID | beale_graphs::OPENAI_ID
+        )
+    }) {
+        "Top-level"
+    } else {
+        "Main"
+    };
     let mut body = col()
         .key("session-insights-body")
         .w_full()
@@ -134,13 +144,21 @@ pub(crate) fn dialog(state: &State, theme: ThemeStyle<'_>, window_width: f32) ->
         .child(design::tabs_with_control(
             token_charts::agent_filters(
                 state.session_insights_filter,
+                main_label,
                 "session-insights",
                 |state, filter| state.session_insights_filter = filter,
                 theme,
             ),
-            design::segmented_group_width(
-                &AgentFilter::ALL.map(|filter| design::segmented_tab_width(filter.label(), true)),
-            ),
+            design::segmented_group_width(&AgentFilter::ALL.map(|filter| {
+                design::segmented_tab_width(
+                    if filter == AgentFilter::Main {
+                        main_label
+                    } else {
+                        filter.label()
+                    },
+                    true,
+                )
+            })),
             design::badge("All recorded turns", theme),
             145.0,
             inner,
@@ -407,6 +425,22 @@ mod tests {
         click(&mut runtime, "session-insights-done");
         click(&mut runtime, "session-sidenav-chart-button");
         assert_eq!(runtime.state.session_insights_filter, AgentFilter::All);
+    }
+
+    #[test]
+    fn peer_graph_insights_name_top_level_agents() {
+        let mut state = visual_preview::fixture("session-insights");
+        state.active_session.as_mut().unwrap().graph_id = beale_graphs::OPENAI_ID.to_owned();
+        let mut runtime = Runtime::new(state, view, (1200.0, 800.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        assert!(
+            runtime
+                .elements()
+                .iter()
+                .any(|item| item.text.as_deref() == Some("Top-level"))
+        );
+        click(&mut runtime, "session-insights-filter-Main");
+        assert_eq!(runtime.state.session_insights_filter, AgentFilter::Main);
     }
 
     #[test]

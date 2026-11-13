@@ -91,7 +91,10 @@ fn feature_specs() -> Vec<FeatureSpec> {
             has_prompt_extension: beale_graphs::HAS_PROMPT_EXTENSION,
             tool_count: beale_graphs::TOOL_COUNT,
             prompt_extension: beale_graphs::PROMPT_EXTENSION,
-            tool_names: vec![beale_graphs::DELEGATE_TOOL.to_owned()],
+            tool_names: vec![
+                beale_graphs::DELEGATE_TOOL.to_owned(),
+                beale_graphs::HANDOFF_TOOL.to_owned(),
+            ],
         },
         #[cfg(feature = "tracking")]
         FeatureSpec {
@@ -449,7 +452,7 @@ mod tests {
                     .find(|feature| feature.id == beale_graphs::FEATURE_ID)
                     .unwrap();
                 assert!(!graphs.enabled);
-                assert_eq!(graphs.tool_count, 1);
+                assert_eq!(graphs.tool_count, beale_graphs::TOOL_COUNT);
                 assert!(graphs.has_prompt_extension);
             }
             let feature = catalog

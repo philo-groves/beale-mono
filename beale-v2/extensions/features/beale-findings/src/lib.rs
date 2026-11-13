@@ -22,7 +22,7 @@ pub const FEATURE_NAME: &str = "Findings";
 pub const FEATURE_DESCRIPTION: &str = "Independent, evidence-backed findings with explicit validation, screening, and reporting states.";
 pub const HAS_PROMPT_EXTENSION: bool = true;
 pub const TOOL_COUNT: u32 = 6;
-pub const PROMPT_EXTENSION: &str = "## Findings\n\nUse Candidate for a specific hypothesis. A finding may cover multiple surfaces; keep its summary concise. Record an optional root_cause when supported, an attack_path when its reachability and steps are understood, and remediation when known. Complete Validated only after evidence establishes the behavior; name and describe the validation method, record its result and limitations, cite a successful workspace tool call in evidence_refs, and record counter_evidence when present. A local proof may help but is not required. Complete Screened only after checking validation quality, accepted risks or known issues, and scope/reportability. Prepare a triage-facing, machine-agnostic PoC and report only after Screened. Draft finding or state details with findings_update, then use findings_complete_state; it reports missing fields. Rejected records a reason without discarding earlier state. A state object is not a completed status until its completion passes the predecessor check.";
+pub const PROMPT_EXTENSION: &str = "## Findings\n\nUse Candidate for a specific hypothesis. A finding may cover multiple surfaces; keep its summary concise. Record root_cause and attack_path as they become supported, and remediation when known. Complete Validated only after evidence establishes the behavior; name and describe the validation method, record its result and limitations, cite a successful workspace tool call in evidence_refs, and record counter_evidence when present. A local proof may help but is not required. Complete Screened only after recording root_cause and all attack_path.reachability details, assigning integer impact_score and reachability_score values from 0 to 100 in the screened state, and checking validation quality, accepted risks or known issues, and scope/reportability. Higher scores mean greater impact or easier reachability; they are assessments, not probabilities. Prepare a triage-facing, machine-agnostic PoC and report only after Screened. Draft finding or state details with findings_update, then use findings_complete_state; it reports missing fields. Rejected records a reason without discarding earlier state. A state object is not a completed status until its completion passes the predecessor check.";
 
 const QUERY: &str = "findings_query";
 const READ: &str = "findings_read";
@@ -69,6 +69,8 @@ pub fn definitions() -> Vec<Value> {
             "validation_review":screening_check_schema.clone(),
             "known_issue_review":screening_check_schema.clone(),
             "scope_review":screening_check_schema,
+            "impact_score":{"type":["integer","null"],"minimum":0,"maximum":100,"description":"Screened state: assessed impact, from 0 (none) to 100 (highest). Required to complete screening."},
+            "reachability_score":{"type":["integer","null"],"minimum":0,"maximum":100,"description":"Screened state: assessed reachability, from 0 (unreachable) to 100 (most reachable). Required to complete screening; not a probability."},
             "poc_steps":{"type":"string"},"poc_result":{"type":"string"},
             "poc_portability_notes":{"type":"string"},
             "poc_artifact_refs":{"type":"array","items":{"type":"string"}},
@@ -82,7 +84,7 @@ pub fn definitions() -> Vec<Value> {
         json!({"type":"function","name":READ,"description":"Read a finding. Pass history_offset (starting at 0) to include one newest-first revision; omit it for the current record only.","parameters":{"type":"object","properties":{"id":{"type":"string"},"history_offset":{"type":"integer","minimum":0}},"required":["id"],"additionalProperties":false}}),
         json!({"type":"function","name":CREATE,"description":"Create a Candidate finding with a concise summary, concrete hypothesis, and optional surface IDs, root cause, attack path, and remediation.","parameters":{"type":"object","properties":{"title":{"type":"string"},"summary":{"type":"string"},"surface_ids":{"type":"array","items":{"type":"string"}},"root_cause":{"type":"object","properties":{"summary":{"type":"string"},"evidence_refs":{"type":"array","items":{"type":"object","properties":{"kind":{"type":"string","enum":["tool_call","artifact","surface","document","url","other"]},"reference":{"type":"string"},"note":{"type":"string"}},"required":["kind","reference"],"additionalProperties":false}}},"required":["summary","evidence_refs"],"additionalProperties":false},"attack_path":attack_path_schema,"remediation":{"type":"string"},"hypothesis":{"type":"string"}},"required":["title","summary","hypothesis"],"additionalProperties":false}}),
         json!({"type":"function","name":UPDATE,"description":"Revise finding metadata or one state object. Set state to finding, candidate, validated, screened, or reported. Supply a complete root_cause or attack_path object when setting it. State-specific fields are listed in patch; only fields belonging to the selected state are accepted. Reported PoC details require completed screening.","parameters":{"type":"object","properties":{"id":{"type":"string"},"expected_revision":{"type":"integer","minimum":1},"state":{"type":"string","enum":["finding","candidate","validated","screened","reported"]},"patch":patch_schema,"reason":{"type":"string"}},"required":["id","expected_revision","state","patch","reason"],"additionalProperties":false}}),
-        json!({"type":"function","name":COMPLETE,"description":"Complete Validated, Screened, or Reported in order. Returns missing state details when incomplete. Validation evidence must cite durable successful read or bash calls in this workspace.","parameters":{"type":"object","properties":{"id":{"type":"string"},"expected_revision":{"type":"integer","minimum":1},"state":{"type":"string","enum":["validated","screened","reported"]}},"required":["id","expected_revision","state"],"additionalProperties":false}}),
+        json!({"type":"function","name":COMPLETE,"description":"Complete Validated, Screened, or Reported in order. Returns missing state details when incomplete. Validation evidence must cite durable successful read or bash calls in this workspace. Screening requires root_cause, complete attack_path.reachability details, and impact_score and reachability_score integers from 0 to 100.","parameters":{"type":"object","properties":{"id":{"type":"string"},"expected_revision":{"type":"integer","minimum":1},"state":{"type":"string","enum":["validated","screened","reported"]}},"required":["id","expected_revision","state"],"additionalProperties":false}}),
         json!({"type":"function","name":REJECT,"description":"Reject a finding from its current state with a reason and optional typed evidence_refs, retaining prior state objects.","parameters":{"type":"object","properties":{"id":{"type":"string"},"expected_revision":{"type":"integer","minimum":1},"reason":{"type":"string"},"evidence_refs":{"type":"array","items":{"type":"object","properties":{"kind":{"type":"string","enum":["tool_call","artifact","surface","document","url","other"]},"reference":{"type":"string"},"note":{"type":"string"}},"required":["kind","reference"],"additionalProperties":false}}},"required":["id","expected_revision","reason"],"additionalProperties":false}}),
     ]
 }
@@ -126,6 +128,8 @@ fn patch_finding(finding: &mut Finding, patch: &Value) -> Result<()> {
         "invalid finding patch"
     );
     let prior_surface_ids = finding.surface_ids.clone();
+    let prior_root_cause = finding.root_cause.clone();
+    let prior_attack_path = finding.attack_path.clone();
     for (key, value) in fields {
         match key.as_str() {
             "title" => finding.title = serde_json::from_value(value.clone())?,
@@ -137,7 +141,9 @@ fn patch_finding(finding: &mut Finding, patch: &Value) -> Result<()> {
             _ => bail!("unknown finding field: {key}"),
         }
     }
-    if finding.surface_ids != prior_surface_ids
+    if (finding.surface_ids != prior_surface_ids
+        || finding.root_cause != prior_root_cause
+        || finding.attack_path != prior_attack_path)
         && let Some(screened) = &mut finding.state.screened
     {
         screened.completion = None;
@@ -166,8 +172,37 @@ fn patch_state<T: serde::Serialize + DeserializeOwned>(state: &mut T, patch: &Va
     Ok(())
 }
 
-fn screening_missing(state: &Screened) -> Vec<String> {
+fn screening_missing(finding: &Finding, state: &Screened) -> Vec<String> {
     let mut missing = Vec::new();
+    if finding
+        .root_cause
+        .as_ref()
+        .is_none_or(|root| root.summary.trim().is_empty())
+    {
+        missing.push("root_cause".to_owned());
+    }
+    if let Some(path) = &finding.attack_path {
+        let reach = &path.reachability;
+        for (key, value) in [
+            ("summary", &reach.summary),
+            ("attacker_role", &reach.attacker_role),
+            ("entrypoint", &reach.entrypoint),
+            ("source", &reach.source),
+            ("sink", &reach.sink),
+        ] {
+            if value.trim().is_empty() {
+                missing.push(format!("attack_path.reachability.{key}"));
+            }
+        }
+    } else {
+        missing.push("attack_path.reachability".to_owned());
+    }
+    if state.impact_score.is_none() {
+        missing.push("impact_score".to_owned());
+    }
+    if state.reachability_score.is_none() {
+        missing.push("reachability_score".to_owned());
+    }
     for (name, check) in [
         ("validation_review", &state.validation_review),
         ("known_issue_review", &state.known_issue_review),
@@ -411,11 +446,12 @@ pub fn execute(
                                 .as_ref()
                                 .context("validation missing")?
                                 .revision;
-                            let stage = finding.state.screened.get_or_insert_with(|| Screened {
-                                revision: 1,
-                                ..Default::default()
-                            });
-                            missing = screening_missing(stage);
+                            let mut stage =
+                                finding.state.screened.clone().unwrap_or_else(|| Screened {
+                                    revision: 1,
+                                    ..Default::default()
+                                });
+                            missing = screening_missing(&finding, &stage);
                             if missing.is_empty() {
                                 stage.completion = Some(Completion {
                                     at_ms: beale_storage::finding_now_ms()?,
@@ -423,6 +459,7 @@ pub fn execute(
                                     predecessor_revision: predecessor,
                                 });
                                 stage.revision += 1;
+                                finding.state.screened = Some(stage);
                             }
                         }
                         "reported" => {
@@ -592,6 +629,16 @@ mod tests {
         .unwrap()
     }
 
+    fn example_path() -> Value {
+        json!({
+            "summary":"Synthetic request path", "assumptions":[], "evidence_refs":[],
+            "limitations":[], "preconditions":[], "likelihood_description":"Example user can reach the endpoint",
+            "impact_description":"Synthetic data exposure", "steps":["Send an example request"],
+            "reachability":{"summary":"Example route is reachable", "attacker_role":"Example user",
+                "entrypoint":"https://example.test/api/example", "source":"request parameter", "sink":"response body"}
+        })
+    }
+
     #[test]
     fn tool_contract_exposes_state_patch_fields() {
         let definitions = definitions();
@@ -621,6 +668,8 @@ mod tests {
             "validation_review",
             "known_issue_review",
             "scope_review",
+            "impact_score",
+            "reachability_score",
             "poc_steps",
             "poc_result",
             "poc_portability_notes",
@@ -629,6 +678,10 @@ mod tests {
             "evidence_refs",
         ] {
             assert!(fields.get(name).is_some(), "missing update field {name}");
+        }
+        for name in ["impact_score", "reachability_score"] {
+            assert_eq!(fields[name]["minimum"], 0);
+            assert_eq!(fields[name]["maximum"], 100);
         }
         assert_eq!(
             fields["attack_path"]["anyOf"][0]["properties"]["reachability"]["properties"]["sink"]["type"],
@@ -654,7 +707,7 @@ mod tests {
         let created = invoke(
             &db,
             CREATE,
-            json!({"title":"Example boundary finding","summary":"A synthetic boundary issue","surface_ids":["S1","S2"],"hypothesis":"An example.test input crosses a boundary"}),
+            json!({"title":"Example boundary finding","summary":"A synthetic boundary issue","surface_ids":["S1","S2"],"hypothesis":"An example.test input crosses a boundary","root_cause":{"summary":"Example boundary mismatch","evidence_refs":[]},"attack_path":example_path()}),
         );
         let id = created["record"]["id"].as_str().unwrap();
         assert_eq!(created["record"]["status"], "candidate");
@@ -707,6 +760,7 @@ mod tests {
             arguments: "{}".to_owned(),
             output: "Synthetic observed response".to_owned(),
             is_error: false,
+            agent_role: "main".to_owned(),
         };
         db.append_turn_with_tools(&session, &turn, true, &[])
             .unwrap();
@@ -785,7 +839,7 @@ mod tests {
         invoke(
             &db,
             UPDATE,
-            json!({"id":id,"expected_revision":4,"state":"screened","patch":{"validation_review":check,"known_issue_review":check,"scope_review":check,"evidence_refs":[{"kind":"document","reference":"example-screening-note"}]},"reason":"Perform screening"}),
+            json!({"id":id,"expected_revision":4,"state":"screened","patch":{"validation_review":check,"known_issue_review":check,"scope_review":check,"impact_score":80,"reachability_score":65,"evidence_refs":[{"kind":"document","reference":"example-screening-note"}]},"reason":"Perform screening"}),
         );
         let screened = invoke(
             &db,
@@ -1081,6 +1135,142 @@ mod tests {
         );
         assert!(invoke(&db, READ, json!({"id":id}))["record"]["attack_path"].is_null());
         drop(db);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn screening_requires_context_and_bounded_scores_and_reopens_after_context_edits() {
+        let root =
+            std::env::temp_dir().join(format!("beale-screening-example-{}", uuid::Uuid::new_v4()));
+        let db = HostDatabase::open(&root).unwrap();
+        db.replace_workspaces(&[WorkspaceRow {
+            id: "workspace-example".into(),
+            name: "Example Workspace".into(),
+            directory: "example-directory".into(),
+        }])
+        .unwrap();
+        let record: Finding = serde_json::from_value(json!({
+            "id":"", "workspace_id":"workspace-example", "title":"Example screening", "summary":"Synthetic assessment", "surface_ids":[],
+            "state": {"candidate":{"hypothesis":"Example boundary", "revision":1,"completed_at_ms":1},
+                "validated":{"attacker_control":"Example input", "violated_invariant":"Example boundary", "observed_behavior":"Synthetic result", "impact":"Example impact", "revision":2,
+                    "completion":{"at_ms":1,"session_id":"session-example","predecessor_revision":1}}},
+            "created_at_ms":1,"updated_at_ms":1,"revision":1,"history":[]
+        })).unwrap();
+        let record = db.finding_create(record, "session-example").unwrap();
+        let id = &record.id;
+        let check = json!({"passed":true,"method":"Synthetic review","conclusion":"Supported"});
+        invoke(
+            &db,
+            UPDATE,
+            json!({"id":id,"expected_revision":1,"state":"screened","patch":{"validation_review":check,"known_issue_review":check,"scope_review":check},"reason":"Draft checks"}),
+        );
+        let missing = invoke(
+            &db,
+            COMPLETE,
+            json!({"id":id,"expected_revision":2,"state":"screened"}),
+        );
+        assert_eq!(
+            missing["missing"],
+            json!([
+                "root_cause",
+                "attack_path.reachability",
+                "impact_score",
+                "reachability_score"
+            ])
+        );
+        for field in ["impact_score", "reachability_score"] {
+            for value in [json!(-1), json!(101), json!(1000), json!(0.5), json!("80")] {
+                assert!(execute(&db,"workspace-example","session-example",UPDATE,
+                    &json!({"id":id,"expected_revision":2,"state":"screened","patch":{field:value},"reason":"Invalid score"}),&[]).is_err());
+                assert_eq!(
+                    db.finding_get("workspace-example", id)
+                        .unwrap()
+                        .unwrap()
+                        .revision,
+                    2
+                );
+            }
+        }
+        let mut path = example_path();
+        path["reachability"]["entrypoint"] = json!(" ");
+        invoke(
+            &db,
+            UPDATE,
+            json!({"id":id,"expected_revision":2,"state":"finding","patch":{"root_cause":{"summary":"Example cause","evidence_refs":[]},"attack_path":path},"reason":"Document context"}),
+        );
+        invoke(
+            &db,
+            UPDATE,
+            json!({"id":id,"expected_revision":3,"state":"screened","patch":{"impact_score":0,"reachability_score":100},"reason":"Assess ratings"}),
+        );
+        let missing = invoke(
+            &db,
+            COMPLETE,
+            json!({"id":id,"expected_revision":4,"state":"screened"}),
+        );
+        assert_eq!(
+            missing["missing"],
+            json!(["attack_path.reachability.entrypoint"])
+        );
+        invoke(
+            &db,
+            UPDATE,
+            json!({"id":id,"expected_revision":4,"state":"finding","patch":{"attack_path":example_path()},"reason":"Complete reachability"}),
+        );
+        let completed = invoke(
+            &db,
+            COMPLETE,
+            json!({"id":id,"expected_revision":5,"state":"screened"}),
+        );
+        assert_eq!(completed["record"]["status"], "screened");
+        let page = invoke(&db, QUERY, json!({}));
+        assert_eq!(page["records"][0]["impact_score"], 0);
+        assert_eq!(page["records"][0]["reachability_score"], 100);
+        let mut revision = 6;
+        let mut revised_path = example_path();
+        revised_path["reachability"]["sink"] = json!("example response header");
+        for patch in [
+            json!({"root_cause":{"summary":"Revised example cause","evidence_refs":[]}}),
+            json!({"attack_path": revised_path}),
+        ] {
+            let updated = invoke(
+                &db,
+                UPDATE,
+                json!({"id":id,"expected_revision":revision,"state":"finding","patch":patch,"reason":"Revise screening premise"}),
+            );
+            assert_eq!(updated["record"]["status"], "validated");
+            revision += 1;
+            invoke(
+                &db,
+                COMPLETE,
+                json!({"id":id,"expected_revision":revision,"state":"screened"}),
+            );
+            revision += 1;
+        }
+        let updated = invoke(
+            &db,
+            UPDATE,
+            json!({"id":id,"expected_revision":revision,"state":"screened","patch":{"impact_score":null},"reason":"Withdraw rating"}),
+        );
+        assert_eq!(updated["record"]["status"], "validated");
+        let missing = invoke(
+            &db,
+            COMPLETE,
+            json!({"id":id,"expected_revision":revision+1,"state":"screened"}),
+        );
+        assert_eq!(missing["missing"], json!(["impact_score"]));
+        drop(db);
+        let reopened = HostDatabase::open(&root).unwrap();
+        let saved = reopened
+            .finding_get("workspace-example", id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            saved.state.screened.as_ref().unwrap().reachability_score,
+            Some(100)
+        );
+        assert_eq!(saved.state.screened.as_ref().unwrap().impact_score, None);
+        drop(reopened);
         std::fs::remove_dir_all(root).unwrap();
     }
 

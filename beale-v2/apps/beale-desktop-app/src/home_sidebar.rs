@@ -6,8 +6,9 @@ use crate::icons::{
     SEARCH,
 };
 use crate::{
-    SelectionMenu, State, ThemeStyle, form_button, modal_dialog, start_session_archive,
-    start_session_load, toggle_selection_menu, ui_font, workspace_creation::display_directory,
+    SelectionMenu, State, ThemeStyle, design::SIDENAV_ROW_HEIGHT, form_button, modal_dialog,
+    start_session_archive, start_session_load, toggle_selection_menu, ui_font,
+    workspace_creation::display_directory,
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -97,7 +98,7 @@ fn primary_action(spec: &SidebarAction, state: &State, theme: ThemeStyle<'_>) ->
             format!("{} unavailable", spec.label)
         })
         .w_full()
-        .h(34.0)
+        .h(SIDENAV_ROW_HEIGHT)
         .px(4.0)
         .center_y()
         .gap(12.0)
@@ -158,7 +159,7 @@ fn session_row(key: String, label: &str, italic: bool, active: bool, theme: Them
         .role("button")
         .label(label.to_owned())
         .w_full()
-        .min_h(30.0)
+        .h(SIDENAV_ROW_HEIGHT)
         .px(4.0)
         .center_y()
         .gap(10.0)
@@ -278,7 +279,7 @@ pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
                 .label(format!("Open {}", workspace.name))
                 .grow(1.0)
                 .min_w(0.0)
-                .h(34.0)
+                .h(SIDENAV_ROW_HEIGHT)
                 .center_y()
                 .gap(10.0)
                 .child(icon(&FOLDER_OPEN, 15.0).color(color("#9d9d9d")))
@@ -298,7 +299,7 @@ pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
                 .role("group")
                 .label(workspace.name.clone())
                 .w_full()
-                .min_h(30.0)
+                .h(SIDENAV_ROW_HEIGHT)
                 .px(4.0)
                 .center_y()
                 .gap(4.0)
@@ -370,7 +371,7 @@ pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
                         .key(format!("home-session-empty-{}", workspace.id))
                         .inert()
                         .w_full()
-                        .h(34.0)
+                        .h(SIDENAV_ROW_HEIGHT)
                         .px(4.0)
                         .center_y()
                         .gap(10.0)
@@ -449,7 +450,12 @@ pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
                                 .role("button")
                                 .label(format!("Archive {}", session.title))
                                 .help("Archive Session")
-                                .pin(None, Some(2.0), Some(2.0), None)
+                                .pin(
+                                    None,
+                                    Some((SIDENAV_ROW_HEIGHT - 26.0) / 2.0),
+                                    Some(2.0),
+                                    None,
+                                )
                                 .size(26.0, 26.0)
                                 .center()
                                 .radius(8.0)
@@ -474,7 +480,7 @@ pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
                         .role("button")
                         .label(label)
                         .w_full()
-                        .h(28.0)
+                        .h(SIDENAV_ROW_HEIGHT)
                         .px(4.0)
                         .center_y()
                         .gap(10.0)
@@ -534,11 +540,7 @@ pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
                         .child(el().size(5.0, 8.0).radius(3.0).fill(theme.accent()))
                         .child(el().size(7.0, 11.0).radius(4.0).fill(theme.accent())),
                 )
-                .child(
-                    text(HOME_SIDEBAR.title)
-                        .font(ui_font(18.0, 600.0))
-                        .color(theme.color("#f2f2f2")),
-                ),
+                .child(crate::sidenav_heading(HOME_SIDEBAR.title, theme)),
         )
         .child(primary)
         .child(collection)

@@ -368,27 +368,32 @@ async fn review_inner(
             reason: "Auto-Review rules are disabled.".to_owned(),
         });
     }
-    let (small, lead) = if request.provider == Provider::Custom {
-        let (id, _) = beale_providers::split_qualified_model(request.model)?;
-        let definition = credentials
-            .custom_provider(id)?
-            .context("custom provider is unavailable")?;
-        (
-            beale_providers::qualified_model(id, &definition.small_model)?,
-            beale_providers::qualified_model(id, &definition.lead_model)?,
-        )
-    } else {
-        let defaults = credentials
-            .load_model_defaults(provider_name(request.provider), mode_name(request.mode))?;
-        if let Some(defaults) = defaults {
-            (defaults.small, defaults.lead)
+    let (small, lead) =
+        if request.provider == Provider::OpenAi && request.mode == AuthMode::Subscription {
+            // The active model has already been accepted for this subscription.
+            // A catalog-listed small model can still return 403 on the Codex route.
+            (request.model.to_owned(), request.model.to_owned())
+        } else if request.provider == Provider::Custom {
+            let (id, _) = beale_providers::split_qualified_model(request.model)?;
+            let definition = credentials
+                .custom_provider(id)?
+                .context("custom provider is unavailable")?;
+            (
+                beale_providers::qualified_model(id, &definition.small_model)?,
+                beale_providers::qualified_model(id, &definition.lead_model)?,
+            )
         } else {
-            let catalog = client
-                .list_models(request.provider, request.mode, credentials)
-                .await?;
-            (catalog.small_model, catalog.lead_model)
-        }
-    };
+            let defaults = credentials
+                .load_model_defaults(provider_name(request.provider), mode_name(request.mode))?;
+            if let Some(defaults) = defaults {
+                (defaults.small, defaults.lead)
+            } else {
+                let catalog = client
+                    .list_models(request.provider, request.mode, credentials)
+                    .await?;
+                (catalog.small_model, catalog.lead_model)
+            }
+        };
     let input = json!({"tool": request.name, "arguments": request.arguments,
         "workspace_context": request.workspace_context});
     ensure!(

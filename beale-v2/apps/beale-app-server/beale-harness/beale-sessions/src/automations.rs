@@ -100,15 +100,27 @@ async fn execute_claim(state: SessionState, claim: AutomationClaim) {
         graph_id,
         graph_models,
         graph_node_concurrency: graph_config.concurrency,
+        agent_role: String::new(),
     };
     let heartbeat_state = state.clone();
     let heartbeat_id = claim.run_id.clone();
+    let heartbeat_job_id = claim.job_id.clone();
+    let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
+    let stop_status = stop_rx.clone();
     let (lease_lost_tx, mut lease_lost_rx) = tokio::sync::oneshot::channel();
     let heartbeat = tokio::spawn(async move {
-        let mut timer = tokio::time::interval(Duration::from_secs(10));
+        let mut timer = tokio::time::interval(Duration::from_secs(2));
         timer.tick().await;
         loop {
             timer.tick().await;
+            if heartbeat_state
+                .db
+                .automation_job_canceled(&heartbeat_job_id)
+                .unwrap_or(true)
+            {
+                stop_tx.send_replace(true);
+                break;
+            }
             if !heartbeat_state
                 .db
                 .renew_automation_lease(&heartbeat_id, now_ms())
@@ -120,14 +132,16 @@ async fn execute_claim(state: SessionState, claim: AutomationClaim) {
         }
     });
     let outcome = tokio::select! {
-        result = run_turn(state.clone(), request, None) => Some(result),
+        result = run_turn(state.clone(), request, None, Some(stop_rx)) => Some(result),
         _ = &mut lease_lost_rx => None,
     };
     heartbeat.abort();
     let _ = heartbeat.await;
     let Some(outcome) = outcome else { return };
+    let canceled = *stop_status.borrow();
     let (session_id, status, error) = match outcome {
         Ok(detail) => match detail.summary {
+            Some(summary) if canceled => (Some(summary.id), 4, "Canceled by the user."),
             Some(summary) => (Some(summary.id), 2, ""),
             None => (None, 3, "The run completed without a saved session."),
         },

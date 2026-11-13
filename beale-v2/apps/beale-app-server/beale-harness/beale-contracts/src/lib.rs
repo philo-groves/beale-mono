@@ -808,6 +808,8 @@ pub mod v1 {
         pub duration_ms: u64,
         #[prost(message, repeated, tag = "6")]
         pub commentary: Vec<SessionCommentary>,
+        #[prost(string, tag = "7")]
+        pub agent_role: String,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -816,6 +818,8 @@ pub mod v1 {
         pub text: String,
         #[prost(uint32, tag = "2")]
         pub after_tool_count: u32,
+        #[prost(string, tag = "3")]
+        pub agent_role: String,
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq, ::prost::Enumeration)]
@@ -831,6 +835,9 @@ pub mod v1 {
         TurnCompleted = 7,
         SubagentsSpawned = 8,
         RunbookProgress = 9,
+        SessionStarted = 10,
+        AgentTurnCompleted = 11,
+        AgentStarted = 12,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -847,6 +854,10 @@ pub mod v1 {
         pub segment_index: u32,
         #[prost(message, optional, tag = "6")]
         pub runbook_progress: Option<RunbookProgress>,
+        #[prost(string, tag = "7")]
+        pub agent_role: String,
+        #[prost(message, optional, tag = "8")]
+        pub tool_detail: Option<SessionToolDetailPage>,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -867,6 +878,8 @@ pub mod v1 {
         pub text: String,
         #[prost(uint32, tag = "2")]
         pub after_tool_count: u32,
+        #[prost(string, tag = "3")]
+        pub agent_role: String,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -879,6 +892,8 @@ pub mod v1 {
         pub summary: String,
         #[prost(bool, tag = "4")]
         pub is_error: bool,
+        #[prost(string, tag = "5")]
+        pub agent_role: String,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -986,6 +1001,32 @@ pub mod v1 {
         /// All recorded calls in this session, independent of transcript pagination.
         #[prost(message, repeated, tag = "18")]
         pub model_usage: Vec<SessionModelUsage>,
+        #[prost(message, repeated, tag = "19")]
+        pub graph_agents: Vec<SessionGraphAgent>,
+        #[prost(message, repeated, tag = "20")]
+        pub graph_handoffs: Vec<SessionGraphHandoff>,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct SessionGraphAgent {
+        #[prost(string, tag = "1")]
+        pub role: String,
+        #[prost(string, tag = "2")]
+        pub status: String,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct SessionGraphHandoff {
+        #[prost(string, tag = "1")]
+        pub id: String,
+        #[prost(string, tag = "2")]
+        pub from_role: String,
+        #[prost(string, tag = "3")]
+        pub to_role: String,
+        #[prost(string, tag = "4")]
+        pub task: String,
+        #[prost(string, tag = "5")]
+        pub status: String,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1161,6 +1202,8 @@ pub mod v1 {
         pub graph_models: Vec<GraphNodeModel>,
         #[prost(message, repeated, tag = "14")]
         pub graph_node_concurrency: Vec<GraphNodeConcurrency>,
+        #[prost(string, tag = "15")]
+        pub agent_role: String,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1579,7 +1622,7 @@ pub mod v1 {
 }
 
 pub const PROTOCOL_MAJOR: u32 = 2;
-pub const PROTOCOL_MINOR: u32 = 16;
+pub const PROTOCOL_MINOR: u32 = 20;
 pub const SERVICE_NAME: &str = "beale-app-server";
 pub const HEALTH_PATH: &str = "/v1/health";
 pub const AUTH_STATUS_PATH: &str = "/v1/providers/status";
@@ -1617,6 +1660,8 @@ pub const QUICK_CHAT_DETAIL_PATH: &str = "/v1/quick-chats/{id}";
 pub const SESSION_TURNS_PATH: &str = "/v1/sessions/turns";
 pub const QUICK_CHAT_TURNS_PATH: &str = "/v1/quick-chats/turns";
 pub const SESSION_TURN_STREAM_PATH: &str = "/v1/sessions/turns/stream";
+pub const SESSION_TURN_STOP_PATH: &str = "/v1/sessions/turns/{id}/stop";
+pub const SESSION_TURN_ID_HEADER: &str = "x-beale-turn-id";
 pub const SESSION_TOOL_DETAIL_PATH: &str = "/v1/sessions/{id}/tools/{tool_id}";
 pub const AUTOMATIONS_PATH: &str = "/v1/automations";
 pub const AUTOMATIONS_CANCEL_PATH: &str = "/v1/automations/cancel";
@@ -1642,6 +1687,7 @@ pub const PLUGIN_SCOPE_PATH: &str = "/v1/plugins/scope";
 pub const PROTOBUF_CONTENT_TYPE: &str = "application/x-protobuf";
 pub const PROTOBUF_STREAM_CONTENT_TYPE: &str = "application/x-beale-protobuf-stream";
 pub const SESSION_STREAM_MAX_FRAME_BYTES: usize = 4_500_000;
+pub const SESSION_DETAIL_MAX_TOOL_SUMMARIES: usize = 4_096;
 
 pub fn session_stream_frame(event: &v1::SessionStreamEvent) -> Option<Vec<u8>> {
     use prost::Message;

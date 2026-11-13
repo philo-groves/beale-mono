@@ -3,6 +3,7 @@ use crate::{ThemeStyle, ui_font};
 use rune::{Color, El, Icon, col, el, icon, row, text};
 
 pub(crate) const CONTROL_HEIGHT: f32 = 32.0;
+pub(crate) const SIDENAV_ROW_HEIGHT: f32 = 36.0;
 pub(crate) const CARD_RADIUS: f32 = 12.0;
 pub(crate) const PAGE_GAP: f32 = 24.0;
 pub(crate) const TAB_ICON_SIZE: f32 = 15.0;

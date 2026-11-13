@@ -33,6 +33,7 @@ mod provider_icons;
 mod provider_models;
 mod provider_usage;
 mod quick_chat;
+mod research_header;
 mod runbook_canvas;
 mod session_insights;
 mod session_sidenav;
@@ -587,6 +588,7 @@ struct State {
     new_research_prompt: TextEdit,
     session_input_history: input_history::InputHistory,
     new_research_workspace_id: Option<String>,
+    research_workspace_view: Option<(uuid::Uuid, workspace_view::WorkspaceTab)>,
     new_research_model: Option<new_research::ModelSelection>,
     new_research_effort: new_research::Effort,
     new_research_repeat: new_research::RepeatPreset,
@@ -594,8 +596,8 @@ struct State {
     new_research_goal_max_turns: TextEdit,
     new_research_goal_max_duration_minutes: TextEdit,
     new_research_graph_id: String,
-    new_research_graph_models: [Option<Vec<new_research::ModelSelection>>; 4],
-    new_research_graph_concurrency: [Option<u32>; 4],
+    new_research_graph_models: [Option<Vec<new_research::ModelSelection>>; 10],
+    new_research_graph_concurrency: [Option<u32>; 10],
     graph_editor: Option<new_research::GraphEditor>,
     graph_editor_max_concurrent: TextEdit,
     quick_chat_open: bool,
@@ -626,10 +628,15 @@ struct State {
     active_session: Option<SessionDetail>,
     session_loading_id: Option<String>,
     session_busy: bool,
+    session_stop_id: Option<String>,
+    session_stopping: bool,
     session_error: String,
     session_pending_prompt: Option<String>,
+    session_pending_role: String,
     session_generation: u64,
     session_live_events: Vec<SessionStreamEvent>,
+    session_agent_role: String,
+    session_agent_tab_manual: bool,
     session_elapsed_ms: u64,
     session_turn_started: Option<Instant>,
     session_sidenav_visible: bool,
@@ -675,6 +682,9 @@ struct State {
     workspace_guidance_edit: TextEdit,
     workspace_surface_edits: Vec<WorkspaceSurface>,
     workspace_surface_pan: [f32; 2],
+    workspace_surface_zoom: f32,
+    workspace_surface_focus: workspace_surface_layout::Focus,
+    workspace_surface_query: TextEdit,
     workspace_surface_pan_origin: [f32; 2],
     workspace_surface_management_open: bool,
     workspace_surface_hovered: Option<usize>,
@@ -821,6 +831,7 @@ impl Default for State {
             new_research_prompt: TextEdit::new(""),
             session_input_history: input_history::InputHistory::default(),
             new_research_workspace_id: None,
+            research_workspace_view: None,
             new_research_model: None,
             new_research_effort: new_research::Effort::default(),
             new_research_repeat: new_research::RepeatPreset::default(),
@@ -830,7 +841,7 @@ impl Default for State {
             new_research_graph_id: beale_graphs::SIMPLE_ID.to_owned(),
             new_research_graph_models: std::array::from_fn(|_| None),
             new_research_graph_concurrency: std::array::from_fn(|index| {
-                beale_graphs::SIMPLE_GRAPH.nodes[index].default_max_concurrent()
+                if index == 0 { Some(1) } else { None }
             }),
             graph_editor: None,
             graph_editor_max_concurrent: TextEdit::new(""),
@@ -862,10 +873,15 @@ impl Default for State {
             active_session: None,
             session_loading_id: None,
             session_busy: false,
+            session_stop_id: None,
+            session_stopping: false,
             session_error: String::new(),
             session_pending_prompt: None,
+            session_pending_role: String::new(),
             session_generation: 0,
             session_live_events: Vec::new(),
+            session_agent_role: "main".to_owned(),
+            session_agent_tab_manual: false,
             session_elapsed_ms: 0,
             session_turn_started: None,
             session_sidenav_visible: false,
@@ -911,6 +927,9 @@ impl Default for State {
             workspace_guidance_edit: TextEdit::new(""),
             workspace_surface_edits: Vec::new(),
             workspace_surface_pan: [0.0; 2],
+            workspace_surface_zoom: 1.0,
+            workspace_surface_focus: workspace_surface_layout::Focus::All,
+            workspace_surface_query: TextEdit::new(""),
             workspace_surface_pan_origin: [0.0; 2],
             workspace_surface_management_open: false,
             workspace_surface_hovered: None,
@@ -1165,7 +1184,14 @@ impl State {
                     PrimaryView::Home
                 };
             }
-            ViewLocation::NewResearch => self.primary_view = PrimaryView::NewResearch,
+            ViewLocation::NewResearch => {
+                if self.primary_view == PrimaryView::Workspace {
+                    self.research_workspace_view =
+                        self.workspace_id.map(|id| (id, self.workspace_tab));
+                }
+                self.primary_view = PrimaryView::NewResearch;
+                self.research_workspace_view = research_header::workspace(self);
+            }
             ViewLocation::WorkspaceCreation(tab) => {
                 self.primary_view = PrimaryView::WorkspaceCreation;
                 self.workspace_draft.tab = if tab == workspace_creation::CreationTab::Surfaces
@@ -1189,6 +1215,12 @@ impl State {
                     && !extensions_view::findings_enabled(self, &id.to_string())
                 {
                     self.workspace_tab = workspace_view::WorkspaceTab::Rules;
+                }
+                if self
+                    .research_workspace_view
+                    .is_some_and(|(workspace, _)| workspace == id)
+                {
+                    self.research_workspace_view = Some((id, self.workspace_tab));
                 }
                 if self.workspace_id != Some(id) {
                     self.workspace_id = Some(id);
@@ -1348,6 +1380,8 @@ impl State {
         self.session_input_history.reset();
         self.clear_tool_detail();
         self.session_live_events.clear();
+        self.session_agent_role = "main".to_owned();
+        self.session_agent_tab_manual = false;
         self.session_elapsed_ms = 0;
         self.session_turn_started = None;
         self.session_sidenav_visible = false;
@@ -1364,7 +1398,10 @@ impl State {
         if had_session || was_loading {
             self.session_generation = self.session_generation.wrapping_add(1);
             self.session_busy = false;
+            self.session_stop_id = None;
+            self.session_stopping = false;
             self.session_pending_prompt = None;
+            self.session_pending_role.clear();
             self.session_error.clear();
             self.new_research_prompt.clear();
             self.new_research_goal_mode = false;
@@ -1373,14 +1410,16 @@ impl State {
         }
         self.new_research_graph_id = beale_graphs::SIMPLE_ID.to_owned();
         self.new_research_graph_models = std::array::from_fn(|_| None);
-        self.new_research_graph_concurrency = std::array::from_fn(|index| {
-            beale_graphs::SIMPLE_GRAPH.nodes[index].default_max_concurrent()
-        });
+        self.new_research_graph_concurrency =
+            std::array::from_fn(|index| if index == 0 { Some(1) } else { None });
         self.graph_editor = None;
         self.graph_editor_max_concurrent.clear();
-        self.new_research_workspace_id = self
-            .selected_research_workspace()
-            .map(|item| item.id.clone());
+        self.new_research_workspace_id = if self.primary_view == PrimaryView::Workspace {
+            self.workspace_id.map(|id| id.to_string())
+        } else {
+            self.selected_research_workspace()
+                .map(|item| item.id.clone())
+        };
         self.navigate_to(ViewLocation::NewResearch);
     }
 
@@ -1394,6 +1433,8 @@ impl State {
             return;
         }
         self.session_busy = false;
+        self.session_stop_id = None;
+        self.session_stopping = false;
         self.session_turn_started = None;
         self.session_elapsed_ms = 0;
         match result {
@@ -1409,13 +1450,22 @@ impl State {
                 self.active_session = Some(detail);
                 runbook_canvas::refresh(self);
                 self.session_pending_prompt = None;
+                self.session_pending_role.clear();
                 self.session_error.clear();
             }
             Err(error) => {
                 self.session_error = error;
+                if !self.session_live_events.is_empty() {
+                    self.session_work_expanded.insert(
+                        self.active_session
+                            .as_ref()
+                            .map_or(0, |detail| detail.messages.len()),
+                    );
+                }
                 if let Some(prompt) = self.session_pending_prompt.take() {
                     self.new_research_prompt = TextEdit::new(prompt);
                 }
+                self.session_pending_role.clear();
             }
         }
     }
@@ -1426,16 +1476,19 @@ impl State {
         }
         self.session_loading_id = None;
         self.session_busy = false;
-        self.session_live_events.clear();
-        self.session_work_expanded.clear();
-        self.session_usage_menu = None;
-        self.session_usage_row_hovered = None;
-        self.session_usage_popup_hovered = false;
-        self.session_usage_snapshot_index = 0;
-        self.session_insights_open = false;
-        self.session_runbook_expanded = [false; 3];
+        self.session_stop_id = None;
+        self.session_stopping = false;
         match result {
             Ok(detail) => {
+                self.session_live_events.clear();
+                self.session_agent_tab_manual = false;
+                self.session_work_expanded.clear();
+                self.session_usage_menu = None;
+                self.session_usage_row_hovered = None;
+                self.session_usage_popup_hovered = false;
+                self.session_usage_snapshot_index = 0;
+                self.session_insights_open = false;
+                self.session_runbook_expanded = [false; 3];
                 self.open_session_sidenav_for_activity(&detail);
                 self.clear_tool_detail();
                 if let Some(summary) = &detail.summary {
@@ -1453,10 +1506,36 @@ impl State {
                     });
                 }
                 self.active_session = Some(detail);
+                if let Some(role) = self.active_session.as_ref().and_then(|detail| {
+                    detail
+                        .messages
+                        .iter()
+                        .rev()
+                        .find(|message| !message.agent_role.is_empty())
+                }) {
+                    self.session_agent_role = role.agent_role.clone();
+                } else if let Some(role) = self
+                    .active_session
+                    .as_ref()
+                    .and_then(|detail| beale_graphs::entry_role(&detail.graph_id))
+                {
+                    self.session_agent_role = role.id().to_owned();
+                }
+                let role = self.session_agent_role.clone();
+                research_header::sync_model_for_role(self, &role);
                 self.new_research_prompt.clear();
                 self.session_error.clear();
             }
-            Err(error) => self.session_error = error,
+            Err(error) => {
+                self.session_error = error;
+                if !self.session_live_events.is_empty() {
+                    self.session_work_expanded.insert(
+                        self.active_session
+                            .as_ref()
+                            .map_or(0, |detail| detail.messages.len()),
+                    );
+                }
+            }
         }
     }
 
@@ -1464,10 +1543,62 @@ impl State {
         if self.session_generation != generation || !self.session_busy {
             return;
         }
+        let graph_id = self
+            .active_session
+            .as_ref()
+            .map_or(self.new_research_graph_id.as_str(), |detail| {
+                detail.graph_id.as_str()
+            });
+        if !self.session_agent_tab_manual
+            && matches!(
+                graph_id,
+                beale_graphs::CLOUDFLARE_ID | beale_graphs::OPENAI_ID
+            )
+            && beale_graphs::Role::from_id(&event.agent_role)
+                .is_some_and(|role| role.is_top_level())
+        {
+            self.session_agent_role = event.agent_role.clone();
+            research_header::sync_model_for_role(self, &event.agent_role);
+        }
         match SessionStreamKind::try_from(event.kind) {
+            Ok(
+                SessionStreamKind::SessionStarted
+                | SessionStreamKind::AgentStarted
+                | SessionStreamKind::AgentTurnCompleted,
+            ) => {
+                let completed_role = event.agent_role.clone();
+                if let Some(detail) = event.detail {
+                    if let Some(summary) = &detail.summary {
+                        self.session_summaries.retain(|item| item.id != summary.id);
+                        self.session_summaries.insert(0, summary.clone());
+                        self.new_research_workspace_id = Some(summary.workspace_id.clone());
+                    }
+                    if event.kind == SessionStreamKind::AgentTurnCompleted as i32 {
+                        self.session_live_events
+                            .retain(|item| item.agent_role != completed_role);
+                        if self.session_pending_prompt.as_ref().is_some_and(|prompt| {
+                            detail.messages.iter().any(|message| {
+                                message.role == beale_contracts::v1::SessionRole::User as i32
+                                    && message.agent_role == self.session_pending_role
+                                    && message.text == *prompt
+                            })
+                        }) {
+                            self.session_pending_prompt = None;
+                            self.session_pending_role.clear();
+                        }
+                    }
+                    self.open_session_sidenav_for_activity(&detail);
+                    self.active_session = Some(detail);
+                    if !self.session_agent_tab_manual {
+                        research_header::sync_model_for_role(self, &completed_role);
+                    }
+                }
+            }
             Ok(SessionStreamKind::MessageDelta | SessionStreamKind::ReasoningDelta) => {
                 if let Some(existing) = self.session_live_events.iter_mut().rev().find(|item| {
-                    item.kind == event.kind && item.segment_index == event.segment_index
+                    item.kind == event.kind
+                        && item.segment_index == event.segment_index
+                        && item.agent_role == event.agent_role
                 }) {
                     if existing.text.len().saturating_add(event.text.len()) <= 2_097_152 {
                         existing.text.push_str(&event.text);
@@ -1496,14 +1627,23 @@ impl State {
                 if session_sidenav::campaign_activity_event(&event) {
                     self.activate_session_sidenav();
                 }
-                if let Some(tool) = event.tool
-                    && let Some(existing) =
+                if let Some(tool_id) = event.tool.as_ref().map(|tool| tool.id.clone()) {
+                    if let Some(existing) =
                         self.session_live_events.iter_mut().rev().find(|item| {
-                            item.tool.as_ref().is_some_and(|prior| prior.id == tool.id)
+                            item.tool.as_ref().is_some_and(|prior| prior.id == tool_id)
                         })
-                {
-                    existing.kind = SessionStreamKind::ToolFinished as i32;
-                    existing.tool = Some(tool);
+                    {
+                        existing.kind = SessionStreamKind::ToolFinished as i32;
+                        existing.tool = event.tool.clone();
+                        existing.tool_detail = event.tool_detail.clone();
+                    } else {
+                        self.session_live_events.push(event.clone());
+                    }
+                    if self.expanded_tool_id.as_deref() == Some(tool_id.as_str()) {
+                        self.tool_detail = event.tool_detail;
+                        self.tool_detail_busy = false;
+                        self.tool_detail_error.clear();
+                    }
                 }
                 if refresh_runbook {
                     runbook_canvas::refresh(self);
@@ -1531,6 +1671,7 @@ impl State {
                     self.session_elapsed_ms = 0;
                     self.session_turn_started = Some(Instant::now());
                     self.session_pending_prompt = None;
+                    self.session_pending_role.clear();
                     self.open_session_sidenav_for_activity(&detail);
                     if let Some(summary) = &detail.summary {
                         self.session_summaries.retain(|item| item.id != summary.id);
@@ -1538,6 +1679,17 @@ impl State {
                         self.new_research_workspace_id = Some(summary.workspace_id.clone());
                     }
                     self.active_session = Some(detail);
+                    if !self.session_agent_tab_manual
+                        && let Some(role) = self.active_session.as_ref().and_then(|detail| {
+                            detail
+                                .messages
+                                .iter()
+                                .rev()
+                                .find(|message| !message.agent_role.is_empty())
+                        })
+                    {
+                        self.session_agent_role = role.agent_role.clone();
+                    }
                     runbook_canvas::refresh(self);
                 }
             }
@@ -1779,6 +1931,9 @@ impl State {
                 self.workspace_guidance_edit = TextEdit::new(&sections.details.guidance);
                 self.workspace_surface_edits = sections.details.surfaces.clone();
                 self.workspace_surface_pan = [0.0; 2];
+                self.workspace_surface_zoom = 1.0;
+                self.workspace_surface_focus = workspace_surface_layout::Focus::All;
+                self.workspace_surface_query.clear();
                 self.workspace_surface_pan_origin = [0.0; 2];
                 self.workspace_surface_management_open = false;
                 self.workspace_surface_hovered = None;
@@ -2064,12 +2219,18 @@ fn start_session_turn(state: &mut State) {
     } else {
         String::new()
     };
-    let graph_models = if graph_id == beale_graphs::SIMPLE_ID {
+    if !graph_id.is_empty() {
+        state.session_agent_role = beale_graphs::entry_role(&graph_id)
+            .unwrap_or(beale_graphs::Role::Main)
+            .id()
+            .to_owned();
+    }
+    let graph_models = if !graph_id.is_empty() {
         new_research::graph_model_config(state)
     } else {
         Vec::new()
     };
-    let graph_node_concurrency = if graph_id == beale_graphs::SIMPLE_ID {
+    let graph_node_concurrency = if !graph_id.is_empty() {
         new_research::graph_concurrency_config(state)
     } else {
         Vec::new()
@@ -2089,15 +2250,36 @@ fn start_session_turn(state: &mut State) {
         graph_id,
         graph_models,
         graph_node_concurrency,
+        agent_role: if let Some(detail) = &state.active_session {
+            if matches!(
+                detail.graph_id.as_str(),
+                beale_graphs::CLOUDFLARE_ID | beale_graphs::OPENAI_ID
+            ) {
+                research_header::selected_role(state, &detail.graph_id)
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        },
     };
     state.session_generation = state.session_generation.wrapping_add(1);
     let generation = state.session_generation;
     state.session_busy = true;
+    let turn_id = uuid::Uuid::new_v4().to_string();
+    state.session_stop_id = Some(turn_id.clone());
+    state.session_stopping = false;
     state.session_error.clear();
     state.session_live_events.clear();
+    state.session_agent_tab_manual = false;
     state.session_elapsed_ms = 0;
     state.session_turn_started = Some(Instant::now());
     state.session_pending_prompt = Some(prompt);
+    state.session_pending_role = if request.agent_role.is_empty() {
+        state.session_agent_role.clone()
+    } else {
+        request.agent_role.clone()
+    };
     state.new_research_prompt.clear();
     state.session_input_history.reset();
     let timer_running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
@@ -2132,6 +2314,7 @@ fn start_session_turn(state: &mut State) {
                 &client,
                 addr,
                 request,
+                &turn_id,
                 move |event| {
                     progress_handle
                         .update(move |state, _| state.apply_session_progress(generation, event));
@@ -2140,6 +2323,42 @@ fn start_session_turn(state: &mut State) {
         })();
         timer_running.store(false, std::sync::atomic::Ordering::Relaxed);
         handle.update(move |state, _| state.finish_session_turn(generation, result));
+    });
+}
+
+fn stop_session_turn(state: &mut State) {
+    if !state.session_busy || state.session_stopping {
+        return;
+    }
+    let Some(turn_id) = state.session_stop_id.clone() else {
+        return;
+    };
+    let Some(handle) = AUTH_HANDLE.get().cloned() else {
+        state.session_error = "Desktop connection is not ready.".to_owned();
+        return;
+    };
+    let generation = state.session_generation;
+    state.session_stopping = true;
+    std::thread::spawn(move || {
+        let result = (|| {
+            let addr = connection::configured_addr()
+                .map_err(|_| "Invalid local app-server address".to_owned())?;
+            let client = sessions::client()?;
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|_| "Could not initialize session connection".to_owned())?;
+            runtime.block_on(sessions::stop_turn(&client, addr, &turn_id))
+        })();
+        handle.update(move |state, _| {
+            if state.session_generation != generation || !state.session_busy {
+                return;
+            }
+            if let Err(error) = result {
+                state.session_stopping = false;
+                state.session_error = error;
+            }
+        });
     });
 }
 
@@ -2156,6 +2375,8 @@ fn start_session_load(state: &mut State, id: String) {
     let generation = state.session_generation;
     state.session_loading_id = Some(id.clone());
     state.session_busy = true;
+    state.session_stop_id = None;
+    state.session_stopping = false;
     state.session_sidenav_visible = false;
     state.session_sidenav_triggered = false;
     state.session_usage_menu = None;
@@ -2167,12 +2388,21 @@ fn start_session_load(state: &mut State, id: String) {
     state.session_elapsed_ms = 0;
     state.session_error.clear();
     state.session_pending_prompt = None;
+    state.session_pending_role.clear();
     state.new_research_workspace_id = state
         .session_summaries
         .iter()
         .find(|summary| summary.id == id)
         .map(|summary| summary.workspace_id.clone());
-    state.active_session = None;
+    if state
+        .active_session
+        .as_ref()
+        .and_then(|detail| detail.summary.as_ref())
+        .is_none_or(|summary| summary.id != id)
+    {
+        state.active_session = None;
+        state.session_live_events.clear();
+    }
     state.new_research_prompt.clear();
     state.session_input_history.reset();
     state.navigate_to(ViewLocation::NewResearch);
@@ -2400,7 +2630,16 @@ fn toggle_tool_detail(state: &mut State, id: String) {
     }
     state.clear_tool_detail();
     state.expanded_tool_id = Some(id.clone());
-    load_tool_detail_page(state, id, 0);
+    if let Some(detail) = state
+        .session_live_events
+        .iter()
+        .rev()
+        .find_map(|event| event.tool_detail.as_ref().filter(|detail| detail.id == id))
+    {
+        state.tool_detail = Some(detail.clone());
+    } else {
+        load_tool_detail_page(state, id, 0);
+    }
 }
 
 fn load_tool_detail_page(state: &mut State, id: String, offset: u64) {
@@ -3063,6 +3302,11 @@ fn selection_menu_items(state: &State, menu: SelectionMenu) -> Vec<in_place_menu
         }],
         SelectionMenu::SessionGraph => [
             (beale_graphs::SIMPLE_ID, beale_graphs::SIMPLE_NAME),
+            (
+                beale_graphs::CLOUDFLARE_ID,
+                beale_graphs::CLOUDFLARE_GRAPH.name,
+            ),
+            (beale_graphs::OPENAI_ID, beale_graphs::OPENAI_GRAPH.name),
             ("", "No Graph"),
         ]
         .into_iter()
@@ -3705,7 +3949,7 @@ fn canvas_width(window_width: f32, sidenav_width: f32) -> f32 {
     )
 }
 
-fn header(state: &State, prefix_width: f32) -> El {
+fn header(state: &State, prefix_width: f32, window_width: f32) -> El {
     let theme = state.appearance.style();
     let color = |value| theme.color(value);
     let mut left = row()
@@ -3877,7 +4121,9 @@ fn header(state: &State, prefix_width: f32) -> El {
         .center_y()
         .gap(10.0)
         .window_drag();
-    if state.primary_view != PrimaryView::Home {
+    if let Some(tabs) = research_header::tabs(state, theme, window_width) {
+        title_area = title_area.child(tabs);
+    } else if state.primary_view != PrimaryView::Home {
         title_area = title_area.child(title);
     }
     let mut bar = row()
@@ -4119,7 +4365,7 @@ fn settings_nav_button(spec: &SettingsSectionSpec, active: bool, theme: ThemeSty
         .role("button")
         .label(format!("{} settings", spec.label))
         .w_full()
-        .h(36.0)
+        .h(design::SIDENAV_ROW_HEIGHT)
         .px(8.0)
         .center_y()
         .gap(12.0)
@@ -5953,7 +6199,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
                     ],
                 ),
         )
-        .child(header(state, header_prefix_width))
+        .child(header(state, header_prefix_width, window_width))
         .child(body);
     window = window.child(surface);
     if state.quick_chat_open {
@@ -6711,6 +6957,14 @@ fn main() -> std::process::ExitCode {
                     }
                     if state.primary_view == PrimaryView::Tracking {
                         tracking_view::start_load(state);
+                    }
+                    if state.primary_view == PrimaryView::Workspace
+                        && state.workspace_tab == workspace_view::WorkspaceTab::Findings
+                        && !state.workspace_findings.loading
+                        && let Some(id) = state.workspace_id
+                        && extensions_view::findings_enabled(state, &id.to_string())
+                    {
+                        findings_view::start_load(state, id);
                     }
                 });
             }
@@ -8989,7 +9243,18 @@ mod tests {
         assert!(runtime.find("new-research-graph-agent-icon-main").is_some());
         assert_eq!(
             runtime.state.new_research_graph_concurrency,
-            [Some(1), None, None, None]
+            [
+                Some(1),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None
+            ]
         );
         let (x, y) = runtime.find("new-research-graph-node-scout").unwrap();
         runtime.pointer_down(x, y);
@@ -9054,7 +9319,7 @@ mod tests {
             runtime.state.selection_menu,
             Some(SelectionMenu::SessionGraph)
         );
-        let (x, y) = runtime.find("selection-menu-item-1").unwrap();
+        let (x, y) = runtime.find("selection-menu-item-3").unwrap();
         runtime.pointer_down(x, y);
         runtime.pointer_up(x, y);
         runtime.frame(0.2);
@@ -9255,6 +9520,69 @@ mod tests {
     }
 
     #[test]
+    fn peer_graphs_render_every_role_at_wide_and_narrow_widths() {
+        for (variant, graph) in [
+            ("graph-cloudflare", &beale_graphs::CLOUDFLARE_GRAPH),
+            ("graph-openai", &beale_graphs::OPENAI_GRAPH),
+        ] {
+            for width in [1200.0, 600.0] {
+                let state = visual_preview::fixture(variant);
+                let mut runtime = Runtime::new(state, view, (width, 800.0), Env::new(true, 1.0));
+                runtime.frame(0.0);
+                let (stage, _) = runtime
+                    .presented(&format!("new-research-{}-graph", graph.id))
+                    .unwrap();
+                for role in graph.nodes {
+                    let (node, _) = runtime
+                        .presented(&format!("new-research-graph-node-{}", role.id()))
+                        .unwrap();
+                    assert!(
+                        node[0] >= stage[0] - 1.0 && node[0] + node[2] <= stage[0] + stage[2] + 1.0,
+                        "{} at {width}",
+                        role.id()
+                    );
+                    assert!(
+                        node[1] >= stage[1] - 1.0 && node[1] + node[3] <= stage[1] + stage[3] + 1.0,
+                        "{} at {width}",
+                        role.id()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn peer_graph_configs_include_each_top_level_model_and_limit() {
+        for variant in ["graph-cloudflare", "graph-openai"] {
+            let state = visual_preview::fixture(variant);
+            let graph = beale_graphs::graph_definition(&state.new_research_graph_id).unwrap();
+            let models = new_research::graph_model_config(&state);
+            let limits = new_research::graph_concurrency_config(&state);
+            assert_eq!(models.len(), graph.nodes.len());
+            assert!(
+                models
+                    .iter()
+                    .all(|model| graph.nodes.iter().any(|role| role.id() == model.node_id))
+            );
+            for role in graph.nodes.iter().filter(|role| role.is_top_level()) {
+                assert_eq!(
+                    models
+                        .iter()
+                        .filter(|model| model.node_id == role.id())
+                        .count(),
+                    1
+                );
+                assert!(
+                    limits
+                        .iter()
+                        .any(|limit| limit.node_id == role.id() && limit.max_concurrent == 1)
+                );
+            }
+            assert!(models.iter().all(|model| model.node_id != "main"));
+        }
+    }
+
+    #[test]
     fn new_research_heading_does_not_require_graphs() {
         let state = State {
             primary_view: PrimaryView::NewResearch,
@@ -9376,6 +9704,8 @@ mod tests {
             token_usage: None,
             usage_snapshots: Vec::new(),
             model_usage: Vec::new(),
+            graph_agents: Vec::new(),
+            graph_handoffs: Vec::new(),
             runbook_count: 0,
             active_runbook_count: 0,
             runbooks: Vec::new(),
@@ -9389,6 +9719,7 @@ mod tests {
                 tool: None,
                 detail: Some(detail),
                 segment_index: 0,
+                ..Default::default()
             },
         );
         assert!(state.session_busy);
@@ -9527,6 +9858,54 @@ mod tests {
     }
 
     #[test]
+    fn failed_reload_keeps_the_open_session_and_live_activity() {
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let mut state = State {
+            session_generation: 1,
+            session_loading_id: Some(session_id.clone()),
+            session_busy: true,
+            active_session: Some(SessionDetail {
+                summary: Some(SessionSummary {
+                    id: session_id,
+                    workspace_id: uuid::Uuid::new_v4().to_string(),
+                    title: "Example Session".to_owned(),
+                    last_message_at_ms: 1,
+                }),
+                ..Default::default()
+            }),
+            session_live_events: vec![SessionStreamEvent {
+                kind: SessionStreamKind::ReasoningDelta as i32,
+                text: "Example progress".to_owned(),
+                segment_index: 1,
+                ..Default::default()
+            }],
+            ..State::default()
+        };
+        state.finish_session_load(1, Err("Invalid app-server session detail".to_owned()));
+        assert!(state.active_session.is_some());
+        assert_eq!(state.session_live_events.len(), 1);
+        assert!(state.session_work_expanded.contains(&0));
+        assert_eq!(state.session_error, "Invalid app-server session detail");
+    }
+
+    #[test]
+    fn failed_turn_keeps_live_activity_expanded() {
+        let mut state = State {
+            session_generation: 1,
+            session_busy: true,
+            session_live_events: vec![SessionStreamEvent {
+                kind: SessionStreamKind::ToolStarted as i32,
+                ..Default::default()
+            }],
+            ..State::default()
+        };
+        state.finish_session_turn(1, Err("Example provider failure".to_owned()));
+        assert!(state.session_work_expanded.contains(&0));
+        assert_eq!(state.session_live_events.len(), 1);
+        assert_eq!(state.session_error, "Example provider failure");
+    }
+
+    #[test]
     fn completed_turn_reuses_the_draft_view_and_replaces_the_new_session_row() {
         let workspace_id = "00000000-0000-4000-8000-000000000001";
         let session_id = "00000000-0000-4000-8000-000000000002";
@@ -9558,6 +9937,7 @@ mod tests {
                     reasoning_summaries: Vec::new(),
                     duration_ms: 0,
                     commentary: Vec::new(),
+                    agent_role: String::new(),
                 },
                 beale_contracts::v1::SessionMessage {
                     role: beale_contracts::v1::SessionRole::Assistant as i32,
@@ -9566,6 +9946,7 @@ mod tests {
                     reasoning_summaries: Vec::new(),
                     duration_ms: 1_234,
                     commentary: Vec::new(),
+                    agent_role: "main".to_owned(),
                 },
             ],
             provider: ProviderId::Openai as i32,
@@ -9581,6 +9962,8 @@ mod tests {
             token_usage: None,
             usage_snapshots: Vec::new(),
             model_usage: Vec::new(),
+            graph_agents: Vec::new(),
+            graph_handoffs: Vec::new(),
             runbook_count: 0,
             active_runbook_count: 0,
             runbooks: Vec::new(),
@@ -9698,6 +10081,8 @@ mod tests {
                     token_usage: None,
                     usage_snapshots: Vec::new(),
                     model_usage: Vec::new(),
+                    graph_agents: Vec::new(),
+                    graph_handoffs: Vec::new(),
                     runbook_count: 0,
                     active_runbook_count: 0,
                     runbooks: Vec::new(),
@@ -9804,6 +10189,7 @@ mod tests {
                     reasoning_summaries: Vec::new(),
                     duration_ms: 1_000,
                     commentary: Vec::new(),
+                    agent_role: "main".to_owned(),
                 }],
                 provider: ProviderId::Openai as i32,
                 method: AuthMethod::ApiKey as i32,
@@ -9818,6 +10204,8 @@ mod tests {
                 token_usage: None,
                 usage_snapshots: Vec::new(),
             model_usage: Vec::new(),
+graph_agents: Vec::new(),
+graph_handoffs: Vec::new(),
 runbook_count: 0,
 active_runbook_count: 0,
             runbooks: Vec::new(),
@@ -9830,6 +10218,7 @@ active_runbook_count: 0,
                 tool: None,
                 detail: None,
                 segment_index: 0,
+                ..Default::default()
             }],
             ..State::default()
         };
@@ -9876,6 +10265,7 @@ active_runbook_count: 0,
                     reasoning_summaries: Vec::new(),
                     duration_ms: 0,
                     commentary: Vec::new(),
+                    agent_role: String::new(),
                 }],
                 provider: ProviderId::Openai as i32,
                 method: AuthMethod::ApiKey as i32,
@@ -9890,6 +10280,8 @@ active_runbook_count: 0,
                 token_usage: None,
                 usage_snapshots: Vec::new(),
             model_usage: Vec::new(),
+graph_agents: Vec::new(),
+graph_handoffs: Vec::new(),
 runbook_count: 0,
 active_runbook_count: 0,
             runbooks: Vec::new(),
@@ -9940,16 +10332,20 @@ active_runbook_count: 0,
                         name: "read".to_owned(),
                         summary: "Read example.txt".to_owned(),
                         is_error: false,
+                        agent_role: "main".to_owned(),
                     }],
                     reasoning_summaries: vec![beale_contracts::v1::SessionReasoningSummary {
                         text: "Checking the example file.".to_owned(),
                         after_tool_count: 0,
+                        agent_role: "main".to_owned(),
                     }],
                     duration_ms: 2_345,
                     commentary: vec![beale_contracts::v1::SessionCommentary {
                         text: "Reading the example file.".to_owned(),
                         after_tool_count: 0,
+                        agent_role: "main".to_owned(),
                     }],
+                    agent_role: "main".to_owned(),
                 }],
                 provider: ProviderId::Openai as i32,
                 method: AuthMethod::ApiKey as i32,
@@ -9964,6 +10360,8 @@ active_runbook_count: 0,
                 token_usage: None,
                 usage_snapshots: Vec::new(),
                 model_usage: Vec::new(),
+                graph_agents: Vec::new(),
+                graph_handoffs: Vec::new(),
                 runbook_count: 0,
                 active_runbook_count: 0,
                 runbooks: Vec::new(),
@@ -9974,7 +10372,13 @@ active_runbook_count: 0,
         runtime.frame(0.0);
         assert!(runtime.find("session-work-header-0").is_some());
         assert!(runtime.find("session-message-0").is_some());
-        assert!(runtime.find("session-reasoning-0-0").is_none());
+        assert!(runtime.find("session-reasoning-0-0").is_some());
+        assert!(runtime.find("session-commentary-0-0").is_some());
+        assert!(
+            runtime
+                .find(&format!("session-tool-button-{tool_id}"))
+                .is_none()
+        );
         let (x, y) = runtime.find("session-work-header-0").unwrap();
         runtime.pointer_down(x, y);
         runtime.pointer_up(x, y);
@@ -10017,10 +10421,12 @@ active_runbook_count: 0,
             name: "read".to_owned(),
             summary: "Read example.txt".to_owned(),
             is_error: false,
+            agent_role: "main".to_owned(),
         };
         let mut state = State {
             primary_view: PrimaryView::NewResearch,
             session_busy: true,
+            session_stop_id: Some("00000000-0000-4000-8000-000000000004".to_owned()),
             session_generation: 7,
             session_pending_prompt: Some("Inspect example.txt".to_owned()),
             ..State::default()
@@ -10035,6 +10441,7 @@ active_runbook_count: 0,
                     tool: None,
                     detail: None,
                     segment_index: 1,
+                    ..Default::default()
                 },
             );
         }
@@ -10047,6 +10454,13 @@ active_runbook_count: 0,
                 tool: Some(tool.clone()),
                 detail: None,
                 segment_index: 0,
+                tool_detail: Some(SessionToolDetailPage {
+                    id: "00000000-0000-4000-8000-000000000003".to_owned(),
+                    name: "read".to_owned(),
+                    arguments: "{\"path\":\"example.txt\"}".to_owned(),
+                    ..Default::default()
+                }),
+                ..Default::default()
             },
         );
         state.apply_session_progress(
@@ -10058,6 +10472,16 @@ active_runbook_count: 0,
                 tool: Some(tool),
                 detail: None,
                 segment_index: 0,
+                tool_detail: Some(SessionToolDetailPage {
+                    id: "00000000-0000-4000-8000-000000000003".to_owned(),
+                    name: "read".to_owned(),
+                    arguments: "{\"path\":\"example.txt\"}".to_owned(),
+                    output: "Example result".to_owned(),
+                    next_offset: 14,
+                    total_bytes: 14,
+                    ..Default::default()
+                }),
+                ..Default::default()
             },
         );
         state.apply_session_progress(
@@ -10069,6 +10493,7 @@ active_runbook_count: 0,
                 tool: None,
                 detail: None,
                 segment_index: 1,
+                ..Default::default()
             },
         );
         assert_eq!(state.session_live_events.len(), 2);
@@ -10079,12 +10504,23 @@ active_runbook_count: 0,
         );
         let mut runtime = Runtime::new(state, view, (840.0, 600.0), Env::new(true, 1.0));
         runtime.frame(0.0);
+        assert!(runtime.find("new-research-stop").is_some());
         assert!(runtime.find("session-current-work-header").is_some());
         assert!(runtime.find("session-live-reasoning-0").is_some());
         assert!(
             runtime
-                .find("session-live-tool-00000000-0000-4000-8000-000000000003")
+                .find("session-tool-00000000-0000-4000-8000-000000000003")
                 .is_some()
+        );
+        let (x, y) = runtime
+            .find("session-tool-button-00000000-0000-4000-8000-000000000003")
+            .unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+        assert_eq!(
+            runtime.state.tool_detail.as_ref().unwrap().output,
+            "Example result"
         );
     }
 
@@ -10513,7 +10949,7 @@ active_runbook_count: 0,
                 let (node_x, node_y) = loaded.find("workspace-surface-node-0").unwrap();
                 loaded.pointer_move(node_x, node_y);
                 loaded.frame(1.0 / 60.0);
-                assert!(loaded.find("workspace-surface-name-0").is_some());
+                assert!(loaded.find("workspace-surface-visible-name-0").is_some());
                 loaded.pointer_down(node_x, node_y);
                 loaded.pointer_up(node_x, node_y);
                 loaded.frame(1.0 / 60.0);
@@ -10795,6 +11231,159 @@ active_runbook_count: 0,
     }
 
     #[test]
+    fn surface_overview_filters_preserve_topology_and_fit_resets_pan() {
+        use workspace_surface_layout::Focus;
+        let state = visual_preview::fixture("surfaces");
+        let mut runtime = Runtime::new(state, view, (1440.0, 960.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        let original = runtime.presented("workspace-surface-node-0").unwrap().0;
+        let click = |runtime: &mut Runtime<State>, key: &str| {
+            let (x, y) = runtime.find(key).unwrap();
+            runtime.pointer_down(x, y);
+            runtime.pointer_up(x, y);
+            runtime.frame(1.0);
+        };
+        click(&mut runtime, "workspace-surface-focus-Review");
+        assert_eq!(runtime.state.workspace_surface_focus, Focus::Review);
+        assert_eq!(
+            runtime.presented("workspace-surface-node-0").unwrap().0,
+            original
+        );
+        let elements = runtime.elements();
+        let opacity = |key: &str| {
+            elements
+                .iter()
+                .find(|el| el.key.as_deref() == Some(key))
+                .unwrap()
+                .opacity
+        };
+        assert!(opacity("workspace-surface-node-0") < opacity("workspace-surface-node-2"));
+        assert!(
+            elements
+                .iter()
+                .any(|el| el.text.as_deref() == Some("7 connections · 3 of 8 match"))
+        );
+        click(&mut runtime, "workspace-surface-search");
+        runtime.paste("no-such-example");
+        runtime.frame(0.0);
+        assert!(runtime.find("workspace-surface-clear-filters").is_some());
+        click(&mut runtime, "workspace-surface-clear-filters");
+        assert_eq!(runtime.state.workspace_surface_focus, Focus::All);
+        assert!(runtime.state.workspace_surface_query.text.is_empty());
+        click(&mut runtime, "workspace-surface-zoom-in");
+        assert!(runtime.presented("workspace-surface-node-0").unwrap().0[2] > original[2]);
+        runtime.update(|state, tx| {
+            tx.instant();
+            state.workspace_surface_pan = [100.0, -80.0];
+        });
+        runtime.frame(0.0);
+        click(&mut runtime, "workspace-surface-fit");
+        assert_eq!(runtime.state.workspace_surface_pan, [0.0; 2]);
+        assert_eq!(
+            runtime.presented("workspace-surface-node-0").unwrap().0,
+            original
+        );
+        assert!(runtime.find("saved-workspace-save").is_none());
+    }
+
+    #[test]
+    fn surface_overview_fits_cards_and_controls_across_themes_and_densities() {
+        for theme in [
+            AppearanceTheme::Light,
+            AppearanceTheme::Dark,
+            AppearanceTheme::Cream,
+            AppearanceTheme::Midnight,
+        ] {
+            for (width, height, variant) in [
+                (1440.0, 960.0, "surfaces"),
+                (1040.0, 800.0, "surfaces"),
+                (840.0, 720.0, "surfaces-large"),
+                (1440.0, 960.0, "surfaces-dense"),
+                (840.0, 720.0, "surfaces-empty"),
+            ] {
+                let mut state = visual_preview::fixture(variant);
+                state.appearance.theme = theme;
+                let mut runtime = Runtime::new(state, view, (width, height), Env::new(true, 1.0));
+                runtime.frame(0.0);
+                let (stage, _) = runtime.presented("workspace-surface-network").unwrap();
+                let (search, _) = runtime.presented("workspace-surface-search").unwrap();
+                let (actions, _) = runtime.presented("workspace-surface-actions").unwrap();
+                for key in [
+                    "workspace-surface-overview",
+                    "workspace-surface-search",
+                    "workspace-surface-actions",
+                ] {
+                    let (bounds, _) = runtime.presented(key).unwrap();
+                    assert!(
+                        bounds[0] >= stage[0] - 1.0
+                            && bounds[0] + bounds[2] <= stage[0] + stage[2] + 1.0,
+                        "{key}, {width}, {variant}: {bounds:?} outside {stage:?}"
+                    );
+                }
+                for index in 0..runtime.state.workspace_surface_edits.len() {
+                    let (card, _) = runtime
+                        .presented(&format!("workspace-surface-node-{index}"))
+                        .unwrap();
+                    assert!(
+                        card[0] >= stage[0] - 1.0 && card[0] + card[2] <= stage[0] + stage[2] + 1.0,
+                        "card {index}, {width}, {variant}: {card:?} outside {stage:?}"
+                    );
+                    assert!(
+                        card[1] >= search[1] + search[3] && card[1] + card[3] < actions[1],
+                        "card {index}, {width}, {variant}: {card:?} outside graph"
+                    );
+                    let (name, _) = runtime
+                        .presented(&format!("workspace-surface-visible-name-{index}"))
+                        .unwrap();
+                    assert!(
+                        name[1] + name[3] <= card[1] + card[3] + 1.0,
+                        "name {index}, {width}, {variant} overflows card"
+                    );
+                }
+                let elements = runtime.elements();
+                let captions = elements
+                    .iter()
+                    .filter(|element| {
+                        element
+                            .key
+                            .as_deref()
+                            .is_some_and(|key| key.starts_with("workspace-surface-relationship-"))
+                    })
+                    .collect::<Vec<_>>();
+                if width == 1440.0 && variant == "surfaces" {
+                    assert_eq!(captions.len(), 7);
+                }
+                let overlaps = |a: [f32; 4], b: [f32; 4]| {
+                    a[0] < b[0] + b[2]
+                        && a[0] + a[2] > b[0]
+                        && a[1] < b[1] + b[3]
+                        && a[1] + a[3] > b[1]
+                };
+                for (index, caption) in captions.iter().enumerate() {
+                    assert!(caption.rect[1] > search[1] + search[3]);
+                    for card in elements.iter().filter(|element| {
+                        element
+                            .key
+                            .as_deref()
+                            .is_some_and(|key| key.starts_with("workspace-surface-node-"))
+                    }) {
+                        assert!(
+                            !overlaps(caption.rect, card.rect),
+                            "caption overlaps card at {width}"
+                        );
+                    }
+                    for other in &captions[index + 1..] {
+                        assert!(
+                            !overlaps(caption.rect, other.rect),
+                            "captions overlap at {width}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn surface_network_covers_content_and_pans_beneath_title() {
         use beale_contracts::v1::{
             SurfaceDefinition, SurfaceKind, SurfaceLocator, SurfaceScope, WorkspaceSurface,
@@ -10871,7 +11460,13 @@ active_runbook_count: 0,
         let (manage, _) = runtime.presented("workspace-surface-manage").unwrap();
         assert_eq!(stage, content);
         assert!(node_before[2] <= workspace_surface_layout::NODE_MAX_WIDTH);
-        assert_eq!(node_before[3], workspace_surface_layout::NODE_HEIGHT);
+        assert!(node_before[3] <= workspace_surface_layout::NODE_HEIGHT);
+        assert!(
+            (node_before[2] / workspace_surface_layout::NODE_MAX_WIDTH
+                - node_before[3] / workspace_surface_layout::NODE_HEIGHT)
+                .abs()
+                < 0.01
+        );
         assert!(name[0] >= node_before[0]);
         assert!(name[1] >= node_before[1]);
         assert!(name[0] + name[2] <= node_before[0] + node_before[2]);
@@ -10900,8 +11495,10 @@ active_runbook_count: 0,
                 .any(|label| label.starts_with("Select a surface"))
         );
 
-        let x = stage[0] + stage[2] - 24.0;
-        let y = stage[1] + stage[3] / 2.0;
+        let scale = node_before[2] / workspace_surface_layout::NODE_MAX_WIDTH;
+        let x =
+            node_before[0] + node_before[2] + workspace_surface_layout::COLUMN_GAP * scale / 2.0;
+        let y = node_before[1] + node_before[3] / 2.0;
         let drag_distance = (node_before[1] - title[1] - title[3] + 18.0).max(110.0);
         runtime.pointer_down(x, y);
         runtime.pointer_move(x, y - drag_distance);
@@ -11496,6 +12093,7 @@ active_runbook_count: 0,
                         name: "memory_create".to_owned(),
                         summary: "Saved example memory".to_owned(),
                         is_error: false,
+                        agent_role: "main".to_owned(),
                     }),
                     ..Default::default()
                 },

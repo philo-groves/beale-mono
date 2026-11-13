@@ -284,6 +284,11 @@ fn validate(finding: &Finding) -> Result<()> {
     }
     if let Some(state) = &finding.state.screened {
         ensure!(state.revision > 0, "invalid screening revision");
+        ensure!(
+            state.impact_score.is_none_or(|score| score <= 100)
+                && state.reachability_score.is_none_or(|score| score <= 100),
+            "screening scores must be integers from 0 to 100"
+        );
         validate_evidence(state.evidence_refs.as_deref().unwrap_or(&[]))?;
         for check in [
             &state.validation_review,
@@ -631,7 +636,7 @@ mod tests {
                 Ok(connection.query_row("PRAGMA user_version", [], |row| row.get(0))?)
             })
             .unwrap();
-        assert_eq!(version, 44);
+        assert_eq!(version, 47);
         drop(migrated);
         std::fs::remove_dir_all(root).unwrap();
     }

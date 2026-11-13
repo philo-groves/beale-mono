@@ -1,7 +1,8 @@
 use beale_contracts::{
-    PROTOBUF_CONTENT_TYPE, PROTOBUF_STREAM_CONTENT_TYPE, SESSION_ARCHIVE_PATH, SESSION_DETAIL_PATH,
-    SESSION_STREAM_MAX_FRAME_BYTES, SESSION_TOOL_DETAIL_PATH, SESSION_TURN_STREAM_PATH,
-    SESSIONS_PATH,
+    PROTOBUF_CONTENT_TYPE, PROTOBUF_STREAM_CONTENT_TYPE, SESSION_ARCHIVE_PATH,
+    SESSION_DETAIL_MAX_TOOL_SUMMARIES, SESSION_DETAIL_PATH, SESSION_STREAM_MAX_FRAME_BYTES,
+    SESSION_TOOL_DETAIL_PATH, SESSION_TURN_ID_HEADER, SESSION_TURN_STOP_PATH,
+    SESSION_TURN_STREAM_PATH, SESSIONS_PATH,
     v1::{
         GoalStatus, ListSessionsResponse, SessionDetail, SessionRole, SessionStreamEvent,
         SessionStreamKind, SessionSummary, SessionToolDetailPage, SubmitSessionTurnRequest,
@@ -191,10 +192,14 @@ fn valid_scoped_snapshots(detail: &SessionDetail) -> bool {
     }
     let mut expected = [[0u128; 7]; 2];
     for source in &detail.model_usage {
-        let index = match source.role.as_str() {
-            "main" => 0,
-            "" => continue,
-            _ => 1,
+        let index = if source.role.is_empty() {
+            continue;
+        } else if beale_graphs::Role::from_id(&source.role)
+            .is_some_and(beale_graphs::Role::is_top_level)
+        {
+            0
+        } else {
+            1
         };
         let Some(usage) = &source.usage else {
             return false;
@@ -204,6 +209,35 @@ fn valid_scoped_snapshots(detail: &SessionDetail) -> bool {
         }
     }
     previous == expected
+}
+
+fn valid_graph_state(detail: &SessionDetail) -> bool {
+    if detail.graph_agents.len() > 4 || detail.graph_handoffs.len() > 128 {
+        return false;
+    }
+    let graph = beale_graphs::graph_definition(&detail.graph_id);
+    let mut roles = std::collections::BTreeSet::new();
+    if !detail.graph_agents.iter().all(|agent| {
+        beale_graphs::Role::from_id(&agent.role).is_some_and(|role| {
+            role.is_top_level() && graph.is_some_and(|graph| graph.nodes.contains(&role))
+        }) && matches!(
+            agent.status.as_str(),
+            "idle" | "queued" | "working" | "failed"
+        ) && roles.insert(agent.role.as_str())
+    }) {
+        return false;
+    }
+    detail.graph_handoffs.iter().all(|item| {
+        uuid::Uuid::parse_str(&item.id).is_ok()
+            && !item.task.trim().is_empty()
+            && item.task.len() <= 4_096
+            && matches!(
+                item.status.as_str(),
+                "pending" | "running" | "completed" | "failed"
+            )
+            && beale_graphs::Role::from_id(&item.from_role).is_some_and(|role| role.is_top_level())
+            && beale_graphs::Role::from_id(&item.to_role).is_some_and(|role| role.is_top_level())
+    })
 }
 
 pub(crate) fn valid_detail(detail: &SessionDetail) -> bool {
@@ -245,6 +279,7 @@ pub(crate) fn valid_detail(detail: &SessionDetail) -> bool {
         })
         && valid_model_usage(detail)
         && valid_scoped_snapshots(detail)
+        && valid_graph_state(detail)
         && detail.usage_snapshots.len() <= 2_048
         && detail.usage_snapshots.iter().all(|point| {
             point.work_duration_ms <= detail.total_duration_ms
@@ -303,10 +338,10 @@ pub(crate) fn valid_detail(detail: &SessionDetail) -> bool {
                         && message.reasoning_summaries.is_empty()
                         && message.commentary.is_empty()
                         && message.duration_ms == 0))
-                && message.tools.len() <= 32
+                && message.tools.len() <= SESSION_DETAIL_MAX_TOOL_SUMMARIES
                 && message.duration_ms <= 86_400_000
-                && message.reasoning_summaries.len() <= 128
-                && message.commentary.len() <= 8
+                && message.reasoning_summaries.len() <= 512
+                && message.commentary.len() <= 32
                 && message.commentary.iter().all(|item| {
                     !item.text.trim().is_empty()
                         && item.text.len() <= 8_192
@@ -358,7 +393,13 @@ fn valid_stream_event(event: &SessionStreamEvent) -> bool {
                         && tool.summary.len() <= 512
                 })
         }
-        Ok(SessionStreamKind::Completed | SessionStreamKind::TurnCompleted) => {
+        Ok(
+            SessionStreamKind::Completed
+            | SessionStreamKind::TurnCompleted
+            | SessionStreamKind::SessionStarted
+            | SessionStreamKind::AgentStarted
+            | SessionStreamKind::AgentTurnCompleted,
+        ) => {
             event.text.is_empty()
                 && event.tool.is_none()
                 && event.detail.as_ref().is_some_and(valid_detail)
@@ -497,6 +538,7 @@ pub(crate) async fn submit_stream(
     client: &Client,
     addr: SocketAddr,
     request: SubmitSessionTurnRequest,
+    turn_id: &str,
     mut on_progress: impl FnMut(SessionStreamEvent),
 ) -> Result<SessionDetail, String> {
     let token = crate::provider_auth::authenticated_token(client, addr).await?;
@@ -504,6 +546,7 @@ pub(crate) async fn submit_stream(
         .post(url(addr, SESSION_TURN_STREAM_PATH))
         .bearer_auth(token)
         .header(CONTENT_TYPE, PROTOBUF_CONTENT_TYPE)
+        .header(SESSION_TURN_ID_HEADER, turn_id)
         .body(request.encode_to_vec())
         .send()
         .await
@@ -557,6 +600,32 @@ pub(crate) async fn submit_stream(
         }
     }
     Err("Session stream ended before completion".to_owned())
+}
+
+pub(crate) async fn stop_turn(
+    client: &Client,
+    addr: SocketAddr,
+    turn_id: &str,
+) -> Result<(), String> {
+    if uuid::Uuid::parse_str(turn_id).is_err() {
+        return Err("Invalid turn ID".to_owned());
+    }
+    let token = crate::provider_auth::authenticated_token(client, addr).await?;
+    let path = SESSION_TURN_STOP_PATH.replace("{id}", turn_id);
+    let response = client
+        .post(url(addr, &path))
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|_| "Could not stop session turn".to_owned())?;
+    match response.status() {
+        StatusCode::NO_CONTENT => Ok(()),
+        StatusCode::NOT_FOUND => Err("Session turn has already finished".to_owned()),
+        _ => Err(format!(
+            "Could not stop session turn ({})",
+            response.status()
+        )),
+    }
 }
 
 #[cfg(test)]
@@ -656,6 +725,7 @@ mod tests {
             tool: None,
             detail: None,
             segment_index: 1,
+            ..Default::default()
         };
         let second = SessionStreamEvent {
             runbook_progress: None,
@@ -664,6 +734,7 @@ mod tests {
             tool: None,
             detail: None,
             segment_index: 1,
+            ..Default::default()
         };
         let mut bytes = session_stream_frame(&first).unwrap();
         bytes.extend(session_stream_frame(&second).unwrap());
@@ -720,5 +791,106 @@ mod tests {
         let mut invalid = event;
         invalid.runbook_progress.as_mut().unwrap().cell_name = "x".repeat(41);
         assert!(!valid_stream_event(&invalid));
+    }
+
+    #[test]
+    fn peer_graph_detail_accepts_top_level_usage_and_graph_turn_activity() {
+        use beale_contracts::v1::{
+            SessionGraphAgent, SessionMessage, SessionModelUsage, SessionTokenUsage,
+            SessionUsageSnapshot,
+        };
+        let usage = SessionTokenUsage {
+            input_tokens: 100,
+            output_tokens: 20,
+            measured_calls: 1,
+            total_calls: 1,
+            ..Default::default()
+        };
+        let mut detail = SessionDetail {
+            summary: Some(SessionSummary {
+                id: uuid::Uuid::new_v4().to_string(),
+                workspace_id: uuid::Uuid::new_v4().to_string(),
+                title: "Example research".to_owned(),
+                last_message_at_ms: 1,
+            }),
+            messages: vec![
+                SessionMessage {
+                    role: SessionRole::User as i32,
+                    text: "Check the example package".to_owned(),
+                    agent_role: "discovery".to_owned(),
+                    ..Default::default()
+                },
+                SessionMessage {
+                    role: SessionRole::Assistant as i32,
+                    text: "Example observation".to_owned(),
+                    duration_ms: 1,
+                    agent_role: "discovery".to_owned(),
+                    ..Default::default()
+                },
+            ],
+            provider: 1,
+            method: 1,
+            model: "example-model".to_owned(),
+            first_turn_number: 1,
+            graph_id: beale_graphs::OPENAI_ID.to_owned(),
+            total_duration_ms: 1,
+            token_usage: Some(usage.clone()),
+            model_usage: vec![SessionModelUsage {
+                provider: 1,
+                method: 1,
+                model: "example-model".to_owned(),
+                role: "discovery".to_owned(),
+                usage: Some(usage.clone()),
+            }],
+            usage_snapshots: vec![SessionUsageSnapshot {
+                work_duration_ms: 1,
+                input_tokens: 100,
+                output_tokens: 20,
+                measured_calls: 1,
+                total_calls: 1,
+                main_usage: Some(usage),
+                subagent_usage: Some(SessionTokenUsage::default()),
+                ..Default::default()
+            }],
+            graph_agents: ["discovery", "validation", "reporter", "patch_generation"]
+                .into_iter()
+                .map(|role| SessionGraphAgent {
+                    role: role.to_owned(),
+                    status: "idle".to_owned(),
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let message = &mut detail.messages[1];
+        for index in 0..708 {
+            message.tools.push(beale_contracts::v1::SessionToolSummary {
+                id: uuid::Uuid::new_v4().to_string(),
+                name: "read".to_owned(),
+                summary: format!("Read synthetic file {index}"),
+                agent_role: "discovery".to_owned(),
+                ..Default::default()
+            });
+        }
+        assert!(valid_detail(&detail));
+        let started = SessionStreamEvent {
+            kind: SessionStreamKind::SessionStarted as i32,
+            detail: Some(detail.clone()),
+            ..Default::default()
+        };
+        assert!(valid_stream_event(&started));
+        let mut oversized = detail.clone();
+        let message = &mut oversized.messages[1];
+        for _ in message.tools.len()..=SESSION_DETAIL_MAX_TOOL_SUMMARIES {
+            message.tools.push(beale_contracts::v1::SessionToolSummary {
+                id: uuid::Uuid::new_v4().to_string(),
+                name: "read".to_owned(),
+                summary: "Read synthetic file".to_owned(),
+                ..Default::default()
+            });
+        }
+        assert!(!valid_detail(&oversized));
+        let mut invalid = detail;
+        invalid.graph_agents[1].status = "unknown".to_owned();
+        assert!(!valid_detail(&invalid));
     }
 }

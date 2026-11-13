@@ -1,4 +1,7 @@
-use crate::{credentials::CredentialStore, oauth};
+use crate::{
+    credentials::{CodexAccountMismatch, CredentialStore},
+    oauth,
+};
 use anyhow::{Context, Result, bail, ensure};
 use futures_util::{SinkExt, Stream, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -57,11 +60,18 @@ impl std::error::Error for ProviderFailure {}
 struct DaybreakAccessError;
 
 #[derive(Debug)]
-struct DaybreakSelectionError;
+struct DaybreakSelectionError {
+    requested: String,
+    selected: String,
+}
 
 impl fmt::Display for DaybreakSelectionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("OpenAI did not select the requested Daybreak program")
+        write!(
+            formatter,
+            "OpenAI selected {} instead of requested {}",
+            self.selected, self.requested
+        )
     }
 }
 
@@ -165,8 +175,14 @@ async fn rejected_response(mut response: reqwest::Response) -> ProviderFailure {
 }
 
 pub fn provider_error_message(provider: Provider, mode: AuthMode, error: &anyhow::Error) -> String {
-    if error.downcast_ref::<DaybreakSelectionError>().is_some() {
-        return "OpenAI selected a different cybersecurity program than Beale requested. Check the OpenAI subscription or API project used for this request.".to_owned();
+    if error.downcast_ref::<CodexAccountMismatch>().is_some() {
+        return "Codex and Beale are signed into different OpenAI accounts. Sign into the same account in both apps, or choose API Key in Beale.".to_owned();
+    }
+    if let Some(selection) = error.downcast_ref::<DaybreakSelectionError>() {
+        return format!(
+            "OpenAI selected {} instead of {} for this request. Check the approved workspace or API project and its Daybreak setting.",
+            selection.selected, selection.requested
+        );
     }
     if error.downcast_ref::<DaybreakAccessError>().is_some() {
         return "This OpenAI model requires Daybreak Red. Choose another model or switch Daybreak Mode in Providers.".to_owned();
@@ -449,6 +465,14 @@ fn tool_request_body(
             });
             if provider == Provider::OpenAi {
                 if !tools.is_empty() {
+                    let tools = tools
+                        .iter()
+                        .map(|tool| {
+                            let mut tool = tool.clone();
+                            tool["strict"] = json!(false);
+                            tool
+                        })
+                        .collect::<Vec<_>>();
                     body["tools"] = json!([{"type":"namespace","name":"beale","description":"Beale host tools for authorized research work.","tools":tools}]);
                 }
                 body["reasoning"] = json!({"summary":"auto"});
@@ -616,7 +640,12 @@ where
                             && Some(selected) != requested_cyber_program
                         {
                             return Some((
-                                Err(DaybreakSelectionError.into()),
+                                Err(DaybreakSelectionError {
+                                    requested: requested_cyber_program.unwrap_or("none").to_owned(),
+                                    selected: safe_code(Some(selected))
+                                        .unwrap_or_else(|| "unknown".to_owned()),
+                                }
+                                .into()),
                                 (socket, requested_cyber_program),
                             ));
                         }
@@ -1189,27 +1218,27 @@ where
                                 .get("delta")
                                 .and_then(Value::as_str)
                                 .context("missing reasoning summary delta")?;
-                            ensure!(
-                                reasoning_parts.contains_key(&key)
-                                    || reasoning_parts.len() < MAX_REASONING_SUMMARIES,
-                                "too many reasoning summaries"
-                            );
-                            let part = reasoning_parts.entry(key).or_default();
-                            ensure!(
-                                part.len().saturating_add(delta.len())
-                                    <= MAX_REASONING_SUMMARY_BYTES,
-                                "reasoning summary is too large"
-                            );
-                            part.push_str(delta);
-                            if !delta.is_empty() {
-                                sent_reasoning.insert(key);
-                            }
-                            if !delta.is_empty()
-                                && let Some(tx) = progress
+                            if reasoning_parts.contains_key(&key)
+                                || reasoning_parts.len() < MAX_REASONING_SUMMARIES
                             {
-                                let _ = tx
-                                    .send(ProviderProgress::ReasoningDelta(delta.to_owned()))
-                                    .await;
+                                let part = reasoning_parts.entry(key).or_default();
+                                if part.len().saturating_add(delta.len())
+                                    <= MAX_REASONING_SUMMARY_BYTES
+                                {
+                                    part.push_str(delta);
+                                    if !delta.is_empty() {
+                                        sent_reasoning.insert(key);
+                                    }
+                                    if !delta.is_empty()
+                                        && let Some(tx) = progress
+                                    {
+                                        let _ = tx
+                                            .send(ProviderProgress::ReasoningDelta(
+                                                delta.to_owned(),
+                                            ))
+                                            .await;
+                                    }
+                                }
                             }
                         }
                         "response.reasoning_summary_text.done"
@@ -1219,11 +1248,10 @@ where
                                 .get("text")
                                 .or_else(|| event.pointer("/part/text"))
                                 .and_then(Value::as_str)
+                                && value.len() <= MAX_REASONING_SUMMARY_BYTES
+                                && (reasoning_parts.contains_key(&key)
+                                    || reasoning_parts.len() < MAX_REASONING_SUMMARIES)
                             {
-                                ensure!(
-                                    value.len() <= MAX_REASONING_SUMMARY_BYTES,
-                                    "reasoning summary is too large"
-                                );
                                 reasoning_parts.insert(key, value.to_owned());
                                 if !value.is_empty()
                                     && sent_reasoning.insert(key)
@@ -1233,10 +1261,6 @@ where
                                         .send(ProviderProgress::ReasoningDelta(value.to_owned()))
                                         .await;
                                 }
-                                ensure!(
-                                    reasoning_parts.len() <= MAX_REASONING_SUMMARIES,
-                                    "too many reasoning summaries"
-                                );
                             }
                         }
                         "response.output_item.done" => {
@@ -1430,18 +1454,12 @@ fn summaries_from_response(
         if let Some(parts) = item.get("summary").and_then(Value::as_array) {
             for (summary_index, part) in parts.iter().enumerate() {
                 if let Some(value) = part.get("text").and_then(Value::as_str) {
-                    ensure!(
-                        value.len() <= MAX_REASONING_SUMMARY_BYTES,
-                        "reasoning summary is too large"
-                    );
-                    streamed.insert(
-                        (output_index as u64, summary_index as u64),
-                        value.to_owned(),
-                    );
-                    ensure!(
-                        streamed.len() <= MAX_REASONING_SUMMARIES,
-                        "too many reasoning summaries"
-                    );
+                    let key = (output_index as u64, summary_index as u64);
+                    if value.len() <= MAX_REASONING_SUMMARY_BYTES
+                        && (streamed.contains_key(&key) || streamed.len() < MAX_REASONING_SUMMARIES)
+                    {
+                        streamed.insert(key, value.to_owned());
+                    }
                 }
             }
         }
@@ -1896,6 +1914,7 @@ mod tests {
         );
         assert_eq!(responses["tools"][0]["name"], "beale");
         assert_eq!(responses["tools"][0]["tools"][0]["name"], "read");
+        assert_eq!(responses["tools"][0]["tools"][0]["strict"], false);
         assert_eq!(responses["store"], false);
         assert_eq!(responses["input"], json!(input));
         assert_eq!(responses["reasoning"]["summary"], "auto");
@@ -1919,6 +1938,7 @@ mod tests {
             },
         );
         assert!(xai.get("reasoning").is_none());
+        assert!(xai["tools"][0].get("strict").is_none());
         assert!(xai.get("access_programs").is_none());
         let chat = tool_request_body(
             Provider::Xai,
@@ -2136,6 +2156,15 @@ mod tests {
             .await
             .unwrap_err();
         assert!(error.downcast_ref::<DaybreakSelectionError>().is_some());
+        assert!(
+            provider_error_message(Provider::OpenAi, AuthMode::Subscription, &error)
+                .contains("selected standard instead of daybreak_blue")
+        );
+        let interrupted = error.context("provider stream interrupted");
+        assert!(
+            provider_error_message(Provider::OpenAi, AuthMode::Subscription, &interrupted)
+                .contains("selected standard instead of daybreak_blue")
+        );
         server.await.unwrap();
     }
 
@@ -2212,6 +2241,51 @@ mod tests {
         let summaries = summaries_from_response(&output, streamed).unwrap();
         assert_eq!(summaries, vec!["Checked the example input."]);
         assert!(summaries[0].find("private trace").is_none());
+    }
+
+    #[test]
+    fn excessive_reasoning_parts_do_not_discard_a_valid_response() {
+        let output = vec![json!({
+            "type": "reasoning",
+            "summary": (0..20)
+                .map(|index| json!({"type": "summary_text", "text": format!("Example summary {index}")}))
+                .collect::<Vec<_>>()
+        })];
+        let summaries = summaries_from_response(&output, BTreeMap::new()).unwrap();
+        assert_eq!(summaries.len(), MAX_REASONING_SUMMARIES);
+        assert_eq!(summaries[0], "Example summary 0");
+    }
+
+    #[tokio::test]
+    async fn streamed_reasoning_beyond_display_limit_keeps_tool_response() {
+        use axum::{body::Bytes, http::Response};
+        use futures_util::stream;
+        use std::convert::Infallible;
+
+        let mut chunks = (0..20)
+            .map(|index| {
+                Ok::<_, Infallible>(Bytes::from(format!(
+                    "data: {}\n\n",
+                    json!({"type":"response.reasoning_summary_text.delta","output_index":0,
+                        "summary_index":index,"delta":format!("Example summary {index}")})
+                )))
+            })
+            .collect::<Vec<_>>();
+        chunks.push(Ok(Bytes::from(format!(
+            "data: {}\n\n",
+            json!({"type":"response.completed","response":{"output":[
+                {"type":"reasoning","summary":[]},
+                {"type":"function_call","call_id":"call-example","name":"read",
+                    "arguments":"{}"}
+            ]}})
+        ))));
+        let response: reqwest::Response =
+            Response::new(reqwest::Body::wrap_stream(stream::iter(chunks))).into();
+        let step = read_tool_stream(response, WireShape::Responses, None)
+            .await
+            .unwrap();
+        assert_eq!(step.reasoning_summaries.len(), MAX_REASONING_SUMMARIES);
+        assert_eq!(step.calls.len(), 1);
     }
 
     #[tokio::test]

@@ -1,31 +1,98 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use beale_contracts::v1::WorkspaceSurface;
+use beale_contracts::v1::{SurfaceScope, SurfaceScopeState, WorkspaceSurface};
 
-pub(crate) const NODE_MAX_WIDTH: f32 = 180.0;
-pub(crate) const NODE_HEIGHT: f32 = 60.0;
+pub(crate) const NODE_MAX_WIDTH: f32 = 232.0;
+pub(crate) const NODE_HEIGHT: f32 = 148.0;
+pub(crate) const COLUMN_GAP: f32 = 116.0;
+pub(crate) const ROW_GAP: f32 = 72.0;
 
-/// Place related surfaces together before isolated surfaces.
-/// An absent relationship is not inferred from a surface's type or name.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Focus {
+    #[default]
+    All,
+    Review,
+    Unevidenced,
+    Excluded,
+}
+
+pub(crate) fn evidence_count(surface: &WorkspaceSurface) -> usize {
+    surface
+        .definition
+        .iter()
+        .flat_map(|definition| &definition.evidence_refs)
+        .chain(
+            surface
+                .relationships
+                .iter()
+                .flat_map(|link| &link.evidence_refs),
+        )
+        .filter(|reference| !reference.reference.trim().is_empty())
+        .map(|reference| (reference.kind.as_str(), reference.reference.as_str()))
+        .collect::<HashSet<_>>()
+        .len()
+}
+
+pub(crate) fn needs_review(surface: &WorkspaceSurface) -> bool {
+    surface.definition.as_ref().is_none_or(|definition| {
+        definition.scope_state != SurfaceScopeState::Approved as i32
+            || !matches!(
+                SurfaceScope::try_from(definition.scope),
+                Ok(SurfaceScope::InScope | SurfaceScope::OutOfScope)
+            )
+    })
+}
+
+pub(crate) fn matches(surface: &WorkspaceSurface, focus: Focus, query: &str) -> bool {
+    let focused = match focus {
+        Focus::All => true,
+        Focus::Review => needs_review(surface),
+        Focus::Unevidenced => evidence_count(surface) == 0,
+        Focus::Excluded => surface
+            .definition
+            .as_ref()
+            .is_some_and(|definition| definition.scope == SurfaceScope::OutOfScope as i32),
+    };
+    let query = query.trim().to_lowercase();
+    focused
+        && (query.is_empty()
+            || surface.id.to_lowercase().contains(&query)
+            || surface.definition.as_ref().is_some_and(|definition| {
+                [
+                    &definition.name,
+                    &definition.type_id,
+                    &definition.description,
+                ]
+                .iter()
+                .any(|value| value.to_lowercase().contains(&query))
+                    || definition
+                        .locator
+                        .as_ref()
+                        .is_some_and(|locator| locator.value.to_lowercase().contains(&query))
+            }))
+}
+
+/// Pack recorded connected components into readable rows. A serpentine order keeps
+/// adjacent records close when a component wraps; no relationships are inferred.
 pub(crate) fn layout(surfaces: &[WorkspaceSurface], width: f32, height: f32) -> Vec<[f32; 2]> {
-    if surfaces.is_empty() {
-        return Vec::new();
-    }
     let indices: HashMap<&str, usize> = surfaces
         .iter()
         .enumerate()
         .map(|(index, surface)| (surface.id.as_str(), index))
         .collect();
     let mut neighbors = vec![Vec::new(); surfaces.len()];
+    let mut incoming = vec![0_usize; surfaces.len()];
     let mut edges = HashSet::new();
     for (source, surface) in surfaces.iter().enumerate() {
         for relationship in &surface.relationships {
             if let Some(&target) = indices.get(relationship.target_id.as_str())
                 && source != target
-                && edges.insert((source.min(target), source.max(target)))
             {
-                neighbors[source].push(target);
-                neighbors[target].push(source);
+                incoming[target] += 1;
+                if edges.insert((source.min(target), source.max(target))) {
+                    neighbors[source].push(target);
+                    neighbors[target].push(source);
+                }
             }
         }
     }
@@ -35,127 +102,73 @@ pub(crate) fn layout(surfaces: &[WorkspaceSurface], width: f32, height: f32) -> 
         if seen[start] {
             continue;
         }
-        seen[start] = true;
-        let mut queue = VecDeque::from([start]);
         let mut members = Vec::new();
+        let mut queue = VecDeque::from([start]);
+        seen[start] = true;
         while let Some(index) = queue.pop_front() {
             members.push(index);
-            for &neighbor in &neighbors[index] {
-                if !seen[neighbor] {
-                    seen[neighbor] = true;
-                    queue.push_back(neighbor);
+            for &next in &neighbors[index] {
+                if !seen[next] {
+                    seen[next] = true;
+                    queue.push_back(next);
                 }
             }
         }
-        groups.push(members);
-    }
-    groups.sort_by(|left, right| {
-        right
-            .len()
-            .cmp(&left.len())
-            .then_with(|| surfaces[left[0]].id.cmp(&surfaces[right[0]].id))
-    });
-
-    let mut positions = vec![[0.0, 0.0]; surfaces.len()];
-    let mut boxes = Vec::new();
-    for members in groups {
-        if members.len() == 1 {
-            let size = NODE_MAX_WIDTH + 24.0;
-            boxes.push((size, size, vec![(members[0], [size / 2.0, size / 2.0])]));
-            continue;
-        }
-        let hub = *members
+        // Prefer an explicit source, then the most connected record, with stable ties.
+        let root = *members
             .iter()
-            .max_by_key(|&&index| (neighbors[index].len(), std::cmp::Reverse(index)))
+            .min_by_key(|&&index| {
+                (
+                    incoming[index],
+                    std::cmp::Reverse(neighbors[index].len()),
+                    index,
+                )
+            })
             .unwrap();
-        let mut distances = vec![usize::MAX; surfaces.len()];
-        distances[hub] = 0;
-        let mut queue = VecDeque::from([hub]);
+        let mut ordered = Vec::new();
+        let mut visited = HashSet::from([root]);
+        let mut queue = VecDeque::from([root]);
         while let Some(index) = queue.pop_front() {
-            for &neighbor in &neighbors[index] {
-                if distances[neighbor] == usize::MAX {
-                    distances[neighbor] = distances[index] + 1;
-                    queue.push_back(neighbor);
+            ordered.push(index);
+            for &next in &neighbors[index] {
+                if visited.insert(next) {
+                    queue.push_back(next);
                 }
             }
         }
-        let depth = members.iter().map(|&index| distances[index]).max().unwrap();
-        let mut radius = 0.0_f32;
-        let mut points = vec![(hub, [0.0, 0.0])];
-        for ring in 1..=depth {
-            let mut ring_members: Vec<_> = members
-                .iter()
-                .copied()
-                .filter(|&index| distances[index] == ring)
-                .collect();
-            ring_members.sort_by(|&left, &right| surfaces[left].id.cmp(&surfaces[right].id));
-            radius = (radius + NODE_MAX_WIDTH + 16.0)
-                .max(ring_members.len() as f32 * (NODE_MAX_WIDTH + 20.0) / std::f32::consts::TAU);
-            for (slot, index) in ring_members.iter().enumerate() {
-                let angle = -std::f32::consts::FRAC_PI_2
-                    + std::f32::consts::TAU * slot as f32 / ring_members.len() as f32;
-                points.push((*index, [radius * angle.cos(), radius * angle.sin()]));
-            }
-        }
-        let size = 2.0 * (radius + NODE_MAX_WIDTH / 2.0 + 4.0);
-        boxes.push((
-            size,
-            size,
-            points
-                .into_iter()
-                .map(|(index, [x, y])| (index, [x + size / 2.0, y + size / 2.0]))
-                .collect(),
-        ));
+        groups.push(ordered);
     }
-
-    let total_area: f32 = boxes.iter().map(|(w, h, _)| (w + 24.0) * (h + 24.0)).sum();
-    let target_width = (total_area * (width / height.max(1.0)).max(0.5))
-        .sqrt()
-        .clamp(200.0, (width - 48.0).max(200.0));
-    let mut rows: Vec<Vec<usize>> = vec![Vec::new()];
-    let mut row_width = 0.0;
-    for (index, (box_width, _, _)) in boxes.iter().enumerate() {
-        let next = if row_width == 0.0 {
-            *box_width
-        } else {
-            row_width + 24.0 + box_width
-        };
-        if next > target_width && row_width > 0.0 {
-            rows.push(Vec::new());
-            row_width = 0.0;
-        }
-        rows.last_mut().unwrap().push(index);
-        row_width += if row_width == 0.0 {
-            *box_width
-        } else {
-            24.0 + box_width
-        };
-    }
-    let total_height: f32 = rows
-        .iter()
-        .map(|row| row.iter().map(|&index| boxes[index].1).fold(0.0, f32::max) + 24.0)
-        .sum();
-    let mut y = if rows.len() == 1 && total_height > height {
-        (height - total_height) / 2.0
-    } else {
-        ((height - total_height) / 2.0).max(150.0)
+    groups.sort_by_key(|group| (std::cmp::Reverse(group.len()), group[0]));
+    // Choose the grid that maximizes card size while fitting every record.
+    let fit = |columns: usize| {
+        let rows = surfaces.len().div_ceil(columns).max(1);
+        let grid_width = columns as f32 * (NODE_MAX_WIDTH + COLUMN_GAP) - COLUMN_GAP;
+        let grid_height = rows as f32 * (NODE_HEIGHT + ROW_GAP) - ROW_GAP + 52.0;
+        ((width - 48.0).max(1.0) / grid_width).min((height - 24.0).max(1.0) / grid_height)
     };
-    for row in rows {
-        let row_height = row.iter().map(|&index| boxes[index].1).fold(0.0, f32::max);
-        let width_used: f32 = row.iter().map(|&index| boxes[index].0 + 24.0).sum::<f32>() - 24.0;
-        let mut x = if width_used > width {
-            (width - width_used) / 2.0
-        } else {
-            ((width - width_used) / 2.0).max(24.0)
-        };
-        for index in row {
-            let (box_width, box_height, points) = &boxes[index];
-            for &(surface, [local_x, local_y]) in points {
-                positions[surface] = [x + local_x, y + (row_height - box_height) / 2.0 + local_y];
-            }
-            x += box_width + 24.0;
+    let columns = (1..=surfaces.len().max(1))
+        .max_by(|&left, &right| {
+            fit(left)
+                .total_cmp(&fit(right))
+                .then_with(|| right.cmp(&left))
+        })
+        .unwrap();
+    let mut positions = vec![[0.0, 0.0]; surfaces.len()];
+    let mut slot = 0;
+    for group in groups {
+        for index in group {
+            let row = slot / columns;
+            let col = if row % 2 == 0 {
+                slot % columns
+            } else {
+                columns - 1 - slot % columns
+            };
+            positions[index] = [
+                NODE_MAX_WIDTH / 2.0 + col as f32 * (NODE_MAX_WIDTH + COLUMN_GAP),
+                NODE_HEIGHT / 2.0 + row as f32 * (NODE_HEIGHT + ROW_GAP),
+            ];
+            slot += 1;
         }
-        y += row_height + 24.0;
     }
     positions
 }
@@ -183,7 +196,7 @@ mod tests {
     }
 
     #[test]
-    fn connected_surfaces_cluster_and_unconnected_surfaces_use_multiple_rows() {
+    fn connected_surfaces_cluster_with_stable_positions() {
         let surfaces = [
             surface("hub", Some("left")),
             surface("left", None),
@@ -200,22 +213,17 @@ mod tests {
         };
         assert!(distance(0, 1) < distance(0, 3));
         assert!(distance(0, 2) < distance(0, 3));
-        assert!(
-            positions[3..]
-                .windows(2)
-                .any(|pair| pair[0][1] != pair[1][1])
-        );
         assert_eq!(positions, layout(&surfaces, 1000.0, 700.0));
     }
 
     #[test]
-    fn three_unconnected_surfaces_do_not_form_a_single_row() {
+    fn narrow_view_wraps_unconnected_surfaces() {
         let surfaces = [
             surface("one", None),
             surface("two", None),
             surface("three", None),
         ];
-        let positions = layout(&surfaces, 1000.0, 700.0);
+        let positions = layout(&surfaces, 600.0, 700.0);
         assert!(
             positions
                 .iter()
@@ -256,5 +264,74 @@ mod tests {
                 );
             }
         }
+    }
+    #[test]
+    fn review_distinguishes_approval_from_recorded_scope() {
+        use beale_contracts::v1::SurfaceDefinition;
+        let mut record = surface("S1", None);
+        assert!(needs_review(&record));
+        record.definition = Some(SurfaceDefinition {
+            scope: SurfaceScope::InScope as i32,
+            scope_state: SurfaceScopeState::Approved as i32,
+            ..Default::default()
+        });
+        assert!(!needs_review(&record));
+        record.definition.as_mut().unwrap().scope = SurfaceScope::OutOfScope as i32;
+        assert!(!needs_review(&record));
+        assert!(matches(&record, Focus::Excluded, ""));
+        record.definition.as_mut().unwrap().scope = SurfaceScope::Unspecified as i32;
+        assert!(needs_review(&record));
+        record.definition.as_mut().unwrap().scope = 999;
+        assert!(needs_review(&record));
+        record.definition.as_mut().unwrap().scope = SurfaceScope::InScope as i32;
+        record.definition.as_mut().unwrap().scope_state = SurfaceScopeState::Candidate as i32;
+        assert!(needs_review(&record));
+    }
+
+    #[test]
+    fn evidence_counts_unique_nonempty_references_across_definition_and_links() {
+        use beale_contracts::v1::{SurfaceDefinition, SurfaceEvidence};
+        let reference = SurfaceEvidence {
+            kind: "artifact".into(),
+            reference: "artifacts/example.txt".into(),
+            note: String::new(),
+        };
+        let mut record = surface("S1", Some("S2"));
+        record.definition = Some(SurfaceDefinition {
+            evidence_refs: vec![reference.clone(), SurfaceEvidence::default()],
+            ..Default::default()
+        });
+        record.relationships[0].evidence_refs = vec![
+            reference.clone(),
+            SurfaceEvidence {
+                reference: "artifacts/example-connection.txt".into(),
+                ..reference
+            },
+        ];
+        assert_eq!(evidence_count(&record), 2);
+        assert!(!matches(&record, Focus::Unevidenced, ""));
+    }
+
+    #[test]
+    fn search_matches_recorded_properties_and_combines_with_focus() {
+        use beale_contracts::v1::{SurfaceDefinition, SurfaceLocator};
+        let mut record = surface("S1", None);
+        record.definition = Some(SurfaceDefinition {
+            name: "Example parser".into(),
+            type_id: "code.module".into(),
+            description: "Decodes example requests".into(),
+            locator: Some(SurfaceLocator {
+                kind: "path".into(),
+                value: "src/example.rs".into(),
+            }),
+            scope: SurfaceScope::InScope as i32,
+            scope_state: SurfaceScopeState::Candidate as i32,
+            ..Default::default()
+        });
+        for query in [" S1 ", "PARSER", "code.module", "decodes", "src/example.rs"] {
+            assert!(matches(&record, Focus::Review, query), "{query}");
+        }
+        assert!(!matches(&record, Focus::Excluded, "parser"));
+        assert!(!matches(&record, Focus::All, "missing"));
     }
 }

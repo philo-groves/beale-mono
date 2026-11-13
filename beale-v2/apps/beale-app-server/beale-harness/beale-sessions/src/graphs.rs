@@ -18,7 +18,7 @@ use beale_providers::{
 };
 use beale_safety::ReviewRequest;
 use beale_storage::{ChildTurnRow, ModelUsageRow, ToolCallRow};
-use beale_tools::{AgentFiles, definitions, execute, model_preview};
+use beale_tools::{AgentFiles, definitions, execute, model_preview, page};
 use futures_util::future::join_all;
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, Semaphore, mpsc};
@@ -26,8 +26,8 @@ use uuid::Uuid;
 
 use super::{SessionState, append_tool_result, tool_summary as summary};
 
-const MAX_CHILD_ROUNDS: usize = 6;
-const MAX_CHILD_CALLS: usize = 8;
+const MAX_CHILD_ROUNDS: usize = 24;
+const MAX_CHILD_CALLS: usize = 48;
 
 pub(super) struct DelegateOutcome {
     pub output: String,
@@ -36,7 +36,7 @@ pub(super) struct DelegateOutcome {
     pub child_turns: Vec<ChildTurnRow>,
 }
 
-fn provider_for(model: &GraphNodeModel) -> Option<(Provider, AuthMode)> {
+pub(super) fn provider_for(model: &GraphNodeModel) -> Option<(Provider, AuthMode)> {
     let provider = match ProviderId::try_from(model.provider).ok()? {
         ProviderId::Openai => Provider::OpenAi,
         ProviderId::Xai => Provider::Xai,
@@ -64,6 +64,7 @@ struct ChildOutcome {
 }
 
 pub(super) struct ChildContext<'a> {
+    pub parent_role: Role,
     pub state: &'a SessionState,
     pub workspace: &'a Path,
     pub agent_files: &'a AgentFiles,
@@ -93,7 +94,11 @@ async fn run_child(
 ) -> (ChildOutcome, ChildTurnRow) {
     let agent_id = Uuid::new_v4().to_string();
     let role = assignment.role.id().to_owned();
-    let task = assignment.task.clone();
+    let task = if context.parent_role == Role::Main {
+        assignment.task.clone()
+    } else {
+        format!("From {}: {}", context.parent_role.label(), assignment.task)
+    };
     let mut messages = Vec::new();
     let mut reasoning = Vec::new();
     let outcome = run_child_inner(
@@ -172,13 +177,14 @@ async fn run_child_inner(
         };
     };
     let system = format!(
-        "{}\n\n## {} subagent\n\n{}\n\nYou have a fresh context. Work only on the assigned task. You cannot delegate. Return a concise result with evidence and uncertainties; the main agent owns the user-facing answer.",
+        "{}\n\n## {} subagent for {}\n\n{}\n\nYou have a fresh context. Work only on the assigned task. You cannot delegate. Return a concise result with evidence and uncertainties to your parent agent.",
         context.base_system,
         assignment.role.label(),
+        context.parent_role.label(),
         assignment.role.instruction()
     );
     let task = format!(
-        "Task: {}\n\nAsk the main agent for any scope details requiring tools unavailable to you.\n\nRecorded surfaces at delegation:\n{}",
+        "Task: {}\n\nAsk the parent agent for any scope details requiring tools unavailable to you.\n\nRecorded surfaces at delegation:\n{}",
         assignment.task, context.surfaces_context
     );
     let mut input = input_messages(&[TextMessage {
@@ -290,8 +296,24 @@ async fn run_child_inner(
             };
         }
         if round + 1 == MAX_CHILD_ROUNDS || call_count + step.calls.len() > MAX_CHILD_CALLS {
+            let notes = messages
+                .iter()
+                .rev()
+                .filter_map(|message| message.get("text").and_then(Value::as_str))
+                .filter(|text| !text.trim().is_empty())
+                .take(3)
+                .map(|text| text.chars().take(500).collect::<String>())
+                .collect::<Vec<_>>()
+                .join("\n");
             return ChildOutcome {
-                result: "Subagent reached its tool budget before finishing.".to_owned(),
+                result: if notes.is_empty() {
+                    "Subagent reached its work budget before finishing. Assign a narrower follow-up task."
+                        .to_owned()
+                } else {
+                    format!(
+                        "Subagent reached its work budget before finishing. Partial notes:\n{notes}\nAssign a narrower follow-up task."
+                    )
+                },
                 is_error: true,
                 tools,
             };
@@ -313,11 +335,7 @@ async fn run_child_inner(
             let id = Uuid::new_v4().to_string();
             let ordinal = tool_sequence.fetch_add(1, Ordering::SeqCst);
             let arguments: Result<Value, _> = serde_json::from_str(&call.arguments);
-            let label = format!(
-                "{}: {}",
-                assignment.role.label(),
-                summary(&call.name, arguments.as_ref().unwrap_or(&Value::Null))
-            );
+            let label = summary(&call.name, arguments.as_ref().unwrap_or(&Value::Null));
             if let Some(tx) = context.progress {
                 let _ = tx
                     .send(SessionStreamEvent {
@@ -329,9 +347,21 @@ async fn run_child_inner(
                             name: call.name.clone(),
                             summary: label.clone(),
                             is_error: false,
+                            agent_role: context.parent_role.id().to_owned(),
                         }),
                         detail: None,
                         segment_index: 0,
+                        agent_role: context.parent_role.id().to_owned(),
+                        tool_detail: Some(beale_contracts::v1::SessionToolDetailPage {
+                            id: id.clone(),
+                            name: call.name.clone(),
+                            arguments: call.arguments.clone(),
+                            output: String::new(),
+                            offset: 0,
+                            next_offset: 0,
+                            total_bytes: 0,
+                            is_error: false,
+                        }),
                     })
                     .await;
             }
@@ -415,9 +445,23 @@ async fn run_child_inner(
                                 name: call.name.clone(),
                                 summary: label.clone(),
                                 is_error,
+                                agent_role: context.parent_role.id().to_owned(),
                             }),
                             detail: None,
                             segment_index: 0,
+                            agent_role: context.parent_role.id().to_owned(),
+                            tool_detail: Some(beale_contracts::v1::SessionToolDetailPage {
+                                id: id.clone(),
+                                name: call.name.clone(),
+                                arguments: call.arguments.clone(),
+                                output: page(&output, 0, super::TOOL_PAGE_BYTES)
+                                    .map_or_else(|_| String::new(), |(first, _)| first),
+                                offset: 0,
+                                next_offset: page(&output, 0, super::TOOL_PAGE_BYTES)
+                                    .map_or(0, |(_, next)| next as u64),
+                                total_bytes: output.len() as u64,
+                                is_error,
+                            }),
                         })
                         .await;
                 }
@@ -432,6 +476,7 @@ async fn run_child_inner(
                     arguments: call.arguments,
                     output: output.clone(),
                     is_error,
+                    agent_role: context.parent_role.id().to_owned(),
                 });
                 model_preview(&output, context.agent_files)
             };
@@ -534,6 +579,8 @@ pub(super) async fn delegate(
                 tool: None,
                 detail: None,
                 segment_index: 0,
+                agent_role: context.parent_role.id().to_owned(),
+                tool_detail: None,
             })
             .await;
     }

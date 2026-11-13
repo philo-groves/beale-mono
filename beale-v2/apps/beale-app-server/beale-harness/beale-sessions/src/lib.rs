@@ -11,16 +11,18 @@ use axum::{
 use beale_contracts::runbooks::{self, CellRunRequest, CellRunResponse};
 use beale_contracts::{
     ARCHIVE_PATH, AUTOMATIONS_CANCEL_PATH, AUTOMATIONS_PATH, PROTOBUF_STREAM_CONTENT_TYPE,
-    QUICK_CHAT_DETAIL_PATH, QUICK_CHAT_TURNS_PATH, SESSION_ARCHIVE_PATH, SESSION_DETAIL_PATH,
-    SESSION_RESTORE_PATH, SESSION_TOOL_DETAIL_PATH, SESSION_TURN_STREAM_PATH, SESSION_TURNS_PATH,
-    SESSIONS_PATH, session_stream_frame,
+    QUICK_CHAT_DETAIL_PATH, QUICK_CHAT_TURNS_PATH, SESSION_ARCHIVE_PATH,
+    SESSION_DETAIL_MAX_TOOL_SUMMARIES, SESSION_DETAIL_PATH, SESSION_RESTORE_PATH,
+    SESSION_TOOL_DETAIL_PATH, SESSION_TURN_ID_HEADER, SESSION_TURN_STOP_PATH,
+    SESSION_TURN_STREAM_PATH, SESSION_TURNS_PATH, SESSIONS_PATH, session_stream_frame,
     v1::{
         ArchiveEntry, AuthMethod, GoalStatus, GraphNodeConcurrency, GraphNodeModel,
         ListArchiveResponse, ListSessionsResponse, ProviderId, ReasoningEffort, SessionCommentary,
-        SessionDetail, SessionGoal, SessionGraphConfig, SessionMessage, SessionReasoningSummary,
-        SessionRole, SessionStreamEvent, SessionStreamKind, SessionSummary, SessionTokenUsage,
-        SessionToolDetailPage, SessionToolSummary, SessionUsageSnapshot, SubmitSessionTurnRequest,
-        SurfaceScopeState, WorkspaceSurface,
+        SessionDetail, SessionGoal, SessionGraphAgent, SessionGraphConfig, SessionGraphHandoff,
+        SessionMessage, SessionReasoningSummary, SessionRole, SessionStreamEvent,
+        SessionStreamKind, SessionSummary, SessionTokenUsage, SessionToolDetailPage,
+        SessionToolSummary, SessionUsageSnapshot, SubmitSessionTurnRequest, SurfaceScopeState,
+        WorkspaceSurface,
     },
 };
 use beale_extender::PluginRuntime;
@@ -44,10 +46,11 @@ use prost::Message;
 use serde_json::{Value, json};
 use std::{
     collections::{HashMap, HashSet},
+    future::Future,
     sync::{Arc, Weak},
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::{Mutex, mpsc, watch};
 use uuid::Uuid;
 
 #[cfg(feature = "runbooks")]
@@ -328,11 +331,41 @@ fn feature_tool_requires_review(name: &str) -> bool {
     if name == beale_goals::TOOL_NAME {
         return true;
     }
-    #[cfg(feature = "graphs")]
-    if name == beale_graphs::DELEGATE_TOOL {
-        return true;
-    }
     false
+}
+
+#[cfg(feature = "graphs")]
+fn requested_top_level_role(
+    graph: Option<&beale_graphs::GraphDefinition>,
+    id: &str,
+) -> Result<Option<beale_graphs::Role>, StatusCode> {
+    if id.is_empty() {
+        return Ok(None);
+    }
+    beale_graphs::Role::from_id(id)
+        .filter(|role| role.is_top_level())
+        .filter(|role| graph.is_some_and(|graph| graph.nodes.contains(role)))
+        .map(Some)
+        .ok_or(StatusCode::BAD_REQUEST)
+}
+
+#[cfg(feature = "graphs")]
+fn reserve_delegations(
+    runtime: &dyn beale_graphs::GraphRuntime,
+    arguments: &Value,
+    config: &SessionGraphConfig,
+    fallback: &GraphNodeModel,
+    used: &mut usize,
+) -> Result<(), String> {
+    let count = runtime
+        .assignments(arguments, config, fallback)
+        .map_err(|error| format!("Invalid delegation: {error}"))?
+        .len();
+    if count > beale_graphs::MAX_ASSIGNMENTS_PER_TURN.saturating_sub(*used) {
+        return Err("Subagent assignment limit reached for this turn.".to_owned());
+    }
+    *used += count;
+    Ok(())
 }
 
 #[cfg(feature = "runbooks")]
@@ -362,6 +395,8 @@ fn runbook_review_context(state: &SessionState, workspace_id: &str) -> Result<St
 #[cfg(feature = "graphs")]
 mod graphs;
 mod http;
+#[cfg(feature = "graphs")]
+mod peer_graph;
 mod quick_chat;
 mod system_prompt;
 use http::{authorized, checked_body, response};
@@ -377,6 +412,9 @@ const MAX_COMMENTARY_BYTES_PER_TURN: usize = 8_192;
 const TOOL_PAGE_BYTES: usize = 8_000;
 const INTERRUPTED_ANSWER: &str =
     "The provider could not complete this turn. Tool activity was saved.";
+const WORK_BUDGET_ANSWER: &str =
+    "This agent reached its per-turn work budget. Its work is saved; continue to resume.";
+const STOPPED_ANSWER: &str = "Stopped by the user. Completed tool activity was saved.";
 
 fn compact_openai_context(input: &[Value]) -> Vec<Value> {
     let start = input
@@ -409,15 +447,19 @@ fn validate_graph_selection(
         if graph_models.len() > 64 {
             return Err(StatusCode::BAD_REQUEST);
         }
-        if graph_node_concurrency.len() > 4 {
+        let graph = beale_graphs::graph_definition(graph_id).ok_or(StatusCode::BAD_REQUEST)?;
+        if graph_node_concurrency.len() > graph.nodes.len() {
             return Err(StatusCode::BAD_REQUEST);
         }
         let mut seen = std::collections::HashSet::new();
-        let mut per_role = [0_usize; 4];
+        let mut per_role = [0_usize; 10];
         for item in graph_models {
             let Some(role) = beale_graphs::Role::from_id(&item.node_id) else {
                 return Err(StatusCode::BAD_REQUEST);
             };
+            if !graph.nodes.contains(&role) {
+                return Err(StatusCode::BAD_REQUEST);
+            }
             per_role[role.index()] += 1;
             if per_role[role.index()] > role.max_models()
                 || item.model.is_empty()
@@ -442,9 +484,12 @@ fn validate_graph_selection(
             let Some(role) = beale_graphs::Role::from_id(&item.node_id) else {
                 return Err(StatusCode::BAD_REQUEST);
             };
+            if !graph.nodes.contains(&role) {
+                return Err(StatusCode::BAD_REQUEST);
+            }
             if item.max_concurrent == 0
                 || item.max_concurrent > beale_graphs::MAX_CONCURRENT
-                || (role == beale_graphs::Role::Main && item.max_concurrent != 1)
+                || (role.is_top_level() && item.max_concurrent != 1)
                 || !limited_roles.insert(item.node_id.as_str())
             {
                 return Err(StatusCode::BAD_REQUEST);
@@ -529,6 +574,7 @@ struct SessionState {
     credentials: Arc<CredentialStore>,
     provider: Arc<ProviderClient>,
     session_locks: Arc<Mutex<HashMap<String, Weak<Mutex<()>>>>>,
+    turn_stops: Arc<Mutex<HashMap<Uuid, watch::Sender<bool>>>>,
     quick_chat_lock: Arc<Mutex<()>>,
 }
 
@@ -549,6 +595,40 @@ struct StoredTurn {
     answer: String,
     duration_ms: u64,
     internal_prompt: bool,
+    agent_role: String,
+}
+
+#[cfg(feature = "graphs")]
+#[derive(Clone)]
+struct PeerRun {
+    role: beale_graphs::Role,
+    turn_number: i64,
+    notify: mpsc::UnboundedSender<()>,
+    handoff: bool,
+}
+
+#[cfg(feature = "graphs")]
+fn peer_input_messages(
+    turns: &[StoredTurn],
+    role: beale_graphs::Role,
+    prompt: &str,
+) -> Vec<TextMessage> {
+    let mut messages = Vec::new();
+    for turn in turns.iter().filter(|turn| turn.agent_role == role.id()) {
+        messages.push(TextMessage {
+            role: TextRole::User,
+            text: turn.prompt.clone(),
+        });
+        messages.push(TextMessage {
+            role: TextRole::Assistant,
+            text: turn.answer.clone(),
+        });
+    }
+    messages.push(TextMessage {
+        role: TextRole::User,
+        text: prompt.to_owned(),
+    });
+    messages
 }
 
 pub fn router(token: String, workspaces: WorkspaceStore) -> anyhow::Result<Router> {
@@ -563,6 +643,7 @@ pub fn router_with_runtime(
     plugins: PluginRuntime,
 ) -> anyhow::Result<Router> {
     let state = build_state_with_runtime(token, workspaces, plugins)?;
+    state.db.recover_abandoned_graph_work()?;
     let router = Router::new()
         .route(SESSIONS_PATH, get(list))
         .route(SESSION_DETAIL_PATH, get(details))
@@ -574,6 +655,7 @@ pub fn router_with_runtime(
         .route(AUTOMATIONS_PATH, get(automations::list))
         .route(AUTOMATIONS_CANCEL_PATH, post(automations::cancel))
         .route(SESSION_TURN_STREAM_PATH, post(stream_turn))
+        .route(SESSION_TURN_STOP_PATH, post(stop_turn))
         .route(QUICK_CHAT_TURNS_PATH, post(quick_chat::turn))
         .route(QUICK_CHAT_DETAIL_PATH, get(quick_chat::details));
     #[cfg(feature = "runbooks")]
@@ -605,6 +687,7 @@ fn build_state_with_runtime(
         credentials,
         provider: Arc::new(ProviderClient::new()?),
         session_locks: Arc::new(Mutex::new(HashMap::new())),
+        turn_stops: Arc::new(Mutex::new(HashMap::new())),
         quick_chat_lock: Arc::new(Mutex::new(())),
     })
 }
@@ -668,28 +751,46 @@ fn load_persisted(
         .session(&id.to_string())
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
-    if item.turns.is_empty()
-        || item.turns.len() > RECENT_TURNS
+    let peer_graph = db
+        .is_peer_graph_session(&id.to_string())
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let rows = if peer_graph {
+        db.graph_recent_turns(&id.to_string())
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    } else {
+        item.turns
+    };
+    if (rows.is_empty() && !peer_graph)
+        || rows.len() > RECENT_TURNS
         || item.session.created_at_ms < 0
         || item.session.last_message_at_ms < 0
     {
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
-    let first_number = item.turns[0].number;
+    let first_number = rows.first().map_or(1, |turn| turn.number);
     if first_number <= 0 {
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
-    let mut turns = item
-        .turns
+    let mut turns = rows
         .into_iter()
         .enumerate()
         .map(|(index, row)| {
             let expected = first_number
                 .checked_add(i64::try_from(index).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?)
                 .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
-            if row.duration_ms < 0 || row.number != expected {
+            if row.duration_ms < 0 || row.number < expected {
                 return Err(StatusCode::INTERNAL_SERVER_ERROR);
             }
+            let agent_role = if let Some(role) = db
+                .graph_turn_role(&id.to_string(), row.number)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            {
+                role
+            } else {
+                db.session_turn_role(&id.to_string(), row.number)
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+                    .unwrap_or_else(|| "main".to_owned())
+            };
             Ok(StoredTurn {
                 number: row.number,
                 provider: row.provider,
@@ -699,6 +800,7 @@ fn load_persisted(
                 answer: row.answer,
                 duration_ms: row.duration_ms as u64,
                 internal_prompt: row.internal_prompt,
+                agent_role,
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -738,25 +840,165 @@ fn summary(session: &StoredSession) -> SessionSummary {
     }
 }
 
+fn graph_state(
+    db: &HostDatabase,
+    session_id: &str,
+) -> Result<(Vec<SessionGraphAgent>, Vec<SessionGraphHandoff>), StatusCode> {
+    #[cfg(feature = "graphs")]
+    {
+        if !db
+            .is_peer_graph_session(session_id)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        {
+            return Ok((Vec::new(), Vec::new()));
+        }
+        let id = db
+            .session_graph_id(session_id)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+        let graph = beale_graphs::graph_definition(&id).ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+        let agents = graph
+            .nodes
+            .iter()
+            .filter(|role| role.is_top_level())
+            .map(|role| {
+                Ok(SessionGraphAgent {
+                    role: role.id().to_owned(),
+                    status: db
+                        .graph_role_status(session_id, role.id())
+                        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+                })
+            })
+            .collect::<Result<Vec<_>, StatusCode>>()?;
+        let handoffs = db
+            .graph_handoffs(session_id)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .into_iter()
+            .map(|item| SessionGraphHandoff {
+                id: item.id,
+                from_role: item.from_role,
+                to_role: item.to_role,
+                task: item.task,
+                status: item.status,
+            })
+            .collect();
+        Ok((agents, handoffs))
+    }
+    #[cfg(not(feature = "graphs"))]
+    {
+        let _ = (db, session_id);
+        Ok((Vec::new(), Vec::new()))
+    }
+}
+
+fn recent_peer_turns(
+    turns: &[StoredTurn],
+    mut tool_count: impl FnMut(&[i64]) -> Result<usize, StatusCode>,
+) -> Result<&[StoredTurn], StatusCode> {
+    let mut start = turns.len().saturating_sub(8);
+    loop {
+        let recent = &turns[start..];
+        let numbers = recent.iter().map(|turn| turn.number).collect::<Vec<_>>();
+        let history_bytes = recent.iter().fold(0_usize, |total, turn| {
+            total.saturating_add(turn.prompt.len().saturating_add(turn.answer.len()))
+        });
+        if (tool_count(&numbers)? <= SESSION_DETAIL_MAX_TOOL_SUMMARIES
+            && history_bytes <= MAX_HISTORY_BYTES)
+            || recent.len() <= 1
+        {
+            return Ok(recent);
+        }
+        start += 1;
+    }
+}
+
 fn detail(
     db: &HostDatabase,
     session: &StoredSession,
     turns: &[StoredTurn],
 ) -> Result<SessionDetail, StatusCode> {
-    let first_turn = turns
-        .first()
-        .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?
-        .number;
-    let tools = db
-        .tool_summaries_since(&session.id, first_turn)
+    if turns.is_empty() {
+        #[cfg(not(feature = "graphs"))]
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        #[cfg(feature = "graphs")]
+        {
+            let (graph_agents, graph_handoffs) = graph_state(db, &session.id)?;
+            let graph_id = db
+                .session_graph_id(&session.id)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+                .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+            let graph_config = db
+                .session_graph_config(&session.id)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+                .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+            let config = SessionGraphConfig::decode(graph_config.as_slice())
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            let model = config
+                .models
+                .iter()
+                .find(|model| {
+                    beale_graphs::entry_role(&graph_id)
+                        .is_some_and(|role| model.node_id == role.id())
+                })
+                .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+            return Ok(SessionDetail {
+                summary: Some(summary(session)),
+                provider: model.provider,
+                method: model.method,
+                model: model.model.clone(),
+                first_turn_number: 1,
+                graph_id,
+                graph_models: config.models,
+                graph_node_concurrency: config.concurrency,
+                token_usage: Some(SessionTokenUsage::default()),
+                graph_agents,
+                graph_handoffs,
+                ..Default::default()
+            });
+        }
+    }
+    // Graph roles keep their own provider history. Bound the combined UI transcript
+    // separately so a busy team cannot exceed the detail protocol's tool cap.
+    let peer_graph = db
+        .is_peer_graph_session(&session.id)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let reasoning = db
-        .reasoning_summaries_since(&session.id, first_turn)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let commentary = db
-        .commentary_since(&session.id, first_turn)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    if tools.len() > RECENT_TURNS * MAX_TOOL_CALLS {
+    let turns = if peer_graph {
+        recent_peer_turns(turns, |numbers| {
+            db.tool_summaries_for_turns(&session.id, numbers)
+                .map(|rows| rows.len())
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+        })?
+    } else {
+        turns
+    };
+    let first_turn = turns[0].number;
+    let (graph_agents, graph_handoffs) = graph_state(db, &session.id)?;
+    let selected_turns = turns.iter().map(|turn| turn.number).collect::<Vec<_>>();
+    let tools = if peer_graph {
+        db.tool_summaries_for_turns(&session.id, &selected_turns)
+    } else {
+        db.tool_summaries_since(&session.id, first_turn)
+    }
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let reasoning = if peer_graph {
+        db.reasoning_summaries_for_turns(&session.id, &selected_turns)
+    } else {
+        db.reasoning_summaries_since(&session.id, first_turn)
+    }
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let commentary = if peer_graph {
+        db.commentary_for_turns(&session.id, &selected_turns)
+    } else {
+        db.commentary_since(&session.id, first_turn)
+    }
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if tools.len()
+        > if peer_graph {
+            SESSION_DETAIL_MAX_TOOL_SUMMARIES
+        } else {
+            RECENT_TURNS * 32
+        }
+    {
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
     let mut messages = Vec::with_capacity(turns.len() * 2);
@@ -774,6 +1016,7 @@ fn detail(
                 reasoning_summaries: Vec::new(),
                 duration_ms: 0,
                 commentary: Vec::new(),
+                agent_role: turn.agent_role.clone(),
             });
         }
         let turn_number = turn.number;
@@ -791,6 +1034,7 @@ fn detail(
                     name: tool.name.clone(),
                     summary: tool.summary.clone(),
                     is_error: tool.is_error,
+                    agent_role: tool.agent_role.clone(),
                 })
                 .collect(),
             reasoning_summaries: reasoning
@@ -804,6 +1048,7 @@ fn detail(
                     Ok(SessionReasoningSummary {
                         text: item.text.clone(),
                         after_tool_count: item.after_tool_count as u32,
+                        agent_role: item.agent_role.clone(),
                     })
                 })
                 .collect::<Result<Vec<_>, _>>()?,
@@ -819,9 +1064,11 @@ fn detail(
                     Ok(SessionCommentary {
                         text: item.text.clone(),
                         after_tool_count: item.after_tool_count as u32,
+                        agent_role: item.agent_role.clone(),
                     })
                 })
                 .collect::<Result<Vec<_>, _>>()?,
+            agent_role: turn.agent_role.clone(),
         });
     }
     let latest = turns.last().ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -918,6 +1165,8 @@ fn detail(
         .session_runbooks(&session.workspace_id, &session.id)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(SessionDetail {
+        graph_agents,
+        graph_handoffs,
         model_usage,
         summary: Some(summary(session)),
         messages,
@@ -1333,7 +1582,22 @@ async fn submit_turn(
         return Err(StatusCode::UNAUTHORIZED);
     }
     let request: SubmitSessionTurnRequest = checked_body(&headers, &body)?;
-    Ok(response(run_turn(state, request, None).await?))
+    Ok(response(run_turn(state, request, None, None).await?))
+}
+
+async fn stop_turn(
+    State(state): State<SessionState>,
+    RoutePath(id): RoutePath<String>,
+    headers: HeaderMap,
+) -> Result<StatusCode, StatusCode> {
+    if !authorized(&headers, &state.token) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    let id = parse_id(&id)?;
+    let stops = state.turn_stops.lock().await;
+    let stop = stops.get(&id).ok_or(StatusCode::NOT_FOUND)?;
+    stop.send_replace(true);
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn stream_turn(
@@ -1345,9 +1609,32 @@ async fn stream_turn(
         return Err(StatusCode::UNAUTHORIZED);
     }
     let request: SubmitSessionTurnRequest = checked_body(&headers, &body)?;
+    let stop_id = headers
+        .get(SESSION_TURN_ID_HEADER)
+        .map(|value| {
+            value
+                .to_str()
+                .map_err(|_| StatusCode::BAD_REQUEST)
+                .and_then(parse_id)
+        })
+        .transpose()?;
+    let stop = if let Some(id) = stop_id {
+        let (sender, receiver) = watch::channel(false);
+        let mut stops = state.turn_stops.lock().await;
+        if stops.contains_key(&id) {
+            return Err(StatusCode::CONFLICT);
+        }
+        stops.insert(id, sender);
+        Some(receiver)
+    } else {
+        None
+    };
     let (tx, rx) = mpsc::channel::<SessionStreamEvent>(32);
     tokio::spawn(async move {
-        let outcome = run_turn(state, request, Some(tx.clone())).await;
+        let outcome = run_turn(state.clone(), request, Some(tx.clone()), stop).await;
+        if let Some(id) = stop_id {
+            state.turn_stops.lock().await.remove(&id);
+        }
         let event = match outcome {
             Ok(detail) => SessionStreamEvent {
                 runbook_progress: None,
@@ -1356,6 +1643,7 @@ async fn stream_turn(
                 tool: None,
                 detail: Some(detail),
                 segment_index: 0,
+                ..Default::default()
             },
             Err(status) => SessionStreamEvent {
                 runbook_progress: None,
@@ -1371,6 +1659,7 @@ async fn stream_turn(
                 tool: None,
                 detail: None,
                 segment_index: 0,
+                ..Default::default()
             },
         };
         let event = if session_stream_frame(&event).is_some() {
@@ -1383,6 +1672,7 @@ async fn stream_turn(
                 tool: None,
                 detail: None,
                 segment_index: 0,
+                ..Default::default()
             }
         };
         let _ = tx.send(event).await;
@@ -1425,11 +1715,49 @@ fn reasoning_effort_name(value: i32) -> Result<Option<&'static str>, StatusCode>
     }
 }
 
+fn stop_requested(stop: &Option<watch::Receiver<bool>>) -> bool {
+    stop.as_ref().is_some_and(|receiver| *receiver.borrow())
+}
+
+async fn until_stopped<F: Future>(
+    future: F,
+    stop: &mut Option<watch::Receiver<bool>>,
+) -> Option<F::Output> {
+    tokio::pin!(future);
+    if let Some(receiver) = stop.as_mut() {
+        tokio::select! {
+            result = &mut future => Some(result),
+            changed = receiver.changed() => {
+                if changed.is_ok() && *receiver.borrow() {
+                    None
+                } else {
+                    Some(future.await)
+                }
+            }
+        }
+    } else {
+        Some(future.await)
+    }
+}
+
+#[cfg(feature = "goal-mode")]
+fn goal_signal_for_answer(
+    answer: &str,
+    signal: Option<beale_goals::Signal>,
+) -> Option<beale_goals::Signal> {
+    if answer.starts_with(INTERRUPTED_ANSWER) || answer == STOPPED_ANSWER {
+        None
+    } else {
+        signal.or(Some(beale_goals::Signal::Continue))
+    }
+}
+
 #[cfg(feature = "goal-mode")]
 async fn run_turn(
     state: SessionState,
     mut request: SubmitSessionTurnRequest,
     progress: Option<mpsc::Sender<SessionStreamEvent>>,
+    stop: Option<watch::Receiver<bool>>,
 ) -> Result<SessionDetail, StatusCode> {
     let lock = if request.session_id.is_empty() {
         Arc::new(Mutex::new(()))
@@ -1439,11 +1767,55 @@ async fn run_turn(
     let _guard = lock.try_lock().map_err(|_| StatusCode::CONFLICT)?;
     let mut automatic = false;
     loop {
-        let detail =
-            run_one_turn(&state, request.clone(), progress.clone(), automatic, &lock).await?;
+        #[cfg(feature = "graphs")]
+        let peer = peer_graph::applies(&state.db, &request)?;
+        #[cfg(not(feature = "graphs"))]
+        let peer = false;
+        let detail = if peer {
+            #[cfg(feature = "graphs")]
+            {
+                peer_graph::run(
+                    &state,
+                    request.clone(),
+                    progress.clone(),
+                    &lock,
+                    stop.clone(),
+                )
+                .await?
+            }
+            #[cfg(not(feature = "graphs"))]
+            {
+                unreachable!()
+            }
+        } else {
+            run_one_turn(
+                &state,
+                request.clone(),
+                progress.clone(),
+                automatic,
+                &lock,
+                stop.clone(),
+                #[cfg(feature = "graphs")]
+                None,
+            )
+            .await?
+        };
         if let Some(goal) = &detail.goal
             && goal.status == GoalStatus::Active as i32
         {
+            if stop_requested(&stop) {
+                let id = &detail
+                    .summary
+                    .as_ref()
+                    .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?
+                    .id;
+                state
+                    .db
+                    .set_goal_status(id, GoalStatus::Paused as i32)
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                let (session, turns) = load_persisted(&state.db, parse_id(id)?)?;
+                return self::detail(&state.db, &session, &turns);
+            }
             if !state
                 .db
                 .feature_enabled(beale_goals::FEATURE_ID)
@@ -1483,6 +1855,7 @@ async fn run_turn(
                         tool: None,
                         detail: Some(detail.clone()),
                         segment_index: 0,
+                        ..Default::default()
                     })
                     .await;
             }
@@ -1498,6 +1871,9 @@ async fn run_turn(
             request.goal_max_turns = 0;
             request.goal_max_duration_minutes = 0;
             request.repeat_preset.clear();
+            request.graph_id.clear();
+            request.graph_models.clear();
+            request.graph_node_concurrency.clear();
             automatic = true;
             continue;
         }
@@ -1510,6 +1886,7 @@ async fn run_turn(
     state: SessionState,
     request: SubmitSessionTurnRequest,
     progress: Option<mpsc::Sender<SessionStreamEvent>>,
+    stop: Option<watch::Receiver<bool>>,
 ) -> Result<SessionDetail, StatusCode> {
     if request.goal_mode {
         return Err(StatusCode::BAD_REQUEST);
@@ -1520,7 +1897,21 @@ async fn run_turn(
         session_lock(&state, &request.session_id).await
     };
     let _guard = lock.try_lock().map_err(|_| StatusCode::CONFLICT)?;
-    run_one_turn(&state, request, progress, false, &lock).await
+    #[cfg(feature = "graphs")]
+    if peer_graph::applies(&state.db, &request)? {
+        return peer_graph::run(&state, request, progress, &lock, stop).await;
+    }
+    run_one_turn(
+        &state,
+        request,
+        progress,
+        false,
+        &lock,
+        stop,
+        #[cfg(feature = "graphs")]
+        None,
+    )
+    .await
 }
 
 async fn run_one_turn(
@@ -1529,6 +1920,8 @@ async fn run_one_turn(
     progress: Option<mpsc::Sender<SessionStreamEvent>>,
     automatic: bool,
     lock: &Arc<Mutex<()>>,
+    mut stop: Option<watch::Receiver<bool>>,
+    #[cfg(feature = "graphs")] peer: Option<PeerRun>,
 ) -> Result<SessionDetail, StatusCode> {
     let started = Instant::now();
     let _workspace_id = parse_id(&request.workspace_id)?;
@@ -1590,9 +1983,10 @@ async fn run_one_turn(
         &request.workspace_id,
     )?;
     #[cfg(feature = "graphs")]
-    if request.graph_id == beale_graphs::SIMPLE_ID
+    if !request.graph_id.is_empty()
         && request.graph_models.iter().any(|model| {
-            model.node_id == beale_graphs::Role::Main.id()
+            Some(model.node_id.as_str())
+                == beale_graphs::entry_role(&request.graph_id).map(|role| role.id())
                 && (model.provider != request.provider
                     || model.method != request.method
                     || model.model != request.model)
@@ -1636,12 +2030,25 @@ async fn run_one_turn(
     let next_turn_number = turns.last().map_or(Ok(1), |turn| {
         turn.number.checked_add(1).ok_or(StatusCode::CONFLICT)
     })?;
+    #[cfg(feature = "graphs")]
+    let next_turn_number = peer
+        .as_ref()
+        .map_or(next_turn_number, |peer| peer.turn_number);
     let persisted_goal = state
         .db
         .goal(&session.id)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     #[cfg(feature = "goal-mode")]
     let mut goal = persisted_goal;
+    #[cfg(all(feature = "graphs", feature = "goal-mode"))]
+    if peer.as_ref().is_some_and(|peer| {
+        !matches!(
+            peer.role,
+            beale_graphs::Role::Discovery | beale_graphs::Role::DiscoveryHarness
+        )
+    }) {
+        goal = None;
+    }
     #[cfg(not(feature = "goal-mode"))]
     let goal = persisted_goal;
     if let Some(saved) = &goal
@@ -1659,7 +2066,15 @@ async fn run_one_turn(
     {
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
-    if goal.is_none() && next_turn_number > MAX_ORDINARY_TURNS {
+    #[cfg(feature = "graphs")]
+    let max_turns = if peer.is_some() {
+        1024
+    } else {
+        MAX_ORDINARY_TURNS
+    };
+    #[cfg(not(feature = "graphs"))]
+    let max_turns = MAX_ORDINARY_TURNS;
+    if goal.is_none() && next_turn_number > max_turns {
         return Err(StatusCode::CONFLICT);
     }
     #[cfg(feature = "goal-mode")]
@@ -1740,6 +2155,28 @@ async fn run_one_turn(
         role: TextRole::User,
         text: request.prompt.clone(),
     });
+    #[cfg(feature = "graphs")]
+    if let Some(peer) = &peer {
+        let mut agent_turns = state
+            .db
+            .graph_agent_turns(&session.id, peer.role.id())
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .into_iter()
+            .map(|turn| StoredTurn {
+                number: turn.number,
+                provider: turn.provider,
+                method: turn.method,
+                model: turn.model,
+                prompt: turn.prompt,
+                answer: turn.answer,
+                duration_ms: turn.duration_ms.max(0) as u64,
+                internal_prompt: turn.internal_prompt,
+                agent_role: peer.role.id().to_owned(),
+            })
+            .collect::<Vec<_>>();
+        trim_recent_turns(&mut agent_turns);
+        messages = peer_input_messages(&agent_turns, peer.role, &request.prompt);
+    }
     let history_bytes = messages
         .iter()
         .map(|message| message.text.len())
@@ -1837,20 +2274,35 @@ async fn run_one_turn(
     let graph_section =
         active_graph.map(|runtime| runtime.system_section(&active_graph_config, &graph_fallback));
     let mut input = input_messages(&messages);
-    if provider == Provider::OpenAi
-        && turns.last().is_some_and(|turn| {
-            turn.provider == request.provider
-                && turn.method == request.method
-                && turn.model == request.model
-                && turn.answer != INTERRUPTED_ANSWER
-        })
-        && let Some(saved) = state
-            .db
-            .provider_context(&session.id)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    {
+    let reuse_prior_context = turns.last().is_some_and(|turn| {
+        turn.provider == request.provider
+            && turn.method == request.method
+            && turn.model == request.model
+            && !turn.answer.starts_with(INTERRUPTED_ANSWER)
+    });
+    #[cfg(feature = "graphs")]
+    let reuse_prior_context = peer.is_some() || (active_graph.is_none() && reuse_prior_context);
+    #[cfg(feature = "graphs")]
+    let saved_context = if let Some(peer) = &peer {
+        state.db.graph_provider_context(&session.id, peer.role.id())
+    } else {
+        state.db.provider_context(&session.id)
+    }
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    #[cfg(not(feature = "graphs"))]
+    let saved_context = state
+        .db
+        .provider_context(&session.id)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let reuse_saved_context = provider == Provider::OpenAi && reuse_prior_context;
+    #[cfg(feature = "graphs")]
+    let reuse_saved_context = reuse_saved_context || peer.is_some();
+    if reuse_saved_context && let Some(saved) = saved_context {
         let mut previous: Vec<Value> =
             serde_json::from_str(&saved).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        if provider != Provider::OpenAi {
+            previous.retain(|item| item.get("role").and_then(Value::as_str) != Some("system"));
+        }
         previous.push(json!({"role":"user","content":request.prompt}));
         input = previous;
     }
@@ -2075,6 +2527,79 @@ async fn run_one_turn(
     } else {
         String::new()
     };
+    #[cfg(feature = "graphs")]
+    let requested_role = requested_top_level_role(
+        active_graph.and_then(|_| beale_graphs::graph_definition(&saved_graph_id)),
+        &request.agent_role,
+    )?;
+    #[cfg(not(feature = "graphs"))]
+    if !request.agent_role.is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    #[cfg(feature = "graphs")]
+    let previous_role = if active_graph.is_some() && !turns.is_empty() {
+        state
+            .db
+            .session_last_top_level_role(&session.id)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    } else {
+        None
+    };
+    #[cfg(feature = "graphs")]
+    let mut active_role = if active_graph.is_some() && !turns.is_empty() {
+        requested_role
+            .or_else(|| {
+                previous_role
+                    .as_deref()
+                    .and_then(beale_graphs::Role::from_id)
+                    .filter(|role| {
+                        beale_graphs::graph_definition(&saved_graph_id)
+                            .is_some_and(|graph| graph.nodes.contains(role))
+                    })
+            })
+            .or_else(|| beale_graphs::entry_role(&saved_graph_id))
+            .unwrap_or(beale_graphs::Role::Main)
+    } else {
+        requested_role
+            .or_else(|| active_graph.and_then(|_| beale_graphs::entry_role(&saved_graph_id)))
+            .unwrap_or(beale_graphs::Role::Main)
+    };
+    #[cfg(feature = "graphs")]
+    if let Some(peer) = &peer {
+        active_role = peer.role;
+    }
+    #[cfg(feature = "graphs")]
+    let mut active_model = if active_graph.is_some() {
+        beale_graphs::top_level_model(&active_graph_config, active_role, &graph_fallback)
+    } else {
+        graph_fallback.clone()
+    };
+    #[cfg(not(feature = "graphs"))]
+    let active_model = GraphNodeModel {
+        node_id: "main".to_owned(),
+        provider: request.provider,
+        method: request.method,
+        model: request.model.clone(),
+    };
+    #[cfg(feature = "graphs")]
+    let (mut provider, mut mode) =
+        graphs::provider_for(&active_model).ok_or(StatusCode::BAD_REQUEST)?;
+    #[cfg(feature = "graphs")]
+    if let Some(tool) = beale_graphs::handoff_definition(&saved_graph_id, active_role) {
+        definitions.push(tool);
+    }
+    #[cfg(feature = "graphs")]
+    let base_system = system.clone();
+    #[allow(unused_mut)]
+    let mut system = system;
+    #[cfg(feature = "graphs")]
+    if active_graph.is_some() {
+        system.push_str(&format!(
+            "\n\n## Active agent: {}\n\n{}",
+            active_role.label(),
+            active_role.instruction()
+        ));
+    }
     if provider != Provider::OpenAi {
         input.insert(0, json!({"role":"system","content":system}));
     }
@@ -2093,11 +2618,40 @@ async fn run_one_turn(
     let mut commentary_bytes = 0_usize;
     let mut call_count = 0_usize;
     #[cfg(feature = "graphs")]
-    let mut delegated_count = 0_usize;
+    let mut delegated_count = [0_usize; 10];
+    #[cfg(feature = "graphs")]
+    let mut handoff_count = 0_usize;
+    #[cfg(feature = "graphs")]
+    let mut peer_messages = Vec::<String>::new();
+    #[cfg(feature = "graphs")]
+    let max_rounds = if active_graph.is_some()
+        && matches!(
+            saved_graph_id.as_str(),
+            beale_graphs::CLOUDFLARE_ID | beale_graphs::OPENAI_ID
+        ) {
+        32
+    } else {
+        MAX_TOOL_ROUNDS
+    };
+    #[cfg(not(feature = "graphs"))]
+    let max_rounds = MAX_TOOL_ROUNDS;
+    #[cfg(feature = "graphs")]
+    let max_calls = if max_rounds > MAX_TOOL_ROUNDS {
+        128
+    } else {
+        MAX_TOOL_CALLS
+    };
+    #[cfg(not(feature = "graphs"))]
+    let max_calls = MAX_TOOL_CALLS;
     let mut answer = None;
-    'rounds: for round in 0..MAX_TOOL_ROUNDS {
+    'rounds: for round in 0..max_rounds {
+        if stop_requested(&stop) {
+            answer = Some(STOPPED_ANSWER.to_owned());
+            break;
+        }
         let (provider_tx, forward) = if let Some(client_tx) = progress.clone() {
             let (provider_tx, mut provider_rx) = mpsc::channel::<ProviderProgress>(32);
+            let stream_role = active_model.node_id.clone();
             let forward = tokio::spawn(async move {
                 while let Some(update) = provider_rx.recv().await {
                     let (kind, text) = match update {
@@ -2116,6 +2670,8 @@ async fn run_one_turn(
                             tool: None,
                             detail: None,
                             segment_index: (round + 1) as u32,
+                            agent_role: stream_role.clone(),
+                            tool_detail: None,
                         })
                         .await
                         .is_err()
@@ -2128,42 +2684,51 @@ async fn run_one_turn(
         } else {
             (None, None)
         };
-        let step_request = ToolStepRequest {
-            model: &request.model,
-            input: &input,
-            tools: &definitions,
-            instructions: (provider == Provider::OpenAi).then_some(system.as_str()),
-            reasoning_effort,
-            workspace_root: Some(&workspace),
-        };
         let call_started = Instant::now();
-        let step = if provider == Provider::OpenAi {
-            state
-                .provider
-                .openai_tool_step(
-                    mode,
-                    step_request,
-                    &state.credentials,
-                    provider_tx.as_ref(),
-                    &mut openai_connection,
-                )
-                .await
-        } else {
-            state
-                .provider
-                .tool_step(
-                    provider,
-                    mode,
-                    step_request,
-                    &state.credentials,
-                    provider_tx.as_ref(),
-                )
-                .await
+        let step = {
+            let step_request = ToolStepRequest {
+                model: &active_model.model,
+                input: &input,
+                tools: &definitions,
+                instructions: (provider == Provider::OpenAi).then_some(system.as_str()),
+                reasoning_effort,
+                workspace_root: Some(&workspace),
+            };
+            let provider_call = async {
+                if provider == Provider::OpenAi {
+                    state
+                        .provider
+                        .openai_tool_step(
+                            mode,
+                            step_request,
+                            &state.credentials,
+                            provider_tx.as_ref(),
+                            &mut openai_connection,
+                        )
+                        .await
+                } else {
+                    state
+                        .provider
+                        .tool_step(
+                            provider,
+                            mode,
+                            step_request,
+                            &state.credentials,
+                            provider_tx.as_ref(),
+                        )
+                        .await
+                }
+            };
+            until_stopped(provider_call, &mut stop).await
         };
         drop(provider_tx);
         if let Some(forward) = forward {
             let _ = forward.await;
         }
+        let Some(step) = step else {
+            answer = Some(STOPPED_ANSWER.to_owned());
+            break;
+        };
         let step = match step {
             Ok(step) => step,
             Err(error) => {
@@ -2178,21 +2743,30 @@ async fn run_one_turn(
                                 tool: None,
                                 detail: None,
                                 segment_index: 0,
+                                agent_role: active_model.node_id.clone(),
+                                tool_detail: None,
                             })
                             .await;
                     }
                     return Err(StatusCode::BAD_GATEWAY);
                 }
-                answer = Some(INTERRUPTED_ANSWER.to_owned());
+                answer = Some(format!(
+                    "{INTERRUPTED_ANSWER} {}",
+                    provider_error_message(provider, mode, &error)
+                ));
                 break;
             }
         };
+        if stop_requested(&stop) {
+            answer = Some(STOPPED_ANSWER.to_owned());
+            break;
+        }
         model_usage.push(ModelUsageRow {
-            agent_id: "main".to_owned(),
-            role: "main".to_owned(),
-            provider: request.provider,
-            method: request.method,
-            model: request.model.clone(),
+            agent_id: active_model.node_id.clone(),
+            role: active_model.node_id.clone(),
+            provider: active_model.provider,
+            method: active_model.method,
+            model: active_model.model.clone(),
             input_tokens: step.usage.map(|usage| usage.input_tokens as i64),
             output_tokens: step.usage.map(|usage| usage.output_tokens as i64),
             cache_read_tokens: step
@@ -2207,7 +2781,7 @@ async fn run_one_turn(
                 }),
         });
         for mut summary in step.reasoning_summaries {
-            if reasoning_rows.len() >= MAX_TOOL_ROUNDS * 16
+            if reasoning_rows.len() >= max_rounds * 16
                 || reasoning_bytes >= MAX_REASONING_BYTES_PER_TURN
             {
                 break;
@@ -2229,8 +2803,10 @@ async fn run_one_turn(
                 ordinal: reasoning_rows.len() as i64,
                 after_tool_count: tool_rows.len() as i64,
                 text: summary,
+                agent_role: active_model.node_id.clone(),
             });
         }
+        let prior_input_len = input.len();
         input.extend(step.continuation);
         if step.calls.is_empty() {
             answer = Some(step.text);
@@ -2253,21 +2829,34 @@ async fn run_one_turn(
                     ordinal: commentary_rows.len() as i64,
                     after_tool_count: tool_rows.len() as i64,
                     text,
+                    agent_role: active_model.node_id.clone(),
                 });
             }
         }
-        if round + 1 == MAX_TOOL_ROUNDS
-            || call_count.saturating_add(step.calls.len()) > MAX_TOOL_CALLS
-        {
+        if round + 1 == max_rounds || call_count.saturating_add(step.calls.len()) > max_calls {
             if tool_rows.is_empty() {
                 return Err(StatusCode::BAD_GATEWAY);
             }
-            answer = Some(INTERRUPTED_ANSWER.to_owned());
+            // The last model step requested tools we cannot execute in this turn.
+            // Keep only the completed tool cycle in the saved provider context.
+            input.truncate(prior_input_len);
+            #[cfg(feature = "goal-mode")]
+            if goal_active && goal_signal.is_none() {
+                goal_signal = Some(beale_goals::Signal::Continue);
+            }
+            answer = Some(WORK_BUDGET_ANSWER.to_owned());
             break;
         }
         call_count += step.calls.len();
         let mut anthropic_tool_results = Vec::new();
+        #[cfg(feature = "graphs")]
+        let mut pending_handoff: Option<(beale_graphs::Role, String)> = None;
         for call in step.calls {
+            if stop_requested(&stop) {
+                input.truncate(prior_input_len);
+                answer = Some(STOPPED_ANSWER.to_owned());
+                break 'rounds;
+            }
             if call.id.is_empty()
                 || call.id.len() > 256
                 || call.name.len() > 128
@@ -2301,8 +2890,28 @@ async fn run_one_turn(
                 format!("{} runbook", call.name.trim_start_matches("runbook_"))
             } else if cfg!(feature = "graphs") && call.name == "graph_delegate" {
                 "Delegate to graph subagents".to_owned()
+            } else if cfg!(feature = "graphs") && call.name == "graph_handoff" {
+                format!(
+                    "Hand off to {}",
+                    args.as_ref()
+                        .ok()
+                        .and_then(|value| value.get("role"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("peer agent")
+                )
             } else {
                 tool_summary(&call.name, args.as_ref().unwrap_or(&Value::Null))
+            };
+            #[cfg(feature = "graphs")]
+            let summary = if peer.is_none()
+                && active_graph.is_some()
+                && matches!(
+                    saved_graph_id.as_str(),
+                    beale_graphs::CLOUDFLARE_ID | beale_graphs::OPENAI_ID
+                ) {
+                format!("{}: {summary}", active_role.label())
+            } else {
+                summary
             };
             if let Some(tx) = &progress {
                 let _ = tx
@@ -2315,9 +2924,21 @@ async fn run_one_turn(
                             name: call.name.clone(),
                             summary: summary.clone(),
                             is_error: false,
+                            agent_role: active_model.node_id.clone(),
                         }),
                         detail: None,
                         segment_index: 0,
+                        agent_role: active_model.node_id.clone(),
+                        tool_detail: Some(SessionToolDetailPage {
+                            id: id.clone(),
+                            name: call.name.clone(),
+                            arguments: call.arguments.clone(),
+                            output: String::new(),
+                            offset: 0,
+                            next_offset: 0,
+                            total_bytes: 0,
+                            is_error: false,
+                        }),
                     })
                     .await;
             }
@@ -2326,24 +2947,30 @@ async fn run_one_turn(
             let (review_denial, feature_review_approved) =
                 if feature_tool_requires_review(&call.name) {
                     if let Ok(arguments) = args.as_ref() {
-                        let decision = beale_safety::review(
-                            &state.db,
-                            &state.provider,
-                            &state.credentials,
-                            ReviewRequest {
-                                provider,
-                                mode,
-                                model: &request.model,
-                                name: &call.name,
-                                arguments,
-                                workspace_context: &workspace_context,
-                            },
+                        match until_stopped(
+                            beale_safety::review(
+                                &state.db,
+                                &state.provider,
+                                &state.credentials,
+                                ReviewRequest {
+                                    provider,
+                                    mode,
+                                    model: &active_model.model,
+                                    name: &call.name,
+                                    arguments,
+                                    workspace_context: &workspace_context,
+                                },
+                            ),
+                            &mut stop,
                         )
-                        .await;
-                        (
-                            (!decision.approved).then_some(decision.reason),
-                            decision.approved && decision.reviewed,
-                        )
+                        .await
+                        {
+                            Some(decision) => (
+                                (!decision.approved).then_some(decision.reason),
+                                decision.approved && decision.reviewed,
+                            ),
+                            None => (Some("Stopped by user".to_owned()), false),
+                        }
                     } else {
                         (None, false)
                     }
@@ -2358,89 +2985,167 @@ async fn run_one_turn(
                 match args {
                     #[cfg(feature = "webfetch")]
                     Ok(args) if call.name == beale_webfetch::TOOL_NAME => {
-                        match execute_webfetch(&state.db, &request.workspace_id, &args).await {
-                            Ok(value) => (value.output, value.is_error),
-                            Err(error) => (format!("Webfetch error: {error:#}"), true),
+                        match until_stopped(
+                            execute_webfetch(&state.db, &request.workspace_id, &args),
+                            &mut stop,
+                        )
+                        .await
+                        {
+                            Some(Ok(value)) => (value.output, value.is_error),
+                            Some(Err(error)) => (format!("Webfetch error: {error:#}"), true),
+                            None => ("Webfetch stopped by user.".to_owned(), true),
                         }
                     }
                     Ok(args) if call.name == "plugin_call" => {
                         let result = async {
-                        let parsed: PluginCallArgs = serde_json::from_value(args)?;
-                        anyhow::ensure!(parsed.arguments.is_object(), "arguments must be an object");
-                        anyhow::ensure!(callable_plugins.contains(&parsed.plugin), "plugin tools are unavailable in this workspace");
-                        let review_args = json!({"plugin":parsed.plugin,"server":parsed.server,"tool":parsed.tool,"arguments":parsed.arguments});
-                        let decision = beale_safety::review(&state.db, &state.provider, &state.credentials, ReviewRequest {
-                            provider, mode, model: &request.model, name: "plugin_call", arguments: &review_args, workspace_context: &workspace_context,
-                        }).await;
-                        anyhow::ensure!(decision.approved, "plugin tool denied by review: {}", decision.reason);
-                        let value = state.plugins.call_tool(&parsed.plugin, &parsed.server, &parsed.tool, parsed.arguments, &request.workspace_id).await?;
-                        Ok::<_, anyhow::Error>((value.to_string(), value["isError"].as_bool().unwrap_or(false)))
-                    }.await;
+                            let parsed: PluginCallArgs = serde_json::from_value(args)?;
+                            anyhow::ensure!(
+                                parsed.arguments.is_object(),
+                                "arguments must be an object"
+                            );
+                            anyhow::ensure!(
+                                callable_plugins.contains(&parsed.plugin),
+                                "plugin tools are unavailable in this workspace"
+                            );
+                            let review_args = json!({"plugin":parsed.plugin,"server":parsed.server,"tool":parsed.tool,"arguments":parsed.arguments});
+                            let decision = beale_safety::review(
+                                &state.db,
+                                &state.provider,
+                                &state.credentials,
+                                ReviewRequest {
+                                    provider,
+                                    mode,
+                                    model: &active_model.model,
+                                    name: "plugin_call",
+                                    arguments: &review_args,
+                                    workspace_context: &workspace_context,
+                                },
+                            )
+                            .await;
+                            anyhow::ensure!(
+                                decision.approved,
+                                "plugin tool denied by review: {}",
+                                decision.reason
+                            );
+                            let value = state
+                                .plugins
+                                .call_tool(
+                                    &parsed.plugin,
+                                    &parsed.server,
+                                    &parsed.tool,
+                                    parsed.arguments,
+                                    &request.workspace_id,
+                                )
+                                .await?;
+                            Ok::<_, anyhow::Error>((
+                                value.to_string(),
+                                value["isError"].as_bool().unwrap_or(false),
+                            ))
+                        };
+                        let result = until_stopped(result, &mut stop).await;
                         match result {
-                            Ok(value) => value,
-                            Err(error) => (format!("Plugin tool error: {error}"), true),
+                            Some(Ok(value)) => value,
+                            Some(Err(error)) => (format!("Plugin tool error: {error}"), true),
+                            None => ("Plugin tool stopped by user.".to_owned(), true),
                         }
                     }
                     #[cfg(feature = "runbooks")]
                     Ok(args) if runbook_tools_enabled && call.name == beale_runbooks::RUN => {
-                        let result: anyhow::Result<(String, bool)> = async {
-                        let runbook_id = args.get("id").and_then(Value::as_str)
-                            .ok_or_else(|| anyhow::anyhow!("id is required"))?;
-                        let document = state.db.runbook_get(&request.workspace_id, runbook_id)?
-                            .ok_or_else(|| anyhow::anyhow!("runbook not found"))?;
-                        for cell in &document.cells {
-                            if let beale_contracts::runbooks::Cell::Code { language, source, .. } = cell {
-                                let review_args = serde_json::json!({"command":format!("# {language} runbook cell\n{source}")});
-                                let decision = beale_safety::review(
-                                    &state.db,
-                                    &state.provider,
-                                    &state.credentials,
-                                    ReviewRequest {
-                                        provider,
-                                        mode,
-                                        model: &request.model,
-                                        name: "bash",
-                                        arguments: &review_args,
-                                        workspace_context: &workspace_context,
-                                    },
-                                ).await;
-                                if !decision.approved {
-                                    anyhow::bail!("runbook cell denied by review: {}", decision.reason);
+                        let result = async {
+                            let runbook_id = args
+                                .get("id")
+                                .and_then(Value::as_str)
+                                .ok_or_else(|| anyhow::anyhow!("id is required"))?;
+                            let document = state
+                                .db
+                                .runbook_get(&request.workspace_id, runbook_id)?
+                                .ok_or_else(|| anyhow::anyhow!("runbook not found"))?;
+                            for cell in &document.cells {
+                                if let beale_contracts::runbooks::Cell::Code {
+                                    language,
+                                    source,
+                                    ..
+                                } = cell
+                                {
+                                    let review_args = serde_json::json!({"command":format!("# {language} runbook cell\n{source}")});
+                                    let decision = beale_safety::review(
+                                        &state.db,
+                                        &state.provider,
+                                        &state.credentials,
+                                        ReviewRequest {
+                                            provider,
+                                            mode,
+                                            model: &active_model.model,
+                                            name: "bash",
+                                            arguments: &review_args,
+                                            workspace_context: &workspace_context,
+                                        },
+                                    )
+                                    .await;
+                                    if !decision.approved {
+                                        anyhow::bail!(
+                                            "runbook cell denied by review: {}",
+                                            decision.reason
+                                        );
+                                    }
                                 }
                             }
-                        }
-                        let run = state.db.runbook_run_start(&request.workspace_id, &session.id, runbook_id, document.revision)?;
-                        let mut active = ActiveRunbookRun { db: state.db.clone(), id: run.id.clone(), finished: false };
-                        let progress_tx = progress.clone();
-                        let progress_title = document.title.clone();
-                        let progress_id = runbook_id.to_owned();
-                        let result = beale_runbooks::run_document(&document, &workspace, |cell_number| {
-                            let cell_name = document.cells[(cell_number - 1) as usize].name();
-                            state.db.runbook_run_cell(&run.id, cell_number, cell_name)?;
-                            if let Some(tx) = &progress_tx {
-                                let _ = tx.try_send(SessionStreamEvent {
-                                    kind: SessionStreamKind::RunbookProgress as i32,
-                                    runbook_progress: Some(beale_contracts::v1::RunbookProgress {
-                                        runbook_id: progress_id.clone(),
-                                        title: progress_title.clone(),
-                                        cell_number,
-                                        cell_name: cell_name.to_owned(),
-                                    }),
-                                    ..Default::default()
-                                });
-                            }
-                            Ok(())
-                        }, |cell_id, success, exit_code, stdout, stderr| state.db.runbook_run_cell_result(&run.id, cell_id, success, exit_code, stdout, stderr)).await;
-                        let (success, output) = match result {
-                            Ok(result) => (result.success, result.output),
-                            Err(error) => (false, format!("Runbook execution error: {error}")),
+                            let run = state.db.runbook_run_start(
+                                &request.workspace_id,
+                                &session.id,
+                                runbook_id,
+                                document.revision,
+                            )?;
+                            let mut active = ActiveRunbookRun {
+                                db: state.db.clone(),
+                                id: run.id.clone(),
+                                finished: false,
+                            };
+                            let progress_tx = progress.clone();
+                            let progress_title = document.title.clone();
+                            let progress_id = runbook_id.to_owned();
+                            let result = beale_runbooks::run_document(
+                                &document,
+                                &workspace,
+                                |cell_number| {
+                                    let cell_name =
+                                        document.cells[(cell_number - 1) as usize].name();
+                                    state.db.runbook_run_cell(&run.id, cell_number, cell_name)?;
+                                    if let Some(tx) = &progress_tx {
+                                        let _ = tx.try_send(SessionStreamEvent {
+                                            kind: SessionStreamKind::RunbookProgress as i32,
+                                            runbook_progress: Some(
+                                                beale_contracts::v1::RunbookProgress {
+                                                    runbook_id: progress_id.clone(),
+                                                    title: progress_title.clone(),
+                                                    cell_number,
+                                                    cell_name: cell_name.to_owned(),
+                                                },
+                                            ),
+                                            ..Default::default()
+                                        });
+                                    }
+                                    Ok(())
+                                },
+                                |cell_id, success, exit_code, stdout, stderr| {
+                                    state.db.runbook_run_cell_result(
+                                        &run.id, cell_id, success, exit_code, stdout, stderr,
+                                    )
+                                },
+                            )
+                            .await;
+                            let (success, output) = match result {
+                                Ok(result) => (result.success, result.output),
+                                Err(error) => (false, format!("Runbook execution error: {error}")),
+                            };
+                            active.finish(success, &output)?;
+                            Ok((serde_json::json!({"run_id":run.id,"runbook_id":runbook_id,"status":if success {"completed"} else {"failed"}}).to_string(), !success))
                         };
-                        active.finish(success, &output)?;
-                        Ok((serde_json::json!({"run_id":run.id,"runbook_id":runbook_id,"status":if success {"completed"} else {"failed"}}).to_string(), !success))
-                    }.await;
+                        let result = until_stopped(result, &mut stop).await;
                         match result {
-                            Ok(value) => value,
-                            Err(error) => (format!("Runbook tool error: {error}"), true),
+                            Some(Ok(value)) => value,
+                            Some(Err(error)) => (format!("Runbook tool error: {error}"), true),
+                            None => ("Runbook stopped by user.".to_owned(), true),
                         }
                     }
                     #[cfg(feature = "runbooks")]
@@ -2506,7 +3211,7 @@ async fn run_one_turn(
                             state.workspaces.root(),
                             &request.workspace_id,
                             &session.id,
-                            "main",
+                            &active_model.node_id,
                             &args,
                         ) {
                             Ok(value) => (value, false),
@@ -2545,62 +3250,125 @@ async fn run_one_turn(
                     }
                     #[cfg(feature = "graphs")]
                     Ok(args)
+                        if call.name == beale_graphs::HANDOFF_TOOL && active_graph.is_some() =>
+                    {
+                        if (peer.is_none() && pending_handoff.is_some()) || handoff_count >= 8 {
+                            ("Peer handoff limit reached for this turn.".to_owned(), true)
+                        } else {
+                            match beale_graphs::handoff_target(&saved_graph_id, active_role, &args)
+                            {
+                                Ok((role, task)) => {
+                                    handoff_count += 1;
+                                    if let Some(peer) = &peer {
+                                        let item = beale_storage::GraphHandoffRow {
+                                            id: Uuid::new_v4().to_string(),
+                                            from_role: active_role.id().to_owned(),
+                                            to_role: role.id().to_owned(),
+                                            task,
+                                            status: "pending".to_owned(),
+                                        };
+                                        let now = SystemTime::now()
+                                            .duration_since(UNIX_EPOCH)
+                                            .map_or(0, |time| {
+                                                time.as_millis().min(i64::MAX as u128) as i64
+                                            });
+                                        match state.db.enqueue_graph_handoff(
+                                            &session.id,
+                                            &item,
+                                            now,
+                                        ) {
+                                            Ok(()) => {
+                                                let _ = peer.notify.send(());
+                                                (
+                                                    format!(
+                                                        "Queued a handoff to {}.",
+                                                        role.label()
+                                                    ),
+                                                    false,
+                                                )
+                                            }
+                                            Err(error) => (
+                                                format!("Handoff could not be saved: {error}"),
+                                                true,
+                                            ),
+                                        }
+                                    } else {
+                                        pending_handoff = Some((role, task));
+                                        (format!("Handing off to {}.", role.label()), false)
+                                    }
+                                }
+                                Err(error) => (format!("Invalid handoff: {error}"), true),
+                            }
+                        }
+                    }
+                    #[cfg(feature = "graphs")]
+                    Ok(args)
                         if call.name == beale_graphs::DELEGATE_TOOL && active_graph.is_some() =>
                     {
-                        let count = args
-                            .get("assignments")
-                            .and_then(Value::as_array)
-                            .map_or(0, Vec::len);
-                        if count == 0
-                            || count
-                                > beale_graphs::MAX_ASSIGNMENTS_PER_TURN
-                                    .saturating_sub(delegated_count)
-                        {
-                            (
-                                "Subagent assignment limit reached for this turn.".to_owned(),
-                                true,
-                            )
+                        let reservation = active_graph
+                            .ok_or_else(|| "Graph runtime is unavailable.".to_owned())
+                            .and_then(|runtime| {
+                                reserve_delegations(
+                                    runtime,
+                                    &args,
+                                    &active_graph_config,
+                                    &graph_fallback,
+                                    &mut delegated_count[active_role.index()],
+                                )
+                            });
+                        if let Err(error) = reservation {
+                            (error, true)
                         } else {
-                            delegated_count += count;
                             let child_usage = Mutex::new(Vec::new());
-                            let result = graphs::delegate(
-                                &saved_graph_id,
-                                graphs::ChildContext {
-                                    state,
-                                    workspace: &workspace,
-                                    agent_files: &agent_files,
-                                    #[cfg(any(feature = "agent-feedback", feature = "webfetch"))]
-                                    workspace_id: &request.workspace_id,
-                                    #[cfg(feature = "webfetch")]
-                                    webfetch_enabled: webfetch_tools_enabled,
-                                    #[cfg(feature = "agent-feedback")]
-                                    session_id: &session.id,
-                                    #[cfg(feature = "agent-feedback")]
-                                    feedback_enabled: agent_feedback_tools_enabled,
-                                    workspace_context: &workspace_context,
-                                    surfaces_context: &surfaces_context,
-                                    base_system: &child_system,
-                                    reasoning_effort,
-                                    turn_number: next_turn_number,
-                                    turn_started: started,
-                                    progress: progress.as_ref(),
-                                    model_usage: &child_usage,
-                                },
-                                &args,
-                                &active_graph_config,
-                                &graph_fallback,
+                            let result = until_stopped(
+                                graphs::delegate(
+                                    &saved_graph_id,
+                                    graphs::ChildContext {
+                                        parent_role: active_role,
+                                        state,
+                                        workspace: &workspace,
+                                        agent_files: &agent_files,
+                                        #[cfg(any(
+                                            feature = "agent-feedback",
+                                            feature = "webfetch"
+                                        ))]
+                                        workspace_id: &request.workspace_id,
+                                        #[cfg(feature = "webfetch")]
+                                        webfetch_enabled: webfetch_tools_enabled,
+                                        #[cfg(feature = "agent-feedback")]
+                                        session_id: &session.id,
+                                        #[cfg(feature = "agent-feedback")]
+                                        feedback_enabled: agent_feedback_tools_enabled,
+                                        workspace_context: &workspace_context,
+                                        surfaces_context: &surfaces_context,
+                                        base_system: &child_system,
+                                        reasoning_effort,
+                                        turn_number: next_turn_number,
+                                        turn_started: started,
+                                        progress: progress.as_ref(),
+                                        model_usage: &child_usage,
+                                    },
+                                    &args,
+                                    &active_graph_config,
+                                    &graph_fallback,
+                                ),
+                                &mut stop,
                             )
                             .await;
                             model_usage.extend(child_usage.into_inner());
-                            child_tools = result.tools;
-                            child_turns.extend(result.child_turns);
-                            (result.output, result.is_error)
+                            if let Some(result) = result {
+                                child_tools = result.tools;
+                                child_turns.extend(result.child_turns);
+                                (result.output, result.is_error)
+                            } else {
+                                ("Delegation stopped by user.".to_owned(), true)
+                            }
                         }
                     }
                     Ok(args) => {
                         let decision =
                             if matches!(call.name.as_str(), "read" | "write" | "edit" | "bash") {
-                                Some(
+                                until_stopped(
                                     beale_safety::review(
                                         &state.db,
                                         &state.provider,
@@ -2608,27 +3376,34 @@ async fn run_one_turn(
                                         ReviewRequest {
                                             provider,
                                             mode,
-                                            model: &request.model,
+                                            model: &active_model.model,
                                             name: &call.name,
                                             arguments: &args,
                                             workspace_context: &workspace_context,
                                         },
-                                    )
-                                    .await,
+                                    ),
+                                    &mut stop,
                                 )
+                                .await
                             } else {
                                 None
                             };
-                        if let Some(decision) = decision
+                        if stop_requested(&stop) {
+                            ("Tool stopped by user.".to_owned(), true)
+                        } else if let Some(decision) = decision
                             && !decision.approved
                         {
                             (format!("Tool denied by review: {}", decision.reason), true)
                         } else {
-                            match execute(&call.name, &args, &workspace, state.workspaces.root())
-                                .await
+                            match until_stopped(
+                                execute(&call.name, &args, &workspace, state.workspaces.root()),
+                                &mut stop,
+                            )
+                            .await
                             {
-                                Ok(value) => (value.output, value.is_error),
-                                Err(error) => (format!("Tool error: {error:#}"), true),
+                                Some(Ok(value)) => (value.output, value.is_error),
+                                Some(Err(error)) => (format!("Tool error: {error:#}"), true),
+                                None => ("Tool stopped by user.".to_owned(), true),
                             }
                         }
                     }
@@ -2647,9 +3422,23 @@ async fn run_one_turn(
                                 name: call.name.clone(),
                                 summary: summary.clone(),
                                 is_error,
+                                agent_role: active_model.node_id.clone(),
                             }),
                             detail: None,
                             segment_index: 0,
+                            agent_role: active_model.node_id.clone(),
+                            tool_detail: Some(SessionToolDetailPage {
+                                id: id.clone(),
+                                name: call.name.clone(),
+                                arguments: call.arguments.clone(),
+                                output: page(&output, 0, TOOL_PAGE_BYTES)
+                                    .map_or_else(|_| String::new(), |(first, _)| first),
+                                offset: 0,
+                                next_offset: page(&output, 0, TOOL_PAGE_BYTES)
+                                    .map_or(0, |(_, next)| next as u64),
+                                total_bytes: output.len() as u64,
+                                is_error,
+                            }),
                         })
                         .await;
                 }
@@ -2662,6 +3451,7 @@ async fn run_one_turn(
                     arguments: call.arguments,
                     output: output.clone(),
                     is_error,
+                    agent_role: active_model.node_id.clone(),
                 });
                 #[cfg(feature = "graphs")]
                 for mut child in child_tools {
@@ -2682,6 +3472,36 @@ async fn run_one_turn(
         if !anthropic_tool_results.is_empty() {
             input.push(json!({"role":"user","content":anthropic_tool_results}));
         }
+        #[cfg(feature = "graphs")]
+        if let Some((role, task)) = pending_handoff {
+            peer_messages.push(format!(
+                "{} → {}: {}",
+                active_role.label(),
+                role.label(),
+                task
+            ));
+            active_role = role;
+            active_model =
+                beale_graphs::top_level_model(&active_graph_config, role, &graph_fallback);
+            (provider, mode) =
+                graphs::provider_for(&active_model).ok_or(StatusCode::BAD_REQUEST)?;
+            openai_connection = OpenAiConnection::default();
+            definitions.retain(|tool| tool["name"] != beale_graphs::HANDOFF_TOOL);
+            if let Some(tool) = beale_graphs::handoff_definition(&saved_graph_id, role) {
+                definitions.push(tool);
+            }
+            system = format!(
+                "{base_system}\n\n## Active agent: {}\n\n{}",
+                role.label(),
+                role.instruction()
+            );
+            input = input_messages(&messages);
+            input.push(json!({"role":"user","content":format!("Peer handoff to {}. Task: {}\n\nHandoffs in this turn:\n{}\n\nWork in this session. You may delegate to your own subagents and hand off to a peer when needed.", role.label(), task, peer_messages.join("\n"))}));
+            if provider != Provider::OpenAi {
+                input.insert(0, json!({"role":"system","content":system}));
+            }
+            continue 'rounds;
+        }
     }
     let mut answer = answer.ok_or(StatusCode::BAD_GATEWAY)?;
     if answer.trim().is_empty() || history_bytes.saturating_add(answer.len()) > MAX_HISTORY_BYTES {
@@ -2700,6 +3520,8 @@ async fn run_one_turn(
                         tool: None,
                         detail: None,
                         segment_index: 0,
+                        agent_role: active_model.node_id.clone(),
+                        tool_detail: None,
                     })
                     .await;
             }
@@ -2714,11 +3536,7 @@ async fn run_one_turn(
             i64::try_from(started.elapsed().as_millis().min(i64::MAX as u128))
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
         );
-        let signal = if answer == INTERRUPTED_ANSWER {
-            None
-        } else {
-            goal_signal
-        };
+        let signal = goal_signal_for_answer(&answer, goal_signal);
         match beale_goals::after_turn(
             signal,
             goal.turns_used as u64,
@@ -2736,16 +3554,29 @@ async fn run_one_turn(
             }
             beale_goals::Outcome::Paused => goal.status = GoalStatus::Paused as i32,
         }
+        if stop_requested(&stop) && goal.status == GoalStatus::Active as i32 {
+            goal.status = GoalStatus::Paused as i32;
+        }
     }
     turns.push(StoredTurn {
         number: next_turn_number,
-        provider: request.provider,
-        method: request.method,
-        model: request.model,
+        provider: active_model.provider,
+        method: active_model.method,
+        model: active_model.model.clone(),
         prompt: request.prompt,
         answer,
         duration_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,
-        internal_prompt: automatic,
+        internal_prompt: automatic || {
+            #[cfg(feature = "graphs")]
+            {
+                peer.as_ref().is_some_and(|peer| peer.handoff)
+            }
+            #[cfg(not(feature = "graphs"))]
+            {
+                false
+            }
+        },
+        agent_role: active_model.node_id.clone(),
     });
     let repeat_preset = request.repeat_preset;
     let automation_options = AutomationOptions {
@@ -2755,15 +3586,24 @@ async fn run_one_turn(
         goal_max_duration_minutes: request.goal_max_duration_minutes,
     };
     let latest = turns.last().ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
-    let provider_context_json =
-        if provider == Provider::OpenAi && latest.answer != INTERRUPTED_ANSWER {
-            Some(
-                serde_json::to_string(&compact_openai_context(&input))
-                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
-            )
+    #[cfg(feature = "graphs")]
+    let save_peer_context = peer.is_some();
+    #[cfg(not(feature = "graphs"))]
+    let save_peer_context = false;
+    let provider_context_json = if save_peer_context
+        || (provider == Provider::OpenAi && !latest.answer.starts_with(INTERRUPTED_ANSWER))
+    {
+        let context = if provider == Provider::OpenAi {
+            compact_openai_context(&input)
         } else {
-            None
+            input.clone()
         };
+        let encoded =
+            serde_json::to_string(&context).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        (encoded.len() <= 8_388_608).then_some(encoded)
+    } else {
+        None
+    };
     session.last_message_at_ms = u64::try_from(
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -2795,7 +3635,16 @@ async fn run_one_turn(
                     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
                 internal_prompt: latest.internal_prompt,
             },
-            next_turn_number == 1,
+            next_turn_number == 1 && {
+                #[cfg(feature = "graphs")]
+                {
+                    peer.is_none()
+                }
+                #[cfg(not(feature = "graphs"))]
+                {
+                    true
+                }
+            },
             TurnActivity {
                 tools: &tool_rows,
                 reasoning: &reasoning_rows,
@@ -2813,6 +3662,11 @@ async fn run_one_turn(
             },
         )
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    #[cfg(feature = "graphs")]
+    if peer.is_some() {
+        let (saved, turns) = load_persisted(&state.db, parse_id(&session.id)?)?;
+        return detail(&state.db, &saved, &turns);
+    }
     trim_recent_turns(&mut turns);
     detail(&state.db, &session, &turns)
 }
@@ -2826,6 +3680,76 @@ mod tests {
     use beale_storage::WorkspaceRow;
     use prost::Message;
     use tower::ServiceExt;
+
+    #[cfg(feature = "goal-mode")]
+    #[test]
+    fn omitted_goal_status_continues_without_an_explicit_limit() {
+        assert!(matches!(
+            goal_signal_for_answer("More work remains.", None),
+            Some(beale_goals::Signal::Continue)
+        ));
+        assert!(goal_signal_for_answer(INTERRUPTED_ANSWER, None).is_none());
+        assert!(goal_signal_for_answer(STOPPED_ANSWER, None).is_none());
+    }
+
+    #[tokio::test]
+    async fn stop_signal_interrupts_in_flight_work() {
+        let (sender, receiver) = watch::channel(false);
+        let mut stop = Some(receiver);
+        sender.send_replace(true);
+        let result = until_stopped(std::future::pending::<()>(), &mut stop).await;
+        assert!(result.is_none());
+        assert!(stop_requested(&stop));
+    }
+
+    #[tokio::test]
+    async fn stop_turn_requires_auth_and_signals_only_the_requested_turn() {
+        let root = std::env::temp_dir().join(format!("beale-stop-example-{}", Uuid::new_v4()));
+        let state = build_state(
+            "example-token".to_owned(),
+            WorkspaceStore::at(root.clone()).unwrap(),
+        )
+        .unwrap();
+        let id = Uuid::new_v4();
+        let (sender, receiver) = watch::channel(false);
+        state.turn_stops.lock().await.insert(id, sender);
+        let app = Router::new()
+            .route(SESSION_TURN_STOP_PATH, post(stop_turn))
+            .with_state(state);
+        let path = SESSION_TURN_STOP_PATH.replace("{id}", &id.to_string());
+        let request = Request::builder()
+            .method("POST")
+            .uri(&path)
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.clone().oneshot(request).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+        let request = Request::builder()
+            .method("POST")
+            .uri(&path)
+            .header("authorization", "Bearer example-token")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.clone().oneshot(request).await.unwrap().status(),
+            StatusCode::NO_CONTENT
+        );
+        assert!(*receiver.borrow());
+        let missing = SESSION_TURN_STOP_PATH.replace("{id}", &Uuid::new_v4().to_string());
+        let request = Request::builder()
+            .method("POST")
+            .uri(missing)
+            .header("authorization", "Bearer example-token")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(request).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[cfg(feature = "webfetch")]
     #[tokio::test]
@@ -2954,11 +3878,11 @@ mod tests {
         assert!(feature_tool_requires_review(beale_runbooks::RUN));
         #[cfg(feature = "goal-mode")]
         assert!(feature_tool_requires_review(beale_goals::TOOL_NAME));
-        #[cfg(feature = "graphs")]
-        assert!(feature_tool_requires_review(beale_graphs::DELEGATE_TOOL));
         for name in [
             #[cfg(feature = "agent-feedback")]
             beale_agent_feedback::TOOL_NAME,
+            #[cfg(feature = "graphs")]
+            beale_graphs::DELEGATE_TOOL,
             "read",
             "write",
             "edit",
@@ -2992,7 +3916,7 @@ mod tests {
             + beale_webfetch::TOOL_COUNT as usize
             + beale_graphs::TOOL_COUNT as usize
             + beale_goals::TOOL_COUNT as usize;
-        assert_eq!(all, 30);
+        assert_eq!(all, 31);
     }
 
     #[cfg(feature = "graphs")]
@@ -3144,12 +4068,61 @@ mod tests {
             ),
             Err(StatusCode::BAD_REQUEST)
         );
-        let mut unknown_role = model;
+        let mut unknown_role = model.clone();
         unknown_role.node_id = "unknown".to_owned();
         assert_eq!(
             validate_graph_selection(&db, "simple", &[unknown_role], &[], "", &workspace),
             Err(StatusCode::BAD_REQUEST)
         );
+        for graph_id in [beale_graphs::CLOUDFLARE_ID, beale_graphs::OPENAI_ID] {
+            assert_eq!(
+                validate_graph_selection(&db, graph_id, &[], &[], "", &workspace),
+                Ok(())
+            );
+            let entry = beale_graphs::entry_role(graph_id).unwrap();
+            assert_eq!(
+                validate_graph_selection(
+                    &db,
+                    graph_id,
+                    &[GraphNodeModel {
+                        node_id: entry.id().to_owned(),
+                        ..model.clone()
+                    }],
+                    &[],
+                    "",
+                    &workspace
+                ),
+                Ok(())
+            );
+            assert_eq!(
+                validate_graph_selection(
+                    &db,
+                    graph_id,
+                    &[GraphNodeModel {
+                        node_id: "main".to_owned(),
+                        ..model.clone()
+                    }],
+                    &[],
+                    "",
+                    &workspace
+                ),
+                Err(StatusCode::BAD_REQUEST)
+            );
+            assert_eq!(
+                validate_graph_selection(
+                    &db,
+                    graph_id,
+                    &[],
+                    &[GraphNodeConcurrency {
+                        node_id: entry.id().to_owned(),
+                        max_concurrent: 2
+                    }],
+                    "",
+                    &workspace
+                ),
+                Err(StatusCode::BAD_REQUEST)
+            );
+        }
         assert_eq!(
             validate_graph_selection(&db, "unknown", &[], &[], "", &workspace),
             Err(StatusCode::BAD_REQUEST)
@@ -3166,6 +4139,111 @@ mod tests {
         );
         drop(db);
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(feature = "graphs")]
+    #[test]
+    fn addressed_graph_role_must_be_a_top_level_node_in_this_flow() {
+        let pipeline = beale_graphs::graph_definition(beale_graphs::OPENAI_ID);
+        assert_eq!(
+            requested_top_level_role(pipeline, "reporter").unwrap(),
+            Some(beale_graphs::Role::Reporter)
+        );
+        assert_eq!(requested_top_level_role(pipeline, "").unwrap(), None);
+        for role in ["scout", "validation_system", "unknown"] {
+            assert_eq!(
+                requested_top_level_role(pipeline, role).unwrap_err(),
+                StatusCode::BAD_REQUEST
+            );
+        }
+        assert_eq!(
+            requested_top_level_role(None, "reporter").unwrap_err(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[cfg(feature = "graphs")]
+    #[test]
+    fn peer_agent_context_excludes_other_top_level_turns() {
+        let make = |number, role: &str, prompt: &str, answer: &str| StoredTurn {
+            number,
+            provider: ProviderId::Openai as i32,
+            method: AuthMethod::ApiKey as i32,
+            model: "example-model".to_owned(),
+            prompt: prompt.to_owned(),
+            answer: answer.to_owned(),
+            duration_ms: 1,
+            internal_prompt: false,
+            agent_role: role.to_owned(),
+        };
+        let turns = vec![
+            make(1, "discovery", "Find an example issue", "Example lead"),
+            make(2, "validation", "Check the lead", "Example check"),
+            make(3, "discovery", "Continue", "Example follow-up"),
+        ];
+        let messages = peer_input_messages(&turns, beale_graphs::Role::Validation, "Next check");
+        let text: Vec<_> = messages
+            .iter()
+            .map(|message| message.text.as_str())
+            .collect();
+        assert_eq!(text, ["Check the lead", "Example check", "Next check"]);
+    }
+
+    #[cfg(feature = "graphs")]
+    #[test]
+    fn peer_detail_keeps_the_newest_complete_turns_within_tool_limit() {
+        let turns = (1..=3)
+            .map(|number| StoredTurn {
+                number,
+                provider: ProviderId::Openai as i32,
+                method: AuthMethod::ApiKey as i32,
+                model: "example-model".to_owned(),
+                prompt: "Example prompt".to_owned(),
+                answer: "Example answer".to_owned(),
+                duration_ms: 1,
+                internal_prompt: false,
+                agent_role: "discovery".to_owned(),
+            })
+            .collect::<Vec<_>>();
+        let selected = recent_peer_turns(&turns, |numbers| {
+            Ok(numbers
+                .iter()
+                .map(|number| match number {
+                    1 => 3_000,
+                    2 => 1_500,
+                    _ => 708,
+                })
+                .sum())
+        })
+        .unwrap();
+        assert_eq!(
+            selected.iter().map(|turn| turn.number).collect::<Vec<_>>(),
+            [2, 3]
+        );
+    }
+
+    #[cfg(feature = "graphs")]
+    #[test]
+    fn invalid_delegation_does_not_consume_role_capacity() {
+        let runtime = beale_graphs::runtime(beale_graphs::OPENAI_ID).unwrap();
+        let config = SessionGraphConfig::default();
+        let fallback = GraphNodeModel {
+            node_id: "discovery".to_owned(),
+            provider: ProviderId::Openai as i32,
+            method: AuthMethod::ApiKey as i32,
+            model: "example-model".to_owned(),
+        };
+        let mut used = 0;
+        let invalid =
+            json!({"assignments":[{"role":"scout","task":"Inspect example","model_index":7}]});
+        assert!(reserve_delegations(runtime, &invalid, &config, &fallback, &mut used).is_err());
+        assert_eq!(used, 0);
+        let valid = json!({"assignments":[{"role":"scout","task":"Inspect example"}]});
+        reserve_delegations(runtime, &valid, &config, &fallback, &mut used).unwrap();
+        assert_eq!(used, 1);
+        used = beale_graphs::MAX_ASSIGNMENTS_PER_TURN;
+        assert!(reserve_delegations(runtime, &valid, &config, &fallback, &mut used).is_err());
+        assert_eq!(used, beale_graphs::MAX_ASSIGNMENTS_PER_TURN);
     }
 
     #[cfg(feature = "graphs")]
@@ -3264,9 +4342,11 @@ mod tests {
                 node_id: "main".to_owned(),
                 max_concurrent: 1,
             }],
+            agent_role: "main".to_owned(),
         };
         let decoded = SubmitSessionTurnRequest::decode(request.encode_to_vec().as_slice()).unwrap();
         assert_eq!(decoded.graph_id, "simple");
+        assert_eq!(decoded.agent_role, "main");
         assert_eq!(decoded.graph_models, request.graph_models);
         assert_eq!(
             decoded.graph_node_concurrency,
@@ -3300,6 +4380,7 @@ mod tests {
             graph_id: String::new(),
             graph_models: vec![],
             graph_node_concurrency: vec![],
+            agent_role: String::new(),
         };
         let decoded = SubmitSessionTurnRequest::decode(request.encode_to_vec().as_slice()).unwrap();
         assert!(decoded.goal_mode);
@@ -3730,6 +4811,7 @@ mod tests {
             arguments: "{\"path\":\"example.txt\"}".to_owned(),
             output: "private example output".to_owned(),
             is_error: false,
+            agent_role: "main".to_owned(),
         };
         db.append_turn_with_full_activity(
             &session,
@@ -3742,12 +4824,14 @@ mod tests {
                     ordinal: 0,
                     after_tool_count: 0,
                     text: "Checking the example file.".to_owned(),
+                    agent_role: "main".to_owned(),
                 },
                 ReasoningSummaryRow {
                     turn_number: 1,
                     ordinal: 1,
                     after_tool_count: 1,
                     text: "The check is complete.".to_owned(),
+                    agent_role: "main".to_owned(),
                 },
             ],
             &[CommentaryRow {
@@ -3755,6 +4839,7 @@ mod tests {
                 ordinal: 0,
                 after_tool_count: 0,
                 text: "Reading the example file.".to_owned(),
+                agent_role: "main".to_owned(),
             }],
         )
         .unwrap();
@@ -3891,13 +4976,27 @@ mod tests {
             graph_id: String::new(),
             graph_models: vec![],
             graph_node_concurrency: vec![],
+            agent_role: String::new(),
         };
+        let payload = request.encode_to_vec();
+        let invalid_id = Request::builder()
+            .method("POST")
+            .uri(SESSION_TURN_STREAM_PATH)
+            .header("authorization", "Bearer example-token")
+            .header("content-type", beale_contracts::PROTOBUF_CONTENT_TYPE)
+            .header(SESSION_TURN_ID_HEADER, "invalid")
+            .body(Body::from(payload.clone()))
+            .unwrap();
+        assert_eq!(
+            app.clone().oneshot(invalid_id).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
         let request = Request::builder()
             .method("POST")
             .uri(SESSION_TURNS_PATH)
             .header("authorization", "Bearer example-token")
             .header("content-type", beale_contracts::PROTOBUF_CONTENT_TYPE)
-            .body(Body::from(request.encode_to_vec()))
+            .body(Body::from(payload))
             .unwrap();
         assert_eq!(
             app.oneshot(request).await.unwrap().status(),
@@ -4157,6 +5256,7 @@ mod tests {
             graph_id: String::new(),
             graph_models: vec![],
             graph_node_concurrency: vec![],
+            agent_role: String::new(),
         };
         let request = Request::builder()
             .method("POST")
@@ -4218,6 +5318,7 @@ mod tests {
             arguments: "{\"path\":\"example.txt\"}".to_owned(),
             output: "x".repeat(20_000),
             is_error: false,
+            agent_role: "main".to_owned(),
         };
         db.append_turn_with_tools(&session, &turn, true, std::slice::from_ref(&tool))
             .unwrap();

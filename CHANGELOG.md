@@ -4,7 +4,26 @@
 
 ### Beale
 
+#### Fixed
+
+- V2 desktop accepts saved graph turns with up to 4,096 inspectable tool entries, matching the app-server detail boundary. Busy graph sessions return the newest complete turns that fit. Turn and reload failures keep live activity visible.
+
 #### Changed
+
+- Goal Mode keeps working without an implicit turn or duration limit, including when a completed model turn omits `goal_status`. The desktop Stop control pauses a running goal and saves completed activity. Canceling an automation series also stops its active run. Configured limits still apply.
+- V2 sessions keep intermediate model commentary and supplied reasoning summaries visible in the transcript after a turn completes; the Working disclosure controls tool activity.
+- V2 peer graph agents retain separate provider context across turns. Goal Mode rolls over at the per-turn work budget instead of pausing with a provider error; graph prompts list configured subagent model indices and stage handoffs, invalid delegations do not spend the assignment quota, and subagents return bounded partial notes when their budget is reached. Feedback records the active top-level role.
+- New v2 peer graph sessions run top-level agents with separate role histories and models. Durable handoffs start recipients concurrently while idle roles wait for an addressed prompt or handoff; the desktop shows role status and handoff activity in each agent tab.
+- V2 graph sessions now give each top-level role a separate header tab and role-scoped activity. The active tab follows handoffs until manually selected, and new prompts address the selected role. Live tool rows open arguments and a bounded result preview; full saved output remains paged. Research Pipeline sessions resume with the configured model for the active role.
+- Graph delegation no longer requests a redundant review before subagent execution; each subagent tool remains reviewed. Subagents have a larger bounded tool budget, and bash supports a 120-second default with a configurable limit up to 600 seconds.
+
+- V2 Graphs now offers two-peer Discovery and Validation and four-peer Research Pipeline flows. Top-level agents can hand off a bounded task to connected peers in the same session and each can delegate to Scout, Reviewer, and Prover subagents. The graph picker, node editor, previews, and session header support both flows; existing graph configuration storage remains compatible.
+
+- V2 research headers now keep the originating workspace view beside a navigable session tab. Drafts show New Research; started and saved sessions show a robot icon and Main Agent. Switching tabs preserves draft and execution state.
+
+- Findings now offers Ledger and Plot views with automatic refresh. The four-quadrant plot places 0–100 reachability ratings horizontally and impact vertically, groups identical points, and keeps unrated and rejected records accessible outside the plot. Clickable legend switches show or hide each active stage, with all stages visible by default; plot counts and groups follow the selection.
+
+- Redesigned the v2 Surfaces map with property cards, scope and approval badges, evidence and connection counts, update activity, directed labeled links, and dashed out-of-scope connections. Compact overview filters and vertically padded search preserve topology; top and bottom controls float over the dot grid. Automatic fit, compact cards, zoom controls, and a contextual inspector support dense maps and smaller windows across all themes.
 
 - The v2 session Insights icon now opens a modal using the shared token dashboard cards, cumulative activity bars, token mix, and model breakdown. Values cover the selected session across all recorded turns. All agents, Main, and Subagents filters scope every chart and model list; hover usage popouts remain available.
 
@@ -13,7 +32,7 @@
 - Refined the v2 desktop across Light, Dark, Cream, and Midnight with shared typography, spacing, controls, theme-aware status colors, and a Beale research desk. Dark uses neutral black and charcoal surfaces with silver accents. Workspace cards, research views, Findings, Fleet, extensions, settings, and dialogs share the updated visual system. Existing appearance overrides remain compatible.
 - Improved v2 small-window layouts: Findings adapts to four, two, or one column; Canvas uses the available content area when a split would be too narrow; session telemetry stacks above the transcript; tall dialogs retain visible actions.
 - Unified v2 view tabs as inset segmented controls with contextual icons, raised selection, consistent hover states, and stable label sizing across settings, providers, extensions, Fleet, Archive, workspace setup, and Tracking. Provider tabs reflow using measured label widths and the selected text size.
-- Simplified v2 settings labels and the home wordmark, balanced sidebar action spacing, and padded empty Archive lists. Default and Theme controls share their respective tab rows when measured widths fit, and move below on smaller windows.
+- Simplified v2 settings labels and the home wordmark, balanced sidebar action spacing, and padded empty Archive lists. View sidenavs share 36px navigation rows and consistent heading typography, including the home Beale label. Default and Theme controls share their respective tab rows when measured widths fit, and move below on smaller windows.
 - Combined v2 breadcrumb and view headings into compact single-row headers, with muted parent context and the current view as the final title. New Research keeps workspace switching in the final crumb.
 - Findings tools use distinct `findings_*` names. Update advertises typed patch fields; query pages through results, and read omits revision snapshots unless requested. App-server schema 43 moves finding revisions into a separate table without losing history or limiting later edits. Protocol 2.11 updates the read contract.
 - Findings now supports an optional attack path with assumptions, evidence, limitations, preconditions, likelihood, impact, steps, and nested reachability details. Protocol 2.10 exposes it; existing records remain readable without a storage migration.
@@ -262,7 +281,18 @@
 
 ### app-server
 
+#### Fixed
+
+- Excess provider reasoning summary parts no longer abort a research step. OpenAI subscription permission reviews use the active research model to avoid separate model access failures, and interrupted turns show the sanitized provider cause. Daybreak selection errors report the requested and selected programs.
+
 #### Changed
+
+- Protocol 2.20 adds an authenticated streamed-turn Stop route and turn ID header. Stopping interrupts an in-flight provider call, saves the turn, and pauses an active goal; clients must rebuild with the host.
+- SQLite schema 47 persists provider context by peer graph role. OpenAI Responses tools explicitly use non-strict argument schemas so optional fields remain optional; the host still validates tool inputs. Beale's Windows shell enables Git long paths for its child process without changing the user's Git configuration.
+- Protocol 2.19 exposes graph agent and handoff state plus agent lifecycle events. SQLite schema 46 persists independent peer turns and handoff work, recovers abandoned work, and preserves legacy shared-turn graph sessions.
+- Protocol 2.18 tags graph activity with its top-level role and streams a bounded tool detail page for live inspection. SQLite schema 45 adds role columns to tool, reasoning, and commentary rows; existing rows migrate as `main`.
+
+- New Findings screening completions require root cause, complete attack-path reachability details, and integer impact/reachability scores from 0 to 100. Revising either context reopens screening. Protocol 2.17 includes scores in finding summaries; existing completions and history remain readable without a database migration, with missing scores left unrated.
 
 - Streamlined the v2 system prompt around four base tools and file-based workspace and extension guidance. Removed duplicate runtime instructions and inline extension catalogs; subagents receive catalogs limited to their available features. Prior unchanged stock prompts upgrade automatically while custom edits are preserved.
 
@@ -282,6 +312,8 @@
 
 #### Fixed
 
+- OpenAI subscription turns now explain when Codex and Beale are signed into different accounts, with actions to align the sign-ins or choose API Key. The cross-account credential guard remains enforced.
+- Fixed 403 errors when opening saved v2 session runbooks after Runbooks was disabled or removed from the workspace's feature scope. Authenticated document and result reads remain available; agent tools, edits, and execution still require the feature.
 - OpenAI subscription turns now use a current Codex ChatGPT sign-in when available, so the Codex Responses endpoint honors the requested Daybreak program. The host verifies the provider-selected program and fails a turn on a downgrade instead of silently treating Standard as Daybreak.
 - Reassembled streamed OpenAI output items by their output index and retained completed tool calls when the terminal response carried an empty output array, preventing reasoning-only turns caused by dropped tool items.
 - Excluded OpenAI models that require Daybreak Red from the Blue-mode model catalog and refreshed desktop model choices after changing Daybreak Mode. A blocked session turn now explains the required mode instead of showing a generic provider error.

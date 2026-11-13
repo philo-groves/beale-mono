@@ -1281,7 +1281,7 @@ pub(crate) fn sidenav(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
                 .role("button")
                 .label(section.label())
                 .w_full()
-                .h(30.0)
+                .h(crate::design::SIDENAV_ROW_HEIGHT)
                 .px(8.0)
                 .center_y()
                 .gap(12.0)

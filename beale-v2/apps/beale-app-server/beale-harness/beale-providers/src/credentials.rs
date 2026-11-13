@@ -71,6 +71,32 @@ fn jwt_email(token: &str) -> Option<String> {
     claims["email"].as_str().map(str::to_owned)
 }
 
+#[derive(Debug)]
+pub(crate) struct CodexAccountMismatch;
+
+impl std::fmt::Display for CodexAccountMismatch {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("Codex and Beale OpenAI sign-ins use different accounts")
+    }
+}
+
+impl std::error::Error for CodexAccountMismatch {}
+
+fn matching_codex_credential(
+    bytes: &[u8],
+    beale_id_token: Option<&str>,
+) -> Result<CodexCredential> {
+    let codex: Value = serde_json::from_slice(bytes).context("invalid Codex credential file")?;
+    let codex_email = codex["tokens"]["id_token"].as_str().and_then(jwt_email);
+    let beale_email = beale_id_token.and_then(jwt_email);
+    if let (Some(codex_email), Some(beale_email)) = (codex_email, beale_email)
+        && !codex_email.eq_ignore_ascii_case(&beale_email)
+    {
+        return Err(CodexAccountMismatch.into());
+    }
+    parse_codex_credential(bytes)
+}
+
 pub struct CredentialStore {
     root: PathBuf,
     db: Mutex<Option<HostDatabase>>,
@@ -91,7 +117,11 @@ impl CredentialStore {
                 .context("home directory is unavailable")?;
             PathBuf::from(home).join(".codex").join("auth.json")
         };
-        let bytes = match std::fs::read(&path) {
+        self.load_codex_credential_at(&path)
+    }
+
+    fn load_codex_credential_at(&self, path: &Path) -> Result<Option<CodexCredential>> {
+        let bytes = match std::fs::read(path) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(error).context("cannot read Codex credential file"),
@@ -99,20 +129,10 @@ impl CredentialStore {
         if bytes.len() > 1_048_576 {
             bail!("Codex credential file is too large");
         }
-        let codex: Value =
-            serde_json::from_slice(&bytes).context("invalid Codex credential file")?;
-        let codex_email = codex["tokens"]["id_token"].as_str().and_then(jwt_email);
-        let beale_email = self
+        let beale_id_token = self
             .load("openai")?
-            .and_then(|credential| credential.id_token)
-            .as_deref()
-            .and_then(jwt_email);
-        if let (Some(codex_email), Some(beale_email)) = (codex_email, beale_email)
-            && !codex_email.eq_ignore_ascii_case(&beale_email)
-        {
-            bail!("Codex and Beale OpenAI sign-ins use different accounts");
-        }
-        Ok(Some(parse_codex_credential(&bytes)?))
+            .and_then(|credential| credential.id_token);
+        matching_codex_credential(&bytes, beale_id_token.as_deref()).map(Some)
     }
 
     pub fn new() -> Result<Self> {
@@ -543,6 +563,7 @@ mod tests {
     fn codex_credential_requires_a_matching_unexpired_account_claim() {
         let claims = serde_json::json!({
             "exp":4_000_000_000_u64,
+            "email":"researcher@example.test",
             "https://api.openai.com/auth":{"chatgpt_account_id":"account-example"}
         });
         let token = format!(
@@ -551,10 +572,27 @@ mod tests {
         );
         let credential = serde_json::json!({
             "auth_mode":"chatgpt",
-            "tokens":{"access_token":token,"account_id":"account-example"}
+            "tokens":{"access_token":token,"id_token":token,"account_id":"account-example"}
         });
         let parsed = parse_codex_credential(&serde_json::to_vec(&credential).unwrap()).unwrap();
         assert_eq!(parsed.account_id, "account-example");
+        let bytes = serde_json::to_vec(&credential).unwrap();
+        assert_eq!(
+            matching_codex_credential(&bytes, Some(&token))
+                .unwrap()
+                .account_id,
+            "account-example"
+        );
+        let other_claims = serde_json::json!({"email":"other@example.test"});
+        let other_token = format!(
+            "header.{}.signature",
+            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&other_claims).unwrap())
+        );
+        let error = match matching_codex_credential(&bytes, Some(&other_token)) {
+            Ok(_) => panic!("different accounts must be rejected"),
+            Err(error) => error,
+        };
+        assert!(error.downcast_ref::<CodexAccountMismatch>().is_some());
         let mut mismatch = credential.clone();
         mismatch["tokens"]["account_id"] = serde_json::json!("other-example");
         assert!(parse_codex_credential(&serde_json::to_vec(&mismatch).unwrap()).is_err());
@@ -566,6 +604,61 @@ mod tests {
             URL_SAFE_NO_PAD.encode(serde_json::to_vec(&expired).unwrap())
         ));
         assert!(parse_codex_credential(&serde_json::to_vec(&expired_credential).unwrap()).is_err());
+    }
+
+    #[test]
+    fn mismatched_codex_account_returns_actionable_error() {
+        let root =
+            std::env::temp_dir().join(format!("beale-account-example-{}", uuid::Uuid::new_v4()));
+        let store = CredentialStore::at(root.clone());
+        let codex_claims = serde_json::json!({
+            "exp":4_000_000_000_u64,
+            "email":"codex@example.test",
+            "https://api.openai.com/auth":{"chatgpt_account_id":"account-codex-example"}
+        });
+        let codex_token = format!(
+            "header.{}.signature",
+            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&codex_claims).unwrap())
+        );
+        let codex_file = serde_json::json!({
+            "auth_mode":"chatgpt",
+            "tokens":{"access_token":codex_token,"id_token":codex_token,"account_id":"account-codex-example"}
+        });
+        let beale_token = format!(
+            "header.{}.signature",
+            URL_SAFE_NO_PAD.encode(
+                serde_json::to_vec(&serde_json::json!({"email":"beale@example.test"})).unwrap()
+            )
+        );
+        let mut credential = OAuthCredential {
+            access_token: "synthetic-access-token".to_owned(),
+            refresh_token: "synthetic-refresh-token".to_owned(),
+            expires_at: 4_000_000_000,
+            client_id: "example-client".to_owned(),
+            id_token: Some(beale_token),
+            subject: None,
+            scopes: Vec::new(),
+        };
+        store.save("openai", &credential).unwrap();
+        let path = root.join("codex-auth-example.json");
+        std::fs::write(&path, serde_json::to_vec(&codex_file).unwrap()).unwrap();
+        let error = match store.load_codex_credential_at(&path) {
+            Ok(_) => panic!("different accounts must be rejected"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            crate::provider_error_message(
+                crate::Provider::OpenAi,
+                crate::AuthMode::Subscription,
+                &error
+            ),
+            "Codex and Beale are signed into different OpenAI accounts. Sign into the same account in both apps, or choose API Key in Beale."
+        );
+        credential.id_token = Some(codex_token);
+        store.save("openai", &credential).unwrap();
+        assert!(store.load_codex_credential_at(&path).unwrap().is_some());
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

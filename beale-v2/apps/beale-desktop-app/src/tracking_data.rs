@@ -24,10 +24,11 @@ impl AgentFilter {
     }
 
     pub(crate) fn accepts(self, role: &str) -> bool {
+        let top_level = beale_graphs::Role::from_id(role).is_some_and(|role| role.is_top_level());
         match self {
             Self::All => true,
-            Self::Main => role == "main",
-            Self::Subagents => !role.is_empty() && role != "main",
+            Self::Main => top_level,
+            Self::Subagents => !role.is_empty() && !top_level,
         }
     }
 }
@@ -162,6 +163,26 @@ pub(crate) fn valid_cache(day: &TrackingModelDay) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn peer_roles_are_top_level_for_usage_filters() {
+        for role in [
+            "main",
+            "discovery_harness",
+            "validation_system",
+            "discovery",
+            "validation",
+            "reporter",
+            "patch_generation",
+        ] {
+            assert!(AgentFilter::Main.accepts(role));
+            assert!(!AgentFilter::Subagents.accepts(role));
+        }
+        for role in ["scout", "reviewer", "prover"] {
+            assert!(!AgentFilter::Main.accepts(role));
+            assert!(AgentFilter::Subagents.accepts(role));
+        }
+    }
 
     fn day(at: u64, role: &str) -> TrackingModelDay {
         TrackingModelDay {

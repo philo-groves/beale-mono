@@ -36,6 +36,8 @@ pub(crate) fn fixture(variant: &str) -> State {
         | "session-insights-main"
         | "session-insights-subagents"
         | "session-insights-no-subagents" => "session",
+        "surfaces-empty" | "surfaces-review" | "surfaces-search" | "surfaces-dense"
+        | "surfaces-large" => "surfaces",
         "archive-empty" => "archive",
         "archive-chats-empty" => "archive-chats",
         "tracking-selected"
@@ -52,7 +54,10 @@ pub(crate) fn fixture(variant: &str) -> State {
         "typography-compact" => "typography",
         "anthropic" | "openrouter" | "xai" | "zai" | "api-key" => "providers",
         "custom-editor" => "custom",
-        "graph-editor" | "model-menu" | "goal-menu" => "research",
+        "graph-editor" | "model-menu" | "goal-menu" | "graph-cloudflare" | "graph-openai" => {
+            "research"
+        }
+        "graph-session" => "session",
         "surface-add" | "surface-delete" | "relationship" => "surface-manage",
         "workspace-name" => "workspace",
         "workspace-rule" => "rules",
@@ -61,7 +66,14 @@ pub(crate) fn fixture(variant: &str) -> State {
         "fleet-connect" | "fleet-import" | "fleet-detail" => "fleet",
         "browser-add" => "browsers",
         "safety-rule" => "safety",
-        "finding-detail" => "findings",
+        "finding-detail"
+        | "findings-plot"
+        | "findings-plot-empty"
+        | "findings-plot-unrated"
+        | "findings-plot-cluster"
+        | "findings-plot-large"
+        | "findings-plot-filtered"
+        | "findings-plot-hidden" => "findings",
         _ => variant,
     };
     let mut s = State {
@@ -187,58 +199,242 @@ pub(crate) fn fixture(variant: &str) -> State {
             ..Default::default()
         });
     }
-    for (i, (title, type_id)) in [
-        ("Example API", "api.endpoint"),
-        ("Example parser", "code.module"),
-        ("Example storage", "service"),
+    for (i, (name, type_id, locator_kind, locator, excluded, review, refs, revision)) in [
+        (
+            "Gateway API",
+            "api.endpoint",
+            "url",
+            "https://api.example.test/v1",
+            false,
+            SurfaceScopeState::Approved,
+            3,
+            13,
+        ),
+        (
+            "Request parser",
+            "code.module",
+            "path",
+            "src/parser.rs",
+            false,
+            SurfaceScopeState::Approved,
+            4,
+            9,
+        ),
+        (
+            "Session service",
+            "service",
+            "url",
+            "https://auth.example.test",
+            false,
+            SurfaceScopeState::Candidate,
+            1,
+            4,
+        ),
+        (
+            "Object store",
+            "service",
+            "url",
+            "https://storage.example.test",
+            false,
+            SurfaceScopeState::Approved,
+            2,
+            6,
+        ),
+        (
+            "External identity",
+            "service",
+            "url",
+            "https://identity.example.test",
+            true,
+            SurfaceScopeState::Approved,
+            1,
+            2,
+        ),
+        (
+            "Import worker",
+            "binary",
+            "path",
+            "bin/example-worker",
+            false,
+            SurfaceScopeState::Candidate,
+            0,
+            3,
+        ),
+        (
+            "Protocol reference",
+            "documentation",
+            "url",
+            "https://docs.example.test/protocol",
+            true,
+            SurfaceScopeState::Approved,
+            2,
+            2,
+        ),
+        (
+            "Archive adapter",
+            "code.module",
+            "path",
+            "src/archive.rs",
+            false,
+            SurfaceScopeState::Unknown,
+            0,
+            0,
+        ),
     ]
-    .iter()
+    .into_iter()
     .enumerate()
     {
         s.workspace_surface_edits.push(WorkspaceSurface {
             id: format!("S{}", i + 1),
             definition: Some(SurfaceDefinition {
-                name: title.to_string(),
-                type_id: type_id.to_string(),
-                scope: SurfaceScope::InScope as i32,
+                name: name.into(),
+                type_id: type_id.into(),
+                scope: if excluded {
+                    SurfaceScope::OutOfScope
+                } else {
+                    SurfaceScope::InScope
+                } as i32,
+                scope_state: review as i32,
                 locator: Some(SurfaceLocator {
-                    kind: "url".into(),
-                    value: format!("https://example.test/fixture/{}", i + 1),
+                    kind: locator_kind.into(),
+                    value: locator.into(),
                 }),
-                description: "Synthetic surface for visual review.".into(),
-                ..Default::default()
+                description: "Synthetic component for visual review of the ExampleCo surface map."
+                    .into(),
+                out_of_scope_reason: if excluded {
+                    "Reference only; excluded from the example authorization.".into()
+                } else {
+                    String::new()
+                },
+                evidence_refs: (0..refs)
+                    .map(|reference| SurfaceEvidence {
+                        kind: "artifact".into(),
+                        reference: format!(
+                            "artifacts/example-surface-{}-{}.txt",
+                            i + 1,
+                            reference + 1
+                        ),
+                        note: "Synthetic fixture evidence.".into(),
+                    })
+                    .collect(),
             }),
+            lineage: if revision == 0 {
+                Vec::new()
+            } else {
+                vec![SurfaceRevision {
+                    number: revision,
+                    at_ms: 1_800_000_000_000 + i as u64 * 3_600_000,
+                    actor: if i % 2 == 0 { "user" } else { "agent" }.into(),
+                    action: "updated".into(),
+                    changes: vec![SurfaceChange {
+                        field: "definition.description".into(),
+                        before_json: "\"Example draft\"".into(),
+                        after_json: "\"Example reviewed description\"".into(),
+                    }],
+                }]
+            },
             ..Default::default()
         });
     }
-    s.workspace_surface_edits[0]
-        .relationships
-        .push(SurfaceRelationship {
-            target_id: "S2".into(),
-            label: "Parses request".into(),
-            type_id: "calls".into(),
-            ..Default::default()
-        });
-    s.workspace_surface_edits[1]
-        .relationships
-        .push(SurfaceRelationship {
-            target_id: "S3".into(),
-            label: "Stores result".into(),
-            type_id: "writes".into(),
-            ..Default::default()
-        });
+    for (source, target, label, type_id) in [
+        (0, 1, "Parses input", "calls"),
+        (0, 2, "Checks session", "authenticates"),
+        (1, 3, "Persists data", "writes"),
+        (1, 5, "Queues import", "dispatches"),
+        (2, 4, "Federates login", "depends_on"),
+        (5, 6, "Uses protocol", "references"),
+        (5, 7, "Loads archive", "calls"),
+    ] {
+        s.workspace_surface_edits[source]
+            .relationships
+            .push(SurfaceRelationship {
+                target_id: format!("S{}", target + 1),
+                label: label.into(),
+                type_id: type_id.into(),
+                ..Default::default()
+            });
+    }
     if let Some(details) = &mut s.workspace_details {
         details.surfaces = s.workspace_surface_edits.clone();
     }
-    for (i, status) in [
-        beale_contracts::findings::Status::Candidate,
-        beale_contracts::findings::Status::Validated,
-        beale_contracts::findings::Status::Screened,
+    use beale_contracts::findings::Status as FindingStatus;
+    for (i, (title, status, impact, reachability)) in [
+        (
+            "Example boundary mismatch",
+            FindingStatus::Screened,
+            Some(88),
+            Some(86),
+        ),
+        (
+            "Example input handling",
+            FindingStatus::Validated,
+            Some(70),
+            Some(32),
+        ),
+        (
+            "Example access control",
+            FindingStatus::Reported,
+            Some(96),
+            Some(72),
+        ),
+        (
+            "Example resource limit",
+            FindingStatus::Screened,
+            Some(35),
+            Some(78),
+        ),
+        (
+            "Example metadata leak",
+            FindingStatus::Screened,
+            Some(18),
+            Some(28),
+        ),
+        (
+            "Example parser hypothesis",
+            FindingStatus::Candidate,
+            None,
+            None,
+        ),
+        (
+            "Example session boundary",
+            FindingStatus::Validated,
+            Some(52),
+            None,
+        ),
+        (
+            "Example import handling",
+            FindingStatus::Screened,
+            Some(88),
+            Some(86),
+        ),
+        (
+            "Example zero-impact review",
+            FindingStatus::Validated,
+            Some(0),
+            Some(0),
+        ),
+        (
+            "Example maximum assessment",
+            FindingStatus::Reported,
+            Some(100),
+            Some(100),
+        ),
+        (
+            "Example dismissed premise",
+            FindingStatus::Rejected,
+            Some(90),
+            Some(90),
+        ),
     ]
-    .iter()
+    .into_iter()
     .enumerate()
     {
-        s.workspace_findings.records.push(beale_contracts::findings::Summary { id: format!("F{}", i + 1), title: ["Example boundary mismatch", "Example input handling", "Example access control"][i].into(), summary: "Synthetic finding for layout review. Evidence and verification remain attached to the record.".into(), surface_ids: vec!["S1".into()], status: *status, updated_at_ms: 1_800_000_000_000, revision: 2 });
+        s.workspace_findings.records.push(beale_contracts::findings::Summary {
+            id: format!("F{}", i + 1), title: title.into(),
+            summary: "Synthetic finding for layout review. Evidence and verification remain attached to the record.".into(),
+            surface_ids: vec!["S1".into()], status, impact_score: impact, reachability_score: reachability,
+            updated_at_ms: 1_800_000_000_000, revision: 2,
+        });
     }
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -318,6 +514,12 @@ pub(crate) fn fixture(variant: &str) -> State {
         }
         "research" | "session" | "canvas" => {
             s.primary_view = PrimaryView::NewResearch;
+            if variant == "graph-cloudflare" {
+                s.new_research_graph_id = beale_graphs::CLOUDFLARE_ID.to_owned();
+            }
+            if variant == "graph-openai" {
+                s.new_research_graph_id = beale_graphs::OPENAI_ID.to_owned();
+            }
             if name != "research" {
                 s.active_session = Some(SessionDetail {
                     summary: Some(s.session_summaries[0].clone()), model: "example-lead".into(), provider: ProviderId::Openai as i32, method: AuthMethod::ApiKey as i32,
@@ -328,6 +530,21 @@ pub(crate) fn fixture(variant: &str) -> State {
                     ], token_usage: Some(SessionTokenUsage { input_tokens: 18200, output_tokens: 2400, cache_read_tokens: 12000, cache_input_tokens: 18200, measured_calls: 4, total_calls: 4, cache_measured_calls: 4 }), ..Default::default()
                 });
                 s.session_sidenav_visible = name == "session";
+                if variant == "graph-session" {
+                    let detail = s.active_session.as_mut().unwrap();
+                    detail.graph_id = beale_graphs::OPENAI_ID.to_owned();
+                    detail.messages[1].agent_role = "discovery".to_owned();
+                    detail.messages[1].tools = vec![SessionToolSummary {
+                        id: "tool-example".to_owned(),
+                        name: "read".to_owned(),
+                        summary: "Read example.txt".to_owned(),
+                        agent_role: "discovery".to_owned(),
+                        ..Default::default()
+                    }];
+                    s.session_agent_role = "discovery".to_owned();
+                    s.session_work_expanded.insert(1);
+                    s.session_sidenav_visible = false;
+                }
                 s.canvas_open = name == "canvas";
                 if name == "canvas" {
                     s.canvas_runbook = runbook_canvas::CanvasRunbookState::with_view(runbook_canvas::RunbookView {
@@ -605,7 +822,62 @@ pub(crate) fn fixture(variant: &str) -> State {
             s.appearance.text_size = TextSize::ExtraLarge;
         }
     }
+    if variant.starts_with("findings-plot") {
+        s.workspace_findings.mode = findings_view::FindingsMode::Plot;
+        match variant {
+            "findings-plot-empty" => s.workspace_findings.records.clear(),
+            "findings-plot-unrated" => {
+                for record in &mut s.workspace_findings.records {
+                    record.impact_score = None;
+                    record.reachability_score = None;
+                }
+            }
+            "findings-plot-cluster" => s.workspace_findings.plot_selection = Some((88, 86)),
+            "findings-plot-large" => s.appearance.text_size = TextSize::ExtraLarge,
+            "findings-plot-filtered" => {
+                s.workspace_findings
+                    .toggle_plot_stage(FindingStatus::Candidate);
+                s.workspace_findings
+                    .toggle_plot_stage(FindingStatus::Screened);
+            }
+            "findings-plot-hidden" => {
+                for status in [
+                    FindingStatus::Candidate,
+                    FindingStatus::Validated,
+                    FindingStatus::Screened,
+                    FindingStatus::Reported,
+                ] {
+                    s.workspace_findings.toggle_plot_stage(status);
+                }
+            }
+            _ => {}
+        }
+    }
     match variant {
+        "surfaces-empty" => {
+            s.workspace_surface_edits.clear();
+            s.workspace_details.as_mut().unwrap().surfaces.clear();
+        }
+        "surfaces-review" => s.workspace_surface_focus = workspace_surface_layout::Focus::Review,
+        "surfaces-search" => s.workspace_surface_query = TextEdit::new("archive"),
+        "surfaces-large" => s.appearance.text_size = TextSize::ExtraLarge,
+        "surfaces-dense" => {
+            let originals = s.workspace_surface_edits.clone();
+            for group in 1..5 {
+                for surface in &originals {
+                    let mut copy = surface.clone();
+                    copy.id = format!("{}-{}", surface.id, group + 1);
+                    if let Some(definition) = &mut copy.definition {
+                        definition.name = format!("{} {}", definition.name, group + 1);
+                    }
+                    for link in &mut copy.relationships {
+                        link.target_id = format!("{}-{}", link.target_id, group + 1);
+                    }
+                    s.workspace_surface_edits.push(copy);
+                }
+            }
+            s.workspace_details.as_mut().unwrap().surfaces = s.workspace_surface_edits.clone();
+        }
         "tracking-selected" => {
             s.tracking.selected_day = Some(now / 86_400_000 * 86_400_000 - 86_400_000)
         }

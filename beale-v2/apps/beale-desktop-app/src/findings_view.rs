@@ -1,3 +1,6 @@
+#[path = "findings_plot.rs"]
+mod plot;
+
 use beale_contracts::findings::{
     self, Finding, GetRequest, GetResponse, QueryPage, QueryRequest, Status, Summary,
 };
@@ -7,9 +10,20 @@ use std::net::SocketAddr;
 
 use crate::{State, ThemeStyle, form_button, ui_font};
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum FindingsMode {
+    #[default]
+    Ledger,
+    Plot,
+}
+
 #[derive(Default)]
 pub(crate) struct FindingsBoard {
     pub(crate) records: Vec<Summary>,
+    pub(crate) mode: FindingsMode,
+    pub(crate) plot_selection: Option<(u8, u8)>,
+    hidden_plot_stages: Vec<Status>,
+    unrated_expanded: bool,
     pub(crate) loaded: bool,
     pub(crate) loading: bool,
     pub(crate) error: String,
@@ -23,6 +37,26 @@ pub(crate) struct FindingsBoard {
 }
 
 impl FindingsBoard {
+    fn plot_stage_visible(&self, status: Status) -> bool {
+        status != Status::Rejected && !self.hidden_plot_stages.contains(&status)
+    }
+
+    pub(crate) fn toggle_plot_stage(&mut self, status: Status) {
+        if status == Status::Rejected {
+            return;
+        }
+        if let Some(index) = self
+            .hidden_plot_stages
+            .iter()
+            .position(|hidden| *hidden == status)
+        {
+            self.hidden_plot_stages.remove(index);
+        } else {
+            self.hidden_plot_stages.push(status);
+        }
+        self.plot_selection = None;
+    }
+
     pub(crate) fn preview_detail(&mut self) {
         let record: Finding = serde_json::from_value(serde_json::json!({
             "id": "F1", "workspace_id": "00000000-0000-4000-8000-000000000001",
@@ -308,6 +342,21 @@ fn card(record: &Summary, theme: ThemeStyle<'_>) -> El {
                         .color(theme.color("#858585")),
                 ),
         )
+        .child(
+            text(format!(
+                "Impact {} · Reachability {}",
+                record
+                    .impact_score
+                    .map_or("—".to_owned(), |score| score.to_string()),
+                record
+                    .reachability_score
+                    .map_or("—".to_owned(), |score| score.to_string())
+            ))
+            .w_full()
+            .wrap()
+            .font(ui_font(11.0, 500.0))
+            .color(theme.color("#999999")),
+        )
         .on_press(move |state: &mut State| open_record(state, id.clone()))
 }
 
@@ -388,40 +437,70 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> E
                 .center_y()
                 .gap(10.0)
                 .child(
-                    text("Findings ledger")
+                    text("Findings")
+                        .min_w(0.0)
+                        .truncate()
                         .font(ui_font(21.0, 600.0))
                         .color(theme.color("#ededed")),
                 )
                 .child(
-                    text(format!("{active} active"))
-                        .font(ui_font(12.0, 400.0))
-                        .color(theme.color("#969696")),
+                    text(if board.loading {
+                        format!("{active} active · updating…")
+                    } else {
+                        format!("{active} active")
+                    })
+                    .truncate()
+                    .min_w(0.0)
+                    .font(ui_font(12.0, 400.0))
+                    .color(theme.color("#969696")),
                 )
                 .child(el().grow(1.0))
                 .child(
-                    form_button(
-                        if board.loading {
-                            "Loading…"
-                        } else {
-                            "Refresh"
-                        },
-                        theme,
-                    )
-                    .key("findings-refresh")
-                    .on_press(|state: &mut State| {
-                        if let Some(id) = state.workspace_id {
-                            start_load(state, id);
-                        }
-                    }),
+                    crate::design::segmented_control(theme)
+                        .key("findings-view-toggle")
+                        .child(
+                            crate::design::segmented_tab(
+                                "Ledger",
+                                None,
+                                board.mode == FindingsMode::Ledger,
+                                true,
+                                theme,
+                            )
+                            .key("findings-mode-ledger")
+                            .on_press(|state: &mut State| {
+                                state.workspace_findings.mode = FindingsMode::Ledger
+                            }),
+                        )
+                        .child(
+                            crate::design::segmented_tab(
+                                "Plot",
+                                None,
+                                board.mode == FindingsMode::Plot,
+                                true,
+                                theme,
+                            )
+                            .key("findings-mode-plot")
+                            .on_press(|state: &mut State| {
+                                state.workspace_findings.mode = FindingsMode::Plot
+                            }),
+                        ),
                 ),
         );
     if !board.error.is_empty() {
-        page = page.child(
-            text(board.error.clone())
-                .key("findings-error")
-                .font(ui_font(13.0, 400.0))
-                .color(theme.color("#e07676")),
-        );
+        page = page
+            .child(
+                text(board.error.clone())
+                    .key("findings-error")
+                    .font(ui_font(13.0, 400.0))
+                    .color(theme.color("#e07676")),
+            )
+            .child(form_button("Retry", theme).key("findings-retry").on_press(
+                |state: &mut State| {
+                    if let Some(id) = state.workspace_id {
+                        start_load(state, id);
+                    }
+                },
+            ));
     }
     if board.loading && !board.loaded {
         return page.child(
@@ -430,23 +509,27 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> E
                 .color(theme.color("#969696")),
         );
     }
-    let columns = if page_width >= 920.0 {
-        4
-    } else if page_width >= 460.0 {
-        2
+    if board.mode == FindingsMode::Plot {
+        page = page.child(plot::render(state, theme, page_width));
     } else {
-        1
-    };
-    let width = ((page_width - 12.0 * (columns - 1) as f32) / columns as f32).max(180.0);
-    let mut lanes = col().key("findings-lanes").w_full().gap(12.0);
-    for group in LANES.chunks(columns) {
-        let mut line = row().w_full().gap(12.0);
-        for &(status, label, accent) in group {
-            line = line.child(lane(status, label, accent, &board.records, width, theme));
+        let columns = if page_width >= 920.0 {
+            4
+        } else if page_width >= 460.0 {
+            2
+        } else {
+            1
+        };
+        let width = ((page_width - 12.0 * (columns - 1) as f32) / columns as f32).max(180.0);
+        let mut lanes = col().key("findings-lanes").w_full().gap(12.0);
+        for group in LANES.chunks(columns) {
+            let mut line = row().w_full().gap(12.0);
+            for &(status, label, accent) in group {
+                line = line.child(lane(status, label, accent, &board.records, width, theme));
+            }
+            lanes = lanes.child(line);
         }
-        lanes = lanes.child(line);
+        page = page.child(lanes);
     }
-    page = page.child(lanes);
     if !rejected.is_empty() {
         let count = rejected.len();
         page = page.child(
@@ -555,7 +638,28 @@ pub(crate) fn dialog(state: &State, theme: ThemeStyle<'_>) -> Option<[El; 2]> {
             body = body.child(detail_line("Root cause", &root.summary, theme));
         }
         if let Some(path) = &record.attack_path {
-            body = body.child(detail_line("Attack path", &path.summary, theme));
+            body = body
+                .child(detail_line("Attack path", &path.summary, theme))
+                .child(detail_line(
+                    "Reachability",
+                    &path.reachability.summary,
+                    theme,
+                ))
+                .child(detail_line(
+                    "Attacker role",
+                    &path.reachability.attacker_role,
+                    theme,
+                ))
+                .child(detail_line(
+                    "Entrypoint",
+                    &path.reachability.entrypoint,
+                    theme,
+                ))
+                .child(detail_line(
+                    "Source → sink",
+                    &format!("{} → {}", path.reachability.source, path.reachability.sink),
+                    theme,
+                ));
         }
         if let Some(validation) = &record.state.validated {
             body = body.child(detail_line(
@@ -565,6 +669,21 @@ pub(crate) fn dialog(state: &State, theme: ThemeStyle<'_>) -> Option<[El; 2]> {
             ));
         }
         if let Some(screening) = &record.state.screened {
+            body = body
+                .child(detail_line(
+                    "Impact score",
+                    &screening
+                        .impact_score
+                        .map_or("Unrated".to_owned(), |score| format!("{score} / 100")),
+                    theme,
+                ))
+                .child(detail_line(
+                    "Reachability score",
+                    &screening
+                        .reachability_score
+                        .map_or("Unrated".to_owned(), |score| format!("{score} / 100")),
+                    theme,
+                ));
             body = body.child(detail_line(
                 "Screening",
                 &screening.scope_review.conclusion,
@@ -680,6 +799,8 @@ mod tests {
         .enumerate()
         {
             state.workspace_findings.records.push(Summary {
+                impact_score: None,
+                reachability_score: None,
                 id: format!("F{}", index + 1),
                 title: format!("Example finding {}", index + 1),
                 summary: "Synthetic UI example.".to_owned(),
@@ -708,5 +829,240 @@ mod tests {
         runtime.pointer_up(x, y);
         runtime.frame(1.0 / 60.0);
         assert!(runtime.find("finding-card-F5").is_some());
+    }
+    fn click(runtime: &mut Runtime<State>, key: &str) {
+        runtime.update(|_, tx| {
+            tx.instant();
+            tx.scroll_into_view(key);
+        });
+        runtime.frame(1.0);
+        let (x, y) = runtime.find(key).unwrap_or_else(|| panic!("missing {key}"));
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
+    }
+
+    #[test]
+    fn plot_toggle_groups_matching_scores_and_keeps_unrated_and_rejected_accessible() {
+        let state = crate::visual_preview::fixture("findings");
+        let mut runtime = Runtime::new(state, crate::view, (1440.0, 1100.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        assert!(runtime.find("findings-lanes").is_some());
+        assert!(runtime.find("findings-refresh").is_none());
+        click(&mut runtime, "findings-mode-plot");
+        assert_eq!(runtime.state.workspace_findings.mode, FindingsMode::Plot);
+        assert!(runtime.find("findings-plot").is_some());
+        assert!(runtime.find("findings-lanes").is_none());
+        let points = runtime
+            .elements()
+            .into_iter()
+            .filter(|el| {
+                el.key
+                    .as_deref()
+                    .is_some_and(|key| key.starts_with("finding-point-"))
+            })
+            .count();
+        assert_eq!(points, 7);
+        assert!(runtime.find("finding-point-0-0").is_some());
+        assert!(runtime.find("finding-point-100-100").is_some());
+        assert!(runtime.find("finding-point-90-90").is_none());
+        click(&mut runtime, "finding-point-70-32");
+        assert_eq!(
+            runtime.state.workspace_findings.selected_id.as_deref(),
+            Some("F2")
+        );
+        close_record(&mut runtime.state);
+        runtime.frame(1.0);
+        click(&mut runtime, "finding-point-88-86");
+        assert_eq!(
+            runtime.state.workspace_findings.plot_selection,
+            Some((88, 86))
+        );
+        assert!(runtime.find("finding-card-F1").is_some());
+        assert!(runtime.find("finding-card-F8").is_some());
+        click(&mut runtime, "finding-card-F1");
+        assert_eq!(
+            runtime.state.workspace_findings.selected_id.as_deref(),
+            Some("F1")
+        );
+        assert!(runtime.find("finding-detail-dialog").is_some());
+        close_record(&mut runtime.state);
+        runtime.frame(1.0);
+        click(&mut runtime, "findings-plot-selection-close");
+        click(&mut runtime, "findings-unrated-toggle");
+        assert!(runtime.find("finding-card-F6").is_some());
+        assert!(runtime.find("finding-card-F7").is_some());
+        click(&mut runtime, "findings-rejected-toggle");
+        assert!(runtime.find("finding-card-F11").is_some());
+        click(&mut runtime, "findings-mode-ledger");
+        assert_eq!(runtime.state.workspace_findings.mode, FindingsMode::Ledger);
+        assert!(runtime.find("findings-lanes").is_some());
+    }
+
+    #[test]
+    fn plot_axes_and_toggle_fit_all_themes_and_larger_text() {
+        for theme in [
+            crate::AppearanceTheme::Light,
+            crate::AppearanceTheme::Dark,
+            crate::AppearanceTheme::Cream,
+            crate::AppearanceTheme::Midnight,
+        ] {
+            for (width, large) in [(1440.0, false), (840.0, false), (840.0, true)] {
+                let mut state = crate::visual_preview::fixture("findings-plot");
+                state.appearance.theme = theme;
+                if large {
+                    state.appearance.text_size = crate::TextSize::ExtraLarge;
+                }
+                let mut runtime =
+                    Runtime::new(state, crate::view, (width, 1200.0), Env::new(true, 1.0));
+                runtime.frame(0.0);
+                let (page, _) = runtime.presented("workspace-findings-view").unwrap();
+                for key in [
+                    "findings-view-toggle",
+                    "findings-plot",
+                    "findings-plot-legend",
+                    "findings-plot-stage-candidate",
+                    "findings-plot-stage-validated",
+                    "findings-plot-stage-screened",
+                    "findings-plot-stage-reported",
+                    "finding-point-0-0",
+                    "finding-point-100-100",
+                ] {
+                    let (bounds, _) = runtime.presented(key).unwrap();
+                    assert!(
+                        bounds[0] >= page[0] && bounds[0] + bounds[2] <= page[0] + page[2] + 1.0,
+                        "{key} overflows {width}, large={large}: {bounds:?}, page={page:?}"
+                    );
+                }
+                let (low, _) = runtime.presented("finding-point-0-0").unwrap();
+                let (high, _) = runtime.presented("finding-point-100-100").unwrap();
+                assert!(high[0] > low[0] && high[1] < low[1]);
+            }
+        }
+    }
+
+    #[test]
+    fn unrated_plot_does_not_invent_zero_scores() {
+        for variant in ["findings-plot-empty", "findings-plot-unrated"] {
+            let state = crate::visual_preview::fixture(variant);
+            let mut runtime =
+                Runtime::new(state, crate::view, (1440.0, 960.0), Env::new(true, 1.0));
+            runtime.frame(0.0);
+            assert!(runtime.find("findings-plot-empty").is_some());
+            assert!(runtime.find("finding-point-0-0").is_none());
+        }
+    }
+    #[test]
+    fn plot_legend_toggles_every_stage_and_rebuilds_mixed_groups() {
+        let mut state = crate::visual_preview::fixture("findings-plot");
+        let mut candidate = state.workspace_findings.records[5].clone();
+        candidate.id = "F12".to_owned();
+        candidate.impact_score = Some(45);
+        candidate.reachability_score = Some(10);
+        state.workspace_findings.records.push(candidate);
+        state.workspace_findings.records[7].status = Status::Reported;
+        state.workspace_findings.plot_selection = Some((88, 86));
+        let mut runtime = Runtime::new(state, crate::view, (1440.0, 1300.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        let rated_count = |runtime: &Runtime<State>| {
+            runtime
+                .elements()
+                .into_iter()
+                .find(|el| el.key.as_deref() == Some("findings-plot-rated-count"))
+                .unwrap()
+                .text
+                .unwrap()
+        };
+        assert_eq!(rated_count(&runtime), "9 rated");
+        for (status, label, _) in LANES {
+            assert!(runtime.state.workspace_findings.plot_stage_visible(status));
+            let key = format!("findings-plot-stage-{}", label.to_lowercase());
+            let control = runtime
+                .elements()
+                .into_iter()
+                .find(|el| el.key.as_deref() == Some(key.as_str()))
+                .unwrap();
+            assert_eq!(control.role, "switch");
+            assert!(control.label.unwrap().contains("shown"));
+        }
+        click(&mut runtime, "findings-plot-stage-candidate");
+        assert_eq!(runtime.state.workspace_findings.plot_selection, None);
+        assert!(runtime.find("finding-point-45-10").is_none());
+        assert_eq!(rated_count(&runtime), "8 rated");
+        click(&mut runtime, "findings-unrated-toggle");
+        assert!(runtime.find("finding-card-F6").is_none());
+        assert!(runtime.find("finding-card-F7").is_some());
+        click(&mut runtime, "findings-plot-stage-validated");
+        assert!(runtime.find("finding-point-70-32").is_none());
+        assert!(runtime.find("finding-point-0-0").is_none());
+        assert!(runtime.find("findings-unrated-toggle").is_none());
+        assert_eq!(rated_count(&runtime), "6 rated");
+        runtime.state.workspace_findings.plot_selection = Some((88, 86));
+        runtime.frame(0.0);
+        click(&mut runtime, "findings-plot-stage-screened");
+        assert!(runtime.find("finding-point-35-78").is_none());
+        assert!(runtime.find("finding-point-18-28").is_none());
+        assert!(runtime.find("findings-plot-selection").is_none());
+        let point = runtime
+            .elements()
+            .into_iter()
+            .find(|el| el.key.as_deref() == Some("finding-point-88-86"))
+            .unwrap();
+        assert!(point.label.unwrap().starts_with("F8 ·"));
+        assert_eq!(rated_count(&runtime), "3 rated");
+        click(&mut runtime, "findings-plot-stage-reported");
+        assert_eq!(rated_count(&runtime), "0 rated");
+        assert!(runtime.elements().iter().all(|el| {
+            !el.key
+                .as_deref()
+                .is_some_and(|key| key.starts_with("finding-point-"))
+        }));
+        assert!(
+            runtime
+                .elements()
+                .iter()
+                .any(|el| el.text.as_deref() == Some("No stages selected"))
+        );
+        for (_, label, _) in LANES {
+            click(
+                &mut runtime,
+                &format!("findings-plot-stage-{}", label.to_lowercase()),
+            );
+        }
+        assert_eq!(rated_count(&runtime), "9 rated");
+        assert!(runtime.find("findings-plot-empty").is_none());
+        let point = runtime
+            .elements()
+            .into_iter()
+            .find(|el| el.key.as_deref() == Some("finding-point-88-86"))
+            .unwrap();
+        assert!(point.label.unwrap().starts_with("2 findings"));
+        assert!(runtime.find("findings-rejected-toggle").is_some());
+    }
+
+    #[test]
+    fn plot_stage_selection_survives_reload_and_view_switches_and_resets_with_board() {
+        let state = crate::visual_preview::fixture("findings-plot");
+        let mut runtime = Runtime::new(state, crate::view, (1440.0, 1100.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        click(&mut runtime, "findings-plot-stage-screened");
+        let board = &mut runtime.state.workspace_findings;
+        board.finish_load(board.generation, Ok(board.records.clone()));
+        runtime.frame(0.0);
+        assert!(runtime.find("finding-point-88-86").is_none());
+        click(&mut runtime, "findings-mode-ledger");
+        assert!(runtime.find("finding-card-F1").is_some());
+        click(&mut runtime, "findings-mode-plot");
+        assert!(
+            !runtime
+                .state
+                .workspace_findings
+                .plot_stage_visible(Status::Screened)
+        );
+        assert!(runtime.find("finding-point-88-86").is_none());
+        runtime.state.workspace_findings.reset();
+        for (status, _, _) in LANES {
+            assert!(runtime.state.workspace_findings.plot_stage_visible(status));
+        }
     }
 }

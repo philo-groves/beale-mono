@@ -497,16 +497,19 @@ message SessionMessage {
   repeated SessionReasoningSummary reasoning_summaries = 4;
   uint64 duration_ms = 5;
   repeated SessionCommentary commentary = 6;
+  string agent_role = 7;
 }
 
 message SessionReasoningSummary {
   string text = 1;
   uint32 after_tool_count = 2;
+  string agent_role = 3;
 }
 
 message SessionCommentary {
   string text = 1;
   uint32 after_tool_count = 2;
+  string agent_role = 3;
 }
 
 enum SessionStreamKind {
@@ -520,6 +523,9 @@ enum SessionStreamKind {
   SESSION_STREAM_KIND_TURN_COMPLETED = 7;
   SESSION_STREAM_KIND_SUBAGENTS_SPAWNED = 8;
   SESSION_STREAM_KIND_RUNBOOK_PROGRESS = 9;
+  SESSION_STREAM_KIND_SESSION_STARTED = 10;
+  SESSION_STREAM_KIND_AGENT_TURN_COMPLETED = 11;
+  SESSION_STREAM_KIND_AGENT_STARTED = 12;
 }
 
 message SessionStreamEvent {
@@ -529,6 +535,8 @@ message SessionStreamEvent {
   SessionDetail detail = 4;
   uint32 segment_index = 5;
   RunbookProgress runbook_progress = 6;
+  string agent_role = 7;
+  SessionToolDetailPage tool_detail = 8;
 }
 
 message RunbookProgress {
@@ -543,6 +551,7 @@ message SessionToolSummary {
   string name = 2;
   string summary = 3;
   bool is_error = 4;
+  string agent_role = 5;
 }
 
 message SessionToolDetailPage {
@@ -603,6 +612,21 @@ message SessionDetail {
   repeated SessionRunbook runbooks = 17; // Runbooks created, edited, or run in this session.
   // All recorded calls in this session, independent of transcript pagination.
   repeated SessionModelUsage model_usage = 18;
+  repeated SessionGraphAgent graph_agents = 19;
+  repeated SessionGraphHandoff graph_handoffs = 20;
+}
+
+message SessionGraphAgent {
+  string role = 1;
+  string status = 2; // idle, queued, working, or failed.
+}
+
+message SessionGraphHandoff {
+  string id = 1;
+  string from_role = 2;
+  string to_role = 3;
+  string task = 4;
+  string status = 5; // pending, running, completed, or failed.
 }
 
 message SessionModelUsage {
@@ -707,6 +731,7 @@ message SubmitSessionTurnRequest {
   string graph_id = 12; // Chosen graph on the first turn; empty for no graph or later turns.
   repeated GraphNodeModel graph_models = 13; // Role model choices on the first turn only.
   repeated GraphNodeConcurrency graph_node_concurrency = 14; // Per-role maximums on the first turn only.
+  string agent_role = 15; // Optional top-level role to address for this turn.
 }
 
 message AutomationJob {

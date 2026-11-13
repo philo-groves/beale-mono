@@ -259,7 +259,7 @@ pub(crate) fn sidenav(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
                 .role("button")
                 .label("Token Tracking, selected")
                 .w_full()
-                .h(34.0)
+                .h(design::SIDENAV_ROW_HEIGHT)
                 .px(8.0)
                 .center_y()
                 .gap(12.0)
@@ -306,6 +306,7 @@ pub(crate) fn sidenav(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
 fn filter_tabs(state: &State, theme: ThemeStyle<'_>) -> El {
     token_charts::agent_filters(
         state.tracking.filter,
+        "Main",
         "tracking",
         |state, filter| state.tracking.filter = filter,
         theme,

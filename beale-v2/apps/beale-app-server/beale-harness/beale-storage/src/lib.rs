@@ -305,6 +305,19 @@ pub struct SessionModelUsageRow {
     pub totals: SessionUsageTotals,
 }
 
+fn is_top_level_role(role: &str) -> bool {
+    matches!(
+        role,
+        "main"
+            | "discovery_harness"
+            | "validation_system"
+            | "discovery"
+            | "validation"
+            | "reporter"
+            | "patch_generation"
+    )
+}
+
 fn add_usage_totals(total: &mut SessionUsageTotals, delta: &SessionUsageTotals) {
     total.input_tokens = total.input_tokens.saturating_add(delta.input_tokens);
     total.output_tokens = total.output_tokens.saturating_add(delta.output_tokens);
@@ -348,6 +361,7 @@ pub struct ToolCallRow {
     pub arguments: String,
     pub output: String,
     pub is_error: bool,
+    pub agent_role: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -357,6 +371,7 @@ pub struct ToolCallSummaryRow {
     pub name: String,
     pub summary: String,
     pub is_error: bool,
+    pub agent_role: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -365,6 +380,7 @@ pub struct ReasoningSummaryRow {
     pub ordinal: i64,
     pub after_tool_count: i64,
     pub text: String,
+    pub agent_role: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -373,6 +389,7 @@ pub struct CommentaryRow {
     pub ordinal: i64,
     pub after_tool_count: i64,
     pub text: String,
+    pub agent_role: String,
 }
 
 pub struct TurnActivity<'a> {
@@ -390,6 +407,15 @@ pub struct TurnMetadata<'a> {
     pub model_usage: Option<&'a [ModelUsageRow]>,
     pub child_turns: &'a [ChildTurnRow],
     pub queue_memories: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GraphHandoffRow {
+    pub id: String,
+    pub from_role: String,
+    pub to_role: String,
+    pub task: String,
+    pub status: String,
 }
 
 #[derive(Clone, Debug)]
@@ -431,7 +457,7 @@ impl HostDatabase {
         connection.busy_timeout(Duration::from_secs(5))?;
         connection.execute_batch("PRAGMA foreign_keys = ON;")?;
         let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version > 44 {
+        if version > 47 {
             bail!("unsupported host database schema version {version}");
         }
         connection.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;")?;
@@ -1054,6 +1080,69 @@ impl HostDatabase {
                  PRAGMA user_version = 44;
                  COMMIT;")?;
         }
+        if version < 45 {
+            let transaction = connection.transaction()?;
+            for (table, sql) in [
+                (
+                    "session_tool_calls",
+                    "ALTER TABLE session_tool_calls ADD COLUMN agent_role TEXT NOT NULL DEFAULT 'main'",
+                ),
+                (
+                    "session_reasoning_summaries",
+                    "ALTER TABLE session_reasoning_summaries ADD COLUMN agent_role TEXT NOT NULL DEFAULT 'main'",
+                ),
+                (
+                    "session_commentary",
+                    "ALTER TABLE session_commentary ADD COLUMN agent_role TEXT NOT NULL DEFAULT 'main'",
+                ),
+            ] {
+                let exists: bool = transaction.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name = 'agent_role')",
+                    [table],
+                    |row| row.get(0),
+                )?;
+                if !exists {
+                    transaction.execute_batch(sql)?;
+                }
+            }
+            transaction.execute_batch("PRAGMA user_version = 45")?;
+            transaction.commit()?;
+        }
+        if version < 46 {
+            connection.execute_batch("BEGIN IMMEDIATE;
+                 CREATE TABLE IF NOT EXISTS session_graph_turns (
+                     session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                     turn_number INTEGER NOT NULL,
+                     agent_role TEXT NOT NULL,
+                     status TEXT NOT NULL CHECK(status IN ('running','completed','failed')),
+                     PRIMARY KEY(session_id, turn_number)
+                 );
+                 CREATE TABLE IF NOT EXISTS session_graph_handoffs (
+                     id TEXT PRIMARY KEY,
+                     session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                     from_role TEXT NOT NULL,
+                     to_role TEXT NOT NULL,
+                     task TEXT NOT NULL,
+                     status TEXT NOT NULL CHECK(status IN ('pending','running','completed','failed')),
+                     created_at_ms INTEGER NOT NULL
+                 );
+                 CREATE INDEX IF NOT EXISTS session_graph_handoffs_queue ON session_graph_handoffs(session_id,status,to_role,created_at_ms);
+                 PRAGMA user_version = 46;
+                 COMMIT;")?;
+        }
+        if version < 47 {
+            connection.execute_batch(
+                "BEGIN IMMEDIATE;
+                 CREATE TABLE IF NOT EXISTS session_graph_provider_context (
+                     session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                     agent_role TEXT NOT NULL,
+                     context_json TEXT NOT NULL,
+                     PRIMARY KEY(session_id, agent_role)
+                 );
+                 PRAGMA user_version = 47;
+                 COMMIT;",
+            )?;
+        }
         connection.execute(
             "UPDATE runbook_runs SET status='interrupted' WHERE status='running'",
             [],
@@ -1286,7 +1375,7 @@ impl HostDatabase {
                 let scopes = changes.entry(bucket).or_default();
                 add_usage_totals(&mut scopes[0], &delta);
                 match role.as_deref() {
-                    Some("main") => add_usage_totals(&mut scopes[1], &delta),
+                    Some(role) if is_top_level_role(role) => add_usage_totals(&mut scopes[1], &delta),
                     Some(role) if !role.is_empty() => add_usage_totals(&mut scopes[2], &delta),
                     _ => {}
                 }
@@ -1343,12 +1432,50 @@ impl HostDatabase {
         })
     }
 
+    pub fn session_last_top_level_role(&self, session_id: &str) -> Result<Option<String>> {
+        self.with_connection(|connection| {
+            connection.query_row(
+                "SELECT role FROM session_model_usage WHERE session_id = ?1
+                 AND role IN ('main','discovery_harness','validation_system','discovery','validation','reporter','patch_generation')
+                 ORDER BY turn_number DESC, ordinal DESC LIMIT 1",
+                [session_id],
+                |row| row.get(0),
+            ).optional().map_err(Into::into)
+        })
+    }
+
+    pub fn session_turn_role(&self, session_id: &str, turn_number: i64) -> Result<Option<String>> {
+        self.with_connection(|connection| {
+            connection.query_row(
+                "SELECT role FROM session_model_usage WHERE session_id = ?1 AND turn_number = ?2
+                 AND role IN ('main','discovery_harness','validation_system','discovery','validation','reporter','patch_generation')
+                 ORDER BY ordinal DESC LIMIT 1",
+                params![session_id, turn_number],
+                |row| row.get(0),
+            ).optional().map_err(Into::into)
+        })
+    }
+
     pub fn provider_context(&self, session_id: &str) -> Result<Option<String>> {
         self.with_connection(|connection| {
             connection
                 .query_row(
                     "SELECT context_json FROM session_provider_context WHERE session_id = ?1",
                     [session_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(Into::into)
+        })
+    }
+
+    pub fn graph_provider_context(&self, session_id: &str, role: &str) -> Result<Option<String>> {
+        self.with_connection(|connection| {
+            connection
+                .query_row(
+                    "SELECT context_json FROM session_graph_provider_context
+                     WHERE session_id=?1 AND agent_role=?2",
+                    params![session_id, role],
                     |row| row.get(0),
                 )
                 .optional()
@@ -1442,6 +1569,17 @@ impl HostDatabase {
                 )?;
             }
             Ok(true)
+        })
+    }
+
+    pub fn automation_job_canceled(&self, id: &str) -> Result<bool> {
+        self.with_connection(|db| {
+            db.query_row(
+                "SELECT canceled FROM automation_jobs WHERE id = ?1",
+                [id],
+                |row| row.get(0),
+            )
+            .map_err(Into::into)
         })
     }
 
@@ -1853,6 +1991,266 @@ impl HostDatabase {
         })
     }
 
+    pub fn create_peer_graph_session(
+        &self,
+        session: &SessionRow,
+        graph_id: &str,
+        graph_config: &[u8],
+        repeat: Option<(&str, AutomationOptions)>,
+    ) -> Result<()> {
+        ensure!(
+            !graph_id.is_empty() && graph_id.len() <= 64,
+            "invalid graph id"
+        );
+        ensure!(graph_config.len() <= 32_768, "graph config is too large");
+        let automation_next = repeat
+            .map(|(preset, _)| automation_next_run(preset, session.last_message_at_ms, 1))
+            .transpose()?;
+        self.with_connection(|connection| {
+            let transaction = connection.transaction()?;
+            transaction.execute(
+                "INSERT INTO sessions(id,workspace_id,title,created_at_ms,last_message_at_ms)
+                 VALUES (?1,?2,?3,?4,?5)",
+                params![
+                    session.id,
+                    session.workspace_id,
+                    session.title,
+                    session.created_at_ms,
+                    session.last_message_at_ms
+                ],
+            )?;
+            transaction.execute(
+                "INSERT INTO session_graphs(session_id,graph_id,config_blob) VALUES (?1,?2,?3)",
+                params![session.id, graph_id, graph_config],
+            )?;
+            if let (Some((preset, options)), Some(next)) = (repeat, automation_next) {
+                transaction.execute(
+                    "INSERT INTO automation_jobs
+                     (id,session_id,workspace_id,title,repeat_preset,next_run_at_ms,last_run_at_ms)
+                     VALUES (?1,?1,?2,?3,?4,?5,?6)",
+                    params![
+                        session.id,
+                        session.workspace_id,
+                        session.title,
+                        preset,
+                        next,
+                        session.last_message_at_ms
+                    ],
+                )?;
+                insert_initial_automation_run(&transaction, session, options)?;
+            }
+            transaction.commit()?;
+            Ok(())
+        })
+    }
+
+    pub fn is_peer_graph_session(&self, session_id: &str) -> Result<bool> {
+        self.with_connection(|connection| {
+            connection
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM session_graph_turns WHERE session_id=?1)
+                    OR EXISTS(SELECT 1 FROM session_graph_handoffs WHERE session_id=?1)
+                    OR EXISTS(SELECT 1 FROM session_graphs WHERE session_id=?1
+                        AND graph_id IN ('cloudflare_harness','openai_pipeline')
+                        AND NOT EXISTS(SELECT 1 FROM session_turns WHERE session_id=?1))",
+                    [session_id],
+                    |row| row.get(0),
+                )
+                .map_err(Into::into)
+        })
+    }
+
+    pub fn reserve_graph_turn(&self, session_id: &str, role: &str) -> Result<i64> {
+        ensure!(!role.is_empty() && role.len() <= 20, "invalid graph role");
+        self.with_connection(|connection| {
+            let transaction = connection.transaction()?;
+            let next: i64 = transaction.query_row(
+                "SELECT MAX(number)+1 FROM (
+                    SELECT number FROM session_turns WHERE session_id=?1
+                    UNION ALL SELECT turn_number AS number FROM session_graph_turns WHERE session_id=?1
+                 )",
+                [session_id],
+                |row| row.get::<_, Option<i64>>(0),
+            )?.unwrap_or(1);
+            ensure!((1..=1024).contains(&next), "graph turn limit reached");
+            transaction.execute(
+                "INSERT INTO session_graph_turns(session_id,turn_number,agent_role,status)
+                 VALUES (?1,?2,?3,'running')",
+                params![session_id,next,role],
+            )?;
+            transaction.commit()?;
+            Ok(next)
+        })
+    }
+
+    pub fn graph_turn_role(&self, session_id: &str, turn_number: i64) -> Result<Option<String>> {
+        self.with_connection(|connection| {
+            connection.query_row(
+                "SELECT agent_role FROM session_graph_turns WHERE session_id=?1 AND turn_number=?2",
+                params![session_id,turn_number], |row| row.get(0),
+            ).optional().map_err(Into::into)
+        })
+    }
+
+    pub fn graph_role_status(&self, session_id: &str, role: &str) -> Result<String> {
+        self.with_connection(|connection| {
+            let running: bool = connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM session_graph_turns
+                 WHERE session_id=?1 AND agent_role=?2 AND status='running')",
+                params![session_id, role],
+                |row| row.get(0),
+            )?;
+            if running {
+                return Ok("working".to_owned());
+            }
+            let pending: bool = connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM session_graph_handoffs
+                 WHERE session_id=?1 AND to_role=?2 AND status='pending')",
+                params![session_id, role],
+                |row| row.get(0),
+            )?;
+            if pending {
+                return Ok("queued".to_owned());
+            }
+            let failed: bool = connection.query_row(
+                "SELECT COALESCE((SELECT status='failed' FROM session_graph_turns
+                 WHERE session_id=?1 AND agent_role=?2 ORDER BY turn_number DESC LIMIT 1),0)",
+                params![session_id, role],
+                |row| row.get(0),
+            )?;
+            Ok(if failed { "failed" } else { "idle" }.to_owned())
+        })
+    }
+
+    pub fn finish_graph_turn(
+        &self,
+        session_id: &str,
+        turn_number: i64,
+        success: bool,
+    ) -> Result<()> {
+        self.with_connection(|connection| {
+            connection.execute(
+                "UPDATE session_graph_turns SET status=?3 WHERE session_id=?1 AND turn_number=?2",
+                params![
+                    session_id,
+                    turn_number,
+                    if success { "completed" } else { "failed" }
+                ],
+            )?;
+            Ok(())
+        })
+    }
+
+    pub fn enqueue_graph_handoff(
+        &self,
+        session_id: &str,
+        item: &GraphHandoffRow,
+        created_at_ms: i64,
+    ) -> Result<()> {
+        ensure!(
+            !item.task.trim().is_empty() && item.task.len() <= 4096,
+            "invalid handoff task"
+        );
+        self.with_connection(|connection| {
+            connection.execute(
+                "INSERT INTO session_graph_handoffs(id,session_id,from_role,to_role,task,status,created_at_ms)
+                 VALUES (?1,?2,?3,?4,?5,'pending',?6)",
+                params![item.id,session_id,item.from_role,item.to_role,item.task,created_at_ms],
+            )?;
+            Ok(())
+        })
+    }
+
+    pub fn graph_handoffs(&self, session_id: &str) -> Result<Vec<GraphHandoffRow>> {
+        self.with_connection(|connection| {
+            let mut query = connection.prepare(
+                "SELECT id,from_role,to_role,task,status FROM session_graph_handoffs
+                 WHERE session_id=?1 ORDER BY created_at_ms DESC,id DESC LIMIT 128",
+            )?;
+            query
+                .query_map([session_id], |row| {
+                    Ok(GraphHandoffRow {
+                        id: row.get(0)?,
+                        from_role: row.get(1)?,
+                        to_role: row.get(2)?,
+                        task: row.get(3)?,
+                        status: row.get(4)?,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(Into::into)
+        })
+    }
+
+    pub fn pending_graph_handoffs(&self, session_id: &str) -> Result<Vec<GraphHandoffRow>> {
+        self.with_connection(|connection| {
+            let mut query = connection.prepare(
+                "SELECT id,from_role,to_role,task,status FROM session_graph_handoffs
+                 WHERE session_id=?1 AND status='pending' ORDER BY created_at_ms,id LIMIT 128",
+            )?;
+            query
+                .query_map([session_id], |row| {
+                    Ok(GraphHandoffRow {
+                        id: row.get(0)?,
+                        from_role: row.get(1)?,
+                        to_role: row.get(2)?,
+                        task: row.get(3)?,
+                        status: row.get(4)?,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(Into::into)
+        })
+    }
+
+    pub fn set_graph_handoff_status(&self, id: &str, status: &str) -> Result<()> {
+        ensure!(
+            matches!(status, "pending" | "running" | "completed" | "failed"),
+            "invalid handoff status"
+        );
+        self.with_connection(|connection| {
+            connection.execute(
+                "UPDATE session_graph_handoffs SET status=?2 WHERE id=?1",
+                params![id, status],
+            )?;
+            Ok(())
+        })
+    }
+
+    pub fn recover_graph_session(&self, session_id: &str) -> Result<()> {
+        self.with_connection(|connection| {
+            let transaction = connection.transaction()?;
+            transaction.execute(
+                "UPDATE session_graph_turns SET status='failed'
+                 WHERE session_id=?1 AND status='running'",
+                [session_id],
+            )?;
+            transaction.execute(
+                "UPDATE session_graph_handoffs SET status='pending'
+                 WHERE session_id=?1 AND status='running'",
+                [session_id],
+            )?;
+            transaction.commit()?;
+            Ok(())
+        })
+    }
+
+    pub fn recover_abandoned_graph_work(&self) -> Result<()> {
+        self.with_connection(|connection| {
+            let transaction = connection.transaction()?;
+            transaction.execute(
+                "UPDATE session_graph_turns SET status='failed' WHERE status='running'",
+                [],
+            )?;
+            transaction.execute(
+                "UPDATE session_graph_handoffs SET status='pending' WHERE status='running'",
+                [],
+            )?;
+            transaction.commit()?;
+            Ok(())
+        })
+    }
+
     pub fn archive_session(&self, id: &str, archived_at_ms: i64) -> Result<bool> {
         self.with_connection(|connection| {
             Ok(connection.execute(
@@ -1955,6 +2353,49 @@ impl HostDatabase {
         })
     }
 
+    pub fn graph_agent_turns(&self, session_id: &str, role: &str) -> Result<Vec<TurnRow>> {
+        self.with_connection(|connection| {
+            let mut statement = connection.prepare(
+                "SELECT number,provider,method,model,prompt,answer,duration_ms,internal_prompt
+                 FROM (SELECT t.number,t.provider,t.method,t.model,t.prompt,t.answer,t.duration_ms,t.internal_prompt
+                       FROM session_turns t JOIN session_graph_turns g
+                         ON g.session_id=t.session_id AND g.turn_number=t.number
+                       WHERE t.session_id=?1 AND g.agent_role=?2
+                       ORDER BY t.number DESC LIMIT 64)
+                 ORDER BY number",
+            )?;
+            statement.query_map(params![session_id,role], |row| Ok(TurnRow {
+                number: row.get(0)?, provider: row.get(1)?, method: row.get(2)?,
+                model: row.get(3)?, prompt: row.get(4)?, answer: row.get(5)?,
+                duration_ms: row.get(6)?, internal_prompt: row.get(7)?,
+            }))?.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+        })
+    }
+
+    pub fn graph_recent_turns(&self, session_id: &str) -> Result<Vec<TurnRow>> {
+        self.with_connection(|connection| {
+            let mut statement = connection.prepare(
+                "SELECT number,provider,method,model,prompt,answer,duration_ms,internal_prompt
+                 FROM (SELECT t.number,t.provider,t.method,t.model,t.prompt,t.answer,t.duration_ms,t.internal_prompt,
+                         ROW_NUMBER() OVER (PARTITION BY g.agent_role ORDER BY t.number DESC) AS role_ordinal
+                       FROM session_turns t JOIN session_graph_turns g
+                         ON g.session_id=t.session_id AND g.turn_number=t.number
+                       WHERE t.session_id=?1)
+                 WHERE role_ordinal<=2 ORDER BY number",
+            )?;
+            statement
+                .query_map([session_id], |row| {
+                    Ok(TurnRow {
+                        number: row.get(0)?, provider: row.get(1)?, method: row.get(2)?,
+                        model: row.get(3)?, prompt: row.get(4)?, answer: row.get(5)?,
+                        duration_ms: row.get(6)?, internal_prompt: row.get(7)?,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(Into::into)
+        })
+    }
+
     pub fn session_total_duration_ms(&self, id: &str) -> Result<u64> {
         self.with_connection(|connection| {
             let total: i64 = connection.query_row(
@@ -1973,6 +2414,7 @@ impl HostDatabase {
                     "SELECT EXISTS(SELECT 1 FROM runbook_runs WHERE session_id = ?1)
                      OR EXISTS(SELECT 1 FROM session_tool_calls
                  WHERE session_id = ?1 AND (name = 'graph_delegate'
+                 OR (name = 'graph_handoff' AND is_error = 0)
                  OR (is_error = 0 AND name IN ('memory_create', 'memory_save', 'lead_create',
                      'finding_create', 'findings_create', 'claim_create', 'runbook_create', 'runbook_edit', 'surface_add', 'surface_save',
                      'surface_mapping_edit', 'surface_promote_element',
@@ -2364,8 +2806,13 @@ impl HostDatabase {
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 params![session.id, turn.number, turn.provider, turn.method, turn.model, turn.prompt, turn.answer, turn.duration_ms, turn.internal_prompt],
             )?;
+            transaction.execute(
+                "UPDATE session_graph_turns SET status='completed'
+                 WHERE session_id=?1 AND turn_number=?2 AND status='running'",
+                params![session.id, turn.number],
+            )?;
             if let Some(model_usage) = model_usage {
-                ensure!(model_usage.len() <= 256, "too many model calls in turn");
+                ensure!(model_usage.len() <= 512, "too many model calls in turn");
                 for (ordinal, item) in model_usage.iter().enumerate() {
                     ensure!(!item.agent_id.is_empty() && item.agent_id.len() <= 64
                         && item.model.len() <= 200 && item.role.len() <= 20
@@ -2389,22 +2836,42 @@ impl HostDatabase {
             }
             if !new_session {
                 transaction.execute(
-                    "UPDATE sessions SET last_message_at_ms = ?2 WHERE id = ?1",
+                    "UPDATE sessions SET last_message_at_ms = MAX(last_message_at_ms, ?2) WHERE id = ?1",
                     params![session.id, session.last_message_at_ms],
                 )?;
             }
+            let graph_role: Option<String> = transaction.query_row(
+                "SELECT agent_role FROM session_graph_turns
+                 WHERE session_id=?1 AND turn_number=?2",
+                params![session.id, turn.number],
+                |row| row.get(0),
+            ).optional()?;
             if let Some(context_json) = provider_context_json {
+                if let Some(role) = &graph_role {
+                    transaction.execute(
+                        "INSERT INTO session_graph_provider_context(session_id,agent_role,context_json)
+                         VALUES (?1,?2,?3) ON CONFLICT(session_id,agent_role)
+                         DO UPDATE SET context_json=excluded.context_json",
+                        params![session.id, role, context_json],
+                    )?;
+                } else {
+                    transaction.execute(
+                        "INSERT INTO session_provider_context(session_id, context_json) VALUES (?1, ?2)
+                         ON CONFLICT(session_id) DO UPDATE SET context_json = excluded.context_json",
+                        params![session.id, context_json],
+                    )?;
+                }
+            } else if let Some(role) = graph_role {
                 transaction.execute(
-                    "INSERT INTO session_provider_context(session_id, context_json) VALUES (?1, ?2)
-                     ON CONFLICT(session_id) DO UPDATE SET context_json = excluded.context_json",
-                    params![session.id, context_json],
+                    "DELETE FROM session_graph_provider_context WHERE session_id=?1 AND agent_role=?2",
+                    params![session.id, role],
                 )?;
             }
             for tool in activity.tools {
                 transaction.execute(
-                    "INSERT INTO session_tool_calls(id, session_id, turn_number, ordinal, name, summary, arguments, output, is_error)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                    params![tool.id, session.id, turn.number, tool.ordinal, tool.name, tool.summary, tool.arguments, tool.output, tool.is_error],
+                    "INSERT INTO session_tool_calls(id, session_id, turn_number, ordinal, name, summary, arguments, output, is_error, agent_role)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                    params![tool.id, session.id, turn.number, tool.ordinal, tool.name, tool.summary, tool.arguments, tool.output, tool.is_error, tool.agent_role],
                 )?;
             }
             for child in child_turns {
@@ -2444,22 +2911,24 @@ impl HostDatabase {
             }
             if queue_memories {
                 transaction.execute(
-                    "INSERT INTO memory_turn_outbox(workspace_id,session_id,turn_number,agent_id) VALUES (?1,?2,?3,'main')",
+                    "INSERT INTO memory_turn_outbox(workspace_id,session_id,turn_number,agent_id)
+                     VALUES (?1,?2,?3,COALESCE((SELECT agent_role FROM session_graph_turns
+                       WHERE session_id=?2 AND turn_number=?3),'main'))",
                     params![session.workspace_id, session.id, turn.number],
                 )?;
             }
             for item in activity.reasoning {
                 transaction.execute(
-                    "INSERT INTO session_reasoning_summaries(session_id, turn_number, ordinal, after_tool_count, text)
-                     VALUES (?1, ?2, ?3, ?4, ?5)",
-                    params![session.id, turn.number, item.ordinal, item.after_tool_count, item.text],
+                    "INSERT INTO session_reasoning_summaries(session_id, turn_number, ordinal, after_tool_count, text, agent_role)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![session.id, turn.number, item.ordinal, item.after_tool_count, item.text, item.agent_role],
                 )?;
             }
             for item in activity.commentary {
                 transaction.execute(
-                    "INSERT INTO session_commentary(session_id, turn_number, ordinal, after_tool_count, text)
-                     VALUES (?1, ?2, ?3, ?4, ?5)",
-                    params![session.id, turn.number, item.ordinal, item.after_tool_count, item.text],
+                    "INSERT INTO session_commentary(session_id, turn_number, ordinal, after_tool_count, text, agent_role)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![session.id, turn.number, item.ordinal, item.after_tool_count, item.text, item.agent_role],
                 )?;
             }
             if let Some(goal) = activity.goal {
@@ -2498,8 +2967,8 @@ impl HostDatabase {
     ) -> Result<Vec<ToolCallSummaryRow>> {
         self.with_connection(|connection| {
             let mut statement = connection.prepare(
-                "SELECT id, turn_number, name, summary, is_error FROM session_tool_calls
-                 WHERE session_id = ?1 AND turn_number >= ?2 ORDER BY turn_number, ordinal LIMIT 2049",
+                "SELECT id, turn_number, name, summary, is_error, agent_role FROM session_tool_calls
+                 WHERE session_id = ?1 AND turn_number >= ?2 ORDER BY turn_number, ordinal LIMIT 4097",
             )?;
             let rows = statement.query_map(params![session_id, first_turn], |row| {
                 Ok(ToolCallSummaryRow {
@@ -2508,9 +2977,38 @@ impl HostDatabase {
                     name: row.get(2)?,
                     summary: row.get(3)?,
                     is_error: row.get(4)?,
+                    agent_role: row.get(5)?,
                 })
             })?;
             rows.collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(Into::into)
+        })
+    }
+
+    pub fn tool_summaries_for_turns(
+        &self,
+        session_id: &str,
+        turns: &[i64],
+    ) -> Result<Vec<ToolCallSummaryRow>> {
+        let turns_json = serde_json::to_string(turns)?;
+        self.with_connection(|connection| {
+            let mut statement = connection.prepare(
+                "SELECT id, turn_number, name, summary, is_error, agent_role FROM session_tool_calls
+                 WHERE session_id=?1 AND turn_number IN (SELECT value FROM json_each(?2))
+                 ORDER BY turn_number, ordinal LIMIT 4097",
+            )?;
+            statement
+                .query_map(params![session_id, turns_json], |row| {
+                    Ok(ToolCallSummaryRow {
+                        id: row.get(0)?,
+                        turn_number: row.get(1)?,
+                        name: row.get(2)?,
+                        summary: row.get(3)?,
+                        is_error: row.get(4)?,
+                        agent_role: row.get(5)?,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()
                 .map_err(Into::into)
         })
     }
@@ -2526,7 +3024,7 @@ impl HostDatabase {
     ) -> Result<Vec<ReasoningSummaryRow>> {
         self.with_connection(|connection| {
             let mut statement = connection.prepare(
-                "SELECT turn_number, ordinal, after_tool_count, text FROM session_reasoning_summaries
+                "SELECT turn_number, ordinal, after_tool_count, text, agent_role FROM session_reasoning_summaries
                  WHERE session_id = ?1 AND turn_number >= ?2 ORDER BY turn_number, ordinal LIMIT 8193",
             )?;
             let rows = statement.query_map(params![session_id, first_turn], |row| {
@@ -2535,10 +3033,30 @@ impl HostDatabase {
                     ordinal: row.get(1)?,
                     after_tool_count: row.get(2)?,
                     text: row.get(3)?,
+                    agent_role: row.get(4)?,
                 })
             })?;
             rows.collect::<rusqlite::Result<Vec<_>>>()
                 .map_err(Into::into)
+        })
+    }
+
+    pub fn reasoning_summaries_for_turns(
+        &self,
+        session_id: &str,
+        turns: &[i64],
+    ) -> Result<Vec<ReasoningSummaryRow>> {
+        let turns_json = serde_json::to_string(turns)?;
+        self.with_connection(|connection| {
+            let mut statement = connection.prepare(
+                "SELECT turn_number, ordinal, after_tool_count, text, agent_role FROM session_reasoning_summaries
+                 WHERE session_id=?1 AND turn_number IN (SELECT value FROM json_each(?2))
+                 ORDER BY turn_number, ordinal LIMIT 8193",
+            )?;
+            statement.query_map(params![session_id, turns_json], |row| Ok(ReasoningSummaryRow {
+                turn_number: row.get(0)?, ordinal: row.get(1)?, after_tool_count: row.get(2)?,
+                text: row.get(3)?, agent_role: row.get(4)?,
+            }))?.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
         })
     }
 
@@ -2553,7 +3071,7 @@ impl HostDatabase {
     ) -> Result<Vec<CommentaryRow>> {
         self.with_connection(|connection| {
             let mut statement = connection.prepare(
-                "SELECT turn_number, ordinal, after_tool_count, text FROM session_commentary
+                "SELECT turn_number, ordinal, after_tool_count, text, agent_role FROM session_commentary
                  WHERE session_id = ?1 AND turn_number >= ?2 ORDER BY turn_number, ordinal LIMIT 8193",
             )?;
             let rows = statement.query_map(params![session_id, first_turn], |row| {
@@ -2562,6 +3080,7 @@ impl HostDatabase {
                     ordinal: row.get(1)?,
                     after_tool_count: row.get(2)?,
                     text: row.get(3)?,
+                    agent_role: row.get(4)?,
                 })
             })?;
             rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -2569,11 +3088,30 @@ impl HostDatabase {
         })
     }
 
+    pub fn commentary_for_turns(
+        &self,
+        session_id: &str,
+        turns: &[i64],
+    ) -> Result<Vec<CommentaryRow>> {
+        let turns_json = serde_json::to_string(turns)?;
+        self.with_connection(|connection| {
+            let mut statement = connection.prepare(
+                "SELECT turn_number, ordinal, after_tool_count, text, agent_role FROM session_commentary
+                 WHERE session_id=?1 AND turn_number IN (SELECT value FROM json_each(?2))
+                 ORDER BY turn_number, ordinal LIMIT 8193",
+            )?;
+            statement.query_map(params![session_id, turns_json], |row| Ok(CommentaryRow {
+                turn_number: row.get(0)?, ordinal: row.get(1)?, after_tool_count: row.get(2)?,
+                text: row.get(3)?, agent_role: row.get(4)?,
+            }))?.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+        })
+    }
+
     pub fn tool_call(&self, session_id: &str, id: &str) -> Result<Option<ToolCallRow>> {
         self.with_connection(|connection| {
             connection
                 .query_row(
-                    "SELECT id, turn_number, ordinal, name, summary, arguments, output, is_error
+                    "SELECT id, turn_number, ordinal, name, summary, arguments, output, is_error, agent_role
                  FROM session_tool_calls WHERE session_id = ?1 AND id = ?2",
                     params![session_id, id],
                     |row| {
@@ -2586,6 +3124,7 @@ impl HostDatabase {
                             arguments: row.get(5)?,
                             output: row.get(6)?,
                             is_error: row.get(7)?,
+                            agent_role: row.get(8)?,
                         })
                     },
                 )
@@ -2764,12 +3303,12 @@ impl HostDatabase {
         self.with_connection(|connection| {
             let mut statement = connection.prepare(
                 "WITH items AS (
-                   SELECT 'turn:'||t.number||':user' ref,t.number turn_number,'main' actor_id,'message' kind,t.prompt body,0 ordinal
-                     FROM session_turns t WHERE t.session_id=?1
-                   UNION ALL SELECT 'turn:'||t.number||':assistant',t.number,'main','message',t.answer,9000 FROM session_turns t WHERE t.session_id=?1
-                   UNION ALL SELECT 'tool:'||c.id,c.turn_number,COALESCE(ct.agent_id,'main'),'tool',c.summary||char(10)||substr(c.output,1,8000),c.ordinal*10+1 FROM session_tool_calls c LEFT JOIN session_child_tools ct ON ct.tool_call_id=c.id WHERE c.session_id=?1
-                   UNION ALL SELECT 'reasoning:'||r.turn_number||':'||r.ordinal,r.turn_number,'main','reasoning_summary',r.text,r.after_tool_count*10+2 FROM session_reasoning_summaries r WHERE r.session_id=?1
-                   UNION ALL SELECT 'commentary:'||c.turn_number||':'||c.ordinal,c.turn_number,'main','commentary',c.text,c.after_tool_count*10+3 FROM session_commentary c WHERE c.session_id=?1
+                   SELECT 'turn:'||t.number||':user' ref,t.number turn_number,COALESCE(g.agent_role,'main') actor_id,'message' kind,t.prompt body,0 ordinal
+                     FROM session_turns t LEFT JOIN session_graph_turns g ON g.session_id=t.session_id AND g.turn_number=t.number WHERE t.session_id=?1
+                   UNION ALL SELECT 'turn:'||t.number||':assistant',t.number,COALESCE(g.agent_role,'main'),'message',t.answer,9000 FROM session_turns t LEFT JOIN session_graph_turns g ON g.session_id=t.session_id AND g.turn_number=t.number WHERE t.session_id=?1
+                   UNION ALL SELECT 'tool:'||c.id,c.turn_number,COALESCE(ct.agent_id,c.agent_role,'main'),'tool',c.summary||char(10)||substr(c.output,1,8000),c.ordinal*10+1 FROM session_tool_calls c LEFT JOIN session_child_tools ct ON ct.tool_call_id=c.id WHERE c.session_id=?1
+                   UNION ALL SELECT 'reasoning:'||r.turn_number||':'||r.ordinal,r.turn_number,COALESCE(r.agent_role,'main'),'reasoning_summary',r.text,r.after_tool_count*10+2 FROM session_reasoning_summaries r WHERE r.session_id=?1
+                   UNION ALL SELECT 'commentary:'||c.turn_number||':'||c.ordinal,c.turn_number,COALESCE(c.agent_role,'main'),'commentary',c.text,c.after_tool_count*10+3 FROM session_commentary c WHERE c.session_id=?1
                    UNION ALL SELECT 'child:'||c.agent_id||':task',c.parent_turn,c.agent_id,'message',c.task,4 FROM session_child_turns c WHERE c.session_id=?1
                    UNION ALL SELECT 'child:'||c.agent_id||':message:'||m.key,c.parent_turn,c.agent_id,'message',json_extract(m.value,'$.text'),5000+CAST(m.key AS INTEGER) FROM session_child_turns c,json_each(c.messages_json) m WHERE c.session_id=?1 AND json_extract(m.value,'$.role')='assistant'
                    UNION ALL SELECT 'child:'||c.agent_id||':reasoning:'||r.key,c.parent_turn,c.agent_id,'reasoning_summary',r.value,6000+CAST(r.key AS INTEGER) FROM session_child_turns c,json_each(c.reasoning_json) r WHERE c.session_id=?1
@@ -2974,6 +3513,24 @@ fn restrict_windows_acl(path: &Path, directory: bool) -> Result<()> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn peer_agents_count_as_top_level_usage() {
+        for role in [
+            "main",
+            "discovery_harness",
+            "validation_system",
+            "discovery",
+            "validation",
+            "reporter",
+            "patch_generation",
+        ] {
+            assert!(is_top_level_role(role));
+        }
+        for role in ["scout", "reviewer", "prover", ""] {
+            assert!(!is_top_level_role(role));
+        }
+    }
+
     fn root() -> std::path::PathBuf {
         std::env::temp_dir().join(format!("beale-storage-example-{}", uuid::Uuid::new_v4()))
     }
@@ -3039,6 +3596,7 @@ mod tests {
                 arguments: "{}".to_owned(),
                 output: "Example tool output".to_owned(),
                 is_error: false,
+                agent_role: "main".to_owned(),
             };
             let child = ChildTurnRow {
                 agent_id: format!("child-{session_id}"),
@@ -3230,6 +3788,12 @@ mod tests {
         let db = HostDatabase::open(&root).unwrap();
         assert_eq!(db.subscription_history(day).unwrap()[0].used_percent, 35);
         let calls = db.session_model_usage(&session.id).unwrap();
+        assert_eq!(
+            db.session_last_top_level_role(&session.id)
+                .unwrap()
+                .as_deref(),
+            Some("main")
+        );
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0].agent_id, "main");
         assert_eq!(calls[0].cache_read_tokens, Some(37));
@@ -3314,6 +3878,51 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+        let peer_turn = TurnRow {
+            number: 2,
+            ..turn.clone()
+        };
+        let peer_usage = [
+            ModelUsageRow {
+                agent_id: "reporter".to_owned(),
+                role: "reporter".to_owned(),
+                ..usage[0].clone()
+            },
+            ModelUsageRow {
+                agent_id: "scout-peer-example".to_owned(),
+                ..usage[1].clone()
+            },
+        ];
+        db.append_turn_with_metadata(
+            &session,
+            &peer_turn,
+            false,
+            TurnActivity {
+                tools: &[],
+                reasoning: &[],
+                commentary: &[],
+                goal: None,
+            },
+            None,
+            TurnMetadata {
+                model_usage: Some(&peer_usage),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            db.session_last_top_level_role(&session.id)
+                .unwrap()
+                .as_deref(),
+            Some("reporter")
+        );
+        let peer_last = db
+            .session_usage_snapshots(&session.id)
+            .unwrap()
+            .pop()
+            .unwrap();
+        assert_eq!(peer_last.main_totals.total_calls, 2);
+        assert_eq!(peer_last.subagent_totals.total_calls, 2);
         drop(db);
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -3461,7 +4070,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(db.automation_jobs().unwrap()[0].title, "Example job");
+        assert!(!db.automation_job_canceled(&session.id).unwrap());
         assert!(db.cancel_automation(&session.id, false).unwrap());
+        assert!(!db.automation_job_canceled(&session.id).unwrap());
         assert_eq!(
             db.automation_jobs().unwrap()[0].next_run_at_ms,
             chrono::DateTime::parse_from_rfc3339("2026-03-31T12:00:00Z")
@@ -3473,6 +4084,7 @@ mod tests {
         assert_eq!(reopened.automation_jobs().unwrap().len(), 1);
         assert!(reopened.cancel_automation(&session.id, true).unwrap());
         assert!(reopened.automation_jobs().unwrap()[0].canceled);
+        assert!(reopened.automation_job_canceled(&session.id).unwrap());
         assert!(!reopened.cancel_automation(&session.id, true).unwrap());
         drop(reopened);
         std::fs::remove_dir_all(root).unwrap();
@@ -3705,6 +4317,7 @@ mod tests {
             ordinal: 0,
             after_tool_count: 0,
             text: "Checked the example input.".to_owned(),
+            agent_role: "main".to_owned(),
         };
         let context = "[{\"type\":\"compaction\",\"encrypted_content\":\"opaque-example\"}]";
         db.append_turn_with_metadata(
@@ -3804,6 +4417,7 @@ mod tests {
                 arguments: "{}".to_owned(),
                 output: "{}".to_owned(),
                 is_error: false,
+                agent_role: "main".to_owned(),
             });
             let usage = [ModelUsageRow {
                 agent_id: "main".into(),
@@ -3993,7 +4607,7 @@ mod tests {
         drop(db);
         let connection = Connection::open(root.join("state.sqlite")).unwrap();
         connection
-            .execute_batch("PRAGMA user_version = 45;")
+            .execute_batch("PRAGMA user_version = 48;")
             .unwrap();
         drop(connection);
         assert!(HostDatabase::open(&root).is_err());
@@ -4001,7 +4615,7 @@ mod tests {
         let version: i64 = connection
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 45);
+        assert_eq!(version, 48);
         drop(connection);
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -4579,6 +5193,269 @@ mod tests {
                 .is_empty()
         );
         drop(db);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn peer_graph_reservations_and_handoffs_are_durable_and_isolated() {
+        let root = root();
+        let db = HostDatabase::open(&root).unwrap();
+        let session = SessionRow {
+            id: "session-example".to_owned(),
+            workspace_id: "workspace-example".to_owned(),
+            title: "Example research".to_owned(),
+            created_at_ms: 100,
+            last_message_at_ms: 100,
+        };
+        db.create_peer_graph_session(&session, "openai_pipeline", b"example-config", None)
+            .unwrap();
+        assert!(db.is_peer_graph_session(&session.id).unwrap());
+        assert_eq!(
+            db.sessions_excluding("internal:quick-chats")
+                .unwrap()
+                .as_slice(),
+            std::slice::from_ref(&session)
+        );
+        let first = db
+            .reserve_graph_turn("session-example", "discovery")
+            .unwrap();
+        let second = db
+            .reserve_graph_turn("session-example", "validation")
+            .unwrap();
+        assert_ne!(first, second);
+        assert_eq!(
+            db.graph_turn_role("session-example", first)
+                .unwrap()
+                .as_deref(),
+            Some("discovery")
+        );
+        assert_eq!(
+            db.graph_turn_role("session-example", second)
+                .unwrap()
+                .as_deref(),
+            Some("validation")
+        );
+        assert_eq!(
+            db.graph_role_status("session-example", "discovery")
+                .unwrap(),
+            "working"
+        );
+        for (number, role) in [(first, "discovery"), (second, "validation")] {
+            let provider_context = format!("[{{\"role\":\"{role}\"}}]");
+            let tool = ToolCallRow {
+                id: format!("tool-{role}-example"),
+                turn_number: number,
+                ordinal: 0,
+                name: "read".to_owned(),
+                summary: "Read example file".to_owned(),
+                arguments: "{}".to_owned(),
+                output: "Example output".to_owned(),
+                is_error: false,
+                agent_role: role.to_owned(),
+            };
+            let reasoning = ReasoningSummaryRow {
+                turn_number: number,
+                ordinal: 0,
+                after_tool_count: 1,
+                text: "Example reasoning".to_owned(),
+                agent_role: role.to_owned(),
+            };
+            let commentary = CommentaryRow {
+                turn_number: number,
+                ordinal: 0,
+                after_tool_count: 1,
+                text: "Example progress".to_owned(),
+                agent_role: role.to_owned(),
+            };
+            db.append_turn_with_metadata(
+                &session,
+                &TurnRow {
+                    number,
+                    provider: 1,
+                    method: 1,
+                    model: "example-model".to_owned(),
+                    prompt: format!("{role} example task"),
+                    answer: format!("{role} example answer"),
+                    duration_ms: 1,
+                    internal_prompt: false,
+                },
+                false,
+                TurnActivity {
+                    tools: &[tool],
+                    reasoning: &[reasoning],
+                    commentary: &[commentary],
+                    goal: None,
+                },
+                None,
+                TurnMetadata {
+                    provider_context_json: Some(&provider_context),
+                    queue_memories: true,
+                    ..TurnMetadata::default()
+                },
+            )
+            .unwrap();
+        }
+        let discovery = db
+            .graph_agent_turns("session-example", "discovery")
+            .unwrap();
+        let validation = db
+            .graph_agent_turns("session-example", "validation")
+            .unwrap();
+        assert_eq!(discovery.len(), 1);
+        assert_eq!(validation.len(), 1);
+        assert_eq!(discovery[0].number, first);
+        assert_eq!(validation[0].number, second);
+        assert_eq!(
+            db.graph_provider_context("session-example", "discovery")
+                .unwrap(),
+            Some("[{\"role\":\"discovery\"}]".to_owned())
+        );
+        assert_eq!(
+            db.graph_provider_context("session-example", "validation")
+                .unwrap(),
+            Some("[{\"role\":\"validation\"}]".to_owned())
+        );
+        assert_eq!(db.provider_context("session-example").unwrap(), None);
+        assert_eq!(
+            db.tool_summaries_for_turns("session-example", &[second])
+                .unwrap()[0]
+                .agent_role,
+            "validation"
+        );
+        assert_eq!(
+            db.reasoning_summaries_for_turns("session-example", &[second])
+                .unwrap()[0]
+                .agent_role,
+            "validation"
+        );
+        assert_eq!(
+            db.commentary_for_turns("session-example", &[second])
+                .unwrap()[0]
+                .agent_role,
+            "validation"
+        );
+        db.set_feature_enabled("beale-memories", true).unwrap();
+        assert_eq!(
+            db.next_memory_job(200).unwrap().unwrap().agent_id,
+            "discovery"
+        );
+        let transcript = db
+            .session_query("workspace-example", "session-example", "", "message", 0, 10)
+            .unwrap();
+        assert!(transcript.iter().any(|item| item.actor_id == "discovery"));
+        assert!(transcript.iter().any(|item| item.actor_id == "validation"));
+        for index in 0..3 {
+            let number = db
+                .reserve_graph_turn("session-example", "discovery")
+                .unwrap();
+            db.append_turn_with_metadata(
+                &session,
+                &TurnRow {
+                    number,
+                    provider: 1,
+                    method: 1,
+                    model: "example-model".to_owned(),
+                    prompt: format!("Discovery example followup {index}"),
+                    answer: "Example answer".to_owned(),
+                    duration_ms: 1,
+                    internal_prompt: false,
+                },
+                false,
+                TurnActivity {
+                    tools: &[],
+                    reasoning: &[],
+                    commentary: &[],
+                    goal: None,
+                },
+                None,
+                TurnMetadata::default(),
+            )
+            .unwrap();
+        }
+        let recent = db.graph_recent_turns("session-example").unwrap();
+        assert_eq!(recent.len(), 3);
+        assert!(recent.iter().any(|turn| turn.number == second));
+        assert!(!recent.iter().any(|turn| turn.number == first));
+        assert_eq!(
+            db.graph_provider_context("session-example", "discovery")
+                .unwrap(),
+            None
+        );
+        assert!(
+            db.graph_provider_context("session-example", "validation")
+                .unwrap()
+                .is_some()
+        );
+        let handoff = GraphHandoffRow {
+            id: "handoff-example".to_owned(),
+            from_role: "discovery".to_owned(),
+            to_role: "validation".to_owned(),
+            task: "Check the example finding.".to_owned(),
+            status: "pending".to_owned(),
+        };
+        db.enqueue_graph_handoff("session-example", &handoff, 101)
+            .unwrap();
+        assert_eq!(
+            db.pending_graph_handoffs("session-example").unwrap(),
+            [handoff]
+        );
+        db.set_graph_handoff_status("handoff-example", "running")
+            .unwrap();
+        db.reserve_graph_turn("session-example", "discovery")
+            .unwrap();
+        db.recover_abandoned_graph_work().unwrap();
+        assert_eq!(
+            db.graph_role_status("session-example", "discovery")
+                .unwrap(),
+            "failed"
+        );
+        assert_eq!(
+            db.graph_role_status("session-example", "validation")
+                .unwrap(),
+            "queued"
+        );
+        assert_eq!(
+            db.pending_graph_handoffs("session-example").unwrap().len(),
+            1
+        );
+        drop(db);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn schema_forty_seven_adds_role_context_without_changing_peer_sessions() {
+        let root = root();
+        let db = HostDatabase::open(&root).unwrap();
+        let session = SessionRow {
+            id: "session-example".to_owned(),
+            workspace_id: "workspace-example".to_owned(),
+            title: "Example research".to_owned(),
+            created_at_ms: 1,
+            last_message_at_ms: 1,
+        };
+        db.create_peer_graph_session(&session, "openai_pipeline", b"example-config", None)
+            .unwrap();
+        drop(db);
+        let connection = Connection::open(root.join("state.sqlite")).unwrap();
+        connection
+            .execute_batch("DROP TABLE session_graph_provider_context; PRAGMA user_version = 46;")
+            .unwrap();
+        drop(connection);
+        let migrated = HostDatabase::open(&root).unwrap();
+        assert!(migrated.is_peer_graph_session(&session.id).unwrap());
+        assert_eq!(
+            migrated
+                .graph_provider_context(&session.id, "discovery")
+                .unwrap(),
+            None
+        );
+        let version: i64 = migrated
+            .with_connection(|connection| {
+                Ok(connection.query_row("PRAGMA user_version", [], |row| row.get(0))?)
+            })
+            .unwrap();
+        assert_eq!(version, 47);
+        drop(migrated);
         std::fs::remove_dir_all(root).unwrap();
     }
 }

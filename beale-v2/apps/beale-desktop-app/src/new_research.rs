@@ -11,7 +11,7 @@ use crate::{
     Provider, SelectionMenu, State, ThemeStyle, catalog_index, effective_model_method, form_button,
     icons::{
         AGENT, ARROW_UP, BRAIN, CHECK, CHEVRON_DOWN, CHEVRON_RIGHT, CHEVRON_UP, FOLDER_OPEN,
-        REPEAT, TARGET, TERMINAL, WRENCH,
+        REPEAT, STOP, TARGET, TERMINAL, WRENCH,
     },
     in_place_menu, input_history, load_tool_detail_page, modal_dialog, selection_button,
     settings_form_card, start_session_turn, toggle_selection_menu, toggle_tool_detail, ui_font,
@@ -660,7 +660,7 @@ fn role_models(state: &State, role: beale_graphs::Role) -> Vec<ModelSelection> {
                 .collect()
         })
         .unwrap_or_else(|| selected_model(state).into_iter().collect());
-    if role == beale_graphs::Role::Main {
+    if role.is_top_level() {
         models.truncate(role.max_models());
     }
     models
@@ -669,11 +669,12 @@ fn role_models(state: &State, role: beale_graphs::Role) -> Vec<ModelSelection> {
 pub(crate) fn graph_concurrency_config(
     state: &State,
 ) -> Vec<beale_contracts::v1::GraphNodeConcurrency> {
-    beale_graphs::SIMPLE_GRAPH
+    beale_graphs::graph_definition(&state.new_research_graph_id)
+        .unwrap_or(&beale_graphs::SIMPLE_GRAPH)
         .nodes
         .iter()
         .filter_map(|role| {
-            (if *role == beale_graphs::Role::Main {
+            (if role.is_top_level() {
                 Some(1)
             } else {
                 state.new_research_graph_concurrency[role.index()]
@@ -687,7 +688,8 @@ pub(crate) fn graph_concurrency_config(
 }
 
 pub(crate) fn graph_model_config(state: &State) -> Vec<beale_contracts::v1::GraphNodeModel> {
-    beale_graphs::SIMPLE_GRAPH
+    beale_graphs::graph_definition(&state.new_research_graph_id)
+        .unwrap_or(&beale_graphs::SIMPLE_GRAPH)
         .nodes
         .iter()
         .flat_map(|role| {
@@ -735,7 +737,7 @@ pub(crate) fn graph_model_label(state: &State, role: beale_graphs::Role) -> Stri
 fn graph_node_width(state: &State, role: beale_graphs::Role, max_width: f32) -> f32 {
     let role_width = rune::text::measure(role.label(), &[], ui_font(12.0, 400.0), None).0
         + 19.0
-        + (if role == beale_graphs::Role::Main {
+        + (if role.is_top_level() {
             Some(1)
         } else {
             state.new_research_graph_concurrency[role.index()]
@@ -776,7 +778,7 @@ fn graph_node(state: &State, placement: GraphNodePlacement, theme: ThemeStyle<'_
             .font(ui_font(12.0, 400.0))
             .color(theme.color("#999999")),
     );
-    let max_concurrent = if role == beale_graphs::Role::Main {
+    let max_concurrent = if role.is_top_level() {
         Some(1)
     } else {
         state.new_research_graph_concurrency[role.index()]
@@ -941,6 +943,104 @@ fn graph_preview(state: &State, theme: ThemeStyle<'_>, available_width: f32) -> 
     row().w_full().center().child(stage)
 }
 
+fn flow_graph_preview(state: &State, theme: ThemeStyle<'_>, available_width: f32) -> El {
+    let Some(graph) = beale_graphs::graph_definition(&state.new_research_graph_id) else {
+        return main_only_preview(state, theme, available_width);
+    };
+    let stage_width = available_width.clamp(180.0, 640.0);
+    let roots: Vec<_> = graph
+        .nodes
+        .iter()
+        .copied()
+        .filter(|role| role.is_top_level())
+        .collect();
+    let specialists: Vec<_> = graph
+        .nodes
+        .iter()
+        .copied()
+        .filter(|role| !role.is_top_level())
+        .collect();
+    let columns = if stage_width >= 420.0 { 2 } else { 1 };
+    let gap = 12.0;
+    let slot_width = (stage_width - gap * (columns - 1) as f32) / columns as f32;
+    let mut placements = Vec::new();
+    for (index, role) in roots.iter().enumerate() {
+        let width = graph_node_width(state, *role, slot_width).min(slot_width);
+        let column = index % columns;
+        let row = index / columns;
+        placements.push(GraphNodePlacement {
+            role: *role,
+            x: column as f32 * (slot_width + gap) + (slot_width - width) / 2.0,
+            y: GRAPH_TOP_INSET + row as f32 * 96.0,
+            width,
+            height: 56.0,
+        });
+    }
+    let root_rows = roots.len().div_ceil(columns);
+    let specialist_top = GRAPH_TOP_INSET + root_rows as f32 * 96.0 + 28.0;
+    let specialist_columns = if stage_width >= 570.0 {
+        3
+    } else if stage_width >= 360.0 {
+        2
+    } else {
+        1
+    };
+    let specialist_slot =
+        (stage_width - gap * (specialist_columns - 1) as f32) / specialist_columns as f32;
+    for (index, role) in specialists.iter().enumerate() {
+        let width = graph_node_width(state, *role, specialist_slot).min(specialist_slot);
+        let column = index % specialist_columns;
+        placements.push(GraphNodePlacement {
+            role: *role,
+            x: column as f32 * (specialist_slot + gap) + (specialist_slot - width) / 2.0,
+            y: specialist_top + (index / specialist_columns) as f32 * 78.0,
+            width,
+            height: 56.0,
+        });
+    }
+    let specialist_rows = specialists.len().div_ceil(specialist_columns);
+    let stage_height = specialist_top + specialist_rows as f32 * 78.0 + 8.0;
+    let mut shape = Shape::new();
+    for edge in graph
+        .edges
+        .iter()
+        .filter(|edge| edge.from.is_top_level() && edge.to.is_top_level())
+    {
+        let (Some(from), Some(to)) = (
+            placements.iter().find(|node| node.role == edge.from),
+            placements.iter().find(|node| node.role == edge.to),
+        ) else {
+            continue;
+        };
+        let source = [from.x + from.width / 2.0, from.y + from.height / 2.0];
+        let target = [to.x + to.width / 2.0, to.y + to.height / 2.0];
+        shape = shape.stroke_path(
+            &Path::new().move_to(source).line_to(target),
+            1.5,
+            LineCap::Round,
+            theme.color("#565656"),
+        );
+    }
+    let mut stage = el()
+        .key(format!("new-research-{}-graph", graph.id))
+        .size(stage_width, stage_height)
+        .child(
+            canvas(shape)
+                .absolute(0.0, 0.0)
+                .size(stage_width, stage_height),
+        )
+        .child(
+            text("SUBAGENTS FOR EACH STAGE")
+                .absolute(0.0, specialist_top - 30.0)
+                .font(ui_font(10.0, 600.0))
+                .color(theme.color("#888888")),
+        );
+    for placement in placements {
+        stage = stage.child(graph_node(state, placement, theme));
+    }
+    row().w_full().center().child(stage)
+}
+
 fn main_only_preview(state: &State, theme: ThemeStyle<'_>, available_width: f32) -> El {
     let stage_width = available_width.clamp(180.0, 640.0);
     let width = graph_node_width(state, beale_graphs::Role::Main, stage_width);
@@ -985,7 +1085,7 @@ pub(crate) fn graph_editor_dialog(state: &State, theme: ThemeStyle<'_>) -> [El; 
         theme,
     )
     .key("graph-editor-model-control");
-    let max_concurrent = if editor.role == beale_graphs::Role::Main {
+    let max_concurrent = if editor.role.is_top_level() {
         text("1")
             .key("graph-editor-fixed-max-concurrent")
             .font(ui_font(14.0, 400.0))
@@ -1021,13 +1121,13 @@ pub(crate) fn graph_editor_dialog(state: &State, theme: ThemeStyle<'_>) -> [El; 
             theme,
         ),
         row_with_control(
-            if editor.role == beale_graphs::Role::Main {
+            if editor.role.is_top_level() {
                 "Model"
             } else {
                 "Allowed Models"
             },
-            if editor.role == beale_graphs::Role::Main {
-                "Choose one model for the main agent."
+            if editor.role.is_top_level() {
+                "Choose one model for this top-level agent."
             } else {
                 "Choose up to 16 models for this role."
             },
@@ -1037,8 +1137,8 @@ pub(crate) fn graph_editor_dialog(state: &State, theme: ThemeStyle<'_>) -> [El; 
     ];
     rows.push(row_with_control(
         "Max Concurrent",
-        if editor.role == beale_graphs::Role::Main {
-            "The main agent runs one turn at a time."
+        if editor.role.is_top_level() {
+            "This top-level agent runs one turn at a time."
         } else {
             "Maximum simultaneous agents for this role."
         },
@@ -1050,7 +1150,7 @@ pub(crate) fn graph_editor_dialog(state: &State, theme: ThemeStyle<'_>) -> [El; 
     if !editor.models.is_empty() {
         save = save.on_press(|state: &mut State| {
             if let Some(editor) = state.graph_editor.take() {
-                if editor.role == beale_graphs::Role::Main {
+                if editor.role.is_top_level() {
                     state.new_research_graph_concurrency[editor.role.index()] = Some(1);
                 } else if !state.new_research_graph_id.is_empty() {
                     state.new_research_graph_concurrency[editor.role.index()] = state
@@ -1061,7 +1161,10 @@ pub(crate) fn graph_editor_dialog(state: &State, theme: ThemeStyle<'_>) -> [El; 
                         .or_else(|| editor.role.default_max_concurrent());
                 }
                 state.graph_editor_max_concurrent.clear();
-                if editor.role == beale_graphs::Role::Main {
+                if Some(editor.role) == beale_graphs::entry_role(&state.new_research_graph_id)
+                    || (state.new_research_graph_id.is_empty()
+                        && editor.role == beale_graphs::Role::Main)
+                {
                     state.new_research_model = editor.models.first().cloned();
                 }
                 state.new_research_graph_models[editor.role.index()] = Some(editor.models);
@@ -1109,7 +1212,7 @@ pub(crate) fn graph_editor_model_menu(state: &State, theme: ThemeStyle<'_>) -> E
     for choice in model_choices {
         let selection = choice.selection.clone();
         let checked = editor.models.contains(&selection);
-        let single_model = editor.role == beale_graphs::Role::Main;
+        let single_model = editor.role.is_top_level();
         list = list.child(
             row()
                 .key(format!(
@@ -1244,13 +1347,10 @@ fn new_research_setup(state: &State, theme: ThemeStyle<'_>, available_width: f32
         .px(20.0)
         .child(heading);
     if crate::extensions_view::graphs_enabled(state) {
-        let selected = state.new_research_graph_id == beale_graphs::SIMPLE_ID;
+        let selected = !state.new_research_graph_id.is_empty();
         let active = state.selection_menu == Some(SelectionMenu::SessionGraph);
-        let label = if selected {
-            beale_graphs::SIMPLE_NAME
-        } else {
-            "No Graph"
-        };
+        let label = beale_graphs::graph_definition(&state.new_research_graph_id)
+            .map_or("No Graph", |graph| graph.name);
         let selector = selection_button(
             label,
             active,
@@ -1261,11 +1361,15 @@ fn new_research_setup(state: &State, theme: ThemeStyle<'_>, available_width: f32
         .role("button")
         .label(format!("Session graph: {label}"));
         content = content.child(row().w_full().py(6.0).center().child(selector));
-        content = content.child(if selected {
-            graph_preview(state, theme, available_width)
-        } else {
-            main_only_preview(state, theme, available_width)
-        });
+        content = content.child(
+            if selected && state.new_research_graph_id == beale_graphs::SIMPLE_ID {
+                graph_preview(state, theme, available_width)
+            } else if selected {
+                flow_graph_preview(state, theme, available_width)
+            } else {
+                main_only_preview(state, theme, available_width)
+            },
+        );
     }
     col()
         .key("new-research-graph-scroll")
@@ -1382,12 +1486,16 @@ fn transcript_tool(tool: &SessionToolSummary, state: &State, theme: ThemeStyle<'
                         .wrap(),
                 )
                 .child(
-                    text(format!(
-                        "Result · bytes {}–{} of {}",
-                        page.offset + 1,
-                        page.next_offset,
-                        page.total_bytes
-                    ))
+                    text(if page.total_bytes == 0 && state.session_busy {
+                        "Running…".to_owned()
+                    } else {
+                        format!(
+                            "Result · bytes {}–{} of {}",
+                            page.offset + 1,
+                            page.next_offset,
+                            page.total_bytes
+                        )
+                    })
                     .font(ui_font(12.0, 600.0))
                     .color(theme.color("#969696")),
                 )
@@ -1397,7 +1505,8 @@ fn transcript_tool(tool: &SessionToolSummary, state: &State, theme: ThemeStyle<'
                         .color(theme.color("#d0d0d0"))
                         .wrap(),
                 );
-            if page.next_offset < page.total_bytes && !state.tool_detail_busy {
+            if page.next_offset < page.total_bytes && !state.tool_detail_busy && !state.session_busy
+            {
                 let id = tool.id.clone();
                 let offset = page.next_offset;
                 detail = detail.child(
@@ -1436,6 +1545,13 @@ fn transcript_tool(tool: &SessionToolSummary, state: &State, theme: ThemeStyle<'
                                 .font(ui_font(12.0, 400.0))
                                 .color(theme.color("#d0d0d0")),
                         ),
+                );
+            }
+            if page.next_offset < page.total_bytes && state.session_busy {
+                detail = detail.child(
+                    text("More output becomes available when this turn finishes.")
+                        .font(ui_font(12.0, 400.0))
+                        .color(theme.color("#969696")),
                 );
             }
         } else if state.tool_detail_busy {
@@ -1538,33 +1654,17 @@ fn work_header(
         .child(el().w_full().h(1.0).fill(theme.color("#303030")))
 }
 
-fn live_tool(tool: &SessionToolSummary, finished: bool, theme: ThemeStyle<'_>) -> El {
-    row()
-        .key(format!("session-live-tool-{}", tool.id))
-        .w_full()
-        .gap(10.0)
-        .py(3.0)
-        .child(
-            icon(
-                if tool.name == "bash" {
-                    &TERMINAL
-                } else {
-                    &WRENCH
-                },
-                16.0,
-            )
-            .color(theme.color("#969696")),
-        )
-        .child(
-            text(if finished {
-                tool.summary.clone()
-            } else {
-                format!("{}…", tool.summary)
-            })
-            .font(ui_font(13.0, 400.0))
-            .color(theme.color(if tool.is_error { "#e07676" } else { "#b4b4b4" }))
-            .truncate(),
-        )
+fn live_tool(
+    tool: &SessionToolSummary,
+    finished: bool,
+    state: &State,
+    theme: ThemeStyle<'_>,
+) -> El {
+    let mut summary = tool.clone();
+    if !finished {
+        summary.summary.push('…');
+    }
+    transcript_tool(&summary, state, theme)
 }
 
 fn previous_input(state: &mut State) {
@@ -1878,7 +1978,20 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
             .min_h(0.0)
             .padding(14.0)
             .color(theme.color("#eeeeee"))
-            .placeholder("Research with Beale", theme.color("#888888"))
+            .placeholder(
+                if state.active_session.as_ref().is_some_and(|detail| {
+                    matches!(
+                        detail.graph_id.as_str(),
+                        beale_graphs::CLOUDFLARE_ID | beale_graphs::OPENAI_ID
+                    )
+                }) {
+                    beale_graphs::Role::from_id(&state.session_agent_role)
+                        .map_or("Research with Beale", |role| role.label())
+                } else {
+                    "Research with Beale"
+                },
+                theme.color("#888888"),
+            )
             .on_edit(|state: &mut State| &mut state.new_research_prompt)
             .on_input_change(|state: &mut State, _| state.session_input_history.reset())
             .on_input_key(composer_history_key)
@@ -1927,28 +2040,47 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
                     let available = has_workspaces
                         && !state.new_research_prompt.text.trim().is_empty()
                         && !state.session_busy;
+                    let can_stop = state.session_busy
+                        && state.session_stop_id.is_some()
+                        && !state.session_stopping;
                     let mut button = row()
-                        .key("new-research-send")
+                        .key(if state.session_busy {
+                            "new-research-stop"
+                        } else {
+                            "new-research-send"
+                        })
                         .role("button")
                         .label(if state.session_busy {
-                            "Sending message"
+                            if state.session_stopping {
+                                "Stopping session"
+                            } else {
+                                "Stop session"
+                            }
                         } else {
                             "Send message"
                         })
                         .size(28.0, 28.0)
                         .center()
                         .radius(14.0)
-                        .fill(if available {
+                        .fill(if available || can_stop {
                             theme.accent()
                         } else {
                             theme.color("#303030")
                         })
-                        .child(icon(&ARROW_UP, 16.0).color(if available {
-                            theme.accent_ink()
-                        } else {
-                            theme.color("#777777")
-                        }));
-                    if available {
+                        .child(
+                            icon(if state.session_busy { &STOP } else { &ARROW_UP }, 16.0).color(
+                                if available || can_stop {
+                                    theme.accent_ink()
+                                } else {
+                                    theme.color("#777777")
+                                },
+                            ),
+                        );
+                    if can_stop {
+                        button = button
+                            .hover(theme.color("#eeeeee"))
+                            .on_press(crate::stop_session_turn);
+                    } else if available {
                         button = button
                             .hover(theme.color("#eeeeee"))
                             .on_press(start_session_turn);
@@ -2118,7 +2250,70 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
         .px(14.0)
         .pt(22.0)
         .pb(24.0);
+    let graph_id = state
+        .active_session
+        .as_ref()
+        .map_or(state.new_research_graph_id.as_str(), |detail| {
+            detail.graph_id.as_str()
+        });
+    let peer_graph = matches!(
+        graph_id,
+        beale_graphs::CLOUDFLARE_ID | beale_graphs::OPENAI_ID
+    );
+    let selected_role = crate::research_header::selected_role(state, graph_id);
+    let visible_role =
+        |role: &str| !peer_graph || role == selected_role || role == "main" || role.is_empty();
     if let Some(detail) = &state.active_session {
+        if peer_graph {
+            if let Some(agent) = detail
+                .graph_agents
+                .iter()
+                .find(|agent| agent.role == selected_role)
+            {
+                let status_text = match agent.status.as_str() {
+                    "failed" => Some("The agent's last turn failed. Send a message to retry."),
+                    "queued" => Some("A handoff is queued for this agent."),
+                    "idle"
+                        if !detail
+                            .messages
+                            .iter()
+                            .any(|message| message.agent_role == selected_role) =>
+                    {
+                        Some("Waiting for a handoff or direct instruction.")
+                    }
+                    _ => None,
+                };
+                if let Some(status_text) = status_text {
+                    transcript = transcript.child(
+                        text(status_text)
+                            .key("session-agent-status")
+                            .font(ui_font(12.0, 450.0))
+                            .color(theme.color(if agent.status == "failed" {
+                                "#e07676"
+                            } else {
+                                "#969696"
+                            })),
+                    );
+                }
+            }
+            for (index, item) in detail
+                .graph_handoffs
+                .iter()
+                .filter(|item| item.to_role == selected_role)
+                .take(4)
+                .enumerate()
+            {
+                let source = beale_graphs::Role::from_id(&item.from_role)
+                    .map_or_else(|| item.from_role.clone(), |role| role.label().to_owned());
+                transcript = transcript.child(
+                    text(format!("From {source} · {}\n{}", item.status, item.task))
+                        .key(format!("session-handoff-{index}"))
+                        .font(ui_font(12.0, 450.0))
+                        .color(theme.color("#b8b8b8"))
+                        .wrap(),
+                );
+            }
+        }
         if detail.graph_id == beale_graphs::SIMPLE_ID {
             transcript = transcript.child(
                 text(beale_graphs::SIMPLE_NAME)
@@ -2141,6 +2336,24 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
         }
         for (index, message) in detail.messages.iter().enumerate() {
             let user = message.role == SessionRole::User as i32;
+            if peer_graph && !visible_role(&message.agent_role) {
+                continue;
+            }
+            let own_activity = message
+                .tools
+                .iter()
+                .any(|tool| visible_role(&tool.agent_role))
+                || message
+                    .reasoning_summaries
+                    .iter()
+                    .any(|item| visible_role(&item.agent_role))
+                || message
+                    .commentary
+                    .iter()
+                    .any(|item| visible_role(&item.agent_role));
+            if peer_graph && !user && !own_activity && message.agent_role != selected_role {
+                continue;
+            }
             if !user {
                 let expanded = state.session_work_expanded.contains(&index);
                 transcript = transcript.child(work_header(
@@ -2151,57 +2364,72 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
                     expanded,
                     theme,
                 ));
-                if expanded {
-                    if message.reasoning_summaries.is_empty() {
-                        transcript = transcript.child(transcript_reasoning(
-                            "No reasoning summary was received for this turn.".to_owned(),
-                            format!("session-reasoning-unavailable-{index}"),
-                            false,
-                            theme,
-                        ));
+                if expanded
+                    && !message
+                        .reasoning_summaries
+                        .iter()
+                        .any(|item| visible_role(&item.agent_role))
+                {
+                    transcript = transcript.child(transcript_reasoning(
+                        "No reasoning summary was received for this turn.".to_owned(),
+                        format!("session-reasoning-unavailable-{index}"),
+                        false,
+                        theme,
+                    ));
+                }
+                let mut summaries = message.reasoning_summaries.iter().enumerate().peekable();
+                let mut commentary = message.commentary.iter().enumerate().peekable();
+                for position in 0..=message.tools.len() {
+                    while summaries
+                        .peek()
+                        .is_some_and(|(_, summary)| summary.after_tool_count as usize == position)
+                    {
+                        if let Some((summary_index, summary)) = summaries.next() {
+                            if !visible_role(&summary.agent_role) {
+                                continue;
+                            }
+                            transcript = transcript.child(transcript_reasoning(
+                                summary.text.clone(),
+                                format!("session-reasoning-{index}-{summary_index}"),
+                                false,
+                                theme,
+                            ));
+                        }
                     }
-                    let mut summaries = message.reasoning_summaries.iter().enumerate().peekable();
-                    let mut commentary = message.commentary.iter().enumerate().peekable();
-                    for position in 0..=message.tools.len() {
-                        while summaries.peek().is_some_and(|(_, summary)| {
-                            summary.after_tool_count as usize == position
-                        }) {
-                            if let Some((summary_index, summary)) = summaries.next() {
-                                transcript = transcript.child(transcript_reasoning(
-                                    summary.text.clone(),
-                                    format!("session-reasoning-{index}-{summary_index}"),
-                                    false,
-                                    theme,
-                                ));
+                    while commentary
+                        .peek()
+                        .is_some_and(|(_, item)| item.after_tool_count as usize == position)
+                    {
+                        if let Some((commentary_index, item)) = commentary.next() {
+                            if !visible_role(&item.agent_role) {
+                                continue;
                             }
+                            transcript = transcript.child(transcript_message(
+                                format!("session-commentary-{index}-{commentary_index}"),
+                                item.text.clone(),
+                                false,
+                                false,
+                                theme,
+                            ));
                         }
-                        while commentary
-                            .peek()
-                            .is_some_and(|(_, item)| item.after_tool_count as usize == position)
-                        {
-                            if let Some((commentary_index, item)) = commentary.next() {
-                                transcript = transcript.child(transcript_message(
-                                    format!("session-commentary-{index}-{commentary_index}"),
-                                    item.text.clone(),
-                                    false,
-                                    false,
-                                    theme,
-                                ));
-                            }
-                        }
-                        if let Some(tool) = message.tools.get(position) {
-                            transcript = transcript.child(transcript_tool(tool, state, theme));
-                        }
+                    }
+                    if expanded
+                        && let Some(tool) = message.tools.get(position)
+                        && visible_role(&tool.agent_role)
+                    {
+                        transcript = transcript.child(transcript_tool(tool, state, theme));
                     }
                 }
             }
-            transcript = transcript.child(transcript_message(
-                format!("session-message-{index}"),
-                message.text.clone(),
-                user,
-                false,
-                theme,
-            ));
+            if user || !peer_graph || message.agent_role == selected_role {
+                transcript = transcript.child(transcript_message(
+                    format!("session-message-{index}"),
+                    message.text.clone(),
+                    user,
+                    false,
+                    theme,
+                ));
+            }
         }
         if !state.session_busy
             && let Some(goal) = &detail.goal
@@ -2249,7 +2477,9 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
             }
         }
     }
-    if let Some(prompt) = &state.session_pending_prompt {
+    if let Some(prompt) = &state.session_pending_prompt
+        && (!peer_graph || state.session_pending_role == selected_role)
+    {
         transcript = transcript.child(transcript_message(
             "session-pending-message".to_owned(),
             prompt.clone(),
@@ -2285,6 +2515,9 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
             )
         {
             for (index, event) in state.session_live_events.iter().enumerate() {
+                if peer_graph && !event.agent_role.is_empty() && event.agent_role != selected_role {
+                    continue;
+                }
                 match SessionStreamKind::try_from(event.kind) {
                     Ok(SessionStreamKind::ReasoningDelta) => {
                         transcript = transcript.child(transcript_reasoning(
@@ -2308,6 +2541,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
                             transcript = transcript.child(live_tool(
                                 tool,
                                 event.kind == SessionStreamKind::ToolFinished as i32,
+                                state,
                                 theme,
                             ));
                         }

@@ -86,6 +86,11 @@ pub struct ScreeningCheck {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Screened {
+    /// Screening assessments on a 0–100 scale; absent on legacy records and incomplete drafts.
+    #[serde(default)]
+    pub impact_score: Option<u8>,
+    #[serde(default)]
+    pub reachability_score: Option<u8>,
     pub validation_review: ScreeningCheck,
     pub known_issue_review: ScreeningCheck,
     pub scope_review: ScreeningCheck,
@@ -268,6 +273,10 @@ pub struct GetResponse {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Summary {
+    #[serde(default)]
+    pub impact_score: Option<u8>,
+    #[serde(default)]
+    pub reachability_score: Option<u8>,
     pub id: String,
     pub title: String,
     pub summary: String,
@@ -280,6 +289,16 @@ pub struct Summary {
 impl From<&Finding> for Summary {
     fn from(value: &Finding) -> Self {
         Self {
+            impact_score: value
+                .state
+                .screened
+                .as_ref()
+                .and_then(|stage| stage.impact_score),
+            reachability_score: value
+                .state
+                .screened
+                .as_ref()
+                .and_then(|stage| stage.reachability_score),
             id: value.id.clone(),
             title: value.title.clone(),
             summary: value.summary.clone(),
@@ -293,7 +312,7 @@ impl From<&Finding> for Summary {
 
 #[cfg(test)]
 mod tests {
-    use super::Validated;
+    use super::*;
     use serde_json::json;
 
     #[test]
@@ -312,5 +331,31 @@ mod tests {
         assert!(record.validation_result.is_empty());
         assert!(record.validation_limitations.is_empty());
         assert!(record.counter_evidence.is_empty());
+    }
+    #[test]
+    fn legacy_screening_and_summary_keep_missing_scores_distinct_from_zero() {
+        let check = json!({"passed":true,"method":"Example review","conclusion":"Supported"});
+        let legacy: Screened = serde_json::from_value(json!({
+            "validation_review":check,"known_issue_review":check,"scope_review":check,
+            "revision":3,"completion":{"at_ms":1,"session_id":"session-example","predecessor_revision":2}
+        })).unwrap();
+        assert_eq!(legacy.impact_score, None);
+        assert_eq!(legacy.reachability_score, None);
+        assert!(legacy.completion.is_some());
+        let mut summary: Summary = serde_json::from_value(json!({
+            "id":"F1","title":"Example finding","summary":"Synthetic summary","surface_ids":[],
+            "status":"screened","updated_at_ms":1,"revision":3
+        }))
+        .unwrap();
+        assert_eq!(summary.impact_score, None);
+        assert_eq!(summary.reachability_score, None);
+        summary.impact_score = Some(0);
+        summary.reachability_score = Some(100);
+        let wire = serde_json::to_value(&summary).unwrap();
+        assert_eq!(wire["impact_score"], 0);
+        assert_eq!(wire["reachability_score"], 100);
+        let decoded: Summary = serde_json::from_value(wire).unwrap();
+        assert_eq!(decoded.impact_score, Some(0));
+        assert_eq!(decoded.reachability_score, Some(100));
     }
 }

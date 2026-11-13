@@ -390,8 +390,8 @@ async fn provider_usage(
             })
         })
         .collect::<Vec<_>>();
-    if state.db.record_subscription_usage(&points).is_err() {
-        eprintln!("could not record subscription usage history");
+    if let Err(error) = state.db.record_subscription_usage(&points) {
+        eprintln!("could not record subscription usage history: {error:#}");
     }
     *cache = Some((Instant::now(), value.clone()));
     Ok(response(value))

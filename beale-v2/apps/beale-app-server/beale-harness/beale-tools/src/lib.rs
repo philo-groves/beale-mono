@@ -14,7 +14,8 @@ pub use agent_files::AgentFiles;
 
 pub const MAX_RESULT_BYTES: usize = 8_000_000;
 const MAX_INPUT_BYTES: usize = 8_000_000;
-const BASH_TIMEOUT: Duration = Duration::from_secs(60);
+const DEFAULT_BASH_TIMEOUT_SECONDS: u64 = 120;
+const MAX_BASH_TIMEOUT_SECONDS: u64 = 600;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -46,7 +47,7 @@ pub fn definitions() -> Vec<Value> {
         json!({"type":"function","name":"read","description":"Read a UTF-8 file. Use offset and limit to read a large file by line.","parameters":{"type":"object","properties":{"path":{"type":"string"},"offset":{"type":"integer","minimum":1},"limit":{"type":"integer","minimum":1,"maximum":2000}},"required":["path"],"additionalProperties":false}}),
         json!({"type":"function","name":"write","description":"Write a UTF-8 file, creating parent directories if needed.","parameters":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"],"additionalProperties":false}}),
         json!({"type":"function","name":"edit","description":"Replace exactly one occurrence of old_text in a UTF-8 file.","parameters":{"type":"object","properties":{"path":{"type":"string"},"old_text":{"type":"string"},"new_text":{"type":"string"}},"required":["path","old_text","new_text"],"additionalProperties":false}}),
-        json!({"type":"function","name":"bash","description":"Run a bash command in the workspace. This uses the current user's host privileges.","parameters":{"type":"object","properties":{"command":{"type":"string"}},"required":["command"],"additionalProperties":false}}),
+        json!({"type":"function","name":"bash","description":"Run a bash command in the workspace with the current user's host privileges. Set timeout_seconds for long operations such as repository cloning; default 120 seconds.","parameters":{"type":"object","properties":{"command":{"type":"string"},"timeout_seconds":{"type":"integer","minimum":1,"maximum":600}},"required":["command"],"additionalProperties":false}}),
     ]
 }
 
@@ -134,6 +135,22 @@ pub fn bash_executable() -> PathBuf {
         }
     }
     PathBuf::from("bash")
+}
+
+#[cfg(windows)]
+fn enable_git_long_paths(command: &mut Command) {
+    let index = match std::env::var("GIT_CONFIG_COUNT") {
+        Ok(value) => match value.parse::<usize>() {
+            Ok(index) if index < 32 => index,
+            _ => return,
+        },
+        Err(std::env::VarError::NotPresent) => 0,
+        Err(std::env::VarError::NotUnicode(_)) => return,
+    };
+    command
+        .env("GIT_CONFIG_COUNT", (index + 1).to_string())
+        .env(format!("GIT_CONFIG_KEY_{index}"), "core.longpaths")
+        .env(format!("GIT_CONFIG_VALUE_{index}"), "true");
 }
 
 pub async fn execute(
@@ -224,20 +241,31 @@ pub async fn execute(
         }
         "bash" => {
             let command = required(args, "command")?;
+            let timeout_seconds = args
+                .get("timeout_seconds")
+                .map_or(Ok(DEFAULT_BASH_TIMEOUT_SECONDS), |value| {
+                    value.as_u64().context("invalid bash timeout_seconds")
+                })?;
+            ensure!(
+                (1..=MAX_BASH_TIMEOUT_SECONDS).contains(&timeout_seconds),
+                "invalid bash timeout_seconds"
+            );
             ensure!(
                 !command.trim().is_empty() && command.len() <= 16_384,
                 "invalid command"
             );
-            let mut child = Command::new(bash_executable())
+            let mut process = Command::new(bash_executable());
+            process
                 .arg("-lc")
                 .arg(command)
                 .current_dir(workspace)
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
-                .kill_on_drop(true)
-                .spawn()
-                .context("start bash")?;
+                .kill_on_drop(true);
+            #[cfg(windows)]
+            enable_git_long_paths(&mut process);
+            let mut child = process.spawn().context("start bash")?;
             let stdout = child.stdout.take().context("bash stdout unavailable")?;
             let stderr = child.stderr.take().context("bash stderr unavailable")?;
             let collect = async {
@@ -273,9 +301,9 @@ pub async fn execute(
                     is_error: !status.success(),
                 })
             };
-            timeout(BASH_TIMEOUT, collect)
+            timeout(Duration::from_secs(timeout_seconds), collect)
                 .await
-                .context("bash timed out")?
+                .with_context(|| format!("bash timed out after {timeout_seconds} seconds"))?
         }
         _ => bail!("unknown tool"),
     }
@@ -328,6 +356,27 @@ mod tests {
     async fn webfetch_is_not_a_base_execution_tool() {
         let result = execute("webfetch", &json!({}), Path::new("."), Path::new(".")).await;
         assert!(result.err().unwrap().to_string().contains("unknown tool"));
+    }
+
+    #[tokio::test]
+    async fn bash_timeout_is_bounded_before_process_start() {
+        let definition = definitions().pop().unwrap();
+        assert_eq!(
+            definition["parameters"]["properties"]["timeout_seconds"]["maximum"],
+            600
+        );
+        for seconds in [0, 601] {
+            let error = execute(
+                "bash",
+                &json!({"command":"printf example","timeout_seconds":seconds}),
+                Path::new("."),
+                Path::new("."),
+            )
+            .await
+            .err()
+            .unwrap();
+            assert!(error.to_string().contains("timeout_seconds"));
+        }
     }
 
     #[test]

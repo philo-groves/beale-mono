@@ -13,6 +13,7 @@ const COLORS: [&str; 8] = [
 
 pub(crate) fn agent_filters(
     selected: AgentFilter,
+    main_label: &'static str,
     key_prefix: &'static str,
     on_select: fn(&mut State, AgentFilter),
     theme: ThemeStyle<'_>,
@@ -28,9 +29,19 @@ pub(crate) fn agent_filters(
             AgentFilter::Subagents => &WORKSPACE_SURFACES,
         };
         tabs = tabs.child(
-            design::segmented_tab(filter.label(), Some(glyph), filter == selected, true, theme)
-                .key(format!("{key_prefix}-filter-{filter:?}"))
-                .on_press(move |state: &mut State| on_select(state, filter)),
+            design::segmented_tab(
+                if filter == AgentFilter::Main {
+                    main_label
+                } else {
+                    filter.label()
+                },
+                Some(glyph),
+                filter == selected,
+                true,
+                theme,
+            )
+            .key(format!("{key_prefix}-filter-{filter:?}"))
+            .on_press(move |state: &mut State| on_select(state, filter)),
         );
     }
     tabs
