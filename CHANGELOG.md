@@ -6,16 +6,28 @@
 
 #### Fixed
 
+- V2 OpenAI OAuth refresh failures now retain a bounded error code and direct expired grants to Reconnect in Providers. Configured subscriptions can reauthorize without first being forgotten; temporary refresh failures remain retryable.
+- V2 OpenAI subscription inference, permission reviews, and model lookup now use Beale's own OAuth grant on the public Responses API. Codex sign-in no longer overrides that grant or sends Beale traffic to Codex's private endpoint.
+- V2 sessions close unreviewed parallel tool calls before saving OpenAI context and repair earlier incomplete context when resumed. OpenAI input rejections now show a specific session error instead of a generic provider failure.
+- Long v2 graph turns can save more than 512 model calls and large subagent transcripts without rolling back the agent's entire turn. Long non-OpenAI provider conversations no longer fail solely because they contain more than 192 input items. OpenAI WebSocket 403 responses now surface as account or model access denials. Disabled review rules no longer stop otherwise approved tools.
+- V2 session token totals and Insights now advance after each completed provider call, including subagents, while a graph turn is still running. Research Pipeline roles stay within their finding stages, and successful read or bash results expose the evidence reference needed to validate a finding. An unavailable permission review ends the affected turn with a specific error instead of retrying tools indefinitely.
+- Configured OpenAI remains visible in the v2 session provider picker when its model catalog cannot load. Previously saved subscription model defaults keep session selection usable; otherwise the composer and Providers settings offer a model-list retry.
+- V2 graph sessions now keep subagent activity in child transcripts and restore it in Canvas. The desktop accepts longer commentary sequences in session detail.
+- V2 prompts request user-visible agent commentary, including for existing custom system prompts. Long turns retain commentary and reasoning entries, and saved provider interruptions include a specific cause when available.
+- Session detail keeps the newest tool activity within its protocol boundary during long-running turns instead of rejecting the session.
 - V2 desktop accepts saved graph turns with up to 4,096 inspectable tool entries, matching the app-server detail boundary. Busy graph sessions return the newest complete turns that fit. Turn and reload failures keep live activity visible.
 
 #### Changed
 
+- V2 session transcripts now mute reasoning summaries and tool rows while keeping commentary prominent. Multiple reasoning parts in one provider response appear as separate entries during streaming and after reload.
+- V2 session sidebars and Insights now scope usage to the selected top-level agent and its subagents. A Subagents popover shows per-agent active counts and opens saved or live child transcripts in Canvas using the shared session components. Protocol 2.22 adds role metrics, child summaries, lifecycle events, and an authenticated child-detail route; rebuild and restart the host and desktop together.
+
 - Goal Mode keeps working without an implicit turn or duration limit, including when a completed model turn omits `goal_status`. The desktop Stop control pauses a running goal and saves completed activity. Canceling an automation series also stops its active run. Configured limits still apply.
 - V2 sessions keep intermediate model commentary and supplied reasoning summaries visible in the transcript after a turn completes; the Working disclosure controls tool activity.
-- V2 peer graph agents retain separate provider context across turns. Goal Mode rolls over at the per-turn work budget instead of pausing with a provider error; graph prompts list configured subagent model indices and stage handoffs, invalid delegations do not spend the assignment quota, and subagents return bounded partial notes when their budget is reached. Feedback records the active top-level role.
+- V2 peer graph agents retain separate provider context across turns. Graph prompts list configured subagent model indices and stage handoffs, and feedback records the active top-level role. Agents, subagents, delegations, and handoffs now continue without implicit per-turn work quotas.
 - New v2 peer graph sessions run top-level agents with separate role histories and models. Durable handoffs start recipients concurrently while idle roles wait for an addressed prompt or handoff; the desktop shows role status and handoff activity in each agent tab.
 - V2 graph sessions now give each top-level role a separate header tab and role-scoped activity. The active tab follows handoffs until manually selected, and new prompts address the selected role. Live tool rows open arguments and a bounded result preview; full saved output remains paged. Research Pipeline sessions resume with the configured model for the active role.
-- Graph delegation no longer requests a redundant review before subagent execution; each subagent tool remains reviewed. Subagents have a larger bounded tool budget, and bash supports a 120-second default with a configurable limit up to 600 seconds.
+- Graph delegation no longer requests a redundant review before subagent execution; each subagent tool remains reviewed. Bash supports a 120-second default with a configurable limit up to 600 seconds.
 
 - V2 Graphs now offers two-peer Discovery and Validation and four-peer Research Pipeline flows. Top-level agents can hand off a bounded task to connected peers in the same session and each can delegate to Scout, Reviewer, and Prover subagents. The graph picker, node editor, previews, and session header support both flows; existing graph configuration storage remains compatible.
 
@@ -283,10 +295,14 @@
 
 #### Fixed
 
+- Graph subagents report missing scope details to their parent in their result; their prompt no longer asks them to use an unavailable parent-message tool. A failed turn save now logs the underlying storage error for diagnosis.
+- Research Pipeline discovery instructions prioritize surface inventory and Candidate findings, while validation owns focused PoCs. Findings tools reject stage changes from the wrong top-level role.
+- OpenAI subscription model listing uses the same matched Codex credential as inference when available. A failed remote catalog request falls back to saved lead and small defaults, subject to the selected Daybreak mode; the host logs the underlying lookup error when no fallback applies.
 - Excess provider reasoning summary parts no longer abort a research step. OpenAI subscription permission reviews use the active research model to avoid separate model access failures, and interrupted turns show the sanitized provider cause. Daybreak selection errors report the requested and selected programs.
 
 #### Changed
 
+- Protocol 2.21 streams typed per-call usage deltas for live session telemetry. Rebuild the host and desktop together.
 - Protocol 2.20 adds an authenticated streamed-turn Stop route and turn ID header. Stopping interrupts an in-flight provider call, saves the turn, and pauses an active goal; clients must rebuild with the host.
 - SQLite schema 47 persists provider context by peer graph role. OpenAI Responses tools explicitly use non-strict argument schemas so optional fields remain optional; the host still validates tool inputs. Beale's Windows shell enables Git long paths for its child process without changing the user's Git configuration.
 - Protocol 2.19 exposes graph agent and handoff state plus agent lifecycle events. SQLite schema 46 persists independent peer turns and handoff work, recovers abandoned work, and preserves legacy shared-turn graph sessions.

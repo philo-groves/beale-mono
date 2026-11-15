@@ -1,7 +1,4 @@
-use crate::{
-    credentials::{CodexAccountMismatch, CredentialStore},
-    oauth,
-};
+use crate::{credentials::CredentialStore, oauth};
 use anyhow::{Context, Result, bail, ensure};
 use futures_util::{SinkExt, Stream, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -134,23 +131,10 @@ fn terminal_failure(event: &Value, kind: FailureKind) -> ProviderFailure {
     }
 }
 
-async fn rejected_response(mut response: reqwest::Response) -> ProviderFailure {
-    let status = response.status().as_u16();
-    let mut body = Vec::new();
-    if response
-        .content_length()
-        .is_none_or(|length| length <= 8_192)
-    {
-        while body.len() < 8_192 {
-            match response.chunk().await {
-                Ok(Some(chunk)) if body.len() + chunk.len() <= 8_192 => {
-                    body.extend_from_slice(&chunk)
-                }
-                _ => break,
-            }
-        }
-    }
-    let detail = serde_json::from_slice::<Value>(&body).ok();
+fn rejected_failure(status: u16, body: &[u8]) -> ProviderFailure {
+    let detail = (body.len() <= 8_192)
+        .then(|| serde_json::from_slice::<Value>(body).ok())
+        .flatten();
     let code = detail.as_ref().and_then(|value| {
         safe_code(
             value
@@ -174,9 +158,36 @@ async fn rejected_response(mut response: reqwest::Response) -> ProviderFailure {
     }
 }
 
+async fn rejected_response(mut response: reqwest::Response) -> ProviderFailure {
+    let status = response.status().as_u16();
+    let mut body = Vec::new();
+    if response
+        .content_length()
+        .is_none_or(|length| length <= 8_192)
+    {
+        while body.len() < 8_192 {
+            match response.chunk().await {
+                Ok(Some(chunk)) if body.len() + chunk.len() <= 8_192 => {
+                    body.extend_from_slice(&chunk)
+                }
+                _ => break,
+            }
+        }
+    }
+    rejected_failure(status, &body)
+}
+
 pub fn provider_error_message(provider: Provider, mode: AuthMode, error: &anyhow::Error) -> String {
-    if error.downcast_ref::<CodexAccountMismatch>().is_some() {
-        return "Codex and Beale are signed into different OpenAI accounts. Sign into the same account in both apps, or choose API Key in Beale.".to_owned();
+    if let Some(refresh) = error.downcast_ref::<oauth::OAuthRefreshError>()
+        && provider == Provider::OpenAi
+        && mode == AuthMode::Subscription
+    {
+        return if refresh.requires_reconnect() || refresh.status == 400 {
+            "Beale's OpenAI sign-in could not refresh. Reconnect OpenAI in Providers, then retry."
+                .to_owned()
+        } else {
+            "OpenAI sign-in renewal is temporarily unavailable. Try again shortly.".to_owned()
+        };
     }
     if let Some(selection) = error.downcast_ref::<DaybreakSelectionError>() {
         return format!(
@@ -187,7 +198,19 @@ pub fn provider_error_message(provider: Provider, mode: AuthMode, error: &anyhow
     if error.downcast_ref::<DaybreakAccessError>().is_some() {
         return "This OpenAI model requires Daybreak Red. Choose another model or switch Daybreak Mode in Providers.".to_owned();
     }
-    let Some(failure) = error.downcast_ref::<ProviderFailure>() else {
+    let websocket_failure = error
+        .downcast_ref::<tokio_tungstenite::tungstenite::Error>()
+        .and_then(|error| match error {
+            tokio_tungstenite::tungstenite::Error::Http(response) => Some(rejected_failure(
+                response.status().as_u16(),
+                response.body().as_deref().unwrap_or_default(),
+            )),
+            _ => None,
+        });
+    let Some(failure) = error
+        .downcast_ref::<ProviderFailure>()
+        .or(websocket_failure.as_ref())
+    else {
         if let Some(network) = error.downcast_ref::<reqwest::Error>() {
             return if network.is_timeout() {
                 "The provider request timed out. Try again.".to_owned()
@@ -195,10 +218,45 @@ pub fn provider_error_message(provider: Provider, mode: AuthMode, error: &anyhow
                 "The provider connection was interrupted. Try again.".to_owned()
             };
         }
+        let has_cause = |cause: &str| error.chain().any(|item| item.to_string() == cause);
+        if has_cause("OpenAI WebSocket connection timed out")
+            || has_cause("OpenAI response timed out")
+        {
+            return "OpenAI timed out before completing this turn.".to_owned();
+        }
+        if has_cause("OpenAI WebSocket is unavailable")
+            || has_cause("OpenAI WebSocket recovery failed")
+            || has_cause("OpenAI WebSocket send failed")
+        {
+            return "The OpenAI connection failed during this turn.".to_owned();
+        }
+        if has_cause("provider output is too large") {
+            return "The provider response exceeded the supported output size.".to_owned();
+        }
+        if has_cause("too many provider output items") || has_cause("too many provider tool calls")
+        {
+            return "The provider returned more items than the current protocol supports."
+                .to_owned();
+        }
+        if has_cause("invalid provider event JSON") || has_cause("invalid provider event encoding")
+        {
+            return "The provider returned an invalid response event.".to_owned();
+        }
         return "The provider could not complete this turn. Try again.".to_owned();
     };
     if provider == Provider::OpenAi && mode == AuthMode::Subscription {
         match failure.code.as_deref() {
+            Some("access_program_not_enabled") => {
+                return "Daybreak access is not enabled for Beale's OpenAI sign-in and selected model. Check the approved account or project in Providers.".to_owned();
+            }
+            Some("subscription_sharing_route_not_supported") => {
+                return "OpenAI rejected this subscription route. Reconnect OpenAI in Providers or choose API Key.".to_owned();
+            }
+            Some(
+                "chatpass_v2_scope_not_authorized" | "chatpass_v2_invalid_authorization_context",
+            ) => {
+                return "Beale's OpenAI sign-in is not authorized for ChatGPT plan inference. Reconnect OpenAI in Providers.".to_owned();
+            }
             Some("subscription_sharing_usage_limit_exceeded") => {
                 return "OpenAI reported a subscription usage limit for this app. Check usage or choose API Key.".to_owned();
             }
@@ -226,6 +284,9 @@ pub fn provider_error_message(provider: Provider, mode: AuthMode, error: &anyhow
         FailureKind::Http(401) => {
             "The provider sign-in was rejected. Reconnect this provider.".to_owned()
         }
+        FailureKind::Http(403) if provider == Provider::OpenAi && mode == AuthMode::Subscription => {
+            "OpenAI denied Beale's subscription request. Check the Beale sign-in, model, and Daybreak access in Providers.".to_owned()
+        }
         FailureKind::Http(403) => {
             "The provider denied this request for the selected account or model.".to_owned()
         }
@@ -238,6 +299,9 @@ pub fn provider_error_message(provider: Provider, mode: AuthMode, error: &anyhow
         FailureKind::Http(status) => format!("The provider rejected this request (HTTP {status})."),
         FailureKind::Failed => match failure.code.as_deref() {
             Some("server_error") => "The provider had a server error. Try again.".to_owned(),
+            None if provider == Provider::OpenAi && failure.param.as_deref() == Some("input") => {
+                "OpenAI rejected this session's conversation input. Retry the turn; if it persists, start a new session.".to_owned()
+            }
             Some(code) => format!("The provider ended the response with error code {code}."),
             None => "The provider ended the response with an error.".to_owned(),
         },
@@ -411,7 +475,7 @@ fn token_usage_with_cache(
 #[derive(Clone, Debug)]
 pub enum ProviderProgress {
     MessageDelta(String),
-    ReasoningDelta(String),
+    ReasoningDelta(String, (u64, u64)),
 }
 
 #[derive(Default)]
@@ -603,6 +667,15 @@ fn websocket_body(mut body: Value, input: &[Value], previous_response_id: Option
     body
 }
 
+fn openai_socket_request(token: &str) -> Result<tokio_tungstenite::tungstenite::http::Request<()>> {
+    let mut request = "wss://api.openai.com/v1/responses".into_client_request()?;
+    request.headers_mut().insert(
+        "Authorization",
+        HeaderValue::from_str(&format!("Bearer {token}"))?,
+    );
+    Ok(request)
+}
+
 fn recoverable_socket_error(error: &anyhow::Error) -> bool {
     error
         .downcast_ref::<ProviderFailure>()
@@ -683,55 +756,26 @@ impl ProviderClient {
             "invalid model name"
         );
         ensure!(!request.input.is_empty(), "empty provider input");
-        let codex_credential = if mode == AuthMode::Subscription {
-            store.load_codex_credential()?
-        } else {
-            None
-        };
-        let token = if let Some(credential) = &codex_credential {
-            credential.access_token.clone()
-        } else {
-            self.token(Provider::OpenAi, mode, store).await?
-        };
+        let token = self.token(Provider::OpenAi, mode, store).await?;
         let cyber_program = request_cyber_program(Provider::OpenAi, request.model, store)?;
         for attempt in 0..2 {
             if connection.socket.is_none() {
-                let endpoint = if codex_credential.is_some() {
-                    "wss://chatgpt.com/backend-api/codex/responses"
-                } else {
-                    "wss://api.openai.com/v1/responses"
-                };
-                let mut handshake = endpoint.into_client_request()?;
-                handshake.headers_mut().insert(
-                    "Authorization",
-                    HeaderValue::from_str(&format!("Bearer {token}"))?,
-                );
-                if let Some(credential) = &codex_credential {
-                    let request_id = uuid::Uuid::new_v4().to_string();
-                    handshake.headers_mut().insert(
-                        "chatgpt-account-id",
-                        HeaderValue::from_str(&credential.account_id)?,
-                    );
-                    handshake
-                        .headers_mut()
-                        .insert("originator", HeaderValue::from_static("beale"));
-                    handshake.headers_mut().insert(
-                        "OpenAI-Beta",
-                        HeaderValue::from_static("responses_websockets=2026-02-06"),
-                    );
-                    handshake
-                        .headers_mut()
-                        .insert("x-client-request-id", HeaderValue::from_str(&request_id)?);
-                    handshake
-                        .headers_mut()
-                        .insert("session-id", HeaderValue::from_str(&request_id)?);
-                }
+                let handshake = openai_socket_request(&token)?;
                 let (socket, _) = tokio::time::timeout(
                     std::time::Duration::from_secs(15),
                     connect_async(handshake),
                 )
                 .await
-                .context("OpenAI WebSocket connection timed out")??;
+                .context("OpenAI WebSocket connection timed out")?
+                .map_err(|error| match error {
+                    tokio_tungstenite::tungstenite::Error::Http(response) => {
+                        anyhow::Error::new(rejected_failure(
+                            response.status().as_u16(),
+                            response.body().as_deref().unwrap_or_default(),
+                        ))
+                    }
+                    other => other.into(),
+                })?;
                 connection.socket = Some(socket);
                 connection.previous_response_id = None;
                 connection.known_input_len = 0;
@@ -1057,10 +1101,7 @@ impl ProviderClient {
             !request.model.is_empty() && request.model.len() <= 200,
             "invalid model name"
         );
-        ensure!(
-            !request.input.is_empty() && request.input.len() <= 192,
-            "invalid provider input count"
-        );
+        ensure!(!request.input.is_empty(), "empty provider input");
         let route = route(provider, mode);
         let (endpoint, model, token) = if provider == Provider::Custom {
             ensure!(
@@ -1235,6 +1276,7 @@ where
                                         let _ = tx
                                             .send(ProviderProgress::ReasoningDelta(
                                                 delta.to_owned(),
+                                                key,
                                             ))
                                             .await;
                                     }
@@ -1258,7 +1300,10 @@ where
                                     && let Some(tx) = progress
                                 {
                                     let _ = tx
-                                        .send(ProviderProgress::ReasoningDelta(value.to_owned()))
+                                        .send(ProviderProgress::ReasoningDelta(
+                                            value.to_owned(),
+                                            key,
+                                        ))
                                         .await;
                                 }
                             }
@@ -1366,9 +1411,12 @@ where
                     let _ = tx.send(ProviderProgress::MessageDelta(text.clone())).await;
                 }
                 if sent_reasoning.is_empty() {
-                    for summary in &reasoning_summaries {
+                    for (index, summary) in reasoning_summaries.iter().enumerate() {
                         let _ = tx
-                            .send(ProviderProgress::ReasoningDelta(summary.clone()))
+                            .send(ProviderProgress::ReasoningDelta(
+                                summary.clone(),
+                                (0, index as u64),
+                            ))
                             .await;
                     }
                 }
@@ -1860,6 +1908,68 @@ mod tests {
     }
 
     #[test]
+    fn provider_protocol_errors_have_specific_sanitized_messages() {
+        let expired: anyhow::Error = oauth::OAuthRefreshError {
+            status: 400,
+            code: Some("invalid_grant".to_owned()),
+        }
+        .into();
+        assert_eq!(
+            provider_error_message(Provider::OpenAi, AuthMode::Subscription, &expired),
+            "Beale's OpenAI sign-in could not refresh. Reconnect OpenAI in Providers, then retry."
+        );
+        let response = tokio_tungstenite::tungstenite::http::Response::builder()
+            .status(403)
+            .body(Some(Vec::new()))
+            .unwrap();
+        let error: anyhow::Error =
+            tokio_tungstenite::tungstenite::Error::Http(Box::new(response)).into();
+        assert_eq!(
+            provider_error_message(Provider::OpenAi, AuthMode::Subscription, &error),
+            "OpenAI denied Beale's subscription request. Check the Beale sign-in, model, and Daybreak access in Providers."
+        );
+        let denial = rejected_failure(
+            403,
+            br#"{"error":{"code":"access_program_not_enabled","message":"private upstream detail"}}"#,
+        );
+        assert_eq!(denial.code.as_deref(), Some("access_program_not_enabled"));
+        assert!(!denial.to_string().contains("private upstream detail"));
+        assert_eq!(
+            provider_error_message(
+                Provider::OpenAi,
+                AuthMode::Subscription,
+                &anyhow::Error::new(denial)
+            ),
+            "Daybreak access is not enabled for Beale's OpenAI sign-in and selected model. Check the approved account or project in Providers."
+        );
+        let error = anyhow::anyhow!("too many provider output items");
+        assert_eq!(
+            provider_error_message(Provider::OpenAi, AuthMode::ApiKey, &error),
+            "The provider returned more items than the current protocol supports."
+        );
+        let error = anyhow::anyhow!("OpenAI response timed out");
+        assert_eq!(
+            provider_error_message(Provider::OpenAi, AuthMode::Subscription, &error),
+            "OpenAI timed out before completing this turn."
+        );
+        let error = anyhow::anyhow!("invalid provider event JSON");
+        assert_eq!(
+            provider_error_message(Provider::OpenAi, AuthMode::ApiKey, &error),
+            "The provider returned an invalid response event."
+        );
+        let input_error: anyhow::Error = terminal_failure(
+            &json!({"type":"response.failed","response":{"error":{"param":"input","message":"private upstream detail"}}}),
+            FailureKind::Failed,
+        )
+        .into();
+        assert_eq!(
+            provider_error_message(Provider::OpenAi, AuthMode::Subscription, &input_error),
+            "OpenAI rejected this session's conversation input. Retry the turn; if it persists, start a new session."
+        );
+        assert!(!input_error.to_string().contains("private upstream detail"));
+    }
+
+    #[test]
     fn chat_stream_accepts_done_marker() {
         let body = "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\ndata: [DONE]\n\n";
         let mut pending = body.as_bytes().to_vec();
@@ -2019,6 +2129,50 @@ mod tests {
         );
         assert_eq!(next["previous_response_id"], "resp-example");
         assert_eq!(next["input"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn openai_subscription_socket_uses_public_responses_route() {
+        let request = openai_socket_request("synthetic-token").unwrap();
+        assert_eq!(
+            request.uri().to_string(),
+            "wss://api.openai.com/v1/responses"
+        );
+        assert_eq!(request.headers()["Authorization"], "Bearer synthetic-token");
+        assert!(!request.headers().contains_key("chatgpt-account-id"));
+        assert!(!request.headers().contains_key("originator"));
+    }
+
+    #[tokio::test]
+    async fn openai_subscription_uses_beale_oauth_token() {
+        let root = std::env::temp_dir().join(format!(
+            "beale-openai-route-example-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let store = CredentialStore::at(root.clone());
+        store
+            .save(
+                "openai",
+                &crate::credentials::OAuthCredential {
+                    access_token: "beale-example-token".to_owned(),
+                    refresh_token: "refresh-example-token".to_owned(),
+                    expires_at: 4_000_000_000,
+                    client_id: "client-example".to_owned(),
+                    id_token: None,
+                    subject: None,
+                    scopes: vec!["chatgpt.tokens.use.direct".to_owned()],
+                },
+            )
+            .unwrap();
+        let client = ProviderClient::new().unwrap();
+        assert_eq!(
+            client
+                .token(Provider::OpenAi, AuthMode::Subscription, &store)
+                .await
+                .unwrap(),
+            "beale-example-token"
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -2289,6 +2443,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn response_keeps_commentary_before_a_tool_call() {
+        use axum::{body::Bytes, http::Response};
+        use futures_util::stream;
+        use std::convert::Infallible;
+
+        let body = format!(
+            "data: {}\n\ndata: {}\n\n",
+            json!({"type":"response.output_text.delta","delta":"Checking the example file."}),
+            json!({"type":"response.completed","response":{"output":[
+                {"type":"message","content":[{"type":"output_text","text":"Checking the example file."}]},
+                {"type":"function_call","call_id":"call-example","name":"read","arguments":"{}"}
+            ]}}),
+        );
+        let chunks = vec![Ok::<Bytes, Infallible>(Bytes::from(body))];
+        let response: reqwest::Response =
+            Response::new(reqwest::Body::wrap_stream(stream::iter(chunks))).into();
+        let step = read_tool_stream(response, WireShape::Responses, None)
+            .await
+            .unwrap();
+        assert_eq!(step.text, "Checking the example file.");
+        assert_eq!(step.calls.len(), 1);
+    }
+
+    #[tokio::test]
     async fn provider_deltas_arrive_before_the_response_completes() {
         use axum::{body::Bytes, http::Response};
         use futures_util::stream;
@@ -2324,7 +2502,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(
-            matches!(first, ProviderProgress::ReasoningDelta(value) if value == "Checking example")
+            matches!(first, ProviderProgress::ReasoningDelta(value, _) if value == "Checking example")
         );
         assert!(!reader.is_finished());
         let second = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
@@ -2336,6 +2514,38 @@ mod tests {
         let result = reader.await.unwrap().unwrap();
         assert_eq!(result.text, "Done example");
         assert_eq!(result.reasoning_summaries, ["Checking example"]);
+    }
+
+    #[tokio::test]
+    async fn reasoning_parts_keep_distinct_stream_keys() {
+        use axum::{body::Bytes, http::Response};
+        use futures_util::stream;
+        use std::convert::Infallible;
+
+        let chunks = stream::iter([
+            Ok::<_, Infallible>(Bytes::from_static(b"data: {\"type\":\"response.reasoning_summary_text.delta\",\"output_index\":0,\"summary_index\":0,\"delta\":\"First \"}\n\n")),
+            Ok(Bytes::from_static(b"data: {\"type\":\"response.reasoning_summary_text.delta\",\"output_index\":0,\"summary_index\":0,\"delta\":\"summary\"}\n\n")),
+            Ok(Bytes::from_static(b"data: {\"type\":\"response.reasoning_summary_text.delta\",\"output_index\":0,\"summary_index\":1,\"delta\":\"Second summary\"}\n\n")),
+            Ok(Bytes::from_static(b"data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"type\":\"reasoning\",\"summary\":[{\"text\":\"First summary\"},{\"text\":\"Second summary\"}]}]}}\n\n")),
+        ]);
+        let response: reqwest::Response = Response::new(reqwest::Body::wrap_stream(chunks)).into();
+        let (tx, mut rx) = mpsc::channel(8);
+        let step = read_tool_stream(response, WireShape::Responses, Some(&tx))
+            .await
+            .unwrap();
+        assert_eq!(
+            step.reasoning_summaries,
+            ["First summary", "Second summary"]
+        );
+        assert!(
+            matches!(rx.recv().await, Some(ProviderProgress::ReasoningDelta(text, (0, 0))) if text == "First ")
+        );
+        assert!(
+            matches!(rx.recv().await, Some(ProviderProgress::ReasoningDelta(text, (0, 0))) if text == "summary")
+        );
+        assert!(
+            matches!(rx.recv().await, Some(ProviderProgress::ReasoningDelta(text, (0, 1))) if text == "Second summary")
+        );
     }
 
     #[tokio::test]
@@ -2356,7 +2566,7 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(8);
         let result = read_tool_stream(response, WireShape::Responses, Some(&tx)).await;
         assert!(
-            matches!(rx.recv().await, Some(ProviderProgress::ReasoningDelta(value)) if value == "Checking example")
+            matches!(rx.recv().await, Some(ProviderProgress::ReasoningDelta(value, _)) if value == "Checking example")
         );
         let error = result.unwrap_err();
         assert_eq!(
@@ -2380,7 +2590,10 @@ mod tests {
                 b"data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"reasoning\",\"summary\":[{\"text\":\"Planning example steps\"}]}}\n\n",
             )),
             Ok(Bytes::from_static(
-                b"data: {\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{\"type\":\"function_call\",\"call_id\":\"call-example\",\"name\":\"write\",\"arguments\":\"{\\\"path\\\":\\\"example.txt\\\"}\"}}\n\n",
+                b"data: {\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{\"type\":\"message\",\"phase\":\"commentary\",\"content\":[{\"type\":\"output_text\",\"text\":\"Checking the example file.\"}]}}\n\n",
+            )),
+            Ok(Bytes::from_static(
+                b"data: {\"type\":\"response.output_item.done\",\"output_index\":2,\"item\":{\"type\":\"function_call\",\"call_id\":\"call-example\",\"name\":\"write\",\"arguments\":\"{\\\"path\\\":\\\"example.txt\\\"}\"}}\n\n",
             )),
             Ok(Bytes::from_static(
                 b"data: {\"type\":\"response.completed\",\"response\":{\"output\":[]}}\n\n",
@@ -2391,10 +2604,11 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(step.reasoning_summaries, ["Planning example steps"]);
+        assert_eq!(step.text, "Checking the example file.");
         assert_eq!(step.calls.len(), 1);
         assert_eq!(step.calls[0].name, "write");
         assert_eq!(step.calls[0].id, "call-example");
-        assert_eq!(step.continuation.len(), 2);
+        assert_eq!(step.continuation.len(), 3);
     }
 
     #[tokio::test]
@@ -2480,10 +2694,10 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires a signed-in Codex subscription and live network access"]
-    async fn codex_subscription_selects_daybreak_blue_with_tools() {
+    #[ignore = "requires a signed-in Beale subscription and live network access"]
+    async fn beale_subscription_selects_daybreak_blue_with_tools() {
         let store = CredentialStore::new().unwrap();
-        assert!(store.load_codex_credential().unwrap().is_some());
+        assert!(store.load("openai").unwrap().is_some());
         assert_eq!(store.daybreak_mode().unwrap(), "blue");
         let client = ProviderClient::new().unwrap();
         let input = vec![json!({"role":"user","content":"Reply with OK without using tools."})];

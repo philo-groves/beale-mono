@@ -14,7 +14,6 @@ pub const MAX_CONCURRENT: u32 = 64;
 pub const DELEGATE_TOOL: &str = "graph_delegate";
 pub const HANDOFF_TOOL: &str = "graph_handoff";
 pub const MAX_BATCH: usize = 8;
-pub const MAX_ASSIGNMENTS_PER_TURN: usize = 16;
 
 #[derive(Clone, Debug)]
 pub struct Assignment {
@@ -125,7 +124,7 @@ impl GraphRuntime for SimpleRuntime {
 
     fn system_section(&self, config: &SessionGraphConfig, fallback: &GraphNodeModel) -> String {
         let mut section = format!(
-            "## Simple Orchestra\n\n{PROMPT_EXTENSION}\n\nUse `{DELEGATE_TOOL}` only when a specialist can help. Delegate at most {MAX_BATCH} tasks per batch and {MAX_ASSIGNMENTS_PER_TURN} per turn. Model indices by role (omit `model_index` for the first):\n"
+            "## Simple Orchestra\n\n{PROMPT_EXTENSION}\n\nUse `{DELEGATE_TOOL}` only when a specialist can help. Delegate at most {MAX_BATCH} tasks per batch. Model indices by role (omit `model_index` for the first):\n"
         );
         append_subagent_models(&mut section, config, fallback);
         section
@@ -195,7 +194,7 @@ impl GraphRuntime for FlowRuntime {
     fn system_section(&self, config: &SessionGraphConfig, fallback: &GraphNodeModel) -> String {
         let graph = graph_definition(self.0).expect("registered flow graph");
         let mut section = format!(
-            "## {}\n\nYou are one of several top-level agents in this session. There is no central main agent. Your conversation history is separate from other top-level agents. Use `{HANDOFF_TOOL}` to queue a concrete task and evidence references for an allowed peer. The recipient starts when work is queued and remains idle otherwise. You may continue your own work while the recipient runs concurrently. The recipient starts with the handoff task and its own history. Use `{DELEGATE_TOOL}` for bounded Scout, Reviewer, or Prover subagent tasks. Each top-level agent may use its own subagents.\n\nTop-level roles and models:\n",
+            "## {}\n\nYou are one of several top-level agents in this session. There is no central main agent. Your conversation history is separate from other top-level agents. Stay within your role even while a peer is idle; queue work for that peer instead of performing its stage. Use `{HANDOFF_TOOL}` to queue a concrete task and evidence references for an allowed peer. The recipient starts when work is queued and remains idle otherwise. You may continue your own role's work while the recipient runs concurrently. The recipient starts with the handoff task and its own history. Use `{DELEGATE_TOOL}` for focused Scout, Reviewer, or Prover subagent tasks within your role. Each top-level agent may use its own subagents.\n\nTop-level roles and models:\n",
             graph.name
         );
         for role in graph.nodes.iter().filter(|role| role.is_top_level()) {
@@ -212,7 +211,7 @@ impl GraphRuntime for FlowRuntime {
             }
         }
         section.push_str(&format!(
-            "\nSubagent model indices (omit `model_index` for the first). Delegate at most {MAX_BATCH} tasks per batch and {MAX_ASSIGNMENTS_PER_TURN} per turn:\n"
+            "\nSubagent model indices (omit `model_index` for the first). Delegate at most {MAX_BATCH} tasks per batch:\n"
         ));
         append_subagent_models(&mut section, config, fallback);
         section
@@ -359,10 +358,10 @@ impl Role {
                 "Independently validate and deduplicate handed-off candidates. Report evidence and uncertainty; hand unresolved gaps back to the Discovery Harness."
             }
             Self::Discovery => {
-                "Discover candidate vulnerabilities within the authorized scope and record supporting observations. Create Candidate findings only. Hand off a concrete candidate, finding ID, and evidence references to Dynamic Validation. If no candidate is ready, continue discovery; do not validate, screen, or report it yourself."
+                "Discover candidate vulnerabilities within the authorized scope. Start with the in-scope Surfaces inventory when enabled; update a surface's definition or mapping as its boundaries become known, and mark a mapping reviewed only after its evidence supports review. Create or revise Candidate findings for concrete hypotheses and hand off the finding ID, observations, and evidence references to Dynamic Validation. Stop at a testable hypothesis: do not build or run a PoC, complete validation, screen, or report. If no candidate is ready, continue discovery and record coverage in Surfaces."
             }
             Self::Validation => {
-                "Dynamically validate handed-off candidates with reproducible evidence; distinguish failed checks from confirmed behavior. Complete Validated only when supported, then hand off the finding ID and evidence to Reporter. Hand unresolved gaps back to Discovery. Do not screen or report."
+                "Dynamically validate handed-off Candidates with reproducible evidence; build or run a focused PoC here when authorized and useful. Distinguish failed checks from confirmed behavior. Complete Validated only when supported, then hand off the finding ID and evidence to Reporter. Hand unresolved gaps back to Discovery. Do not screen or report."
             }
             Self::Reporter => {
                 "Screen supported validated findings for impact and reachability, then prepare clear reports with evidence references. Hand actionable report and remediation context to Patch Generation. Return evidence gaps to Dynamic Validation."

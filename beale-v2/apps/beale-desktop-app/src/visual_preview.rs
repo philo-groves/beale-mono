@@ -57,7 +57,7 @@ pub(crate) fn fixture(variant: &str) -> State {
         "graph-editor" | "model-menu" | "goal-menu" | "graph-cloudflare" | "graph-openai" => {
             "research"
         }
-        "graph-session" => "session",
+        "graph-session" | "session-activity" | "subagent-canvas" | "subagent-popup" => "session",
         "surface-add" | "surface-delete" | "relationship" => "surface-manage",
         "workspace-name" => "workspace",
         "workspace-rule" => "rules",
@@ -530,6 +530,33 @@ pub(crate) fn fixture(variant: &str) -> State {
                     ], token_usage: Some(SessionTokenUsage { input_tokens: 18200, output_tokens: 2400, cache_read_tokens: 12000, cache_input_tokens: 18200, measured_calls: 4, total_calls: 4, cache_measured_calls: 4 }), ..Default::default()
                 });
                 s.session_sidenav_visible = name == "session";
+                if variant == "session-activity" {
+                    let message = &mut s.active_session.as_mut().unwrap().messages[1];
+                    message.reasoning_summaries = vec![
+                        SessionReasoningSummary {
+                            text: "Identify the local fixture's trust boundary.".into(),
+                            ..Default::default()
+                        },
+                        SessionReasoningSummary {
+                            text:
+                                "Check whether both caller roles reach the same authorization path."
+                                    .into(),
+                            ..Default::default()
+                        },
+                    ];
+                    message.commentary = vec![SessionCommentary {
+                        text: "I found two caller roles in the synthetic fixture. I’ll compare their access paths and record the result.".into(),
+                        ..Default::default()
+                    }];
+                    message.tools = vec![SessionToolSummary {
+                        id: "tool-example".into(),
+                        name: "read".into(),
+                        summary: "Read example.txt".into(),
+                        ..Default::default()
+                    }];
+                    s.session_work_expanded.insert(1);
+                    s.session_sidenav_visible = false;
+                }
                 if variant == "graph-session" {
                     let detail = s.active_session.as_mut().unwrap();
                     detail.graph_id = beale_graphs::OPENAI_ID.to_owned();
@@ -545,7 +572,71 @@ pub(crate) fn fixture(variant: &str) -> State {
                     s.session_work_expanded.insert(1);
                     s.session_sidenav_visible = false;
                 }
-                s.canvas_open = name == "canvas";
+                if matches!(variant, "subagent-canvas" | "subagent-popup") {
+                    let child = SessionSubagentSummary {
+                        id: "00000000-0000-4000-8000-000000000099".into(),
+                        parent_role: "discovery".into(), role: "scout".into(),
+                        task: "Inspect the local example application's request boundary and record the evidence.".into(),
+                        status: "completed".into(), completed_at_ms: 1_800_000_000_000,
+                    };
+                    let detail = s.active_session.as_mut().unwrap();
+                    detail.graph_id = beale_graphs::OPENAI_ID.to_owned();
+                    detail.graph_agents = vec![SessionGraphAgent {
+                        role: "discovery".into(),
+                        status: "idle".into(),
+                    }];
+                    detail.agent_metrics = vec![SessionAgentMetrics {
+                        role: "discovery".into(),
+                        token_usage: detail.token_usage.clone(),
+                        model_usage: Vec::new(),
+                        usage_snapshots: Vec::new(),
+                        duration_ms: 142_000,
+                    }];
+                    detail.subagents = vec![child.clone()];
+                    detail.messages[1].agent_role = "discovery".into();
+                    s.session_agent_role = "discovery".into();
+                    if variant == "subagent-canvas" {
+                        s.canvas_open = true;
+                        s.session_sidenav_visible = false;
+                        s.session_work_expanded.insert(usize::MAX);
+                        s.canvas_subagent = Some(subagent_canvas::SubagentCanvas {
+                            session_id: s.session_summaries[0].id.clone(), summary: child.clone(),
+                            detail: Some(SessionSubagentDetail {
+                                summary: Some(child), result: "The example boundary check completed with no confirmed finding.".into(),
+                                offset: 0, next_offset: 3, total_items: 3,
+                                task: "Inspect the local example application's request boundary and record the evidence.".into(),
+                                items: vec![
+                                    SessionSubagentItem { kind: "reasoning".into(), text: "Checking the synthetic fixture's input and authorization stages.".into(), tool: None },
+                                    SessionSubagentItem { kind: "tool".into(), text: String::new(), tool: Some(SessionToolSummary {
+                                        id: "00000000-0000-4000-8000-000000000098".into(), name: "read".into(),
+                                        summary: "Read example.txt".into(), agent_role: "discovery".into(), ..Default::default()
+                                    }) },
+                                    SessionSubagentItem { kind: "message".into(), text: "The example boundary check completed with no confirmed finding.".into(), tool: None },
+                                ],
+                            }), loading: false, error: String::new(), generation: 0,
+                        });
+                        s.session_live_events.push(SessionStreamEvent {
+                            kind: SessionStreamKind::ToolFinished as i32,
+                            agent_role: "discovery".into(),
+                            subagent_id: "00000000-0000-4000-8000-000000000099".into(),
+                            tool_detail: Some(SessionToolDetailPage {
+                                id: "00000000-0000-4000-8000-000000000098".into(),
+                                name: "read".into(),
+                                arguments: "{\"path\":\"example.txt\"}".into(),
+                                output: "Synthetic fixture content".into(),
+                                offset: 0,
+                                next_offset: 25,
+                                total_bytes: 25,
+                                is_error: false,
+                            }),
+                            ..Default::default()
+                        });
+                    } else {
+                        s.session_sidenav_visible = true;
+                        s.session_usage_menu = Some(session_sidenav::UsageMenu::Subagents);
+                    }
+                }
+                s.canvas_open = name == "canvas" || variant == "subagent-canvas";
                 if name == "canvas" {
                     s.canvas_runbook = runbook_canvas::CanvasRunbookState::with_view(runbook_canvas::RunbookView {
                         selected: Some(SessionRunbook { id: "R1".into(), title: "Example boundary verification".into(), status: "prepared".into(), ..Default::default() }),

@@ -56,6 +56,12 @@ pub(crate) async fn list(
         .send()
         .await
         .map_err(|_| "Could not fetch provider models".to_owned())?;
+    if response.status() == StatusCode::UNAUTHORIZED
+        && provider == ProviderId::Openai
+        && method == AuthMethod::Subscription
+    {
+        return Err("OpenAI sign-in needs reconnecting. Use Reconnect in Providers.".to_owned());
+    }
     if response.status() != StatusCode::OK
         || response
             .headers()

@@ -3,13 +3,13 @@ use std::{
     path::Path,
     sync::{
         Arc,
-        atomic::{AtomicI64, Ordering},
+        atomic::{AtomicI64, AtomicU32, Ordering},
     },
 };
 
 use beale_contracts::v1::{
     AuthMethod, GraphNodeModel, ProviderId, SessionGraphConfig, SessionStreamEvent,
-    SessionStreamKind, SessionToolSummary,
+    SessionStreamKind, SessionSubagentSummary, SessionToolSummary,
 };
 use beale_graphs::{Assignment, Role};
 use beale_providers::{
@@ -18,16 +18,15 @@ use beale_providers::{
 };
 use beale_safety::ReviewRequest;
 use beale_storage::{ChildTurnRow, ModelUsageRow, ToolCallRow};
-use beale_tools::{AgentFiles, definitions, execute, model_preview, page};
+use beale_tools::{AgentFiles, definitions, execute, page};
 use futures_util::future::join_all;
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, Semaphore, mpsc};
 use uuid::Uuid;
 
-use super::{SessionState, append_tool_result, tool_summary as summary};
-
-const MAX_CHILD_ROUNDS: usize = 24;
-const MAX_CHILD_CALLS: usize = 48;
+use super::{
+    SessionState, append_tool_result, model_tool_preview, tool_summary as summary, usage_update,
+};
 
 pub(super) struct DelegateOutcome {
     pub output: String,
@@ -83,6 +82,7 @@ pub(super) struct ChildContext<'a> {
     pub turn_number: i64,
     pub turn_started: std::time::Instant,
     pub progress: Option<&'a mpsc::Sender<SessionStreamEvent>>,
+    pub message_sequence: &'a AtomicU32,
     pub model_usage: &'a Mutex<Vec<ModelUsageRow>>,
 }
 
@@ -99,6 +99,24 @@ async fn run_child(
     } else {
         format!("From {}: {}", context.parent_role.label(), assignment.task)
     };
+    if let Some(tx) = context.progress {
+        let _ = tx
+            .send(SessionStreamEvent {
+                kind: SessionStreamKind::SubagentStarted as i32,
+                agent_role: context.parent_role.id().to_owned(),
+                subagent_id: agent_id.clone(),
+                subagent: Some(SessionSubagentSummary {
+                    id: agent_id.clone(),
+                    parent_role: context.parent_role.id().to_owned(),
+                    role: role.clone(),
+                    task: task.clone(),
+                    status: "active".to_owned(),
+                    completed_at_ms: 0,
+                }),
+                ..Default::default()
+            })
+            .await;
+    }
     let mut messages = Vec::new();
     let mut reasoning = Vec::new();
     let outcome = run_child_inner(
@@ -116,6 +134,29 @@ async fn run_child(
         .map_or(0, |duration| {
             duration.as_millis().min(i64::MAX as u128) as i64
         });
+    if let Some(tx) = context.progress {
+        let _ = tx
+            .send(SessionStreamEvent {
+                kind: SessionStreamKind::SubagentCompleted as i32,
+                agent_role: context.parent_role.id().to_owned(),
+                subagent_id: agent_id.clone(),
+                subagent: Some(SessionSubagentSummary {
+                    id: agent_id.clone(),
+                    parent_role: context.parent_role.id().to_owned(),
+                    role: role.clone(),
+                    task: task.clone(),
+                    status: if outcome.is_error {
+                        "failed"
+                    } else {
+                        "completed"
+                    }
+                    .to_owned(),
+                    completed_at_ms: completed_at_ms as u64,
+                }),
+                ..Default::default()
+            })
+            .await;
+    }
     let transcript = ChildTurnRow {
         agent_id,
         role,
@@ -184,7 +225,7 @@ async fn run_child_inner(
         assignment.role.instruction()
     );
     let task = format!(
-        "Task: {}\n\nAsk the parent agent for any scope details requiring tools unavailable to you.\n\nRecorded surfaces at delegation:\n{}",
+        "Task: {}\n\nIf scope details are missing, state the gap in your result so the parent can resolve it. Stay within the recorded authorization boundary.\n\nRecorded surfaces at delegation:\n{}",
         assignment.task, context.surfaces_context
     );
     let mut input = input_messages(&[TextMessage {
@@ -205,8 +246,7 @@ async fn run_child_inner(
     let feedback_enabled = false;
     let definitions = child_tool_definitions(feedback_enabled, webfetch_enabled);
     let mut tools = Vec::<ToolCallRow>::new();
-    let mut call_count = 0;
-    for round in 0..MAX_CHILD_ROUNDS {
+    loop {
         let request = ToolStepRequest {
             model: &assignment.model.model,
             input: &input,
@@ -246,7 +286,7 @@ async fn run_child_inner(
                 };
             }
         };
-        context.model_usage.lock().await.push(ModelUsageRow {
+        let usage = ModelUsageRow {
             agent_id: agent_id.to_owned(),
             role: assignment.role.id().to_owned(),
             provider: assignment.model.provider,
@@ -270,7 +310,44 @@ async fn run_child_inner(
                 .map_or(0, |duration| {
                     duration.as_millis().min(i64::MAX as u128) as i64
                 }),
-        });
+        };
+        if let Some(tx) = context.progress {
+            let mut event = usage_update(&usage, context.parent_role.id());
+            event.subagent_id = agent_id.to_owned();
+            let _ = tx.send(event).await;
+        }
+        context.model_usage.lock().await.push(usage);
+        for text in &step.reasoning_summaries {
+            messages.push(
+                json!({"role":"reasoning","text":text.chars().take(8_000).collect::<String>()}),
+            );
+            if let Some(tx) = context.progress {
+                let _ = tx
+                    .send(SessionStreamEvent {
+                        kind: SessionStreamKind::ReasoningDelta as i32,
+                        text: text.clone(),
+                        segment_index: context.message_sequence.fetch_add(1, Ordering::SeqCst),
+                        agent_role: context.parent_role.id().to_owned(),
+                        subagent_id: agent_id.to_owned(),
+                        ..Default::default()
+                    })
+                    .await;
+            }
+        }
+        if !step.text.trim().is_empty()
+            && let Some(tx) = context.progress
+        {
+            let _ = tx
+                .send(SessionStreamEvent {
+                    kind: SessionStreamKind::MessageDelta as i32,
+                    text: step.text.clone(),
+                    segment_index: context.message_sequence.fetch_add(1, Ordering::SeqCst),
+                    agent_role: context.parent_role.id().to_owned(),
+                    subagent_id: agent_id.to_owned(),
+                    ..Default::default()
+                })
+                .await;
+        }
         if !step.text.is_empty() {
             messages.push(json!({"role":"assistant","text":step.text.chars().take(32_000).collect::<String>()}));
         }
@@ -295,30 +372,6 @@ async fn run_child_inner(
                 tools,
             };
         }
-        if round + 1 == MAX_CHILD_ROUNDS || call_count + step.calls.len() > MAX_CHILD_CALLS {
-            let notes = messages
-                .iter()
-                .rev()
-                .filter_map(|message| message.get("text").and_then(Value::as_str))
-                .filter(|text| !text.trim().is_empty())
-                .take(3)
-                .map(|text| text.chars().take(500).collect::<String>())
-                .collect::<Vec<_>>()
-                .join("\n");
-            return ChildOutcome {
-                result: if notes.is_empty() {
-                    "Subagent reached its work budget before finishing. Assign a narrower follow-up task."
-                        .to_owned()
-                } else {
-                    format!(
-                        "Subagent reached its work budget before finishing. Partial notes:\n{notes}\nAssign a narrower follow-up task."
-                    )
-                },
-                is_error: true,
-                tools,
-            };
-        }
-        call_count += step.calls.len();
         let mut anthropic_results = Vec::new();
         for call in step.calls {
             if call.id.is_empty()
@@ -362,9 +415,13 @@ async fn run_child_inner(
                             total_bytes: 0,
                             is_error: false,
                         }),
+                        usage_delta: None,
+                        subagent_id: agent_id.to_owned(),
+                        subagent: None,
                     })
                     .await;
             }
+            let mut review_unavailable = false;
             let (output, is_error) = match arguments {
                 #[cfg(feature = "agent-feedback")]
                 Ok(arguments)
@@ -396,6 +453,7 @@ async fn run_child_inner(
                         },
                     )
                     .await;
+                    review_unavailable = super::review_failed(&decision);
                     if !decision.approved {
                         (format!("Tool denied by review: {}", decision.reason), true)
                     } else {
@@ -462,6 +520,9 @@ async fn run_child_inner(
                                 total_bytes: output.len() as u64,
                                 is_error,
                             }),
+                            usage_delta: None,
+                            subagent_id: agent_id.to_owned(),
+                            subagent: None,
                         })
                         .await;
                 }
@@ -478,7 +539,7 @@ async fn run_child_inner(
                     is_error,
                     agent_role: context.parent_role.id().to_owned(),
                 });
-                model_preview(&output, context.agent_files)
+                model_tool_preview(&call.name, &id, &output, is_error, context.agent_files)
             };
             append_tool_result(
                 &mut input,
@@ -488,15 +549,17 @@ async fn run_child_inner(
                 &call.id,
                 &model_output,
             );
+            if review_unavailable {
+                return ChildOutcome {
+                    result: "Auto-Review was unavailable; the tool was not run. Retry this subagent after the review service is available.".to_owned(),
+                    is_error: true,
+                    tools,
+                };
+            }
         }
         if !anthropic_results.is_empty() {
             input.push(json!({"role":"user","content":anthropic_results}));
         }
-    }
-    ChildOutcome {
-        result: "Subagent reached its round budget.".to_owned(),
-        is_error: true,
-        tools,
     }
 }
 
@@ -581,6 +644,9 @@ pub(super) async fn delegate(
                 segment_index: 0,
                 agent_role: context.parent_role.id().to_owned(),
                 tool_detail: None,
+                usage_delta: None,
+                subagent_id: String::new(),
+                subagent: None,
             })
             .await;
     }

@@ -1,10 +1,11 @@
 use beale_contracts::v1::{
-    SessionDetail, SessionRunbook, SessionStreamEvent, SessionStreamKind, SessionTokenUsage,
-    SessionUsageSnapshot,
+    SessionDetail, SessionRunbook, SessionStreamEvent, SessionStreamKind, SessionSubagentSummary,
+    SessionTokenUsage, SessionUsageSnapshot,
 };
 use rune::{
     Align, Color, El, Icon, LineCap, ScrollSpec, Shape, Side, canvas, col, el, icon, row, text,
 };
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use crate::{
@@ -21,6 +22,7 @@ pub(crate) enum UsageMenu {
     Tokens,
     Cache,
     Runbooks,
+    Subagents,
 }
 
 impl UsageMenu {
@@ -29,6 +31,7 @@ impl UsageMenu {
             Self::Tokens => "session-sidenav-token-row",
             Self::Cache => "session-sidenav-cache-row",
             Self::Runbooks => "session-sidenav-runbooks-row",
+            Self::Subagents => "session-sidenav-subagents-row",
         }
     }
 }
@@ -41,6 +44,29 @@ fn open_menu(state: &mut State, menu: UsageMenu) {
             .as_ref()
             .map_or(0, |detail| detail.usage_snapshots.len().saturating_sub(1));
     }
+}
+
+fn subagent_entries(
+    detail: Option<&SessionDetail>,
+    live_events: &[SessionStreamEvent],
+    role: &str,
+) -> Vec<SessionSubagentSummary> {
+    let mut entries = BTreeMap::new();
+    if let Some(detail) = detail {
+        for item in &detail.subagents {
+            if item.parent_role == role {
+                entries.insert(item.id.clone(), item.clone());
+            }
+        }
+    }
+    for event in live_events {
+        if let Some(item) = &event.subagent
+            && item.parent_role == role
+        {
+            entries.insert(item.id.clone(), item.clone());
+        }
+    }
+    entries.into_values().collect()
 }
 
 fn activates_sidenav(name: &str) -> bool {
@@ -196,11 +222,39 @@ fn usage_row(menu: UsageMenu, active: bool, content: UsageRowContent, theme: The
 pub(crate) fn render(
     detail: Option<&SessionDetail>,
     live_events: &[SessionStreamEvent],
+    agent_role: &str,
     live_ms: u64,
     active_menu: Option<UsageMenu>,
     theme: ThemeStyle<'_>,
 ) -> El {
-    let duration = detail.map_or(live_ms, |detail| duration_ms(detail, live_ms));
+    let peer_graph = detail.is_some_and(|detail| {
+        matches!(
+            detail.graph_id.as_str(),
+            beale_graphs::CLOUDFLARE_ID | beale_graphs::OPENAI_ID
+        )
+    });
+    let sidebar_title = if peer_graph {
+        beale_graphs::Role::from_id(agent_role).map_or_else(
+            || "Agent Session".to_owned(),
+            |role| format!("{} Session", role.label()),
+        )
+    } else {
+        "Session".to_owned()
+    };
+    let filtered_events = live_events
+        .iter()
+        .filter(|event| !peer_graph || event.agent_role == agent_role)
+        .cloned()
+        .collect::<Vec<_>>();
+    let live_events = filtered_events.as_slice();
+    let live_detail = crate::sessions::detail_for_agent(detail, live_events, agent_role, live_ms);
+    let detail = live_detail.as_ref();
+    let has_live_usage = live_events
+        .iter()
+        .any(|event| event.kind == SessionStreamKind::UsageUpdated as i32);
+    let duration = detail.map_or(live_ms, |detail| {
+        duration_ms(detail, if has_live_usage { 0 } else { live_ms })
+    });
     let usage = detail.and_then(|detail| detail.token_usage.as_ref());
     let tokens = usage.map_or(0, |usage| {
         usage.input_tokens.saturating_add(usage.output_tokens)
@@ -300,6 +354,13 @@ pub(crate) fn render(
     let active_runbooks = detail
         .map_or(0, |detail| detail.active_runbook_count)
         .max(u64::from(live_run));
+    let subagents = subagent_entries(detail, live_events, agent_role);
+    let active_subagents = subagents
+        .iter()
+        .filter(|item| item.status == "active")
+        .count();
+    let show_subagents =
+        !subagents.is_empty() || detail.is_some_and(|detail| !detail.graph_id.is_empty());
     let mut sidebar = col()
         .key("session-sidenav")
         .role("complementary")
@@ -325,7 +386,7 @@ pub(crate) fn render(
                 .center_y()
                 .gap(3.0)
                 .child(
-                    text("Session")
+                    text(sidebar_title)
                         .key("session-sidenav-title")
                         .font(ui_font(14.0, 400.0))
                         .color(theme.color("#aaaaaa")),
@@ -383,66 +444,117 @@ pub(crate) fn render(
                     theme,
                 )),
         );
-    if runbooks > 0 {
-        sidebar = sidebar
-            .child(
-                el().key("session-sidenav-feature-divider")
-                    .role("separator")
-                    .w_full()
-                    .h(1.0)
-                    .my(5.0)
-                    .fill(theme.color("#303030")),
-            )
-            .child(
-                row()
-                    .key("session-sidenav-runbooks-row")
-                    .w_full()
-                    .h(30.0)
-                    .px(2.0)
-                    .center_y()
-                    .gap(8.0)
-                    .role("group")
-                    .label(format!("{runbooks} runbooks, {active_runbooks} active"))
-                    .radius(8.0)
-                    .fill(if active_menu == Some(UsageMenu::Runbooks) {
-                        theme.color("#303030")
-                    } else {
-                        Color::TRANSPARENT
-                    })
-                    .hover(theme.color("#303030"))
-                    .on_hover(|state: &mut State| {
-                        state.session_usage_row_hovered = Some(UsageMenu::Runbooks);
-                        open_menu(state, UsageMenu::Runbooks);
-                    })
-                    .on_hover_change(|state: &mut State, inside, _| {
-                        if inside {
-                            state.session_usage_row_hovered = Some(UsageMenu::Runbooks);
-                            open_menu(state, UsageMenu::Runbooks);
-                        } else if state.session_usage_row_hovered == Some(UsageMenu::Runbooks) {
-                            state.session_usage_row_hovered = None;
-                            if !state.session_usage_popup_hovered {
-                                state.session_usage_menu = None;
-                            }
+    if runbooks > 0 || show_subagents {
+        sidebar = sidebar.child(
+            el().key("session-sidenav-feature-divider")
+                .role("separator")
+                .w_full()
+                .h(1.0)
+                .my(5.0)
+                .fill(theme.color("#303030")),
+        );
+    }
+    if show_subagents {
+        let count = subagents.len();
+        sidebar = sidebar.child(
+            row()
+                .key("session-sidenav-subagents-row")
+                .w_full()
+                .h(30.0)
+                .px(2.0)
+                .center_y()
+                .gap(8.0)
+                .role("group")
+                .label(format!("{count} subagents, {active_subagents} active"))
+                .radius(8.0)
+                .fill(if active_menu == Some(UsageMenu::Subagents) {
+                    theme.color("#303030")
+                } else {
+                    Color::TRANSPARENT
+                })
+                .hover(theme.color("#303030"))
+                .on_hover(|state: &mut State| {
+                    state.session_usage_row_hovered = Some(UsageMenu::Subagents);
+                    open_menu(state, UsageMenu::Subagents);
+                })
+                .on_hover_change(|state: &mut State, inside, _| {
+                    if inside {
+                        state.session_usage_row_hovered = Some(UsageMenu::Subagents);
+                        open_menu(state, UsageMenu::Subagents);
+                    } else if state.session_usage_row_hovered == Some(UsageMenu::Subagents) {
+                        state.session_usage_row_hovered = None;
+                        if !state.session_usage_popup_hovered {
+                            state.session_usage_menu = None;
                         }
-                    })
-                    .hover_delays(Duration::ZERO, Duration::from_millis(250))
-                    .child(
-                        text(format!(
-                            "{runbooks} Runbook{}",
-                            if runbooks == 1 { "" } else { "s" }
-                        ))
-                        .key("session-sidenav-runbooks")
+                    }
+                })
+                .hover_delays(Duration::ZERO, Duration::from_millis(250))
+                .child(
+                    text(format!("{count} Subagents"))
+                        .key("session-sidenav-subagents")
                         .font(ui_font(12.0, 400.0))
                         .color(theme.color("#e7e7e7")),
-                    )
-                    .child(row().grow(1.0))
-                    .child(
-                        text(format!("{active_runbooks} Active"))
-                            .key("session-sidenav-runbooks-active")
-                            .font(ui_font(11.0, 400.0))
-                            .color(theme.color("#929292")),
-                    ),
-            );
+                )
+                .child(row().grow(1.0))
+                .child(
+                    text(format!("{active_subagents} Active"))
+                        .key("session-sidenav-subagents-active")
+                        .font(ui_font(11.0, 400.0))
+                        .color(theme.color("#929292")),
+                ),
+        );
+    }
+    if runbooks > 0 {
+        sidebar = sidebar.child(
+            row()
+                .key("session-sidenav-runbooks-row")
+                .w_full()
+                .h(30.0)
+                .px(2.0)
+                .center_y()
+                .gap(8.0)
+                .role("group")
+                .label(format!("{runbooks} runbooks, {active_runbooks} active"))
+                .radius(8.0)
+                .fill(if active_menu == Some(UsageMenu::Runbooks) {
+                    theme.color("#303030")
+                } else {
+                    Color::TRANSPARENT
+                })
+                .hover(theme.color("#303030"))
+                .on_hover(|state: &mut State| {
+                    state.session_usage_row_hovered = Some(UsageMenu::Runbooks);
+                    open_menu(state, UsageMenu::Runbooks);
+                })
+                .on_hover_change(|state: &mut State, inside, _| {
+                    if inside {
+                        state.session_usage_row_hovered = Some(UsageMenu::Runbooks);
+                        open_menu(state, UsageMenu::Runbooks);
+                    } else if state.session_usage_row_hovered == Some(UsageMenu::Runbooks) {
+                        state.session_usage_row_hovered = None;
+                        if !state.session_usage_popup_hovered {
+                            state.session_usage_menu = None;
+                        }
+                    }
+                })
+                .hover_delays(Duration::ZERO, Duration::from_millis(250))
+                .child(
+                    text(format!(
+                        "{runbooks} Runbook{}",
+                        if runbooks == 1 { "" } else { "s" }
+                    ))
+                    .key("session-sidenav-runbooks")
+                    .font(ui_font(12.0, 400.0))
+                    .color(theme.color("#e7e7e7")),
+                )
+                .child(row().grow(1.0))
+                .child(
+                    text(format!("{active_runbooks} Active"))
+                        .key("session-sidenav-runbooks-active")
+                        .font(ui_font(11.0, 400.0))
+                        .color(theme.color("#929292")),
+                ),
+        );
     }
     sidebar
 }
@@ -628,6 +740,147 @@ fn runbook_date(ms: u64) -> String {
         )
 }
 
+fn subagent_popup(
+    detail: Option<&SessionDetail>,
+    live_events: &[SessionStreamEvent],
+    agent_role: &str,
+    expanded: [bool; 3],
+    theme: ThemeStyle<'_>,
+) -> El {
+    let entries = subagent_entries(detail, live_events, agent_role);
+    let mut content = col().w_full().gap(12.0);
+    for (section, status, index) in [
+        ("Active", "active", 0),
+        ("Completed", "completed", 1),
+        ("Failed", "failed", 2),
+    ] {
+        let mut members = entries
+            .iter()
+            .filter(|item| item.status == status)
+            .collect::<Vec<_>>();
+        members.sort_by(|left, right| {
+            right
+                .completed_at_ms
+                .cmp(&left.completed_at_ms)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        let mut group = col()
+            .key(format!("session-subagent-{status}-section"))
+            .w_full()
+            .gap(5.0)
+            .child(
+                text(section)
+                    .font(ui_font(12.0, 400.0))
+                    .color(theme.color("#929292")),
+            );
+        if members.is_empty() {
+            group = group.child(
+                text("None")
+                    .font(ui_font(11.0, 400.0))
+                    .color(theme.color("#777777")),
+            );
+        }
+        let visible = if expanded[index] {
+            members.len()
+        } else {
+            members.len().min(3)
+        };
+        for member in members.iter().take(visible) {
+            let selected = (*member).clone();
+            let role = beale_graphs::Role::from_id(&member.role)
+                .map_or(member.role.as_str(), |role| role.label())
+                .to_owned();
+            group = group.child(
+                col()
+                    .key(format!("session-subagent-{}", member.id))
+                    .role("button")
+                    .label(format!("Open {role} subagent in Canvas"))
+                    .w_full()
+                    .padding(6.0)
+                    .gap(2.0)
+                    .radius(7.0)
+                    .hover(theme.color("#3b3b3b"))
+                    .on_press(move |state: &mut State| {
+                        crate::subagent_canvas::open(state, selected.clone())
+                    })
+                    .child(
+                        text(role)
+                            .font(ui_font(12.0, 400.0))
+                            .color(theme.color("#eeeeee")),
+                    )
+                    .child(
+                        text(member.task.clone())
+                            .key(format!("session-subagent-{}-task", member.id))
+                            .w_full()
+                            .font(ui_font(11.0, 400.0))
+                            .color(theme.color("#929292"))
+                            .truncate(),
+                    ),
+            );
+        }
+        if members.len() > 3 {
+            group = group.child(
+                el().key(format!("session-subagent-{status}-toggle"))
+                    .role("button")
+                    .label(if expanded[index] {
+                        "Show less"
+                    } else {
+                        "Show more"
+                    })
+                    .w_full()
+                    .h(25.0)
+                    .px(4.0)
+                    .center_y()
+                    .radius(6.0)
+                    .hover(theme.color("#3b3b3b"))
+                    .on_press(move |state: &mut State| {
+                        state.session_subagent_expanded[index] =
+                            !state.session_subagent_expanded[index]
+                    })
+                    .child(
+                        text(if expanded[index] {
+                            "Show less"
+                        } else {
+                            "Show more"
+                        })
+                        .font(ui_font(11.0, 400.0))
+                        .color(theme.color("#b8b8b8")),
+                    ),
+            );
+        }
+        content = content.child(group);
+    }
+    let panel = col()
+        .key("session-subagents-popup")
+        .role("dialog")
+        .label("Agent subagents")
+        .w(350.0)
+        .padding(14.0)
+        .gap(10.0)
+        .child(
+            text("Subagents")
+                .font(ui_font(14.0, 550.0))
+                .color(theme.color("#eeeeee")),
+        )
+        .child(content.max_h(480.0).scroll(ScrollSpec {
+            stick_bottom: false,
+        }));
+    in_place_menu::popup_surface(panel, theme.color("#242424"))
+        .anchored_fit(
+            UsageMenu::Subagents.anchor(),
+            Side::Left,
+            Align::Start,
+            24.0,
+        )
+        .on_hover_change(|state: &mut State, inside, _| {
+            state.session_usage_popup_hovered = inside;
+            if !inside && state.session_usage_row_hovered.is_none() {
+                state.session_usage_menu = None;
+            }
+        })
+        .hover_delays(Duration::ZERO, Duration::from_millis(250))
+}
+
 fn runbook_popup(
     detail: Option<&SessionDetail>,
     live_events: &[SessionStreamEvent],
@@ -782,24 +1035,28 @@ fn runbook_popup(
         .hover_delays(Duration::ZERO, Duration::from_millis(250))
 }
 
-pub(crate) fn popup(
-    detail: Option<&SessionDetail>,
-    menu: UsageMenu,
-    selected: usize,
-    runbook_expanded: [bool; 3],
-    elapsed_ms: u64,
-    live_events: &[SessionStreamEvent],
-    theme: ThemeStyle<'_>,
-) -> El {
+pub(crate) fn popup(state: &State, menu: UsageMenu, theme: ThemeStyle<'_>) -> El {
+    let detail = state.active_session.as_ref();
+    let live_events = &state.session_live_events;
+    let agent_role = state.session_agent_role.as_str();
+    let selected = state.session_usage_snapshot_index;
+    let runbook_expanded = state.session_runbook_expanded;
+    let subagent_expanded = state.session_subagent_expanded;
+    let elapsed_ms = state.session_role_live_ms();
     if menu == UsageMenu::Runbooks {
         return runbook_popup(detail, live_events, runbook_expanded, elapsed_ms, theme);
     }
+    if menu == UsageMenu::Subagents {
+        return subagent_popup(detail, live_events, agent_role, subagent_expanded, theme);
+    }
+    let scoped = crate::sessions::detail_for_agent(detail, live_events, agent_role, elapsed_ms);
+    let detail = scoped.as_ref();
     let points = detail.map_or(&[][..], |detail| detail.usage_snapshots.as_slice());
     let selected = selected.min(points.len().saturating_sub(1));
     let title = match menu {
         UsageMenu::Tokens => "Session tokens",
         UsageMenu::Cache => "Cache usage",
-        UsageMenu::Runbooks => unreachable!(),
+        UsageMenu::Runbooks | UsageMenu::Subagents => unreachable!(),
     };
     let mut panel = col()
         .key("session-usage-popup")
@@ -912,7 +1169,7 @@ pub(crate) fn popup(
                         theme,
                     ));
             }
-            UsageMenu::Runbooks => unreachable!(),
+            UsageMenu::Runbooks | UsageMenu::Subagents => unreachable!(),
         }
         let current = &points[selected];
         let detail = match menu {
@@ -933,7 +1190,7 @@ pub(crate) fn popup(
                     )
                 }
             }
-            UsageMenu::Runbooks => unreachable!(),
+            UsageMenu::Runbooks | UsageMenu::Subagents => unreachable!(),
         };
         panel = panel
             .child(
@@ -1018,6 +1275,37 @@ fn chart_legend(label: &'static str, color: &'static str, theme: ThemeStyle<'_>)
 mod tests {
     use super::*;
     use beale_contracts::v1::{SessionMessage, SessionToolSummary};
+
+    #[test]
+    fn subagent_rows_keep_top_level_owners_and_live_status_separate() {
+        let child = |id: &str, parent_role: &str, status: &str| SessionSubagentSummary {
+            id: id.to_owned(),
+            parent_role: parent_role.to_owned(),
+            role: "scout".to_owned(),
+            task: "Inspect example fixture".to_owned(),
+            status: status.to_owned(),
+            completed_at_ms: if status == "active" { 0 } else { 10 },
+        };
+        let discovery = child("child-example-1", "discovery", "completed");
+        let validation = child("child-example-2", "validation", "completed");
+        let detail = SessionDetail {
+            subagents: vec![discovery.clone(), validation],
+            ..Default::default()
+        };
+        let live = vec![SessionStreamEvent {
+            kind: SessionStreamKind::SubagentStarted as i32,
+            subagent_id: discovery.id.clone(),
+            subagent: Some(child(&discovery.id, "discovery", "active")),
+            agent_role: "discovery".to_owned(),
+            ..Default::default()
+        }];
+        let own = subagent_entries(Some(&detail), &live, "discovery");
+        assert_eq!(own.len(), 1);
+        assert_eq!(own[0].status, "active");
+        let peer = subagent_entries(Some(&detail), &live, "validation");
+        assert_eq!(peer.len(), 1);
+        assert_eq!(peer[0].status, "completed");
+    }
 
     #[test]
     fn duration_adds_only_the_running_period_to_persisted_periods() {

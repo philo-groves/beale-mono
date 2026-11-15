@@ -11,6 +11,7 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
+    fmt,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -31,6 +32,65 @@ const XAI_TOKEN: &str = "https://auth.x.ai/oauth2/token";
 // from provider inference so a future Beale-specific registration can replace it.
 const XAI_CLIENT_ID: &str = "b1a00492-073a-47ea-816f-4c329264a828";
 const XAI_SCOPE: &str = "openid profile email offline_access grok-cli:access api:access";
+
+#[derive(Debug)]
+pub struct OAuthRefreshError {
+    pub status: u16,
+    pub code: Option<String>,
+}
+
+impl OAuthRefreshError {
+    pub fn requires_reconnect(&self) -> bool {
+        self.status == 401
+            || matches!(
+                self.code.as_deref(),
+                Some(
+                    "invalid_grant"
+                        | "invalid_refresh_token"
+                        | "token_expired"
+                        | "refresh_token_expired"
+                        | "refresh_token_invalidated"
+                        | "refresh_token_reused"
+                )
+            )
+    }
+}
+
+impl fmt::Display for OAuthRefreshError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "OAuth refresh rejected (HTTP {})", self.status)?;
+        if let Some(code) = &self.code {
+            write!(formatter, " [{code}]")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for OAuthRefreshError {}
+
+fn refresh_error(status: u16, body: &[u8]) -> OAuthRefreshError {
+    let value = (body.len() <= 4_096)
+        .then(|| serde_json::from_slice::<serde_json::Value>(body).ok())
+        .flatten();
+    let code = value
+        .as_ref()
+        .and_then(|value| {
+            value
+                .pointer("/error/code")
+                .or_else(|| value.get("error"))
+                .or_else(|| value.get("code"))
+                .and_then(serde_json::Value::as_str)
+        })
+        .filter(|code| {
+            !code.is_empty()
+                && code.len() <= 80
+                && code
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        })
+        .map(str::to_ascii_lowercase);
+    OAuthRefreshError { status, code }
+}
 
 #[derive(Deserialize)]
 struct TokenResponse {
@@ -392,17 +452,30 @@ pub(crate) async fn refresh(
     if let Some(resource) = resource {
         form.insert("resource", resource);
     }
-    let response = client
+    let mut response = client
         .post(endpoint)
         .form(&form)
         .send()
         .await
         .context("OAuth refresh request failed")?;
-    ensure!(
-        response.status().is_success(),
-        "OAuth refresh rejected ({})",
-        response.status()
-    );
+    if !response.status().is_success() {
+        let status = response.status().as_u16();
+        let mut body = Vec::new();
+        if response
+            .content_length()
+            .is_none_or(|length| length <= 4_096)
+        {
+            while body.len() < 4_096 {
+                match response.chunk().await {
+                    Ok(Some(chunk)) if body.len() + chunk.len() <= 4_096 => {
+                        body.extend_from_slice(&chunk)
+                    }
+                    _ => break,
+                }
+            }
+        }
+        return Err(refresh_error(status, &body).into());
+    }
     let token: TokenResponse = response
         .json()
         .await
@@ -452,4 +525,25 @@ fn expiry(seconds: u64) -> Result<u64> {
         .duration_since(UNIX_EPOCH)?
         .as_secs()
         .saturating_add(seconds))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn refresh_errors_keep_only_safe_codes() {
+        let error = refresh_error(
+            400,
+            br#"{"error":"invalid_grant","error_description":"private upstream detail"}"#,
+        );
+        assert_eq!(error.code.as_deref(), Some("invalid_grant"));
+        assert!(error.requires_reconnect());
+        assert!(!error.to_string().contains("private upstream detail"));
+
+        let error = refresh_error(503, br#"{"error":{"code":"temporarily_unavailable"}}"#);
+        assert!(!error.requires_reconnect());
+        let error = refresh_error(400, br#"{"error":"private user content\nsecret"}"#);
+        assert!(error.code.is_none());
+    }
 }

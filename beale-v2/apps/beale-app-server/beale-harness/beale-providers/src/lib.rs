@@ -10,7 +10,9 @@ mod wire;
 pub use credentials::{CredentialStore, ModelDefaults, OAuthCredential};
 pub use custom::{CustomProvider, qualified_model, split_qualified_model, valid_custom_id};
 pub use models::{ModelCatalog, ModelEntry, mode_name, provider_name};
-pub use oauth::{login_openai, login_openai_with_prompt, login_xai, login_xai_with_prompt};
+pub use oauth::{
+    OAuthRefreshError, login_openai, login_openai_with_prompt, login_xai, login_xai_with_prompt,
+};
 pub use wire::{
     AuthMode, InferenceRequest, OpenAiConnection, Provider, ProviderClient, ProviderProgress,
     ProviderStep, TextMessage, TextRole, ToolCall, ToolStepRequest, input_messages,

@@ -39,6 +39,7 @@ mod session_insights;
 mod session_sidenav;
 mod sessions;
 mod settings_scroll;
+mod subagent_canvas;
 mod token_charts;
 mod tracking_data;
 mod tracking_view;
@@ -639,6 +640,7 @@ struct State {
     session_agent_tab_manual: bool,
     session_elapsed_ms: u64,
     session_turn_started: Option<Instant>,
+    session_agent_started_at: std::collections::HashMap<String, Instant>,
     session_sidenav_visible: bool,
     session_sidenav_triggered: bool,
     session_usage_menu: Option<session_sidenav::UsageMenu>,
@@ -648,6 +650,7 @@ struct State {
     session_usage_popup_hovered: bool,
     session_usage_snapshot_index: usize,
     session_runbook_expanded: [bool; 3],
+    session_subagent_expanded: [bool; 3],
     session_work_expanded: std::collections::HashSet<usize>,
     expanded_tool_id: Option<String>,
     tool_detail: Option<SessionToolDetailPage>,
@@ -815,6 +818,7 @@ struct State {
     sidenav_width: f32,
     canvas_open: bool,
     canvas_runbook: runbook_canvas::CanvasRunbookState,
+    canvas_subagent: Option<subagent_canvas::SubagentCanvas>,
     canvas_scroll: SettingsScroll,
     settings_scroll: SettingsScroll,
     workspace_scroll: SettingsScroll,
@@ -884,6 +888,7 @@ impl Default for State {
             session_agent_tab_manual: false,
             session_elapsed_ms: 0,
             session_turn_started: None,
+            session_agent_started_at: std::collections::HashMap::new(),
             session_sidenav_visible: false,
             session_sidenav_triggered: false,
             session_usage_menu: None,
@@ -893,6 +898,7 @@ impl Default for State {
             session_usage_popup_hovered: false,
             session_usage_snapshot_index: 0,
             session_runbook_expanded: [false; 3],
+            session_subagent_expanded: [false; 3],
             session_work_expanded: std::collections::HashSet::new(),
             expanded_tool_id: None,
             tool_detail: None,
@@ -1067,6 +1073,7 @@ impl Default for State {
             sidenav_width: SIDENAV_DEFAULT_WIDTH,
             canvas_open: false,
             canvas_runbook: runbook_canvas::CanvasRunbookState::default(),
+            canvas_subagent: None,
             canvas_scroll: SettingsScroll::for_key("canvas-runbook-scroll"),
             settings_scroll: SettingsScroll::default(),
             workspace_scroll: SettingsScroll::for_key("workspace-scroll"),
@@ -1377,6 +1384,7 @@ impl State {
     }
 
     fn start_new_research(&mut self) {
+        self.canvas_subagent = None;
         self.session_input_history.reset();
         self.clear_tool_detail();
         self.session_live_events.clear();
@@ -1384,6 +1392,7 @@ impl State {
         self.session_agent_tab_manual = false;
         self.session_elapsed_ms = 0;
         self.session_turn_started = None;
+        self.session_agent_started_at.clear();
         self.session_sidenav_visible = false;
         self.session_sidenav_triggered = false;
         self.session_usage_menu = None;
@@ -1392,6 +1401,7 @@ impl State {
         self.session_usage_snapshot_index = 0;
         self.session_insights_open = false;
         self.session_runbook_expanded = [false; 3];
+        self.session_subagent_expanded = [false; 3];
         self.session_work_expanded.clear();
         let had_session = self.active_session.take().is_some();
         let was_loading = self.session_loading_id.take().is_some();
@@ -1436,6 +1446,7 @@ impl State {
         self.session_stop_id = None;
         self.session_stopping = false;
         self.session_turn_started = None;
+        self.session_agent_started_at.clear();
         self.session_elapsed_ms = 0;
         match result {
             Ok(detail) => {
@@ -1448,6 +1459,7 @@ impl State {
                     self.new_research_workspace_id = Some(summary.workspace_id.clone());
                 }
                 self.active_session = Some(detail);
+                subagent_canvas::refresh(self);
                 runbook_canvas::refresh(self);
                 self.session_pending_prompt = None;
                 self.session_pending_role.clear();
@@ -1478,6 +1490,7 @@ impl State {
         self.session_busy = false;
         self.session_stop_id = None;
         self.session_stopping = false;
+        self.session_agent_started_at.clear();
         match result {
             Ok(detail) => {
                 self.session_live_events.clear();
@@ -1489,6 +1502,7 @@ impl State {
                 self.session_usage_snapshot_index = 0;
                 self.session_insights_open = false;
                 self.session_runbook_expanded = [false; 3];
+                self.session_subagent_expanded = [false; 3];
                 self.open_session_sidenav_for_activity(&detail);
                 self.clear_tool_detail();
                 if let Some(summary) = &detail.summary {
@@ -1506,6 +1520,7 @@ impl State {
                     });
                 }
                 self.active_session = Some(detail);
+                self.canvas_subagent = None;
                 if let Some(role) = self.active_session.as_ref().and_then(|detail| {
                     detail
                         .messages
@@ -1560,6 +1575,12 @@ impl State {
             self.session_agent_role = event.agent_role.clone();
             research_header::sync_model_for_role(self, &event.agent_role);
         }
+        if event.kind == SessionStreamKind::AgentStarted as i32 {
+            self.session_agent_started_at
+                .insert(event.agent_role.clone(), Instant::now());
+        } else if event.kind == SessionStreamKind::AgentTurnCompleted as i32 {
+            self.session_agent_started_at.remove(&event.agent_role);
+        }
         match SessionStreamKind::try_from(event.kind) {
             Ok(
                 SessionStreamKind::SessionStarted
@@ -1589,6 +1610,7 @@ impl State {
                     }
                     self.open_session_sidenav_for_activity(&detail);
                     self.active_session = Some(detail);
+                    subagent_canvas::refresh(self);
                     if !self.session_agent_tab_manual {
                         research_header::sync_model_for_role(self, &completed_role);
                     }
@@ -1599,6 +1621,7 @@ impl State {
                     item.kind == event.kind
                         && item.segment_index == event.segment_index
                         && item.agent_role == event.agent_role
+                        && item.subagent_id == event.subagent_id
                 }) {
                     if existing.text.len().saturating_add(event.text.len()) <= 2_097_152 {
                         existing.text.push_str(&event.text);
@@ -1650,6 +1673,17 @@ impl State {
                 }
             }
             Ok(SessionStreamKind::SubagentsSpawned) => self.activate_session_sidenav(),
+            Ok(SessionStreamKind::SubagentStarted | SessionStreamKind::SubagentCompleted) => {
+                if let Some(summary) = &event.subagent
+                    && let Some(view) = self.canvas_subagent.as_mut()
+                    && view.summary.id == summary.id
+                {
+                    view.summary = summary.clone();
+                }
+                self.session_live_events.push(event);
+                self.activate_session_sidenav();
+            }
+            Ok(SessionStreamKind::UsageUpdated) => self.session_live_events.push(event),
             Ok(SessionStreamKind::RunbookProgress) => {
                 self.activate_session_sidenav();
                 if let Some(progress) = &event.runbook_progress {
@@ -1669,6 +1703,7 @@ impl State {
                     self.clear_tool_detail();
                     self.session_live_events.clear();
                     self.session_elapsed_ms = 0;
+                    self.session_agent_started_at.clear();
                     self.session_turn_started = Some(Instant::now());
                     self.session_pending_prompt = None;
                     self.session_pending_role.clear();
@@ -1679,6 +1714,7 @@ impl State {
                         self.new_research_workspace_id = Some(summary.workspace_id.clone());
                     }
                     self.active_session = Some(detail);
+                    subagent_canvas::refresh(self);
                     if !self.session_agent_tab_manual
                         && let Some(role) = self.active_session.as_ref().and_then(|detail| {
                             detail
@@ -1703,6 +1739,48 @@ impl State {
             if !self.canvas_open {
                 self.session_sidenav_visible = true;
             }
+        }
+    }
+
+    pub(crate) fn session_role_busy(&self) -> bool {
+        let graph_id = self
+            .active_session
+            .as_ref()
+            .map_or(self.new_research_graph_id.as_str(), |detail| {
+                detail.graph_id.as_str()
+            });
+        if matches!(
+            graph_id,
+            beale_graphs::CLOUDFLARE_ID | beale_graphs::OPENAI_ID
+        ) {
+            self.session_agent_started_at
+                .contains_key(&self.session_agent_role)
+        } else {
+            self.session_busy
+        }
+    }
+
+    pub(crate) fn session_role_live_ms(&self) -> u64 {
+        if !self.session_busy {
+            return 0;
+        }
+        let graph_id = self
+            .active_session
+            .as_ref()
+            .map_or(self.new_research_graph_id.as_str(), |detail| {
+                detail.graph_id.as_str()
+            });
+        if matches!(
+            graph_id,
+            beale_graphs::CLOUDFLARE_ID | beale_graphs::OPENAI_ID
+        ) {
+            self.session_agent_started_at
+                .get(&self.session_agent_role)
+                .map_or(0, |started| {
+                    started.elapsed().as_millis().min(u64::MAX as u128) as u64
+                })
+        } else {
+            self.session_elapsed_ms
         }
     }
 
@@ -2274,6 +2352,7 @@ fn start_session_turn(state: &mut State) {
     state.session_agent_tab_manual = false;
     state.session_elapsed_ms = 0;
     state.session_turn_started = Some(Instant::now());
+    state.session_agent_started_at.clear();
     state.session_pending_prompt = Some(prompt);
     state.session_pending_role = if request.agent_role.is_empty() {
         state.session_agent_role.clone()
@@ -2375,6 +2454,7 @@ fn start_session_load(state: &mut State, id: String) {
     let generation = state.session_generation;
     state.session_loading_id = Some(id.clone());
     state.session_busy = true;
+    state.session_agent_started_at.clear();
     state.session_stop_id = None;
     state.session_stopping = false;
     state.session_sidenav_visible = false;
@@ -4669,11 +4749,18 @@ fn authentication_row(
     };
     let action = if subscription {
         if configured {
-            credential_button(
-                "Forget",
-                move |s| start_auth_action(s, Action::ForgetSubscription(provider.id())),
-                theme,
-            )
+            row()
+                .gap(8.0)
+                .child(credential_button(
+                    "Reconnect",
+                    move |s| start_auth_action(s, Action::StartSubscription(provider.id())),
+                    theme,
+                ))
+                .child(credential_button(
+                    "Forget",
+                    move |s| start_auth_action(s, Action::ForgetSubscription(provider.id())),
+                    theme,
+                ))
         } else {
             credential_button(
                 "Sign in",
@@ -4936,6 +5023,13 @@ fn model_settings(state: &State, provider: Provider) -> El {
                 .font(ui_font(14.0, 400.0))
                 .color(color(PROVIDER_ERROR_COLOR)),
         );
+        if configured {
+            section = section.child(
+                form_button("Retry models", theme)
+                    .self_start()
+                    .on_press(move |state: &mut State| start_model_list(state, provider, method)),
+            );
+        }
     } else if !configured {
         section = section.child(
             text("Connect this sign-in method to load its models.")
@@ -5958,11 +6052,8 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
                     session_sidenav::render(
                         state.active_session.as_ref(),
                         &state.session_live_events,
-                        if state.session_busy {
-                            state.session_elapsed_ms
-                        } else {
-                            0
-                        },
+                        &state.session_agent_role,
+                        state.session_role_live_ms(),
                         state.session_usage_menu,
                         theme,
                     )
@@ -6077,11 +6168,8 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
                 .child(session_sidenav::render(
                     state.active_session.as_ref(),
                     &state.session_live_events,
-                    if state.session_busy {
-                        state.session_elapsed_ms
-                    } else {
-                        0
-                    },
+                    &state.session_agent_role,
+                    state.session_role_live_ms(),
                     state.session_usage_menu,
                     theme,
                 )),
@@ -6104,15 +6192,17 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
         let canvas_height = (window_height - surface_top - 6.0).max(0.0);
         let mut canvas_content = col().w_full().h(canvas_height).min_h(0.0);
         let mut tab_height = 0.0;
-        if let Some(tabs) = runbook_canvas::tab_bar(state, theme) {
+        if let Some(tabs) =
+            subagent_canvas::tab_bar(state, theme).or_else(|| runbook_canvas::tab_bar(state, theme))
+        {
             tab_height = runbook_canvas::TAB_BAR_HEIGHT;
             canvas_content = canvas_content.child(tabs);
         }
-        canvas_content = canvas_content.child(runbook_canvas::render(
-            state,
-            theme,
-            (canvas_height - tab_height).max(0.0),
-        ));
+        canvas_content = canvas_content.child(if state.canvas_subagent.is_some() {
+            subagent_canvas::render(state, theme, (canvas_height - tab_height).max(0.0))
+        } else {
+            runbook_canvas::render(state, theme, (canvas_height - tab_height).max(0.0))
+        });
         settings_surface = settings_surface.child(
             row()
                 .key("canvas-panel")
@@ -6520,15 +6610,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
         && !state.session_insights_open
         && let Some(menu) = state.session_usage_menu
     {
-        window = window.child(session_sidenav::popup(
-            state.active_session.as_ref(),
-            menu,
-            state.session_usage_snapshot_index,
-            state.session_runbook_expanded,
-            state.session_elapsed_ms,
-            &state.session_live_events,
-            theme,
-        ));
+        window = window.child(session_sidenav::popup(state, menu, theme));
     }
     if state.primary_view == PrimaryView::NewResearch
         && state.active_session.is_none()
@@ -9706,6 +9788,8 @@ mod tests {
             model_usage: Vec::new(),
             graph_agents: Vec::new(),
             graph_handoffs: Vec::new(),
+            agent_metrics: Vec::new(),
+            subagents: Vec::new(),
             runbook_count: 0,
             active_runbook_count: 0,
             runbooks: Vec::new(),
@@ -9964,6 +10048,8 @@ mod tests {
             model_usage: Vec::new(),
             graph_agents: Vec::new(),
             graph_handoffs: Vec::new(),
+            agent_metrics: Vec::new(),
+            subagents: Vec::new(),
             runbook_count: 0,
             active_runbook_count: 0,
             runbooks: Vec::new(),
@@ -10083,6 +10169,8 @@ mod tests {
                     model_usage: Vec::new(),
                     graph_agents: Vec::new(),
                     graph_handoffs: Vec::new(),
+                    agent_metrics: Vec::new(),
+                    subagents: Vec::new(),
                     runbook_count: 0,
                     active_runbook_count: 0,
                     runbooks: Vec::new(),
@@ -10206,6 +10294,8 @@ mod tests {
             model_usage: Vec::new(),
 graph_agents: Vec::new(),
 graph_handoffs: Vec::new(),
+            agent_metrics: Vec::new(),
+            subagents: Vec::new(),
 runbook_count: 0,
 active_runbook_count: 0,
             runbooks: Vec::new(),
@@ -10282,6 +10372,8 @@ active_runbook_count: 0,
             model_usage: Vec::new(),
 graph_agents: Vec::new(),
 graph_handoffs: Vec::new(),
+            agent_metrics: Vec::new(),
+            subagents: Vec::new(),
 runbook_count: 0,
 active_runbook_count: 0,
             runbooks: Vec::new(),
@@ -10362,6 +10454,8 @@ active_runbook_count: 0,
                 model_usage: Vec::new(),
                 graph_agents: Vec::new(),
                 graph_handoffs: Vec::new(),
+                agent_metrics: Vec::new(),
+                subagents: Vec::new(),
                 runbook_count: 0,
                 active_runbook_count: 0,
                 runbooks: Vec::new(),
@@ -13824,5 +13918,82 @@ active_runbook_count: 0,
                 .unwrap();
             assert!(description[3] <= 60.0);
         }
+    }
+
+    #[test]
+    fn subagent_popup_and_canvas_use_session_components_across_themes() {
+        for theme in [
+            AppearanceTheme::Light,
+            AppearanceTheme::Dark,
+            AppearanceTheme::Cream,
+            AppearanceTheme::Midnight,
+        ] {
+            let mut popup = visual_preview::fixture("subagent-popup");
+            popup.appearance.theme = theme;
+            let mut runtime = Runtime::new(popup, view, (1400.0, 850.0), Env::new(true, 1.0));
+            runtime.frame(0.0);
+            assert!(runtime.find("session-sidenav-subagents-row").is_some());
+            assert!(runtime.find("session-subagents-popup").is_some());
+            assert!(
+                runtime
+                    .find("session-subagent-00000000-0000-4000-8000-000000000099")
+                    .is_some()
+            );
+            let mut canvas = visual_preview::fixture("subagent-canvas");
+            canvas.appearance.theme = theme;
+            let mut runtime = Runtime::new(canvas, view, (1400.0, 850.0), Env::new(true, 1.0));
+            runtime.frame(0.0);
+            assert!(runtime.find("subagent-canvas-view").is_some());
+            assert!(runtime.find("subagent-task").is_some());
+            assert!(runtime.find("subagent-reasoning-0").is_some());
+            assert!(
+                runtime
+                    .find("session-tool-button-00000000-0000-4000-8000-000000000098")
+                    .is_some()
+            );
+            assert!(runtime.find("subagent-message-2").is_some());
+            let (x, y) = runtime
+                .find("session-tool-button-00000000-0000-4000-8000-000000000098")
+                .unwrap();
+            runtime.pointer_down(x, y);
+            runtime.pointer_up(x, y);
+            runtime.frame(0.0);
+            assert!(
+                runtime
+                    .find("session-tool-detail-00000000-0000-4000-8000-000000000098")
+                    .is_some()
+            );
+            assert_eq!(
+                runtime.state.tool_detail.as_ref().unwrap().output,
+                "Synthetic fixture content"
+            );
+            let (x, y) = runtime.find("subagent-canvas-close").unwrap();
+            runtime.pointer_down(x, y);
+            runtime.pointer_up(x, y);
+            runtime.frame(0.0);
+            assert!(runtime.find("subagent-canvas-view").is_none());
+            assert!(runtime.find("session-sidenav-subagents-row").is_some());
+        }
+    }
+
+    #[test]
+    fn peer_sidebar_clock_follows_only_the_selected_top_level_agent() {
+        let mut state = visual_preview::fixture("subagent-popup");
+        state.session_busy = true;
+        state.session_elapsed_ms = 20_000;
+        state.session_agent_started_at.insert(
+            "validation".to_owned(),
+            Instant::now() - Duration::from_secs(5),
+        );
+        assert!(!state.session_role_busy());
+        assert_eq!(state.session_role_live_ms(), 0);
+        state.session_agent_started_at.insert(
+            "discovery".to_owned(),
+            Instant::now() - Duration::from_secs(2),
+        );
+        assert!(state.session_role_busy());
+        assert!(state.session_role_live_ms() >= 2_000);
+        state.session_agent_started_at.remove("discovery");
+        assert_eq!(state.session_role_live_ms(), 0);
     }
 }

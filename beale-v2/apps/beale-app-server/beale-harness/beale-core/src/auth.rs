@@ -580,6 +580,23 @@ async fn start_subscription(
     }
 }
 
+fn model_list_error_status(
+    provider: Provider,
+    mode: AuthMode,
+    error: &anyhow::Error,
+) -> StatusCode {
+    if provider == Provider::OpenAi
+        && mode == AuthMode::Subscription
+        && error
+            .downcast_ref::<beale_providers::OAuthRefreshError>()
+            .is_some_and(|refresh| refresh.requires_reconnect() || refresh.status == 400)
+    {
+        StatusCode::UNAUTHORIZED
+    } else {
+        StatusCode::BAD_GATEWAY
+    }
+}
+
 async fn list_models(
     State(state): State<AuthState>,
     headers: HeaderMap,
@@ -607,7 +624,10 @@ async fn list_models(
     } else {
         client.list_models(provider, mode, &state.store).await
     }
-    .map_err(|_| StatusCode::BAD_GATEWAY)?;
+    .map_err(|error| {
+        eprintln!("provider model list failed: {error:#}");
+        model_list_error_status(provider, mode, &error)
+    })?;
     Ok(response(ModelCatalogResponse {
         provider: request.provider,
         method: request.method,
@@ -656,7 +676,7 @@ async fn set_model_defaults(
     } else {
         client.list_models(provider, mode, &state.store).await
     }
-    .map_err(|_| StatusCode::BAD_GATEWAY)?;
+    .map_err(|error| model_list_error_status(provider, mode, &error))?;
     if !valid_selection(&catalog, &request.lead_model, &request.small_model) {
         return Err(StatusCode::BAD_REQUEST);
     }
@@ -962,6 +982,23 @@ mod tests {
         http::Request,
     };
     use tower::ServiceExt;
+
+    #[test]
+    fn expired_openai_refresh_requests_reconnection_without_masking_other_failures() {
+        let refresh: anyhow::Error = beale_providers::OAuthRefreshError {
+            status: 400,
+            code: Some("invalid_grant".to_owned()),
+        }
+        .into();
+        assert_eq!(
+            model_list_error_status(Provider::OpenAi, AuthMode::Subscription, &refresh),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            model_list_error_status(Provider::Xai, AuthMode::Subscription, &refresh),
+            StatusCode::BAD_GATEWAY
+        );
+    }
 
     fn test_router(token: String, store: CredentialStore) -> Router {
         let root =

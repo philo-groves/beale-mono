@@ -9,6 +9,7 @@ use std::{
 
 const NAME: &str = "SYSTEM.md";
 const DEFAULT: &str = include_str!("../SYSTEM.default.md");
+const COMMENTARY_GUIDANCE: &str = "While working, write brief, user-visible progress commentary before tool work and when results change your plan. Keep it separate from private reasoning. Give a final answer when the task is complete.";
 // Migration-only snapshots; never included in model prompts.
 const LEGACY_DEFAULTS: &[&str] = &[
     include_str!("../SYSTEM.legacy.md"),
@@ -106,6 +107,10 @@ pub(crate) fn load(root: &Path, runtime_sections: &[&str]) -> Result<String> {
     ensure!(bytes.len() <= MAX_FILE_BYTES, "system prompt is too large");
     let mut prompt = String::from_utf8(bytes).context("system prompt is not UTF-8")?;
     ensure!(!prompt.trim().is_empty(), "system prompt is empty");
+    if !prompt.contains(COMMENTARY_GUIDANCE) {
+        prompt.push_str("\n\n");
+        prompt.push_str(COMMENTARY_GUIDANCE);
+    }
     for section in runtime_sections {
         if section.trim().is_empty() {
             continue;
@@ -141,6 +146,7 @@ mod tests {
         assert_eq!(prompt.matches("RULES.md").count(), 1);
         assert_eq!(prompt.matches("AGENTS.md").count(), 1);
         assert_eq!(prompt.matches("Base tools are").count(), 1);
+        assert_eq!(prompt.matches(COMMENTARY_GUIDANCE).count(), 1);
         for removed in [
             "get_scope",
             "tool_result_page",
@@ -164,6 +170,17 @@ mod tests {
                 .unwrap()
                 .ends_with("None available.\n")
         );
+        fs::remove_dir_all(files.root()).unwrap();
+    }
+
+    #[test]
+    fn existing_custom_prompt_gets_commentary_guidance_once() {
+        let files = AgentFiles::new().unwrap();
+        fs::write(files.root().join(NAME), "# Example custom prompt\n").unwrap();
+        let prompt = load(files.root(), &[]).unwrap();
+        assert!(prompt.starts_with("# Example custom prompt"));
+        assert_eq!(prompt.matches(COMMENTARY_GUIDANCE).count(), 1);
+        assert_eq!(load(files.root(), &[]).unwrap(), prompt);
         fs::remove_dir_all(files.root()).unwrap();
     }
 
@@ -198,14 +215,19 @@ mod tests {
         let prompt = load(&root, &["## Active tools\n\nRead files."]).unwrap();
         assert_eq!(
             prompt,
-            "# Example\n\nLiteral {{workspace}} text.\n\n## Active tools\n\nRead files."
+            format!(
+                "# Example\n\nLiteral {{{{workspace}}}} text.\n\n{COMMENTARY_GUIDANCE}\n\n## Active tools\n\nRead files."
+            )
         );
         assert_eq!(
             fs::read_to_string(root.join(NAME)).unwrap(),
             "# Example\n\nLiteral {{workspace}} text."
         );
         fs::write(root.join(NAME), "# Updated").unwrap();
-        assert_eq!(load(&root, &[]).unwrap(), "# Updated");
+        assert_eq!(
+            load(&root, &[]).unwrap(),
+            format!("# Updated\n\n{COMMENTARY_GUIDANCE}")
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

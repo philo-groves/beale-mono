@@ -146,6 +146,8 @@ struct MenuOption {
 enum MenuChoice {
     Model(ModelSelection),
     Effort(Effort),
+    RetryModels(Provider, AuthMethod),
+    LoadingModels,
 }
 
 fn choices(state: &State) -> Vec<ModelChoice> {
@@ -234,6 +236,18 @@ fn selected<'a>(state: &State, choices: &'a [ModelChoice]) -> Option<&'a ModelCh
 }
 
 fn default_choice<'a>(state: &State, choices: &'a [ModelChoice]) -> Option<&'a ModelChoice> {
+    if let Some(provider) = state.lead_provider
+        && provider != Provider::Custom
+        && {
+            let status = &state.auth_status[provider.index()];
+            status.subscription || status.api_key
+        }
+        && !choices
+            .iter()
+            .any(|choice| choice.selection.provider == provider)
+    {
+        return None;
+    }
     state
         .lead_provider
         .and_then(|provider| {
@@ -277,7 +291,7 @@ fn options(state: &State, section: MenuSection) -> Vec<MenuOption> {
             let mut options: Vec<_> = Provider::ALL
                 .into_iter()
                 .filter_map(|provider| {
-                    choices
+                    let available = choices
                         .iter()
                         .find(|choice| {
                             choice.selection.provider == provider && choice.provider_default
@@ -293,7 +307,37 @@ fn options(state: &State, section: MenuSection) -> Vec<MenuOption> {
                                 .as_ref()
                                 .is_some_and(|selection| selection.provider == provider),
                             choice: MenuChoice::Model(choice.selection.clone()),
-                        })
+                        });
+                    if available.is_some() {
+                        return available;
+                    }
+                    let status = &state.auth_status[provider.index()];
+                    let method = effective_model_method(status);
+                    let configured = match method {
+                        AuthMethod::Subscription => status.subscription,
+                        AuthMethod::ApiKey => status.api_key,
+                        _ => false,
+                    };
+                    configured.then(|| {
+                        let loading = state.model_loading[catalog_index(provider, method)];
+                        MenuOption {
+                            label: format!(
+                                "{} · {}",
+                                provider.name(),
+                                if loading {
+                                    "Loading models…"
+                                } else {
+                                    "Retry models"
+                                }
+                            ),
+                            selected: false,
+                            choice: if loading {
+                                MenuChoice::LoadingModels
+                            } else {
+                                MenuChoice::RetryModels(provider, method)
+                            },
+                        }
+                    })
                 })
                 .collect();
             for provider in state.custom_providers.iter() {
@@ -358,6 +402,10 @@ fn select_option(state: &mut State, index: usize) {
                 }
             }
             MenuChoice::Effort(effort) => state.new_research_effort = *effort,
+            MenuChoice::RetryModels(provider, method) => {
+                crate::start_model_list(state, *provider, *method);
+            }
+            MenuChoice::LoadingModels => return,
         }
         state.composer_menu_open = false;
     }
@@ -379,13 +427,17 @@ pub(crate) fn toggle_menu(state: &mut State) {
         state.composer_menu_open = false;
         return;
     }
-    if choices(state).is_empty() {
+    if choices(state).is_empty() && !has_configured_provider(state) {
         return;
     }
     state.selection_menu = None;
     state.composer_menu_open = true;
-    state.composer_menu_section = MenuSection::Model;
-    state.composer_menu_cursor = options(state, MenuSection::Model)
+    state.composer_menu_section = if selected_model(state).is_none() {
+        MenuSection::Provider
+    } else {
+        MenuSection::Model
+    };
+    state.composer_menu_cursor = options(state, state.composer_menu_section)
         .iter()
         .position(|option| option.selected)
         .unwrap_or(0);
@@ -485,7 +537,10 @@ fn section_row(
 pub(crate) fn model_menu(state: &State, theme: ThemeStyle<'_>) -> El {
     let choices = choices(state);
     let selected = selected(state, &choices);
-    let provider_name = selected.map_or("None", |choice| provider_label(state, &choice.selection));
+    let provider_name = selected.map_or_else(
+        || state.lead_provider.map_or("None", Provider::name),
+        |choice| provider_label(state, &choice.selection),
+    );
     let model_name = selected.map_or("None", |choice| choice.name.as_str());
     let main = in_place_menu::popup_surface(
         col()
@@ -619,7 +674,7 @@ pub(crate) fn transcript_markdown(
     let body = ui_font(if muted { 13.0 } else { 14.0 }, 400.0);
     let heading_weight = if muted { 400.0 } else { 600.0 };
     let mut style = MarkdownStyle::neutral(theme.is_dark())
-        .text(theme.color(if muted { "#b8b8b8" } else { "#eeeeee" }))
+        .text(theme.color(if muted { "#969696" } else { "#eeeeee" }))
         .muted(theme.color("#969696"))
         .link(theme.color(if theme.is_dark() {
             "#a9c7eb"
@@ -1418,7 +1473,20 @@ pub(crate) fn transcript_message(
     }
 }
 
-fn transcript_tool(tool: &SessionToolSummary, state: &State, theme: ThemeStyle<'_>) -> El {
+pub(crate) fn transcript_tool(
+    tool: &SessionToolSummary,
+    state: &State,
+    theme: ThemeStyle<'_>,
+) -> El {
+    transcript_tool_view(tool, state, theme, true)
+}
+
+fn transcript_tool_view(
+    tool: &SessionToolSummary,
+    state: &State,
+    theme: ThemeStyle<'_>,
+    saved: bool,
+) -> El {
     let expanded = state.expanded_tool_id.as_deref() == Some(&tool.id);
     let id = tool.id.clone();
     let mut entry = col()
@@ -1446,7 +1514,7 @@ fn transcript_tool(tool: &SessionToolSummary, state: &State, theme: ThemeStyle<'
                 .child(
                     text(tool.summary.clone())
                         .font(ui_font(13.0, 400.0))
-                        .color(theme.color(if tool.is_error { "#e07676" } else { "#b4b4b4" }))
+                        .color(theme.color(if tool.is_error { "#e07676" } else { "#969696" }))
                         .truncate(),
                 )
                 .child(
@@ -1505,7 +1573,9 @@ fn transcript_tool(tool: &SessionToolSummary, state: &State, theme: ThemeStyle<'
                         .color(theme.color("#d0d0d0"))
                         .wrap(),
                 );
-            if page.next_offset < page.total_bytes && !state.tool_detail_busy && !state.session_busy
+            if page.next_offset < page.total_bytes
+                && !state.tool_detail_busy
+                && (saved || !state.session_busy)
             {
                 let id = tool.id.clone();
                 let offset = page.next_offset;
@@ -1547,7 +1617,7 @@ fn transcript_tool(tool: &SessionToolSummary, state: &State, theme: ThemeStyle<'
                         ),
                 );
             }
-            if page.next_offset < page.total_bytes && state.session_busy {
+            if page.next_offset < page.total_bytes && state.session_busy && !saved {
                 detail = detail.child(
                     text("More output becomes available when this turn finishes.")
                         .font(ui_font(12.0, 400.0))
@@ -1573,7 +1643,7 @@ fn transcript_tool(tool: &SessionToolSummary, state: &State, theme: ThemeStyle<'
     entry
 }
 
-fn transcript_reasoning(
+pub(crate) fn transcript_reasoning(
     content: String,
     key: String,
     streaming: bool,
@@ -1611,7 +1681,7 @@ fn work_duration(ms: u64) -> String {
     parts.join(" ")
 }
 
-fn work_header(
+pub(crate) fn work_header(
     key: String,
     index: usize,
     duration_ms: u64,
@@ -1619,11 +1689,15 @@ fn work_header(
     expanded: bool,
     theme: ThemeStyle<'_>,
 ) -> El {
-    let label = format!(
-        "{} for {}",
-        if working { "Working" } else { "Worked" },
-        work_duration(duration_ms)
-    );
+    let label = if duration_ms == 0 {
+        if working { "Working" } else { "Worked" }.to_owned()
+    } else {
+        format!(
+            "{} for {}",
+            if working { "Working" } else { "Worked" },
+            work_duration(duration_ms)
+        )
+    };
     let mut header = row().key(key).w_full().gap(5.0).py(7.0).child(
         text(label)
             .font(ui_font(14.0, 400.0))
@@ -1654,7 +1728,7 @@ fn work_header(
         .child(el().w_full().h(1.0).fill(theme.color("#303030")))
 }
 
-fn live_tool(
+pub(crate) fn live_tool(
     tool: &SessionToolSummary,
     finished: bool,
     state: &State,
@@ -1664,7 +1738,7 @@ fn live_tool(
     if !finished {
         summary.summary.push('…');
     }
-    transcript_tool(&summary, state, theme)
+    transcript_tool_view(&summary, state, theme, false)
 }
 
 fn previous_input(state: &mut State) {
@@ -1892,8 +1966,16 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
     let no_provider = state.auth_loaded && !has_configured_provider(state);
     let model_label = selected.map_or_else(
         || {
-            if has_configured_provider(state) {
-                "Loading models…".to_owned()
+            if let Some(provider) = state
+                .lead_provider
+                .filter(|_| has_configured_provider(state))
+            {
+                let method = effective_model_method(&state.auth_status[provider.index()]);
+                if state.model_errors[catalog_index(provider, method)].is_empty() {
+                    format!("{} · Loading models…", provider.name())
+                } else {
+                    format!("{} · Retry models", provider.name())
+                }
             } else {
                 "Choose a model".to_owned()
             }
@@ -1954,7 +2036,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
             )
             .color(theme.color("#969696")),
         );
-    if !choices.is_empty() {
+    if !choices.is_empty() || has_configured_provider(state) {
         model_button = model_button
             .hover(theme.color("#303030"))
             .on_press(toggle_menu);
@@ -2488,16 +2570,21 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
             theme,
         ));
     }
-    if state.session_busy || !state.session_live_events.is_empty() {
+    let role_busy = state.session_role_busy();
+    let role_live_events = state.session_live_events.iter().any(|event| {
+        event.subagent_id.is_empty() && (!peer_graph || event.agent_role == selected_role)
+    });
+    let role_working = role_busy || (state.session_busy && role_live_events);
+    if role_busy || role_live_events {
         transcript = transcript.child(work_header(
             "session-current-work-header".to_owned(),
             state
                 .active_session
                 .as_ref()
                 .map_or(0, |detail| detail.messages.len()),
-            state.session_elapsed_ms,
-            state.session_busy,
-            !state.session_busy
+            state.session_role_live_ms(),
+            role_working,
+            !role_working
                 && state.session_work_expanded.contains(
                     &state
                         .active_session
@@ -2506,7 +2593,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
                 ),
             theme,
         ));
-        if state.session_busy
+        if role_working
             || state.session_work_expanded.contains(
                 &state
                     .active_session
@@ -2515,6 +2602,9 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
             )
         {
             for (index, event) in state.session_live_events.iter().enumerate() {
+                if !event.subagent_id.is_empty() {
+                    continue;
+                }
                 if peer_graph && !event.agent_role.is_empty() && event.agent_role != selected_role {
                     continue;
                 }
@@ -2601,7 +2691,7 @@ mod tests {
         MenuSection, choices, has_configured_provider, is_web_link, normalize_goal_limit, options,
         selected_model, work_duration,
     };
-    use crate::{Provider, State};
+    use crate::{AuthStatus, Provider, State};
     use beale_contracts::v1::{CustomProvider, ModelEntry};
     use rune::TextEdit;
 
@@ -2682,6 +2772,47 @@ mod tests {
         state.custom_providers[0].api_key_configured = true;
         assert!(has_configured_provider(&state));
         assert_eq!(choices(&state).len(), 1);
+    }
+
+    #[test]
+    fn configured_openai_remains_in_provider_menu_after_catalog_failure() {
+        let mut state = State {
+            auth_loaded: true,
+            lead_provider: Some(Provider::OpenAi),
+            ..State::default()
+        };
+        state.auth_status[Provider::OpenAi.index()] = AuthStatus {
+            subscription: true,
+            ..AuthStatus::default()
+        };
+        state.model_errors[crate::catalog_index(
+            Provider::OpenAi,
+            beale_contracts::v1::AuthMethod::Subscription,
+        )] = "Model catalog unavailable".to_owned();
+        assert!(choices(&state).is_empty());
+        let providers = options(&state, MenuSection::Provider);
+        assert_eq!(providers.len(), 1);
+        assert_eq!(providers[0].label, "OpenAI · Retry models");
+        super::toggle_menu(&mut state);
+        assert!(state.composer_menu_open);
+        assert_eq!(state.composer_menu_section, MenuSection::Provider);
+
+        state.composer_menu_open = false;
+        state.auth_status[Provider::Xai.index()].subscription = true;
+        state.model_catalogs
+            [crate::catalog_index(Provider::Xai, beale_contracts::v1::AuthMethod::Subscription)] =
+            Some(crate::provider_models::ModelCatalog {
+                models: vec![crate::provider_models::ModelEntry {
+                    id: "example-model".to_owned(),
+                    name: "Example Model".to_owned(),
+                }],
+                lead: "example-model".to_owned(),
+                small: "example-model".to_owned(),
+            });
+        assert!(selected_model(&state).is_none());
+        assert_eq!(options(&state, MenuSection::Provider).len(), 2);
+        super::toggle_menu(&mut state);
+        assert_eq!(state.composer_menu_section, MenuSection::Provider);
     }
 
     #[test]

@@ -121,7 +121,13 @@ fn activity_points(snapshots: &[SessionUsageSnapshot], filter: AgentFilter) -> V
 pub(crate) fn dialog(state: &State, theme: ThemeStyle<'_>, window_width: f32) -> [El; 2] {
     let width = (window_width - 32.0).clamp(280.0, 1120.0);
     let inner = width - 50.0;
-    let detail = state.active_session.as_ref();
+    let live_detail = crate::sessions::detail_for_agent(
+        state.active_session.as_ref(),
+        &state.session_live_events,
+        &state.session_agent_role,
+        state.session_role_live_ms(),
+    );
+    let detail = live_detail.as_ref();
     let title = detail
         .and_then(|d| d.summary.as_ref())
         .map_or("Current session", |s| s.title.as_str());
@@ -430,7 +436,16 @@ mod tests {
     #[test]
     fn peer_graph_insights_name_top_level_agents() {
         let mut state = visual_preview::fixture("session-insights");
-        state.active_session.as_mut().unwrap().graph_id = beale_graphs::OPENAI_ID.to_owned();
+        state.session_agent_role = "discovery".to_owned();
+        let detail = state.active_session.as_mut().unwrap();
+        detail.graph_id = beale_graphs::OPENAI_ID.to_owned();
+        detail.agent_metrics = vec![beale_contracts::v1::SessionAgentMetrics {
+            role: "discovery".to_owned(),
+            token_usage: detail.token_usage.clone(),
+            model_usage: detail.model_usage.clone(),
+            usage_snapshots: detail.usage_snapshots.clone(),
+            duration_ms: detail.total_duration_ms,
+        }];
         let mut runtime = Runtime::new(state, view, (1200.0, 800.0), Env::new(true, 1.0));
         runtime.frame(0.0);
         assert!(

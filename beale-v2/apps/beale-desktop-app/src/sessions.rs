@@ -1,11 +1,12 @@
 use beale_contracts::{
     PROTOBUF_CONTENT_TYPE, PROTOBUF_STREAM_CONTENT_TYPE, SESSION_ARCHIVE_PATH,
     SESSION_DETAIL_MAX_TOOL_SUMMARIES, SESSION_DETAIL_PATH, SESSION_STREAM_MAX_FRAME_BYTES,
-    SESSION_TOOL_DETAIL_PATH, SESSION_TURN_ID_HEADER, SESSION_TURN_STOP_PATH,
-    SESSION_TURN_STREAM_PATH, SESSIONS_PATH,
+    SESSION_SUBAGENT_DETAIL_PATH, SESSION_TOOL_DETAIL_PATH, SESSION_TURN_ID_HEADER,
+    SESSION_TURN_STOP_PATH, SESSION_TURN_STREAM_PATH, SESSIONS_PATH,
     v1::{
         GoalStatus, ListSessionsResponse, SessionDetail, SessionRole, SessionStreamEvent,
-        SessionStreamKind, SessionSummary, SessionToolDetailPage, SubmitSessionTurnRequest,
+        SessionStreamKind, SessionSubagentDetail, SessionSubagentSummary, SessionSummary,
+        SessionToolDetailPage, SubmitSessionTurnRequest,
     },
 };
 use prost::Message;
@@ -112,6 +113,138 @@ fn usage_values(usage: &beale_contracts::v1::SessionTokenUsage) -> [u128; 7] {
         usage.cache_measured_calls,
     ]
     .map(u128::from)
+}
+
+fn add_usage(
+    total: &mut beale_contracts::v1::SessionTokenUsage,
+    delta: &beale_contracts::v1::SessionTokenUsage,
+) {
+    total.input_tokens = total.input_tokens.saturating_add(delta.input_tokens);
+    total.output_tokens = total.output_tokens.saturating_add(delta.output_tokens);
+    total.measured_calls = total.measured_calls.saturating_add(delta.measured_calls);
+    total.total_calls = total.total_calls.saturating_add(delta.total_calls);
+    total.cache_read_tokens = total
+        .cache_read_tokens
+        .saturating_add(delta.cache_read_tokens);
+    total.cache_input_tokens = total
+        .cache_input_tokens
+        .saturating_add(delta.cache_input_tokens);
+    total.cache_measured_calls = total
+        .cache_measured_calls
+        .saturating_add(delta.cache_measured_calls);
+}
+
+pub(crate) fn detail_with_live_usage(
+    detail: Option<&SessionDetail>,
+    events: &[SessionStreamEvent],
+    live_ms: u64,
+) -> Option<SessionDetail> {
+    use beale_contracts::v1::{SessionTokenUsage, SessionUsageSnapshot};
+    let mut detail = detail?.clone();
+    let deltas: Vec<_> = events
+        .iter()
+        .filter(|event| event.kind == SessionStreamKind::UsageUpdated as i32)
+        .filter_map(|event| event.usage_delta.as_ref())
+        .collect();
+    if deltas.is_empty() {
+        return Some(detail);
+    }
+    let mut total = detail.token_usage.take().unwrap_or_default();
+    let mut main = detail
+        .usage_snapshots
+        .last()
+        .and_then(|p| p.main_usage.clone())
+        .unwrap_or_default();
+    let mut subagents = detail
+        .usage_snapshots
+        .last()
+        .and_then(|p| p.subagent_usage.clone())
+        .unwrap_or_default();
+    for delta in deltas {
+        let Some(usage) = &delta.usage else { continue };
+        add_usage(&mut total, usage);
+        let scope = if beale_graphs::Role::from_id(&delta.role)
+            .is_some_and(beale_graphs::Role::is_top_level)
+            || delta.role.is_empty()
+        {
+            &mut main
+        } else {
+            &mut subagents
+        };
+        add_usage(scope, usage);
+        if let Some(existing) = detail.model_usage.iter_mut().find(|item| {
+            (
+                item.provider,
+                item.method,
+                item.model.as_str(),
+                item.role.as_str(),
+            ) == (
+                delta.provider,
+                delta.method,
+                delta.model.as_str(),
+                delta.role.as_str(),
+            )
+        }) {
+            add_usage(
+                existing
+                    .usage
+                    .get_or_insert_with(SessionTokenUsage::default),
+                usage,
+            );
+        } else {
+            detail.model_usage.push((*delta).clone());
+        }
+    }
+    detail.token_usage = Some(total.clone());
+    detail.total_duration_ms = detail.total_duration_ms.saturating_add(live_ms).max(
+        detail
+            .usage_snapshots
+            .last()
+            .map_or(0, |point| point.work_duration_ms.saturating_add(1)),
+    );
+    detail.usage_snapshots.push(SessionUsageSnapshot {
+        work_duration_ms: detail.total_duration_ms,
+        input_tokens: total.input_tokens,
+        output_tokens: total.output_tokens,
+        measured_calls: total.measured_calls,
+        total_calls: total.total_calls,
+        cache_read_tokens: total.cache_read_tokens,
+        cache_input_tokens: total.cache_input_tokens,
+        cache_measured_calls: total.cache_measured_calls,
+        main_usage: Some(main),
+        subagent_usage: Some(subagents),
+    });
+    Some(detail)
+}
+
+pub(crate) fn detail_for_agent(
+    detail: Option<&SessionDetail>,
+    events: &[SessionStreamEvent],
+    role: &str,
+    live_ms: u64,
+) -> Option<SessionDetail> {
+    let detail = detail?;
+    if !matches!(
+        detail.graph_id.as_str(),
+        beale_graphs::CLOUDFLARE_ID | beale_graphs::OPENAI_ID
+    ) {
+        return detail_with_live_usage(Some(detail), events, live_ms);
+    }
+    let metrics = detail
+        .agent_metrics
+        .iter()
+        .find(|metrics| metrics.role == role)?;
+    let mut scoped = detail.clone();
+    scoped.token_usage = metrics.token_usage.clone();
+    scoped.model_usage = metrics.model_usage.clone();
+    scoped.usage_snapshots = metrics.usage_snapshots.clone();
+    scoped.total_duration_ms = metrics.duration_ms;
+    let events = events
+        .iter()
+        .filter(|event| event.agent_role == role)
+        .cloned()
+        .collect::<Vec<_>>();
+    detail_with_live_usage(Some(&scoped), &events, live_ms)
 }
 
 fn valid_model_usage(detail: &SessionDetail) -> bool {
@@ -280,6 +413,18 @@ pub(crate) fn valid_detail(detail: &SessionDetail) -> bool {
         && valid_model_usage(detail)
         && valid_scoped_snapshots(detail)
         && valid_graph_state(detail)
+        && detail.subagents.len() <= 1_024
+        && detail.subagents.iter().all(valid_subagent_summary)
+        && detail.agent_metrics.len() <= 8
+        && detail.agent_metrics.iter().all(|item| {
+            !item.role.is_empty()
+                && item.role.len() <= 32
+                && item
+                    .token_usage
+                    .as_ref()
+                    .is_some_and(|usage| usage.measured_calls <= usage.total_calls)
+                && item.usage_snapshots.len() <= 2_048
+        })
         && detail.usage_snapshots.len() <= 2_048
         && detail.usage_snapshots.iter().all(|point| {
             point.work_duration_ms <= detail.total_duration_ms
@@ -340,11 +485,11 @@ pub(crate) fn valid_detail(detail: &SessionDetail) -> bool {
                         && message.duration_ms == 0))
                 && message.tools.len() <= SESSION_DETAIL_MAX_TOOL_SUMMARIES
                 && message.duration_ms <= 86_400_000
-                && message.reasoning_summaries.len() <= 512
-                && message.commentary.len() <= 32
+                && message.reasoning_summaries.len() <= 8_193
+                && message.commentary.len() <= 8_449
                 && message.commentary.iter().all(|item| {
                     !item.text.trim().is_empty()
-                        && item.text.len() <= 8_192
+                        && item.text.len() <= 2_097_152
                         && item.after_tool_count as usize <= message.tools.len()
                 })
                 && message
@@ -370,7 +515,33 @@ pub(crate) fn valid_detail(detail: &SessionDetail) -> bool {
         })
 }
 
+fn valid_subagent_summary(item: &SessionSubagentSummary) -> bool {
+    uuid::Uuid::parse_str(&item.id).is_ok()
+        && !item.parent_role.is_empty()
+        && item.parent_role.len() <= 32
+        && !item.role.is_empty()
+        && item.role.len() <= 32
+        && !item.task.is_empty()
+        && item.task.len() <= 16_384
+        && matches!(item.status.as_str(), "active" | "completed" | "failed")
+        && (item.status == "active") == (item.completed_at_ms == 0)
+}
+
 fn valid_stream_event(event: &SessionStreamEvent) -> bool {
+    if !event.subagent_id.is_empty() && uuid::Uuid::parse_str(&event.subagent_id).is_err() {
+        return false;
+    }
+    if event.subagent.is_some()
+        && !matches!(
+            SessionStreamKind::try_from(event.kind),
+            Ok(SessionStreamKind::SubagentStarted | SessionStreamKind::SubagentCompleted)
+        )
+    {
+        return false;
+    }
+    if event.kind != SessionStreamKind::UsageUpdated as i32 && event.usage_delta.is_some() {
+        return false;
+    }
     if event.kind != SessionStreamKind::RunbookProgress as i32 && event.runbook_progress.is_some() {
         return false;
     }
@@ -413,6 +584,18 @@ fn valid_stream_event(event: &SessionStreamEvent) -> bool {
         Ok(SessionStreamKind::SubagentsSpawned) => {
             event.text.is_empty() && event.tool.is_none() && event.detail.is_none()
         }
+        Ok(SessionStreamKind::SubagentStarted | SessionStreamKind::SubagentCompleted) => {
+            event.text.is_empty()
+                && event.tool.is_none()
+                && event.detail.is_none()
+                && event.subagent.as_ref().is_some_and(|item| {
+                    valid_subagent_summary(item)
+                        && item.id == event.subagent_id
+                        && item.parent_role == event.agent_role
+                        && (event.kind == SessionStreamKind::SubagentStarted as i32)
+                            == (item.status == "active")
+                })
+        }
         Ok(SessionStreamKind::RunbookProgress) => {
             event.text.is_empty()
                 && event.tool.is_none()
@@ -424,6 +607,25 @@ fn valid_stream_event(event: &SessionStreamEvent) -> bool {
                         && progress.title.len() <= 200
                         && progress.cell_number <= 64
                         && progress.cell_name.chars().count() <= 40
+                })
+        }
+        Ok(SessionStreamKind::UsageUpdated) => {
+            event.text.is_empty()
+                && event.tool.is_none()
+                && event.detail.is_none()
+                && event.usage_delta.as_ref().is_some_and(|model| {
+                    (1..=6).contains(&model.provider)
+                        && (1..=2).contains(&model.method)
+                        && !model.model.is_empty()
+                        && model.model.len() <= 200
+                        && model.role.len() <= 20
+                        && model.usage.as_ref().is_some_and(|usage| {
+                            usage.total_calls == 1
+                                && usage.measured_calls <= 1
+                                && usage.cache_measured_calls <= usage.measured_calls
+                                && usage.cache_read_tokens <= usage.cache_input_tokens
+                                && usage.cache_input_tokens <= usage.input_tokens
+                        })
                 })
         }
         _ => false,
@@ -459,6 +661,51 @@ pub(crate) async fn load_tool_page(
         || reply.next_offset > reply.total_bytes
     {
         return Err("Invalid app-server tool details".to_owned());
+    }
+    Ok(reply)
+}
+
+pub(crate) async fn load_subagent(
+    client: &Client,
+    addr: SocketAddr,
+    session_id: &str,
+    agent_id: &str,
+    offset: u64,
+) -> Result<SessionSubagentDetail, String> {
+    let token = crate::provider_auth::authenticated_token(client, addr).await?;
+    let path = SESSION_SUBAGENT_DETAIL_PATH
+        .replace("{id}", session_id)
+        .replace("{agent_id}", agent_id);
+    let reply: SessionSubagentDetail = decode(
+        client
+            .get(url(addr, &format!("{path}?offset={offset}")))
+            .bearer_auth(token)
+            .send()
+            .await
+            .map_err(|_| "Could not load subagent".to_owned())?,
+    )
+    .await?;
+    if !reply.summary.as_ref().is_some_and(|summary| {
+        valid_subagent_summary(summary) && summary.id == agent_id && summary.status != "active"
+    }) || reply.items.len() > 64
+        || reply.offset != offset
+        || reply.next_offset != offset.saturating_add(reply.items.len() as u64)
+        || reply.next_offset > reply.total_items
+        || (reply.items.is_empty() && reply.next_offset < reply.total_items)
+        || reply.result.len() > 65_536
+        || reply.task.is_empty()
+        || reply.task.len() > 16_384
+        || reply.items.iter().any(|item| {
+            !matches!(item.kind.as_str(), "message" | "reasoning" | "tool")
+                || item.text.len() > 65_536
+                || (item.kind == "tool") != item.tool.is_some()
+                || item
+                    .tool
+                    .as_ref()
+                    .is_some_and(|tool| uuid::Uuid::parse_str(&tool.id).is_err())
+        })
+    {
+        return Err("Invalid app-server subagent detail".to_owned());
     }
     Ok(reply)
 }
@@ -717,6 +964,76 @@ mod tests {
     }
 
     #[test]
+    fn live_usage_updates_reconcile_across_top_level_and_subagents() {
+        use beale_contracts::v1::{SessionModelUsage, SessionTokenUsage};
+        let state = crate::visual_preview::fixture("session-insights");
+        let saved = state.active_session.unwrap();
+        let before = saved.token_usage.as_ref().unwrap().clone();
+        let event = |role: &str, input_tokens| SessionStreamEvent {
+            kind: SessionStreamKind::UsageUpdated as i32,
+            agent_role: "discovery".to_owned(),
+            usage_delta: Some(SessionModelUsage {
+                provider: 1,
+                method: 1,
+                model: "example-model".to_owned(),
+                role: role.to_owned(),
+                usage: Some(SessionTokenUsage {
+                    input_tokens,
+                    output_tokens: 4,
+                    measured_calls: 1,
+                    total_calls: 1,
+                    ..Default::default()
+                }),
+            }),
+            ..Default::default()
+        };
+        let events = [event("discovery", 10), event("scout", 20)];
+        assert!(events.iter().all(valid_stream_event));
+        let live = detail_with_live_usage(Some(&saved), &events, 5_000).unwrap();
+        let total = live.token_usage.as_ref().unwrap();
+        assert_eq!(total.input_tokens, before.input_tokens + 30);
+        assert_eq!(total.output_tokens, before.output_tokens + 8);
+        assert_eq!(total.total_calls, before.total_calls + 2);
+        assert!(valid_model_usage(&live));
+        assert!(valid_scoped_snapshots(&live));
+        let last = live.usage_snapshots.last().unwrap();
+        assert_eq!(
+            last.main_usage.as_ref().unwrap().input_tokens,
+            saved
+                .usage_snapshots
+                .last()
+                .unwrap()
+                .main_usage
+                .as_ref()
+                .unwrap()
+                .input_tokens
+                + 10
+        );
+        assert_eq!(
+            last.subagent_usage.as_ref().unwrap().input_tokens,
+            saved
+                .usage_snapshots
+                .last()
+                .unwrap()
+                .subagent_usage
+                .as_ref()
+                .unwrap()
+                .input_tokens
+                + 20
+        );
+        let mut invalid = events[0].clone();
+        invalid
+            .usage_delta
+            .as_mut()
+            .unwrap()
+            .usage
+            .as_mut()
+            .unwrap()
+            .total_calls = 0;
+        assert!(!valid_stream_event(&invalid));
+    }
+
+    #[test]
     fn stream_decoder_handles_fragmented_and_adjacent_frames() {
         let first = SessionStreamEvent {
             runbook_progress: None,
@@ -871,6 +1188,14 @@ mod tests {
                 ..Default::default()
             });
         }
+        assert!(valid_detail(&detail));
+        detail.messages[1].commentary = (0..40)
+            .map(|index| beale_contracts::v1::SessionCommentary {
+                text: format!("Example progress {index}"),
+                after_tool_count: index,
+                agent_role: "discovery".to_owned(),
+            })
+            .collect();
         assert!(valid_detail(&detail));
         let started = SessionStreamEvent {
             kind: SessionStreamKind::SessionStarted as i32,

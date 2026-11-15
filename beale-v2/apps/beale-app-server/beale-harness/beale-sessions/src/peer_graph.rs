@@ -1,8 +1,6 @@
 use super::*;
 use tokio::task::JoinSet;
 
-const MAX_WORK_ITEMS_PER_REQUEST: usize = 32;
-
 struct Work {
     role: beale_graphs::Role,
     prompt: String,
@@ -241,7 +239,6 @@ pub(super) async fn run(
     let (notify, mut notified) = mpsc::unbounded_channel();
     let mut tasks = JoinSet::new();
     let mut active = [false; 10];
-    let mut launched = 0_usize;
     request.graph_id = graph_id.clone();
     let context = StartContext {
         state,
@@ -273,7 +270,6 @@ pub(super) async fn run(
         },
     )?;
     active[role.index()] = true;
-    launched += 1;
     if let Some(tx) = &progress {
         let (session, turns) = load_persisted(&state.db, parse_id(&request.session_id)?)?;
         let _ = tx
@@ -286,7 +282,7 @@ pub(super) async fn run(
             .await;
     }
     loop {
-        if !stop_requested(&stop) && launched < MAX_WORK_ITEMS_PER_REQUEST {
+        if !stop_requested(&stop) {
             for item in state
                 .db
                 .pending_graph_handoffs(&request.session_id)
@@ -322,7 +318,6 @@ pub(super) async fn run(
                     return Err(error);
                 }
                 active[target.index()] = true;
-                launched += 1;
                 if let Some(tx) = &progress {
                     let (session, turns) =
                         load_persisted(&state.db, parse_id(&request.session_id)?)?;
@@ -334,9 +329,6 @@ pub(super) async fn run(
                             ..Default::default()
                         })
                         .await;
-                }
-                if launched >= MAX_WORK_ITEMS_PER_REQUEST {
-                    break;
                 }
             }
         }

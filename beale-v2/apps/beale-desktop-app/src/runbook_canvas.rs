@@ -82,6 +82,9 @@ impl Default for CanvasRunbookState {
 }
 
 impl CanvasRunbookState {
+    pub(crate) fn has_views(&self) -> bool {
+        !self.views.is_empty()
+    }
     pub(crate) fn with_view(view: RunbookView) -> Self {
         let mut view = view;
         view.instance_id = 1;
@@ -459,6 +462,7 @@ pub(crate) fn delete_cell(state: &mut State, cell_id: String) {
 }
 
 pub(crate) fn open(state: &mut State, selected: SessionRunbook) {
+    state.canvas_subagent = None;
     let session = state
         .active_session
         .as_ref()
@@ -542,6 +546,7 @@ pub(crate) fn tab_bar(state: &State, theme: ThemeStyle<'_>) -> Option<El> {
                         .center_y()
                         .gap(6.0)
                         .on_press(move |state: &mut State| {
+                            state.canvas_subagent = None;
                             if state.canvas_runbook.select(&select_key) {
                                 refresh(state);
                             }

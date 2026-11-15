@@ -838,6 +838,9 @@ pub mod v1 {
         SessionStarted = 10,
         AgentTurnCompleted = 11,
         AgentStarted = 12,
+        UsageUpdated = 13,
+        SubagentStarted = 14,
+        SubagentCompleted = 15,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -858,6 +861,12 @@ pub mod v1 {
         pub agent_role: String,
         #[prost(message, optional, tag = "8")]
         pub tool_detail: Option<SessionToolDetailPage>,
+        #[prost(message, optional, tag = "9")]
+        pub usage_delta: Option<SessionModelUsage>,
+        #[prost(string, tag = "10")]
+        pub subagent_id: String,
+        #[prost(message, optional, tag = "11")]
+        pub subagent: Option<SessionSubagentSummary>,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1005,6 +1014,68 @@ pub mod v1 {
         pub graph_agents: Vec<SessionGraphAgent>,
         #[prost(message, repeated, tag = "20")]
         pub graph_handoffs: Vec<SessionGraphHandoff>,
+        #[prost(message, repeated, tag = "21")]
+        pub agent_metrics: Vec<SessionAgentMetrics>,
+        #[prost(message, repeated, tag = "22")]
+        pub subagents: Vec<SessionSubagentSummary>,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct SessionSubagentSummary {
+        #[prost(string, tag = "1")]
+        pub id: String,
+        #[prost(string, tag = "2")]
+        pub parent_role: String,
+        #[prost(string, tag = "3")]
+        pub role: String,
+        #[prost(string, tag = "4")]
+        pub task: String,
+        #[prost(string, tag = "5")]
+        pub status: String,
+        #[prost(uint64, tag = "6")]
+        pub completed_at_ms: u64,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct SessionSubagentItem {
+        #[prost(string, tag = "1")]
+        pub kind: String,
+        #[prost(string, tag = "2")]
+        pub text: String,
+        #[prost(message, optional, tag = "3")]
+        pub tool: Option<SessionToolSummary>,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct SessionSubagentDetail {
+        #[prost(message, optional, tag = "1")]
+        pub summary: Option<SessionSubagentSummary>,
+        #[prost(message, repeated, tag = "2")]
+        pub items: Vec<SessionSubagentItem>,
+        #[prost(string, tag = "3")]
+        pub result: String,
+        #[prost(uint64, tag = "4")]
+        pub offset: u64,
+        #[prost(uint64, tag = "5")]
+        pub next_offset: u64,
+        #[prost(uint64, tag = "6")]
+        pub total_items: u64,
+        #[prost(string, tag = "7")]
+        pub task: String,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct SessionAgentMetrics {
+        #[prost(string, tag = "1")]
+        pub role: String,
+        #[prost(message, optional, tag = "2")]
+        pub token_usage: Option<SessionTokenUsage>,
+        #[prost(message, repeated, tag = "3")]
+        pub model_usage: Vec<SessionModelUsage>,
+        #[prost(message, repeated, tag = "4")]
+        pub usage_snapshots: Vec<SessionUsageSnapshot>,
+        #[prost(uint64, tag = "5")]
+        pub duration_ms: u64,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1622,7 +1693,7 @@ pub mod v1 {
 }
 
 pub const PROTOCOL_MAJOR: u32 = 2;
-pub const PROTOCOL_MINOR: u32 = 20;
+pub const PROTOCOL_MINOR: u32 = 22;
 pub const SERVICE_NAME: &str = "beale-app-server";
 pub const HEALTH_PATH: &str = "/v1/health";
 pub const AUTH_STATUS_PATH: &str = "/v1/providers/status";
@@ -1663,6 +1734,7 @@ pub const SESSION_TURN_STREAM_PATH: &str = "/v1/sessions/turns/stream";
 pub const SESSION_TURN_STOP_PATH: &str = "/v1/sessions/turns/{id}/stop";
 pub const SESSION_TURN_ID_HEADER: &str = "x-beale-turn-id";
 pub const SESSION_TOOL_DETAIL_PATH: &str = "/v1/sessions/{id}/tools/{tool_id}";
+pub const SESSION_SUBAGENT_DETAIL_PATH: &str = "/v1/sessions/{id}/subagents/{agent_id}";
 pub const AUTOMATIONS_PATH: &str = "/v1/automations";
 pub const AUTOMATIONS_CANCEL_PATH: &str = "/v1/automations/cancel";
 pub const PERMISSION_RULES_PATH: &str = "/v1/permissions/rules";
@@ -1716,6 +1788,71 @@ pub fn control_proof(token: &str, nonce: &[u8]) -> [u8; 32] {
 mod tracking_tests {
     use super::v1::TrackingModelDay;
     use prost::Message;
+
+    #[test]
+    fn subagent_fields_round_trip_without_changing_legacy_frames() {
+        use super::v1::{
+            SessionDetail, SessionStreamEvent, SessionStreamKind, SessionSubagentSummary,
+        };
+        let legacy = SessionStreamEvent::decode(&[0x08, 0x02][..]).unwrap();
+        assert!(legacy.subagent_id.is_empty());
+        assert!(legacy.subagent.is_none());
+        let summary = SessionSubagentSummary {
+            id: "00000000-0000-4000-8000-000000000001".into(),
+            parent_role: "discovery".into(),
+            role: "scout".into(),
+            task: "Inspect the example fixture".into(),
+            status: "active".into(),
+            completed_at_ms: 0,
+        };
+        let event = SessionStreamEvent {
+            kind: SessionStreamKind::SubagentStarted as i32,
+            subagent_id: summary.id.clone(),
+            subagent: Some(summary.clone()),
+            agent_role: "discovery".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            SessionStreamEvent::decode(event.encode_to_vec().as_slice()).unwrap(),
+            event
+        );
+        let detail = SessionDetail {
+            subagents: vec![summary],
+            ..Default::default()
+        };
+        assert_eq!(
+            SessionDetail::decode(detail.encode_to_vec().as_slice()).unwrap(),
+            detail
+        );
+    }
+
+    #[test]
+    fn usage_stream_delta_appends_at_tag_nine() {
+        use super::v1::{
+            SessionModelUsage, SessionStreamEvent, SessionStreamKind, SessionTokenUsage,
+        };
+        let legacy = SessionStreamEvent::decode(&[0x08, 0x02][..]).unwrap();
+        assert!(legacy.usage_delta.is_none());
+        let event = SessionStreamEvent {
+            kind: SessionStreamKind::UsageUpdated as i32,
+            usage_delta: Some(SessionModelUsage {
+                provider: 1,
+                method: 1,
+                model: "example-model".into(),
+                role: "discovery".into(),
+                usage: Some(SessionTokenUsage {
+                    input_tokens: 100,
+                    measured_calls: 1,
+                    total_calls: 1,
+                    ..Default::default()
+                }),
+            }),
+            ..Default::default()
+        };
+        let bytes = event.encode_to_vec();
+        assert!(bytes.contains(&0x4a));
+        assert_eq!(SessionStreamEvent::decode(bytes.as_slice()).unwrap(), event);
+    }
 
     #[test]
     fn scoped_usage_samples_append_fields_and_preserve_legacy_absence() {

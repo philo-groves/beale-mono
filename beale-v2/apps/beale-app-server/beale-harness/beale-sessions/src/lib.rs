@@ -13,16 +13,18 @@ use beale_contracts::{
     ARCHIVE_PATH, AUTOMATIONS_CANCEL_PATH, AUTOMATIONS_PATH, PROTOBUF_STREAM_CONTENT_TYPE,
     QUICK_CHAT_DETAIL_PATH, QUICK_CHAT_TURNS_PATH, SESSION_ARCHIVE_PATH,
     SESSION_DETAIL_MAX_TOOL_SUMMARIES, SESSION_DETAIL_PATH, SESSION_RESTORE_PATH,
-    SESSION_TOOL_DETAIL_PATH, SESSION_TURN_ID_HEADER, SESSION_TURN_STOP_PATH,
-    SESSION_TURN_STREAM_PATH, SESSION_TURNS_PATH, SESSIONS_PATH, session_stream_frame,
+    SESSION_SUBAGENT_DETAIL_PATH, SESSION_TOOL_DETAIL_PATH, SESSION_TURN_ID_HEADER,
+    SESSION_TURN_STOP_PATH, SESSION_TURN_STREAM_PATH, SESSION_TURNS_PATH, SESSIONS_PATH,
+    session_stream_frame,
     v1::{
         ArchiveEntry, AuthMethod, GoalStatus, GraphNodeConcurrency, GraphNodeModel,
-        ListArchiveResponse, ListSessionsResponse, ProviderId, ReasoningEffort, SessionCommentary,
-        SessionDetail, SessionGoal, SessionGraphAgent, SessionGraphConfig, SessionGraphHandoff,
-        SessionMessage, SessionReasoningSummary, SessionRole, SessionStreamEvent,
-        SessionStreamKind, SessionSummary, SessionTokenUsage, SessionToolDetailPage,
-        SessionToolSummary, SessionUsageSnapshot, SubmitSessionTurnRequest, SurfaceScopeState,
-        WorkspaceSurface,
+        ListArchiveResponse, ListSessionsResponse, ProviderId, ReasoningEffort,
+        SessionAgentMetrics, SessionCommentary, SessionDetail, SessionGoal, SessionGraphAgent,
+        SessionGraphConfig, SessionGraphHandoff, SessionMessage, SessionModelUsage,
+        SessionReasoningSummary, SessionRole, SessionStreamEvent, SessionStreamKind,
+        SessionSubagentDetail, SessionSubagentItem, SessionSubagentSummary, SessionSummary,
+        SessionTokenUsage, SessionToolDetailPage, SessionToolSummary, SessionUsageSnapshot,
+        SubmitSessionTurnRequest, SurfaceScopeState, WorkspaceSurface,
     },
 };
 use beale_extender::PluginRuntime;
@@ -35,7 +37,8 @@ use beale_safety::ReviewRequest;
 use beale_storage::GoalRow;
 use beale_storage::{
     AutomationOptions, ChildTurnRow, CommentaryRow, HostDatabase, ModelUsageRow,
-    ReasoningSummaryRow, SessionRow, ToolCallRow, TurnActivity, TurnMetadata, TurnRow,
+    ReasoningSummaryRow, SessionChildSummaryRow, SessionRow, ToolCallRow, TurnActivity,
+    TurnMetadata, TurnRow,
 };
 use beale_tools::{
     AgentFiles, PluginCallArgs, definitions, execute, model_preview, page, plugin_call_definition,
@@ -44,6 +47,8 @@ use beale_tools::{
 use futures_util::stream;
 use prost::Message;
 use serde_json::{Value, json};
+#[cfg(feature = "graphs")]
+use std::sync::atomic::AtomicU32;
 use std::{
     collections::{HashMap, HashSet},
     future::Future,
@@ -350,21 +355,15 @@ fn requested_top_level_role(
 }
 
 #[cfg(feature = "graphs")]
-fn reserve_delegations(
+fn validate_delegations(
     runtime: &dyn beale_graphs::GraphRuntime,
     arguments: &Value,
     config: &SessionGraphConfig,
     fallback: &GraphNodeModel,
-    used: &mut usize,
 ) -> Result<(), String> {
-    let count = runtime
+    runtime
         .assignments(arguments, config, fallback)
-        .map_err(|error| format!("Invalid delegation: {error}"))?
-        .len();
-    if count > beale_graphs::MAX_ASSIGNMENTS_PER_TURN.saturating_sub(*used) {
-        return Err("Subagent assignment limit reached for this turn.".to_owned());
-    }
-    *used += count;
+        .map_err(|error| format!("Invalid delegation: {error}"))?;
     Ok(())
 }
 
@@ -401,19 +400,12 @@ mod quick_chat;
 mod system_prompt;
 use http::{authorized, checked_body, response};
 
-const MAX_ORDINARY_TURNS: i64 = 64;
 const RECENT_TURNS: usize = 64;
 const MAX_RECENT_HISTORY_BYTES: usize = 1_048_576;
 const MAX_HISTORY_BYTES: usize = 4_194_304;
-const MAX_TOOL_ROUNDS: usize = 8;
-const MAX_TOOL_CALLS: usize = 32;
-const MAX_REASONING_BYTES_PER_TURN: usize = 4_096;
-const MAX_COMMENTARY_BYTES_PER_TURN: usize = 8_192;
 const TOOL_PAGE_BYTES: usize = 8_000;
 const INTERRUPTED_ANSWER: &str =
     "The provider could not complete this turn. Tool activity was saved.";
-const WORK_BUDGET_ANSWER: &str =
-    "This agent reached its per-turn work budget. Its work is saved; continue to resume.";
 const STOPPED_ANSWER: &str = "Stopped by the user. Completed tool activity was saved.";
 
 fn compact_openai_context(input: &[Value]) -> Vec<Value> {
@@ -422,6 +414,31 @@ fn compact_openai_context(input: &[Value]) -> Vec<Value> {
         .rposition(|item| item.get("type").and_then(Value::as_str) == Some("compaction"))
         .unwrap_or(0);
     input[start..].to_vec()
+}
+
+fn close_unanswered_openai_calls(input: &mut Vec<Value>) {
+    let answered: HashSet<&str> = input
+        .iter()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("function_call_output"))
+        .filter_map(|item| item.get("call_id").and_then(Value::as_str))
+        .collect();
+    let mut missing = Vec::new();
+    let mut seen = HashSet::new();
+    for item in input.iter() {
+        if item.get("type").and_then(Value::as_str) != Some("function_call") {
+            continue;
+        }
+        if let Some(id) = item.get("call_id").and_then(Value::as_str)
+            && !answered.contains(id)
+            && seen.insert(id)
+        {
+            missing.push(id.to_owned());
+        }
+    }
+    for id in missing {
+        input.push(json!({"type":"function_call_output","call_id":id,
+            "output":"Tool was not run because the turn ended before this call was processed."}));
+    }
 }
 
 fn validate_graph_selection(
@@ -565,6 +582,85 @@ fn append_tool_result(
     }
 }
 
+fn model_tool_preview(
+    name: &str,
+    id: &str,
+    output: &str,
+    is_error: bool,
+    files: &AgentFiles,
+) -> String {
+    let preview = model_preview(output, files);
+    if !is_error && matches!(name, "read" | "bash") {
+        format!(
+            "Finding evidence reference: {{\"kind\":\"tool_call\",\"reference\":\"{id}\"}}\n{preview}"
+        )
+    } else {
+        preview
+    }
+}
+
+fn usage_update(item: &ModelUsageRow, agent_role: &str) -> SessionStreamEvent {
+    let input = item.input_tokens.unwrap_or(0).max(0) as u64;
+    let output = item.output_tokens.unwrap_or(0).max(0) as u64;
+    let cache_read = item.cache_read_tokens.unwrap_or(0).max(0) as u64;
+    SessionStreamEvent {
+        kind: SessionStreamKind::UsageUpdated as i32,
+        agent_role: agent_role.to_owned(),
+        usage_delta: Some(SessionModelUsage {
+            provider: item.provider,
+            method: item.method,
+            model: item.model.clone(),
+            role: item.role.clone(),
+            usage: Some(SessionTokenUsage {
+                input_tokens: input,
+                output_tokens: output,
+                measured_calls: u64::from(
+                    item.input_tokens.is_some() && item.output_tokens.is_some(),
+                ),
+                total_calls: 1,
+                cache_read_tokens: cache_read,
+                cache_input_tokens: if item.cache_read_tokens.is_some() {
+                    input
+                } else {
+                    0
+                },
+                cache_measured_calls: u64::from(item.cache_read_tokens.is_some()),
+            }),
+        }),
+        ..Default::default()
+    }
+}
+
+fn review_failed(decision: &beale_safety::ReviewDecision) -> bool {
+    !decision.approved && !decision.reviewed
+}
+
+#[cfg(all(feature = "graphs", feature = "findings"))]
+fn pipeline_finding_allowed(role: beale_graphs::Role, name: &str, args: &Value) -> bool {
+    let state = args.get("state").and_then(Value::as_str);
+    match name {
+        "findings_query" | "findings_read" => true,
+        "findings_create" => role == beale_graphs::Role::Discovery,
+        "findings_update" => match role {
+            beale_graphs::Role::Discovery => matches!(state, Some("finding" | "candidate")),
+            beale_graphs::Role::Validation => matches!(state, Some("finding" | "validated")),
+            beale_graphs::Role::Reporter => {
+                matches!(state, Some("finding" | "screened" | "reported"))
+            }
+            beale_graphs::Role::PatchGeneration => state == Some("finding"),
+            _ => true,
+        },
+        "findings_complete_state" => match role {
+            beale_graphs::Role::Validation => state == Some("validated"),
+            beale_graphs::Role::Reporter => matches!(state, Some("screened" | "reported")),
+            beale_graphs::Role::Discovery | beale_graphs::Role::PatchGeneration => false,
+            _ => true,
+        },
+        "findings_reject" => role == beale_graphs::Role::Validation,
+        _ => true,
+    }
+}
+
 #[derive(Clone)]
 struct SessionState {
     token: String,
@@ -651,6 +747,7 @@ pub fn router_with_runtime(
         .route(SESSION_RESTORE_PATH, post(restore))
         .route(ARCHIVE_PATH, get(list_archive))
         .route(SESSION_TOOL_DETAIL_PATH, get(tool_details))
+        .route(SESSION_SUBAGENT_DETAIL_PATH, get(subagent_details))
         .route(SESSION_TURNS_PATH, post(submit_turn))
         .route(AUTOMATIONS_PATH, get(automations::list))
         .route(AUTOMATIONS_CANCEL_PATH, post(automations::cancel))
@@ -912,6 +1009,18 @@ fn recent_peer_turns(
     }
 }
 
+fn subagent_summary(row: &SessionChildSummaryRow) -> Result<SessionSubagentSummary, StatusCode> {
+    Ok(SessionSubagentSummary {
+        id: row.agent_id.clone(),
+        parent_role: row.parent_role.clone(),
+        role: row.role.clone(),
+        task: row.task.chars().take(256).collect(),
+        status: if row.is_error { "failed" } else { "completed" }.to_owned(),
+        completed_at_ms: u64::try_from(row.completed_at_ms)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+    })
+}
+
 fn detail(
     db: &HostDatabase,
     session: &StoredSession,
@@ -951,6 +1060,16 @@ fn detail(
                 graph_models: config.models,
                 graph_node_concurrency: config.concurrency,
                 token_usage: Some(SessionTokenUsage::default()),
+                agent_metrics: graph_agents
+                    .iter()
+                    .map(|agent| SessionAgentMetrics {
+                        role: agent.role.clone(),
+                        token_usage: Some(SessionTokenUsage::default()),
+                        model_usage: Vec::new(),
+                        usage_snapshots: Vec::new(),
+                        duration_ms: 0,
+                    })
+                    .collect(),
                 graph_agents,
                 graph_handoffs,
                 ..Default::default()
@@ -974,7 +1093,7 @@ fn detail(
     let first_turn = turns[0].number;
     let (graph_agents, graph_handoffs) = graph_state(db, &session.id)?;
     let selected_turns = turns.iter().map(|turn| turn.number).collect::<Vec<_>>();
-    let tools = if peer_graph {
+    let mut tools = if peer_graph {
         db.tool_summaries_for_turns(&session.id, &selected_turns)
     } else {
         db.tool_summaries_since(&session.id, first_turn)
@@ -992,14 +1111,9 @@ fn detail(
         db.commentary_since(&session.id, first_turn)
     }
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    if tools.len()
-        > if peer_graph {
-            SESSION_DETAIL_MAX_TOOL_SUMMARIES
-        } else {
-            RECENT_TURNS * 32
-        }
-    {
-        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    if tools.len() > SESSION_DETAIL_MAX_TOOL_SUMMARIES {
+        let keep_from = tools.len() - SESSION_DETAIL_MAX_TOOL_SUMMARIES;
+        tools.drain(..keep_from);
     }
     let mut messages = Vec::with_capacity(turns.len() * 2);
     let mut total = 0_usize;
@@ -1024,6 +1138,25 @@ fn detail(
             .iter()
             .filter(|tool| tool.turn_number == turn_number)
             .collect();
+        let first_visible_tool = turn_tools.first().map_or(0, |tool| tool.ordinal);
+        #[allow(unused_mut)]
+        let mut turn_commentary = commentary
+            .iter()
+            .filter(|item| item.turn_number == turn_number)
+            .map(|item| {
+                if item.after_tool_count < 0 {
+                    return Err(StatusCode::INTERNAL_SERVER_ERROR);
+                }
+                Ok(SessionCommentary {
+                    text: item.text.clone(),
+                    after_tool_count: item
+                        .after_tool_count
+                        .saturating_sub(first_visible_tool)
+                        .min(turn_tools.len() as i64) as u32,
+                    agent_role: item.agent_role.clone(),
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         messages.push(SessionMessage {
             role: SessionRole::Assistant as i32,
             text: turn.answer.clone(),
@@ -1041,33 +1174,22 @@ fn detail(
                 .iter()
                 .filter(|item| item.turn_number == turn_number)
                 .map(|item| {
-                    if item.after_tool_count < 0 || item.after_tool_count > turn_tools.len() as i64
-                    {
+                    if item.after_tool_count < 0 {
                         return Err(StatusCode::INTERNAL_SERVER_ERROR);
                     }
                     Ok(SessionReasoningSummary {
                         text: item.text.clone(),
-                        after_tool_count: item.after_tool_count as u32,
+                        after_tool_count: item
+                            .after_tool_count
+                            .saturating_sub(first_visible_tool)
+                            .min(turn_tools.len() as i64)
+                            as u32,
                         agent_role: item.agent_role.clone(),
                     })
                 })
                 .collect::<Result<Vec<_>, _>>()?,
             duration_ms: turn.duration_ms,
-            commentary: commentary
-                .iter()
-                .filter(|item| item.turn_number == turn_number)
-                .map(|item| {
-                    if item.after_tool_count < 0 || item.after_tool_count > turn_tools.len() as i64
-                    {
-                        return Err(StatusCode::INTERNAL_SERVER_ERROR);
-                    }
-                    Ok(SessionCommentary {
-                        text: item.text.clone(),
-                        after_tool_count: item.after_tool_count as u32,
-                        agent_role: item.agent_role.clone(),
-                    })
-                })
-                .collect::<Result<Vec<_>, _>>()?,
+            commentary: turn_commentary,
             agent_role: turn.agent_role.clone(),
         });
     }
@@ -1164,9 +1286,65 @@ fn detail(
     let runbooks = db
         .session_runbooks(&session.workspace_id, &session.id)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let mut agent_metrics = Vec::with_capacity(graph_agents.len());
+    for agent in &graph_agents {
+        let role = agent.role.as_str();
+        let totals = db
+            .session_usage_totals_for_role(&session.id, Some(role))
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let models = db
+            .session_model_totals_for_role(&session.id, Some(role))
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let snapshots = db
+            .session_usage_snapshots_for_role(&session.id, Some(role))
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        agent_metrics.push(SessionAgentMetrics {
+            role: agent.role.clone(),
+            token_usage: Some(scoped_usage(totals)?),
+            model_usage: models
+                .into_iter()
+                .map(|item| {
+                    Ok(SessionModelUsage {
+                        provider: item.provider,
+                        method: item.method,
+                        model: item.model,
+                        role: item.role,
+                        usage: Some(scoped_usage(item.totals)?),
+                    })
+                })
+                .collect::<Result<_, StatusCode>>()?,
+            usage_snapshots: snapshots
+                .into_iter()
+                .map(|point| {
+                    Ok(SessionUsageSnapshot {
+                        work_duration_ms: point.work_duration_ms,
+                        input_tokens: count(point.totals.input_tokens)?,
+                        output_tokens: count(point.totals.output_tokens)?,
+                        cache_read_tokens: count(point.totals.cache_read_tokens)?,
+                        cache_input_tokens: count(point.totals.cache_input_tokens)?,
+                        measured_calls: count(point.totals.measured_calls)?,
+                        total_calls: count(point.totals.total_calls)?,
+                        cache_measured_calls: count(point.totals.cache_measured_calls)?,
+                        main_usage: Some(scoped_usage(point.main_totals)?),
+                        subagent_usage: Some(scoped_usage(point.subagent_totals)?),
+                    })
+                })
+                .collect::<Result<_, StatusCode>>()?,
+            duration_ms: db
+                .session_agent_duration_ms(&session.id, role)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+        });
+    }
     Ok(SessionDetail {
         graph_agents,
         graph_handoffs,
+        agent_metrics,
+        subagents: db
+            .session_children(&session.id)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .iter()
+            .map(subagent_summary)
+            .collect::<Result<Vec<_>, _>>()?,
         model_usage,
         summary: Some(summary(session)),
         messages,
@@ -1388,6 +1566,118 @@ async fn details(
         return Err(StatusCode::NOT_FOUND);
     }
     Ok(response(detail(&state.db, &session, &turns)?))
+}
+
+async fn subagent_details(
+    State(state): State<SessionState>,
+    RoutePath((id, agent_id)): RoutePath<(String, String)>,
+    Query(query): Query<HashMap<String, String>>,
+    headers: HeaderMap,
+) -> Result<impl axum::response::IntoResponse, StatusCode> {
+    if !authorized(&headers, &state.token) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    let id = parse_id(&id)?;
+    let agent_id = parse_id(&agent_id)?;
+    let (session, _) = load_persisted(&state.db, id)?;
+    if !state.workspaces.contains(&session.workspace_id)? {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    let child = state
+        .db
+        .session_child(&session.id, &agent_id.to_string())
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    let values: Vec<Value> = serde_json::from_str(&child.turn.messages_json)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let mut items = Vec::new();
+    let mut has_reasoning = false;
+    for value in values {
+        let kind = value
+            .get("role")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        match kind {
+            "assistant" | "reasoning" => {
+                has_reasoning |= kind == "reasoning";
+                if let Some(text) = value.get("text").and_then(Value::as_str) {
+                    items.push(SessionSubagentItem {
+                        kind: if kind == "assistant" {
+                            "message"
+                        } else {
+                            "reasoning"
+                        }
+                        .to_owned(),
+                        text: text.to_owned(),
+                        tool: None,
+                    });
+                }
+            }
+            "tool" => {
+                if let Some(id) = value.get("tool_call_id").and_then(Value::as_str)
+                    && let Some(tool) = state
+                        .db
+                        .tool_call(&session.id, id)
+                        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+                {
+                    items.push(SessionSubagentItem {
+                        kind: "tool".to_owned(),
+                        text: String::new(),
+                        tool: Some(SessionToolSummary {
+                            id: tool.id,
+                            name: tool.name,
+                            summary: tool.summary,
+                            is_error: tool.is_error,
+                            agent_role: child.parent_role.clone(),
+                        }),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+    if !has_reasoning {
+        let older: Vec<String> = serde_json::from_str(&child.turn.reasoning_json)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        for text in older {
+            items.push(SessionSubagentItem {
+                kind: "reasoning".to_owned(),
+                text,
+                tool: None,
+            });
+        }
+    }
+    let total_items = items.len();
+    let offset = query.get("offset").map_or(Ok(0usize), |value| {
+        value.parse::<usize>().map_err(|_| StatusCode::BAD_REQUEST)
+    })?;
+    if offset > total_items {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let mut page = Vec::new();
+    let mut page_bytes = 0;
+    for item in items.into_iter().skip(offset) {
+        let size = item.encoded_len();
+        if page.len() >= 64 || (!page.is_empty() && page_bytes + size > 500_000) {
+            break;
+        }
+        page_bytes += size;
+        page.push(item);
+    }
+    let next_offset = offset + page.len();
+    Ok(response(SessionSubagentDetail {
+        summary: Some(subagent_summary(&SessionChildSummaryRow::from(&child))?),
+        items: page,
+        result: if next_offset == total_items {
+            child.turn.result.chars().take(16_000).collect()
+        } else {
+            String::new()
+        },
+        offset: offset as u64,
+        next_offset: next_offset as u64,
+        total_items: total_items as u64,
+        task: child.turn.task,
+    }))
 }
 
 #[cfg(feature = "runbooks")]
@@ -2066,17 +2356,6 @@ async fn run_one_turn(
     {
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
-    #[cfg(feature = "graphs")]
-    let max_turns = if peer.is_some() {
-        1024
-    } else {
-        MAX_ORDINARY_TURNS
-    };
-    #[cfg(not(feature = "graphs"))]
-    let max_turns = MAX_ORDINARY_TURNS;
-    if goal.is_none() && next_turn_number > max_turns {
-        return Err(StatusCode::CONFLICT);
-    }
     #[cfg(feature = "goal-mode")]
     {
         let feature_enabled = state
@@ -2300,6 +2579,9 @@ async fn run_one_turn(
     if reuse_saved_context && let Some(saved) = saved_context {
         let mut previous: Vec<Value> =
             serde_json::from_str(&saved).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        if provider == Provider::OpenAi {
+            close_unanswered_openai_calls(&mut previous);
+        }
         if provider != Provider::OpenAi {
             previous.retain(|item| item.get("role").and_then(Value::as_str) != Some("system"));
         }
@@ -2568,6 +2850,26 @@ async fn run_one_turn(
     if let Some(peer) = &peer {
         active_role = peer.role;
     }
+    #[cfg(all(feature = "graphs", feature = "findings"))]
+    if peer.is_some() && saved_graph_id == beale_graphs::OPENAI_ID {
+        definitions.retain(|tool| {
+            let name = tool["name"].as_str().unwrap_or_default();
+            !beale_findings::is_tool(name)
+                || !matches!(
+                    name,
+                    "findings_create" | "findings_complete_state" | "findings_reject"
+                )
+                || match name {
+                    "findings_create" => active_role == beale_graphs::Role::Discovery,
+                    "findings_complete_state" => matches!(
+                        active_role,
+                        beale_graphs::Role::Validation | beale_graphs::Role::Reporter
+                    ),
+                    "findings_reject" => active_role == beale_graphs::Role::Validation,
+                    _ => true,
+                }
+        });
+    }
     #[cfg(feature = "graphs")]
     let mut active_model = if active_graph.is_some() {
         beale_graphs::top_level_model(&active_graph_config, active_role, &graph_fallback)
@@ -2609,42 +2911,20 @@ async fn run_one_turn(
     let mut tool_rows = Vec::<ToolCallRow>::new();
     #[cfg(feature = "graphs")]
     let mut child_turns = Vec::<ChildTurnRow>::new();
+    #[cfg(feature = "graphs")]
+    let child_message_sequence = AtomicU32::new(0x8000_0000);
     #[cfg(not(feature = "graphs"))]
     let child_turns = Vec::<ChildTurnRow>::new();
     let mut reasoning_rows = Vec::<ReasoningSummaryRow>::new();
     let mut commentary_rows = Vec::<CommentaryRow>::new();
     let mut model_usage = Vec::<ModelUsageRow>::new();
-    let mut reasoning_bytes = 0_usize;
-    let mut commentary_bytes = 0_usize;
-    let mut call_count = 0_usize;
-    #[cfg(feature = "graphs")]
-    let mut delegated_count = [0_usize; 10];
-    #[cfg(feature = "graphs")]
-    let mut handoff_count = 0_usize;
     #[cfg(feature = "graphs")]
     let mut peer_messages = Vec::<String>::new();
-    #[cfg(feature = "graphs")]
-    let max_rounds = if active_graph.is_some()
-        && matches!(
-            saved_graph_id.as_str(),
-            beale_graphs::CLOUDFLARE_ID | beale_graphs::OPENAI_ID
-        ) {
-        32
-    } else {
-        MAX_TOOL_ROUNDS
-    };
-    #[cfg(not(feature = "graphs"))]
-    let max_rounds = MAX_TOOL_ROUNDS;
-    #[cfg(feature = "graphs")]
-    let max_calls = if max_rounds > MAX_TOOL_ROUNDS {
-        128
-    } else {
-        MAX_TOOL_CALLS
-    };
-    #[cfg(not(feature = "graphs"))]
-    let max_calls = MAX_TOOL_CALLS;
-    let mut answer = None;
-    'rounds: for round in 0..max_rounds {
+    let answer: Option<String>;
+    let mut segment_index = 0_u32;
+    'rounds: loop {
+        // Reserve one stream segment for the answer and one for each reasoning part.
+        segment_index = segment_index.saturating_add(17);
         if stop_requested(&stop) {
             answer = Some(STOPPED_ANSWER.to_owned());
             break;
@@ -2653,13 +2933,20 @@ async fn run_one_turn(
             let (provider_tx, mut provider_rx) = mpsc::channel::<ProviderProgress>(32);
             let stream_role = active_model.node_id.clone();
             let forward = tokio::spawn(async move {
+                let mut reasoning_segments = std::collections::BTreeMap::new();
                 while let Some(update) = provider_rx.recv().await {
-                    let (kind, text) = match update {
+                    let (kind, text, item_segment) = match update {
                         ProviderProgress::MessageDelta(text) => {
-                            (SessionStreamKind::MessageDelta, text)
+                            (SessionStreamKind::MessageDelta, text, segment_index)
                         }
-                        ProviderProgress::ReasoningDelta(text) => {
-                            (SessionStreamKind::ReasoningDelta, text)
+                        ProviderProgress::ReasoningDelta(text, key) => {
+                            let next = reasoning_segments.len() as u32 + 1;
+                            let part = *reasoning_segments.entry(key).or_insert(next);
+                            (
+                                SessionStreamKind::ReasoningDelta,
+                                text,
+                                segment_index.saturating_add(part),
+                            )
                         }
                     };
                     if client_tx
@@ -2669,9 +2956,12 @@ async fn run_one_turn(
                             text,
                             tool: None,
                             detail: None,
-                            segment_index: (round + 1) as u32,
+                            segment_index: item_segment,
                             agent_role: stream_role.clone(),
                             tool_detail: None,
+                            usage_delta: None,
+                            subagent_id: String::new(),
+                            subagent: None,
                         })
                         .await
                         .is_err()
@@ -2745,6 +3035,9 @@ async fn run_one_turn(
                                 segment_index: 0,
                                 agent_role: active_model.node_id.clone(),
                                 tool_detail: None,
+                                usage_delta: None,
+                                subagent_id: String::new(),
+                                subagent: None,
                             })
                             .await;
                     }
@@ -2780,24 +3073,15 @@ async fn run_one_turn(
                     duration.as_millis().min(i64::MAX as u128) as i64
                 }),
         });
-        for mut summary in step.reasoning_summaries {
-            if reasoning_rows.len() >= max_rounds * 16
-                || reasoning_bytes >= MAX_REASONING_BYTES_PER_TURN
-            {
-                break;
-            }
-            let available = MAX_REASONING_BYTES_PER_TURN - reasoning_bytes;
-            if summary.len() > available {
-                let mut end = available;
-                while !summary.is_char_boundary(end) {
-                    end -= 1;
-                }
-                summary.truncate(end);
-            }
+        if let Some(tx) = &progress
+            && let Some(item) = model_usage.last()
+        {
+            let _ = tx.send(usage_update(item, &active_model.node_id)).await;
+        }
+        for summary in step.reasoning_summaries {
             if summary.trim().is_empty() {
                 continue;
             }
-            reasoning_bytes += summary.len();
             reasoning_rows.push(ReasoningSummaryRow {
                 turn_number: next_turn_number,
                 ordinal: reasoning_rows.len() as i64,
@@ -2812,18 +3096,9 @@ async fn run_one_turn(
             answer = Some(step.text);
             break;
         }
-        if !step.text.trim().is_empty() && commentary_bytes < MAX_COMMENTARY_BYTES_PER_TURN {
-            let mut text = step.text;
-            let available = MAX_COMMENTARY_BYTES_PER_TURN - commentary_bytes;
-            if text.len() > available {
-                let mut end = available;
-                while !text.is_char_boundary(end) {
-                    end -= 1;
-                }
-                text.truncate(end);
-            }
+        if !step.text.trim().is_empty() {
+            let text = step.text;
             if !text.trim().is_empty() {
-                commentary_bytes += text.len();
                 commentary_rows.push(CommentaryRow {
                     turn_number: next_turn_number,
                     ordinal: commentary_rows.len() as i64,
@@ -2833,21 +3108,6 @@ async fn run_one_turn(
                 });
             }
         }
-        if round + 1 == max_rounds || call_count.saturating_add(step.calls.len()) > max_calls {
-            if tool_rows.is_empty() {
-                return Err(StatusCode::BAD_GATEWAY);
-            }
-            // The last model step requested tools we cannot execute in this turn.
-            // Keep only the completed tool cycle in the saved provider context.
-            input.truncate(prior_input_len);
-            #[cfg(feature = "goal-mode")]
-            if goal_active && goal_signal.is_none() {
-                goal_signal = Some(beale_goals::Signal::Continue);
-            }
-            answer = Some(WORK_BUDGET_ANSWER.to_owned());
-            break;
-        }
-        call_count += step.calls.len();
         let mut anthropic_tool_results = Vec::new();
         #[cfg(feature = "graphs")]
         let mut pending_handoff: Option<(beale_graphs::Role, String)> = None;
@@ -2865,7 +3125,9 @@ async fn run_one_turn(
                 if tool_rows.is_empty() {
                     return Err(StatusCode::BAD_GATEWAY);
                 }
-                answer = Some(INTERRUPTED_ANSWER.to_owned());
+                answer = Some(format!(
+                    "{INTERRUPTED_ANSWER} The provider returned an invalid tool call."
+                ));
                 break 'rounds;
             }
             let id = Uuid::new_v4().to_string();
@@ -2939,11 +3201,15 @@ async fn run_one_turn(
                             total_bytes: 0,
                             is_error: false,
                         }),
+                        usage_delta: None,
+                        subagent_id: String::new(),
+                        subagent: None,
                     })
                     .await;
             }
             #[cfg(feature = "graphs")]
             let mut child_tools = Vec::<ToolCallRow>::new();
+            let mut review_unavailable = false;
             let (review_denial, feature_review_approved) =
                 if feature_tool_requires_review(&call.name) {
                     if let Ok(arguments) = args.as_ref() {
@@ -2965,10 +3231,13 @@ async fn run_one_turn(
                         )
                         .await
                         {
-                            Some(decision) => (
-                                (!decision.approved).then_some(decision.reason),
-                                decision.approved && decision.reviewed,
-                            ),
+                            Some(decision) => {
+                                review_unavailable = review_failed(&decision);
+                                (
+                                    (!decision.approved).then_some(decision.reason),
+                                    decision.approved && decision.reviewed,
+                                )
+                            }
                             None => (Some("Stopped by user".to_owned()), false),
                         }
                     } else {
@@ -3163,25 +3432,41 @@ async fn run_one_turn(
                     }
                     #[cfg(feature = "findings")]
                     Ok(args) if findings_tools_enabled && beale_findings::is_tool(&call.name) => {
-                        let pending = tool_rows
-                            .iter()
-                            .map(|row| beale_findings::PendingSource {
-                                id: &row.id,
-                                name: &row.name,
-                                output: &row.output,
-                                is_error: row.is_error,
-                            })
-                            .collect::<Vec<_>>();
-                        match beale_findings::execute(
-                            &state.db,
-                            &request.workspace_id,
-                            &session.id,
-                            &call.name,
-                            &args,
-                            &pending,
-                        ) {
-                            Ok(value) => (value, false),
-                            Err(error) => (format!("Findings tool error: {error}"), true),
+                        let allowed = {
+                            #[cfg(feature = "graphs")]
+                            {
+                                peer.is_none()
+                                    || saved_graph_id != beale_graphs::OPENAI_ID
+                                    || pipeline_finding_allowed(active_role, &call.name, &args)
+                            }
+                            #[cfg(not(feature = "graphs"))]
+                            {
+                                true
+                            }
+                        };
+                        if !allowed {
+                            ("This finding action belongs to another Research Pipeline agent. Hand off the finding and evidence to that role.".to_owned(), true)
+                        } else {
+                            let pending = tool_rows
+                                .iter()
+                                .map(|row| beale_findings::PendingSource {
+                                    id: &row.id,
+                                    name: &row.name,
+                                    output: &row.output,
+                                    is_error: row.is_error,
+                                })
+                                .collect::<Vec<_>>();
+                            match beale_findings::execute(
+                                &state.db,
+                                &request.workspace_id,
+                                &session.id,
+                                &call.name,
+                                &args,
+                                &pending,
+                            ) {
+                                Ok(value) => (value, false),
+                                Err(error) => (format!("Findings tool error: {error}"), true),
+                            }
                         }
                     }
                     #[cfg(feature = "memories")]
@@ -3252,13 +3537,15 @@ async fn run_one_turn(
                     Ok(args)
                         if call.name == beale_graphs::HANDOFF_TOOL && active_graph.is_some() =>
                     {
-                        if (peer.is_none() && pending_handoff.is_some()) || handoff_count >= 8 {
-                            ("Peer handoff limit reached for this turn.".to_owned(), true)
+                        if peer.is_none() && pending_handoff.is_some() {
+                            (
+                                "Finish the pending handoff before adding another.".to_owned(),
+                                true,
+                            )
                         } else {
                             match beale_graphs::handoff_target(&saved_graph_id, active_role, &args)
                             {
                                 Ok((role, task)) => {
-                                    handoff_count += 1;
                                     if let Some(peer) = &peer {
                                         let item = beale_storage::GraphHandoffRow {
                                             id: Uuid::new_v4().to_string(),
@@ -3308,12 +3595,11 @@ async fn run_one_turn(
                         let reservation = active_graph
                             .ok_or_else(|| "Graph runtime is unavailable.".to_owned())
                             .and_then(|runtime| {
-                                reserve_delegations(
+                                validate_delegations(
                                     runtime,
                                     &args,
                                     &active_graph_config,
                                     &graph_fallback,
-                                    &mut delegated_count[active_role.index()],
                                 )
                             });
                         if let Err(error) = reservation {
@@ -3346,6 +3632,7 @@ async fn run_one_turn(
                                         turn_number: next_turn_number,
                                         turn_started: started,
                                         progress: progress.as_ref(),
+                                        message_sequence: &child_message_sequence,
                                         model_usage: &child_usage,
                                     },
                                     &args,
@@ -3388,6 +3675,9 @@ async fn run_one_turn(
                             } else {
                                 None
                             };
+                        if decision.as_ref().is_some_and(review_failed) {
+                            review_unavailable = true;
+                        }
                         if stop_requested(&stop) {
                             ("Tool stopped by user.".to_owned(), true)
                         } else if let Some(decision) = decision
@@ -3439,6 +3729,9 @@ async fn run_one_turn(
                                 total_bytes: output.len() as u64,
                                 is_error,
                             }),
+                            usage_delta: None,
+                            subagent_id: String::new(),
+                            subagent: None,
                         })
                         .await;
                 }
@@ -3458,7 +3751,7 @@ async fn run_one_turn(
                     child.ordinal = tool_rows.len() as i64;
                     tool_rows.push(child);
                 }
-                model_preview(&output, &agent_files)
+                model_tool_preview(&call.name, &id, &output, is_error, &agent_files)
             };
             append_tool_result(
                 &mut input,
@@ -3468,6 +3761,10 @@ async fn run_one_turn(
                 &call.id,
                 &model_output,
             );
+            if review_unavailable {
+                answer = Some("Auto-Review was unavailable, so the requested tool was not run. Saved activity can be resumed after the review service is available.".to_owned());
+                break 'rounds;
+            }
         }
         if !anthropic_tool_results.is_empty() {
             input.push(json!({"role":"user","content":anthropic_tool_results}));
@@ -3522,12 +3819,21 @@ async fn run_one_turn(
                         segment_index: 0,
                         agent_role: active_model.node_id.clone(),
                         tool_detail: None,
+                        usage_delta: None,
+                        subagent_id: String::new(),
+                        subagent: None,
                     })
                     .await;
             }
             return Err(StatusCode::BAD_GATEWAY);
         }
-        answer = INTERRUPTED_ANSWER.to_owned();
+        answer = if answer.trim().is_empty() {
+            format!("{INTERRUPTED_ANSWER} The provider completed without a message.")
+        } else {
+            format!(
+                "{INTERRUPTED_ANSWER} The provider answer exceeded the session history boundary."
+            )
+        };
     }
     #[cfg(feature = "goal-mode")]
     if let Some(goal) = goal.as_mut().filter(|_| goal_active) {
@@ -3590,6 +3896,9 @@ async fn run_one_turn(
     let save_peer_context = peer.is_some();
     #[cfg(not(feature = "graphs"))]
     let save_peer_context = false;
+    if provider == Provider::OpenAi {
+        close_unanswered_openai_calls(&mut input);
+    }
     let provider_context_json = if save_peer_context
         || (provider == Provider::OpenAi && !latest.answer.starts_with(INTERRUPTED_ANSWER))
     {
@@ -3661,7 +3970,10 @@ async fn run_one_turn(
                 queue_memories: memories_tools_enabled,
             },
         )
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|error| {
+            eprintln!("session turn save failed: {error:#}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
     #[cfg(feature = "graphs")]
     if peer.is_some() {
         let (saved, turns) = load_persisted(&state.db, parse_id(&session.id)?)?;
@@ -3680,6 +3992,79 @@ mod tests {
     use beale_storage::WorkspaceRow;
     use prost::Message;
     use tower::ServiceExt;
+
+    #[test]
+    fn disabled_review_rules_do_not_stop_approved_tools() {
+        assert!(!review_failed(&beale_safety::ReviewDecision {
+            approved: true,
+            reviewed: false,
+            reason: "No active review rules".to_owned(),
+        }));
+        assert!(review_failed(&beale_safety::ReviewDecision {
+            approved: false,
+            reviewed: false,
+            reason: "Review unavailable".to_owned(),
+        }));
+    }
+
+    #[test]
+    fn successful_workspace_reads_expose_the_exact_finding_evidence_reference() {
+        let files = AgentFiles::new().unwrap();
+        let id = "tool-example-001";
+        let result = model_tool_preview("read", id, "Example source", false, &files);
+        assert!(result.contains("\"kind\":\"tool_call\",\"reference\":\"tool-example-001\""));
+        assert!(result.ends_with("Example source"));
+        assert_eq!(
+            model_tool_preview("bash", id, "Denied", true, &files),
+            "Denied"
+        );
+        assert_eq!(
+            model_tool_preview("findings_read", id, "{}", false, &files),
+            "{}"
+        );
+        std::fs::remove_dir_all(files.root()).unwrap();
+    }
+
+    #[cfg(all(feature = "graphs", feature = "findings"))]
+    #[test]
+    fn pipeline_finding_stages_follow_top_level_responsibilities() {
+        use beale_graphs::Role;
+        assert!(pipeline_finding_allowed(
+            Role::Discovery,
+            "findings_create",
+            &json!({})
+        ));
+        assert!(pipeline_finding_allowed(
+            Role::Discovery,
+            "findings_update",
+            &json!({"state":"candidate"})
+        ));
+        assert!(!pipeline_finding_allowed(
+            Role::Discovery,
+            "findings_complete_state",
+            &json!({"state":"validated"})
+        ));
+        assert!(pipeline_finding_allowed(
+            Role::Validation,
+            "findings_complete_state",
+            &json!({"state":"validated"})
+        ));
+        assert!(!pipeline_finding_allowed(
+            Role::Validation,
+            "findings_complete_state",
+            &json!({"state":"screened"})
+        ));
+        assert!(pipeline_finding_allowed(
+            Role::Reporter,
+            "findings_complete_state",
+            &json!({"state":"screened"})
+        ));
+        assert!(!pipeline_finding_allowed(
+            Role::Reporter,
+            "findings_create",
+            &json!({})
+        ));
+    }
 
     #[cfg(feature = "goal-mode")]
     #[test]
@@ -4224,7 +4609,7 @@ mod tests {
 
     #[cfg(feature = "graphs")]
     #[test]
-    fn invalid_delegation_does_not_consume_role_capacity() {
+    fn delegation_validation_accepts_repeated_valid_batches() {
         let runtime = beale_graphs::runtime(beale_graphs::OPENAI_ID).unwrap();
         let config = SessionGraphConfig::default();
         let fallback = GraphNodeModel {
@@ -4233,17 +4618,13 @@ mod tests {
             method: AuthMethod::ApiKey as i32,
             model: "example-model".to_owned(),
         };
-        let mut used = 0;
         let invalid =
             json!({"assignments":[{"role":"scout","task":"Inspect example","model_index":7}]});
-        assert!(reserve_delegations(runtime, &invalid, &config, &fallback, &mut used).is_err());
-        assert_eq!(used, 0);
+        assert!(validate_delegations(runtime, &invalid, &config, &fallback).is_err());
         let valid = json!({"assignments":[{"role":"scout","task":"Inspect example"}]});
-        reserve_delegations(runtime, &valid, &config, &fallback, &mut used).unwrap();
-        assert_eq!(used, 1);
-        used = beale_graphs::MAX_ASSIGNMENTS_PER_TURN;
-        assert!(reserve_delegations(runtime, &valid, &config, &fallback, &mut used).is_err());
-        assert_eq!(used, beale_graphs::MAX_ASSIGNMENTS_PER_TURN);
+        for _ in 0..20 {
+            validate_delegations(runtime, &valid, &config, &fallback).unwrap();
+        }
     }
 
     #[cfg(feature = "graphs")]
@@ -4285,6 +4666,26 @@ mod tests {
         ];
         assert_eq!(compact_openai_context(&context), context[1..]);
         assert_eq!(compact_openai_context(&context[0..1]), context[0..1]);
+    }
+
+    #[test]
+    fn closes_unreviewed_parallel_calls_before_saving_or_replaying_context() {
+        let mut context = vec![
+            json!({"role":"user","content":"Inspect example.test"}),
+            json!({"type":"function_call","call_id":"call-one","name":"read","arguments":"{}"}),
+            json!({"type":"function_call","call_id":"call-two","name":"bash","arguments":"{}"}),
+            json!({"type":"function_call","call_id":"call-three","name":"bash","arguments":"{}"}),
+            json!({"type":"function_call_output","call_id":"call-one","output":"Example result"}),
+        ];
+        close_unanswered_openai_calls(&mut context);
+        assert_eq!(context.len(), 7);
+        assert_eq!(context[5]["call_id"], "call-two");
+        assert_eq!(context[6]["call_id"], "call-three");
+        assert!(context[5]["output"].as_str().unwrap().contains("not run"));
+        close_unanswered_openai_calls(&mut context);
+        assert_eq!(context.len(), 7);
+        context.push(json!({"role":"user","content":"Continue"}));
+        assert_eq!(context[7]["role"], "user");
     }
 
     #[test]
@@ -4871,6 +5272,138 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    #[test]
+    fn long_turn_detail_keeps_recent_tools_and_commentary_order() {
+        let root = std::env::temp_dir().join(format!("beale-session-example-{}", Uuid::new_v4()));
+        let db = HostDatabase::open(&root).unwrap();
+        let session = SessionRow {
+            id: Uuid::new_v4().to_string(),
+            workspace_id: Uuid::new_v4().to_string(),
+            title: "Example".to_owned(),
+            created_at_ms: 1,
+            last_message_at_ms: 1,
+        };
+        let tools = (0..4_100)
+            .map(|ordinal| ToolCallRow {
+                id: format!("tool-example-{ordinal}"),
+                turn_number: 1,
+                ordinal,
+                name: "read".to_owned(),
+                summary: "Read example.txt".to_owned(),
+                arguments: "{}".to_owned(),
+                output: String::new(),
+                is_error: false,
+                agent_role: "main".to_owned(),
+            })
+            .collect::<Vec<_>>();
+        db.append_turn_with_full_activity(
+            &session,
+            &TurnRow {
+                number: 1,
+                provider: ProviderId::Openai as i32,
+                method: AuthMethod::ApiKey as i32,
+                model: "example-model".to_owned(),
+                prompt: "Example prompt".to_owned(),
+                answer: "Example answer".to_owned(),
+                duration_ms: 1,
+                internal_prompt: false,
+            },
+            true,
+            &tools,
+            &[],
+            &[CommentaryRow {
+                turn_number: 1,
+                ordinal: 0,
+                after_tool_count: 4_099,
+                text: "Checking recent results.".to_owned(),
+                agent_role: "main".to_owned(),
+            }],
+        )
+        .unwrap();
+        let (loaded, turns) = load_persisted(&db, Uuid::parse_str(&session.id).unwrap()).unwrap();
+        let detail = detail(&db, &loaded, &turns).unwrap();
+        let assistant = &detail.messages[1];
+        assert_eq!(assistant.tools.len(), SESSION_DETAIL_MAX_TOOL_SUMMARIES);
+        assert_eq!(assistant.tools.first().unwrap().id, "tool-example-4");
+        assert_eq!(assistant.tools.last().unwrap().id, "tool-example-4099");
+        assert_eq!(assistant.commentary[0].after_tool_count, 4_095);
+        drop(db);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(feature = "graphs")]
+    #[test]
+    fn saved_subagent_messages_stay_in_child_detail() {
+        let root = std::env::temp_dir().join(format!("beale-session-example-{}", Uuid::new_v4()));
+        let db = HostDatabase::open(&root).unwrap();
+        let session = SessionRow {
+            id: Uuid::new_v4().to_string(),
+            workspace_id: Uuid::new_v4().to_string(),
+            title: "Example".to_owned(),
+            created_at_ms: 1,
+            last_message_at_ms: 1,
+        };
+        let child = ChildTurnRow {
+            agent_id: Uuid::new_v4().to_string(),
+            role: "scout".to_owned(),
+            task: "Inspect example input".to_owned(),
+            result: "Example result".to_owned(),
+            is_error: false,
+            messages_json: json!([
+                {"role":"assistant","text":"Checking the example input."},
+                {"role":"assistant","text":"Example result"}
+            ])
+            .to_string(),
+            reasoning_json: "[]".to_owned(),
+            completed_at_ms: 2,
+        };
+        db.append_turn_with_metadata(
+            &session,
+            &TurnRow {
+                number: 1,
+                provider: ProviderId::Openai as i32,
+                method: AuthMethod::ApiKey as i32,
+                model: "example-model".to_owned(),
+                prompt: "Example prompt".to_owned(),
+                answer: "Example answer".to_owned(),
+                duration_ms: 1,
+                internal_prompt: false,
+            },
+            true,
+            TurnActivity {
+                tools: &[],
+                reasoning: &[],
+                commentary: &[],
+                goal: None,
+            },
+            None,
+            TurnMetadata {
+                child_turns: &[child],
+                ..TurnMetadata::default()
+            },
+        )
+        .unwrap();
+        let (loaded, turns) = load_persisted(&db, Uuid::parse_str(&session.id).unwrap()).unwrap();
+        let detail = detail(&db, &loaded, &turns).unwrap();
+        assert!(detail.messages[1].commentary.is_empty());
+        assert_eq!(detail.subagents.len(), 1);
+        assert_eq!(detail.subagents[0].role, "scout");
+        assert_eq!(detail.subagents[0].parent_role, "main");
+        assert_eq!(detail.subagents[0].status, "completed");
+        let stored = db
+            .session_child(&session.id, &detail.subagents[0].id)
+            .unwrap()
+            .unwrap();
+        assert!(
+            stored
+                .turn
+                .messages_json
+                .contains("Checking the example input.")
+        );
+        drop(db);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[tokio::test]
     async fn routes_require_host_auth_and_a_registered_workspace() {
         let root = std::env::temp_dir().join(format!("beale-session-example-{}", Uuid::new_v4()));
@@ -5099,6 +5632,163 @@ mod tests {
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].last_message_at_ms, 1);
         assert!(db.session(&session_id).unwrap().is_some());
+        drop(db);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn subagent_detail_is_authenticated_and_scoped_to_its_session() {
+        let root = std::env::temp_dir().join(format!("beale-session-example-{}", Uuid::new_v4()));
+        let workspace_id = Uuid::new_v4().to_string();
+        let session_id = Uuid::new_v4().to_string();
+        let child_id = Uuid::new_v4().to_string();
+        let tool_id = Uuid::new_v4().to_string();
+        let db = HostDatabase::open(&root).unwrap();
+        db.replace_workspaces(&[beale_storage::WorkspaceRow {
+            id: workspace_id.clone(),
+            name: "Example Workspace".to_owned(),
+            directory: "example-directory".to_owned(),
+        }])
+        .unwrap();
+        let mut child_messages = vec![
+            json!({"role":"reasoning","text":"Checking the example boundary."}),
+            json!({"role":"tool","tool_call_id":tool_id,"name":"read","summary":"Read example.txt","is_error":false}),
+            json!({"role":"assistant","text":"Example observation"}),
+        ];
+        child_messages.extend(
+            (0..70)
+                .map(|index| json!({"role":"assistant","text":format!("Synthetic note {index}")})),
+        );
+        let child = ChildTurnRow {
+            agent_id: child_id.clone(),
+            role: "scout".to_owned(),
+            task: "Inspect the example fixture".to_owned(),
+            result: "Example observation".to_owned(),
+            is_error: false,
+            messages_json: Value::Array(child_messages).to_string(),
+            reasoning_json: "[]".to_owned(),
+            completed_at_ms: 2,
+        };
+        let tool = ToolCallRow {
+            id: tool_id,
+            turn_number: 1,
+            ordinal: 0,
+            name: "read".to_owned(),
+            summary: "Read example.txt".to_owned(),
+            arguments: "{}".to_owned(),
+            output: "Synthetic output".to_owned(),
+            is_error: false,
+            agent_role: "main".to_owned(),
+        };
+        db.append_turn_with_metadata(
+            &SessionRow {
+                id: session_id.clone(),
+                workspace_id,
+                title: "Example session".to_owned(),
+                created_at_ms: 1,
+                last_message_at_ms: 1,
+            },
+            &TurnRow {
+                number: 1,
+                provider: ProviderId::Openai as i32,
+                method: AuthMethod::ApiKey as i32,
+                model: "model-example".to_owned(),
+                prompt: "Example question".to_owned(),
+                answer: "Example answer".to_owned(),
+                duration_ms: 1,
+                internal_prompt: false,
+            },
+            true,
+            TurnActivity {
+                tools: &[tool],
+                reasoning: &[],
+                commentary: &[],
+                goal: None,
+            },
+            None,
+            TurnMetadata {
+                child_turns: &[child],
+                ..TurnMetadata::default()
+            },
+        )
+        .unwrap();
+        let app = router(
+            "example-token".to_owned(),
+            WorkspaceStore::at(root.clone()).unwrap(),
+        )
+        .unwrap();
+        let path = SESSION_SUBAGENT_DETAIL_PATH
+            .replace("{id}", &session_id)
+            .replace("{agent_id}", &child_id);
+        let request = |path: &str, authorized: bool| {
+            let builder = Request::builder().uri(path);
+            let builder = if authorized {
+                builder.header("authorization", "Bearer example-token")
+            } else {
+                builder
+            };
+            builder.body(Body::empty()).unwrap()
+        };
+        assert_eq!(
+            app.clone()
+                .oneshot(request(&path, false))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        let reply = app.clone().oneshot(request(&path, true)).await.unwrap();
+        assert_eq!(reply.status(), StatusCode::OK);
+        let body = to_bytes(reply.into_body(), 65_536).await.unwrap();
+        let detail = SessionSubagentDetail::decode(body).unwrap();
+        assert_eq!(detail.summary.as_ref().unwrap().id, child_id);
+        assert_eq!(
+            detail
+                .items
+                .iter()
+                .take(3)
+                .map(|item| item.kind.as_str())
+                .collect::<Vec<_>>(),
+            ["reasoning", "tool", "message"]
+        );
+        assert_eq!(
+            (detail.offset, detail.next_offset, detail.total_items),
+            (0, 64, 73)
+        );
+        assert!(detail.result.is_empty());
+        assert_eq!(
+            detail.items[1].tool.as_ref().unwrap().summary,
+            "Read example.txt"
+        );
+        assert!(!String::from_utf8_lossy(&detail.encode_to_vec()).contains("Synthetic output"));
+        let final_reply = app
+            .clone()
+            .oneshot(request(&format!("{path}?offset=64"), true))
+            .await
+            .unwrap();
+        assert_eq!(final_reply.status(), StatusCode::OK);
+        let final_body = to_bytes(final_reply.into_body(), 65_536).await.unwrap();
+        let final_page = SessionSubagentDetail::decode(final_body).unwrap();
+        assert_eq!(
+            (
+                final_page.offset,
+                final_page.next_offset,
+                final_page.total_items
+            ),
+            (64, 73, 73)
+        );
+        assert_eq!(final_page.items.len(), 9);
+        assert_eq!(final_page.result, "Example observation");
+        let other_path = SESSION_SUBAGENT_DETAIL_PATH
+            .replace("{id}", &Uuid::new_v4().to_string())
+            .replace("{agent_id}", &child_id);
+        assert_eq!(
+            app.oneshot(request(&other_path, true))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NOT_FOUND
+        );
         drop(db);
         std::fs::remove_dir_all(root).unwrap();
     }

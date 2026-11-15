@@ -526,6 +526,9 @@ enum SessionStreamKind {
   SESSION_STREAM_KIND_SESSION_STARTED = 10;
   SESSION_STREAM_KIND_AGENT_TURN_COMPLETED = 11;
   SESSION_STREAM_KIND_AGENT_STARTED = 12;
+  SESSION_STREAM_KIND_USAGE_UPDATED = 13;
+  SESSION_STREAM_KIND_SUBAGENT_STARTED = 14;
+  SESSION_STREAM_KIND_SUBAGENT_COMPLETED = 15;
 }
 
 message SessionStreamEvent {
@@ -537,6 +540,9 @@ message SessionStreamEvent {
   RunbookProgress runbook_progress = 6;
   string agent_role = 7;
   SessionToolDetailPage tool_detail = 8;
+  SessionModelUsage usage_delta = 9; // One completed model call; not yet in saved session detail.
+  string subagent_id = 10; // Present for a child agent's own activity.
+  SessionSubagentSummary subagent = 11; // Lifecycle update for a child agent.
 }
 
 message RunbookProgress {
@@ -614,6 +620,41 @@ message SessionDetail {
   repeated SessionModelUsage model_usage = 18;
   repeated SessionGraphAgent graph_agents = 19;
   repeated SessionGraphHandoff graph_handoffs = 20;
+  repeated SessionAgentMetrics agent_metrics = 21; // Saved usage for each top-level graph agent and its subagents.
+  repeated SessionSubagentSummary subagents = 22;
+}
+
+message SessionSubagentSummary {
+  string id = 1;
+  string parent_role = 2;
+  string role = 3;
+  string task = 4;
+  string status = 5; // active, completed, or failed.
+  uint64 completed_at_ms = 6;
+}
+
+message SessionSubagentItem {
+  string kind = 1; // message, reasoning, or tool.
+  string text = 2;
+  SessionToolSummary tool = 3;
+}
+
+message SessionSubagentDetail {
+  SessionSubagentSummary summary = 1;
+  repeated SessionSubagentItem items = 2;
+  string result = 3;
+  uint64 offset = 4;
+  uint64 next_offset = 5;
+  uint64 total_items = 6;
+  string task = 7; // Full assignment text; list summaries carry only a preview.
+}
+
+message SessionAgentMetrics {
+  string role = 1;
+  SessionTokenUsage token_usage = 2;
+  repeated SessionModelUsage model_usage = 3;
+  repeated SessionUsageSnapshot usage_snapshots = 4;
+  uint64 duration_ms = 5;
 }
 
 message SessionGraphAgent {

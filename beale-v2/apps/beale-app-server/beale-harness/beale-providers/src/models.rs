@@ -1,4 +1,4 @@
-use crate::{AuthMode, CredentialStore, Provider, ProviderClient};
+use crate::{AuthMode, CredentialStore, Provider, ProviderClient, credentials::ModelDefaults};
 use anyhow::{Context, Result, bail, ensure};
 use futures_util::StreamExt;
 use serde_json::Value;
@@ -32,6 +32,26 @@ impl ProviderClient {
             return crate::subscription::catalog(provider, store);
         }
         let token = self.token(provider, mode, store).await?;
+        let result = self.list_live_models(provider, mode, store, &token).await;
+        if result.is_err()
+            && provider == Provider::OpenAi
+            && mode == AuthMode::Subscription
+            && let Ok(Some(defaults)) = store.load_model_defaults("openai", "subscription")
+            && let Ok(daybreak_mode) = store.daybreak_mode()
+            && let Some(catalog) = saved_openai_catalog(defaults, daybreak_mode)
+        {
+            return Ok(catalog);
+        }
+        result
+    }
+
+    async fn list_live_models(
+        &self,
+        provider: Provider,
+        mode: AuthMode,
+        store: &CredentialStore,
+        token: &str,
+    ) -> Result<ModelCatalog> {
         let endpoint = match (provider, mode) {
             (Provider::OpenAi, _) => "https://api.openai.com/v1/models",
             (Provider::Xai, AuthMode::ApiKey) => "https://api.x.ai/v1/language-models",
@@ -104,6 +124,24 @@ impl ProviderClient {
             small_model,
         })
     }
+}
+
+fn saved_openai_catalog(defaults: ModelDefaults, daybreak_mode: &str) -> Option<ModelCatalog> {
+    let ids = [&defaults.lead, &defaults.small];
+    if ids.iter().any(|id| {
+        !valid_id(id) || (daybreak_mode == "blue" && crate::wire::openai_requires_daybreak_red(id))
+    }) {
+        return None;
+    }
+    let mut models = Vec::new();
+    for id in ids {
+        push_model(&mut models, id, &id.replace('-', " "));
+    }
+    Some(ModelCatalog {
+        models,
+        lead_model: defaults.lead,
+        small_model: defaults.small,
+    })
 }
 
 fn filter_for_daybreak(
@@ -344,6 +382,35 @@ mod tests {
         assert_eq!(
             filter_for_daybreak(models.clone(), Provider::OpenAi, Some("red")),
             models
+        );
+    }
+
+    #[test]
+    fn saved_openai_defaults_are_usable_only_in_allowed_daybreak_mode() {
+        let defaults = ModelDefaults {
+            lead: "gpt-5.6-sol".to_owned(),
+            small: "gpt-6-luna".to_owned(),
+        };
+        let catalog = saved_openai_catalog(defaults.clone(), "blue").unwrap();
+        assert_eq!(catalog.lead_model, defaults.lead);
+        assert_eq!(catalog.small_model, defaults.small);
+        assert_eq!(catalog.models.len(), 2);
+
+        let red_only = ModelDefaults {
+            lead: "gpt-6.1-sol".to_owned(),
+            small: "gpt-6-luna".to_owned(),
+        };
+        assert!(saved_openai_catalog(red_only.clone(), "blue").is_none());
+        assert!(saved_openai_catalog(red_only, "red").is_some());
+        assert!(
+            saved_openai_catalog(
+                ModelDefaults {
+                    lead: "bad model".to_owned(),
+                    small: "gpt-6-luna".to_owned(),
+                },
+                "blue",
+            )
+            .is_none()
         );
     }
 

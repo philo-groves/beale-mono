@@ -235,6 +235,58 @@ pub struct ChildTurnRow {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionChildRow {
+    pub parent_role: String,
+    pub turn: ChildTurnRow,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionChildSummaryRow {
+    pub parent_role: String,
+    pub agent_id: String,
+    pub role: String,
+    pub task: String,
+    pub is_error: bool,
+    pub completed_at_ms: i64,
+}
+
+impl From<&SessionChildRow> for SessionChildSummaryRow {
+    fn from(row: &SessionChildRow) -> Self {
+        Self {
+            parent_role: row.parent_role.clone(),
+            agent_id: row.turn.agent_id.clone(),
+            role: row.turn.role.clone(),
+            task: row.turn.task.clone(),
+            is_error: row.turn.is_error,
+            completed_at_ms: row.turn.completed_at_ms,
+        }
+    }
+}
+
+fn session_child_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionChildRow> {
+    Ok(SessionChildRow {
+        parent_role: row.get(0)?,
+        turn: ChildTurnRow {
+            agent_id: row.get(1)?,
+            role: row.get(2)?,
+            task: row.get(3)?,
+            result: row.get(4)?,
+            is_error: row.get(5)?,
+            messages_json: row.get(6)?,
+            reasoning_json: row.get(7)?,
+            completed_at_ms: row.get(8)?,
+        },
+    })
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChildAssistantMessageRow {
+    pub parent_turn: i64,
+    pub role: String,
+    pub text: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MemoryTurnJob {
     pub id: i64,
     pub workspace_id: String,
@@ -368,6 +420,7 @@ pub struct ToolCallRow {
 pub struct ToolCallSummaryRow {
     pub id: String,
     pub turn_number: i64,
+    pub ordinal: i64,
     pub name: String,
     pub summary: String,
     pub is_error: bool,
@@ -1267,6 +1320,14 @@ impl HostDatabase {
     }
 
     pub fn session_usage_totals(&self, session_id: &str) -> Result<SessionUsageTotals> {
+        self.session_usage_totals_for_role(session_id, None)
+    }
+
+    pub fn session_usage_totals_for_role(
+        &self,
+        session_id: &str,
+        role: Option<&str>,
+    ) -> Result<SessionUsageTotals> {
         self.with_connection(|connection| {
             Ok(connection.query_row(
                 "SELECT COALESCE(SUM(COALESCE(input_tokens, 0)), 0),
@@ -1276,8 +1337,10 @@ impl HostDatabase {
                         COALESCE(SUM(COALESCE(cache_read_tokens, 0)), 0),
                         COALESCE(SUM(CASE WHEN cache_read_tokens IS NOT NULL THEN input_tokens ELSE 0 END), 0),
                         COUNT(cache_read_tokens)
-                 FROM session_model_usage WHERE session_id = ?1",
-                [session_id],
+                 FROM session_model_usage m LEFT JOIN session_graph_turns g
+                   ON g.session_id=m.session_id AND g.turn_number=m.turn_number
+                 WHERE m.session_id = ?1 AND (?2 IS NULL OR g.agent_role=?2)",
+                params![session_id, role],
                 |row| Ok(SessionUsageTotals {
                     input_tokens: row.get(0)?,
                     output_tokens: row.get(1)?,
@@ -1292,6 +1355,14 @@ impl HostDatabase {
     }
 
     pub fn session_model_totals(&self, session_id: &str) -> Result<Vec<SessionModelUsageRow>> {
+        self.session_model_totals_for_role(session_id, None)
+    }
+
+    pub fn session_model_totals_for_role(
+        &self,
+        session_id: &str,
+        role: Option<&str>,
+    ) -> Result<Vec<SessionModelUsageRow>> {
         self.with_connection(|connection| {
             let mut statement = connection.prepare(
                 "SELECT provider, method, model, role,
@@ -1300,10 +1371,12 @@ impl HostDatabase {
                         SUM(COALESCE(cache_read_tokens, 0)),
                         SUM(CASE WHEN cache_read_tokens IS NOT NULL THEN COALESCE(input_tokens, 0) ELSE 0 END),
                         COUNT(cache_read_tokens)
-                 FROM session_model_usage WHERE session_id = ?1
+                 FROM session_model_usage m LEFT JOIN session_graph_turns g
+                   ON g.session_id=m.session_id AND g.turn_number=m.turn_number
+                 WHERE m.session_id = ?1 AND (?2 IS NULL OR g.agent_role=?2)
                  GROUP BY provider, method, model, role ORDER BY provider, method, model, role LIMIT 1025",
             )?;
-            let rows = statement.query_map([session_id], |row| Ok(SessionModelUsageRow {
+            let rows = statement.query_map(params![session_id, role], |row| Ok(SessionModelUsageRow {
                 provider: row.get(0)?, method: row.get(1)?, model: row.get(2)?, role: row.get(3)?,
                 totals: SessionUsageTotals {
                     input_tokens: row.get(4)?, output_tokens: row.get(5)?, measured_calls: row.get(6)?,
@@ -1319,6 +1392,14 @@ impl HostDatabase {
         &self,
         session_id: &str,
     ) -> Result<Vec<SessionUsageSnapshotRow>> {
+        self.session_usage_snapshots_for_role(session_id, None)
+    }
+
+    pub fn session_usage_snapshots_for_role(
+        &self,
+        session_id: &str,
+        role: Option<&str>,
+    ) -> Result<Vec<SessionUsageSnapshotRow>> {
         const INTERVAL_MS: u64 = 300_000;
         const MAX_SNAPSHOTS: u64 = 2_048;
         self.with_connection(|connection| {
@@ -1326,7 +1407,9 @@ impl HostDatabase {
                 "WITH turn_work AS (
                      SELECT number, duration_ms,
                             SUM(duration_ms) OVER (ORDER BY number ROWS UNBOUNDED PRECEDING) - duration_ms AS prior_ms
-                     FROM session_turns WHERE session_id = ?1
+                     FROM session_turns t LEFT JOIN session_graph_turns g
+                       ON g.session_id=t.session_id AND g.turn_number=t.number
+                     WHERE t.session_id = ?1 AND (?2 IS NULL OR g.agent_role=?2)
                  )
                  SELECT t.prior_ms, t.duration_ms, m.ordinal, m.input_tokens,
                         m.output_tokens, m.cache_read_tokens, m.work_elapsed_ms, m.role
@@ -1334,7 +1417,7 @@ impl HostDatabase {
                    ON m.session_id = ?1 AND m.turn_number = t.number
                  ORDER BY t.number, m.ordinal",
             )?;
-            let rows = statement.query_map([session_id], |row| {
+            let rows = statement.query_map(params![session_id, role], |row| {
                 Ok((
                     row.get::<_, i64>(0)?,
                     row.get::<_, i64>(1)?,
@@ -2407,6 +2490,19 @@ impl HostDatabase {
         })
     }
 
+    pub fn session_agent_duration_ms(&self, session_id: &str, role: &str) -> Result<u64> {
+        self.with_connection(|connection| {
+            let total: i64 = connection.query_row(
+                "SELECT COALESCE(SUM(t.duration_ms),0) FROM session_turns t
+                 JOIN session_graph_turns g ON g.session_id=t.session_id AND g.turn_number=t.number
+                 WHERE t.session_id=?1 AND g.agent_role=?2",
+                params![session_id, role],
+                |row| row.get(0),
+            )?;
+            u64::try_from(total).map_err(Into::into)
+        })
+    }
+
     pub fn session_has_campaign_activity(&self, id: &str) -> Result<bool> {
         self.with_connection(|connection| {
             connection
@@ -2812,7 +2908,6 @@ impl HostDatabase {
                 params![session.id, turn.number],
             )?;
             if let Some(model_usage) = model_usage {
-                ensure!(model_usage.len() <= 512, "too many model calls in turn");
                 for (ordinal, item) in model_usage.iter().enumerate() {
                     ensure!(!item.agent_id.is_empty() && item.agent_id.len() <= 64
                         && item.model.len() <= 200 && item.role.len() <= 20
@@ -2878,9 +2973,6 @@ impl HostDatabase {
                 ensure!(
                     !child.agent_id.is_empty() && child.agent_id.len() <= 64
                         && child.role.len() <= 32 && child.task.len() <= 16_384
-                        && child.result.len() <= 65_536
-                        && child.messages_json.len() <= 1_048_576
-                        && child.reasoning_json.len() <= 131_072
                         && child.completed_at_ms >= 0,
                     "invalid child transcript"
                 );
@@ -2967,17 +3059,20 @@ impl HostDatabase {
     ) -> Result<Vec<ToolCallSummaryRow>> {
         self.with_connection(|connection| {
             let mut statement = connection.prepare(
-                "SELECT id, turn_number, name, summary, is_error, agent_role FROM session_tool_calls
-                 WHERE session_id = ?1 AND turn_number >= ?2 ORDER BY turn_number, ordinal LIMIT 4097",
+                "SELECT id, turn_number, ordinal, name, summary, is_error, agent_role FROM
+                 (SELECT id, turn_number, ordinal, name, summary, is_error, agent_role FROM session_tool_calls
+                  WHERE session_id = ?1 AND turn_number >= ?2 ORDER BY turn_number DESC, ordinal DESC LIMIT 4097)
+                 ORDER BY turn_number, ordinal",
             )?;
             let rows = statement.query_map(params![session_id, first_turn], |row| {
                 Ok(ToolCallSummaryRow {
                     id: row.get(0)?,
                     turn_number: row.get(1)?,
-                    name: row.get(2)?,
-                    summary: row.get(3)?,
-                    is_error: row.get(4)?,
-                    agent_role: row.get(5)?,
+                    ordinal: row.get(2)?,
+                    name: row.get(3)?,
+                    summary: row.get(4)?,
+                    is_error: row.get(5)?,
+                    agent_role: row.get(6)?,
                 })
             })?;
             rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -2993,19 +3088,22 @@ impl HostDatabase {
         let turns_json = serde_json::to_string(turns)?;
         self.with_connection(|connection| {
             let mut statement = connection.prepare(
-                "SELECT id, turn_number, name, summary, is_error, agent_role FROM session_tool_calls
-                 WHERE session_id=?1 AND turn_number IN (SELECT value FROM json_each(?2))
-                 ORDER BY turn_number, ordinal LIMIT 4097",
+                "SELECT id, turn_number, ordinal, name, summary, is_error, agent_role FROM
+                 (SELECT id, turn_number, ordinal, name, summary, is_error, agent_role FROM session_tool_calls
+                  WHERE session_id=?1 AND turn_number IN (SELECT value FROM json_each(?2))
+                  ORDER BY turn_number DESC, ordinal DESC LIMIT 4097)
+                 ORDER BY turn_number, ordinal",
             )?;
             statement
                 .query_map(params![session_id, turns_json], |row| {
                     Ok(ToolCallSummaryRow {
                         id: row.get(0)?,
                         turn_number: row.get(1)?,
-                        name: row.get(2)?,
-                        summary: row.get(3)?,
-                        is_error: row.get(4)?,
-                        agent_role: row.get(5)?,
+                        ordinal: row.get(2)?,
+                        name: row.get(3)?,
+                        summary: row.get(4)?,
+                        is_error: row.get(5)?,
+                        agent_role: row.get(6)?,
                     })
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()
@@ -3104,6 +3202,71 @@ impl HostDatabase {
                 turn_number: row.get(0)?, ordinal: row.get(1)?, after_tool_count: row.get(2)?,
                 text: row.get(3)?, agent_role: row.get(4)?,
             }))?.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+        })
+    }
+
+    pub fn child_assistant_messages_for_turns(
+        &self,
+        session_id: &str,
+        turns: &[i64],
+    ) -> Result<Vec<ChildAssistantMessageRow>> {
+        let turns_json = serde_json::to_string(turns)?;
+        self.with_connection(|connection| {
+            let mut statement = connection.prepare(
+                "SELECT parent_turn, role, text FROM (
+                   SELECT c.parent_turn, c.role, json_extract(m.value,'$.text') AS text,
+                          c.completed_at_ms AS completed_at, CAST(m.key AS INTEGER) AS message_index
+                   FROM session_child_turns c, json_each(c.messages_json) m
+                   WHERE c.session_id=?1
+                     AND c.parent_turn IN (SELECT value FROM json_each(?2))
+                     AND json_extract(m.value,'$.role')='assistant'
+                     AND json_type(m.value,'$.text')='text'
+                   ORDER BY c.parent_turn DESC, completed_at DESC, message_index DESC LIMIT 256
+                 ) ORDER BY parent_turn, completed_at, message_index",
+            )?;
+            statement
+                .query_map(params![session_id, turns_json], |row| {
+                    Ok(ChildAssistantMessageRow {
+                        parent_turn: row.get(0)?,
+                        role: row.get(1)?,
+                        text: row.get(2)?,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(Into::into)
+        })
+    }
+
+    pub fn session_children(&self, session_id: &str) -> Result<Vec<SessionChildSummaryRow>> {
+        self.with_connection(|connection| {
+            let mut statement = connection.prepare(
+                "SELECT COALESCE(g.agent_role,'main'),c.agent_id,c.role,c.task,c.is_error,c.completed_at_ms
+                 FROM session_child_turns c
+                 LEFT JOIN session_graph_turns g ON g.session_id=c.session_id AND g.turn_number=c.parent_turn
+                 WHERE c.session_id=?1 ORDER BY c.completed_at_ms DESC,c.agent_id LIMIT 1024",
+            )?;
+            statement.query_map(params![session_id], |row| Ok(SessionChildSummaryRow {
+                parent_role: row.get(0)?, agent_id: row.get(1)?, role: row.get(2)?,
+                task: row.get(3)?, is_error: row.get(4)?, completed_at_ms: row.get(5)?,
+            }))?
+                .collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+        })
+    }
+
+    pub fn session_child(
+        &self,
+        session_id: &str,
+        agent_id: &str,
+    ) -> Result<Option<SessionChildRow>> {
+        self.with_connection(|connection| {
+            connection.query_row(
+                "SELECT COALESCE(g.agent_role,'main'),c.agent_id,c.role,c.task,c.result,
+                        c.is_error,c.messages_json,c.reasoning_json,c.completed_at_ms
+                 FROM session_child_turns c
+                 LEFT JOIN session_graph_turns g ON g.session_id=c.session_id AND g.turn_number=c.parent_turn
+                 WHERE c.session_id=?1 AND c.agent_id=?2",
+                params![session_id, agent_id], session_child_row,
+            ).optional().map_err(Into::into)
         })
     }
 
@@ -3512,6 +3675,138 @@ fn restrict_windows_acl(path: &Path, directory: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn long_graph_turn_commits_usage_and_child_transcript_without_work_quota() {
+        let root = root();
+        let db = HostDatabase::open(&root).unwrap();
+        let session = SessionRow {
+            id: "session-example".to_owned(),
+            workspace_id: "workspace-example".to_owned(),
+            title: "Example research".to_owned(),
+            created_at_ms: 1,
+            last_message_at_ms: 2,
+        };
+        let usage = (0..513)
+            .map(|ordinal| ModelUsageRow {
+                agent_id: "scout-example".to_owned(),
+                role: "scout".to_owned(),
+                provider: 1,
+                method: 1,
+                model: "example-model".to_owned(),
+                input_tokens: Some(100),
+                output_tokens: Some(10),
+                cache_read_tokens: None,
+                work_elapsed_ms: Some(ordinal * 1_000),
+                duration_ms: 100,
+                observed_at_ms: ordinal * 1_000 + 1,
+            })
+            .collect::<Vec<_>>();
+        let child = ChildTurnRow {
+            agent_id: "scout-example".to_owned(),
+            role: "scout".to_owned(),
+            task: "Inspect a synthetic component".to_owned(),
+            result: "x".repeat(65_537),
+            is_error: false,
+            messages_json: serde_json::json!([{"role":"assistant","text":"x".repeat(1_048_577)}])
+                .to_string(),
+            reasoning_json: serde_json::json!(["x".repeat(131_073)]).to_string(),
+            completed_at_ms: 513_001,
+        };
+        db.append_turn_with_metadata(
+            &session,
+            &TurnRow {
+                number: 1,
+                provider: 1,
+                method: 1,
+                model: "example-model".to_owned(),
+                prompt: "Inspect the example".to_owned(),
+                answer: "Example result".to_owned(),
+                duration_ms: 513_001,
+                internal_prompt: false,
+            },
+            true,
+            TurnActivity {
+                tools: &[],
+                reasoning: &[],
+                commentary: &[],
+                goal: None,
+            },
+            None,
+            TurnMetadata {
+                model_usage: Some(&usage),
+                child_turns: &[child],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(db.session_model_usage(&session.id).unwrap().len(), 513);
+        let saved: (i64, i64, i64) = db.with_connection(|connection| {
+            connection.query_row(
+                "SELECT length(result),length(messages_json),length(reasoning_json) FROM session_child_turns WHERE session_id=?1",
+                [&session.id],
+                |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?)),
+            ).map_err(Into::into)
+        }).unwrap();
+        assert!(saved.0 > 65_536 && saved.1 > 1_048_576 && saved.2 > 131_072);
+        drop(db);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn tool_summaries_keep_the_latest_calls_of_a_long_turn() {
+        let root = root();
+        let db = HostDatabase::open(&root).unwrap();
+        let session = SessionRow {
+            id: "session-example".to_owned(),
+            workspace_id: "workspace-example".to_owned(),
+            title: "Example session".to_owned(),
+            created_at_ms: 1,
+            last_message_at_ms: 2,
+        };
+        let tools = (0..4_100)
+            .map(|ordinal| ToolCallRow {
+                id: format!("tool-example-{ordinal}"),
+                turn_number: 1,
+                ordinal,
+                name: "read".to_owned(),
+                summary: "Read example.txt".to_owned(),
+                arguments: "{}".to_owned(),
+                output: String::new(),
+                is_error: false,
+                agent_role: "main".to_owned(),
+            })
+            .collect::<Vec<_>>();
+        db.append_turn_with_metadata(
+            &session,
+            &TurnRow {
+                number: 1,
+                provider: 1,
+                method: 1,
+                model: "example-model".to_owned(),
+                prompt: "Example prompt".to_owned(),
+                answer: "Example answer".to_owned(),
+                duration_ms: 1,
+                internal_prompt: false,
+            },
+            true,
+            TurnActivity {
+                tools: &tools,
+                reasoning: &[],
+                commentary: &[],
+                goal: None,
+            },
+            None,
+            TurnMetadata::default(),
+        )
+        .unwrap();
+        let summaries = db.tool_summaries_for_turns(&session.id, &[1]).unwrap();
+        assert_eq!(summaries.len(), 4_097);
+        assert_eq!(summaries.first().unwrap().ordinal, 3);
+        assert_eq!(summaries.last().unwrap().ordinal, 4_099);
+        drop(db);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn peer_agents_count_as_top_level_usage() {
@@ -5417,6 +5712,92 @@ mod tests {
         assert_eq!(
             db.pending_graph_handoffs("session-example").unwrap().len(),
             1
+        );
+        drop(db);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn graph_agent_metrics_include_own_subagents_and_exclude_peers() {
+        let root = root();
+        let db = HostDatabase::open(&root).unwrap();
+        let session = SessionRow {
+            id: "session-example".to_owned(),
+            workspace_id: "workspace-example".to_owned(),
+            title: "Example research".to_owned(),
+            created_at_ms: 1,
+            last_message_at_ms: 2,
+        };
+        db.create_peer_graph_session(&session, "openai_pipeline", b"example-config", None)
+            .unwrap();
+        for (role, calls) in [("discovery", 2), ("validation", 1)] {
+            let number = db.reserve_graph_turn(&session.id, role).unwrap();
+            let usage = (0..calls)
+                .map(|index| ModelUsageRow {
+                    agent_id: if index == 0 { role } else { "scout-example" }.to_owned(),
+                    role: if index == 0 { role } else { "scout" }.to_owned(),
+                    provider: 1,
+                    method: 1,
+                    model: "example-model".to_owned(),
+                    input_tokens: Some(100),
+                    output_tokens: Some(10),
+                    cache_read_tokens: None,
+                    duration_ms: 100,
+                    observed_at_ms: 1_000 + index,
+                    work_elapsed_ms: Some(100 + index),
+                })
+                .collect::<Vec<_>>();
+            db.append_turn_with_metadata(
+                &session,
+                &TurnRow {
+                    number,
+                    provider: 1,
+                    method: 1,
+                    model: "example-model".to_owned(),
+                    prompt: "Example task".to_owned(),
+                    answer: "Example answer".to_owned(),
+                    duration_ms: 1_000,
+                    internal_prompt: false,
+                },
+                false,
+                TurnActivity {
+                    tools: &[],
+                    reasoning: &[],
+                    commentary: &[],
+                    goal: None,
+                },
+                None,
+                TurnMetadata {
+                    model_usage: Some(&usage),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        }
+        let discovery = db
+            .session_usage_totals_for_role(&session.id, Some("discovery"))
+            .unwrap();
+        let validation = db
+            .session_usage_totals_for_role(&session.id, Some("validation"))
+            .unwrap();
+        assert_eq!(discovery.total_calls, 2);
+        assert_eq!(validation.total_calls, 1);
+        assert_eq!(discovery.input_tokens, 200);
+        assert_eq!(
+            db.session_model_totals_for_role(&session.id, Some("discovery"))
+                .unwrap()
+                .len(),
+            2
+        );
+        let points = db
+            .session_usage_snapshots_for_role(&session.id, Some("discovery"))
+            .unwrap();
+        assert_eq!(points.last().unwrap().totals.total_calls, 2);
+        assert_eq!(points.last().unwrap().subagent_totals.total_calls, 1);
+        assert_eq!(
+            db.session_agent_duration_ms(&session.id, "discovery")
+                .unwrap(),
+            1_000
         );
         drop(db);
         std::fs::remove_dir_all(root).unwrap();

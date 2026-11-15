@@ -402,7 +402,7 @@ async fn run_model(
             let mut streamed_reasoning = false;
             while let Some(progress) = progress_rx.recv().await {
                 let text = match progress {
-                    ProviderProgress::ReasoningDelta(text) => {
+                    ProviderProgress::ReasoningDelta(text, _) => {
                         streamed_reasoning = true;
                         text
                     }

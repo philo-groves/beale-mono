@@ -221,8 +221,8 @@ const RESPONSE_SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"
 
 fn step_prompt(request: &ToolStepRequest<'_>) -> Result<String> {
     anyhow::ensure!(
-        request.input.len() <= 192 && request.tools.len() <= 64,
-        "subscription input is too large"
+        request.tools.len() <= 64,
+        "subscription tool list is too large"
     );
     Ok(format!(
         "Conversation and available Beale tools (JSON):\n{}\n\nReturn a JSON object with `text` and `calls`. Each call needs a tool name and object arguments matching its listed schema. Return `calls: []` for a final answer. Beale executes calls and sends results in the next step. Do not execute tools yourself.",
@@ -357,6 +357,21 @@ pub async fn zcode_step(request: ToolStepRequest<'_>) -> Result<ProviderStep> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn long_subscription_conversation_is_not_rejected_by_item_count() {
+        let input = vec![json!({"role":"user","content":"Example"}); 193];
+        let prompt = step_prompt(&ToolStepRequest {
+            model: "example-model",
+            input: &input,
+            tools: &[],
+            instructions: None,
+            reasoning_effort: None,
+            workspace_root: None,
+        })
+        .unwrap();
+        assert!(prompt.contains("Example"));
+    }
 
     #[test]
     fn subscription_catalog_keeps_models_distinct() {
