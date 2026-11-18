@@ -3221,12 +3221,33 @@ async fn run_one_turn(
             } else if cfg!(feature = "agent-feedback") && call.name == "agent_feedback" {
                 "Record agent feedback".to_owned()
             } else if cfg!(feature = "surfaces") && call.name.starts_with("surface_") {
-                format!("{} surface", call.name.trim_start_matches("surface_"))
+                #[cfg(feature = "surfaces")]
+                {
+                    beale_surfaces::summary(
+                        &state.workspaces,
+                        &request.workspace_id,
+                        &call.name,
+                        args.as_ref().unwrap_or(&Value::Null),
+                    )
+                }
+                #[cfg(not(feature = "surfaces"))]
+                {
+                    base_tool_summary(&call.name, args.as_ref().unwrap_or(&Value::Null))
+                }
             } else if cfg!(feature = "findings") && call.name.starts_with("findings_") {
-                format!(
-                    "{} finding",
-                    call.name.trim_start_matches("findings_").replace('_', " ")
-                )
+                #[cfg(feature = "findings")]
+                {
+                    beale_findings::summary(
+                        &state.db,
+                        &request.workspace_id,
+                        &call.name,
+                        args.as_ref().unwrap_or(&Value::Null),
+                    )
+                }
+                #[cfg(not(feature = "findings"))]
+                {
+                    base_tool_summary(&call.name, args.as_ref().unwrap_or(&Value::Null))
+                }
             } else if cfg!(feature = "memories") && call.name.starts_with("memory_") {
                 format!(
                     "{} memory",

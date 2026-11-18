@@ -19,7 +19,7 @@
 
 #### Changed
 
-- V2 session transcripts combine adjacent base and Webfetch calls between commentary or reasoning entries, with counts by tool type and expandable call details. Standalone calls retain their path, command, query, or URL.
+- V2 session transcripts combine adjacent base, Webfetch, Surfaces, and Findings calls between commentary or reasoning entries, with counts by tool type and expandable call details. Standalone calls retain available paths, commands, queries, URLs, surface names, or finding titles.
 - V2 Auto-Review now labels unavailable decisions by safe failure category, retries one transient provider failure or malformed reply with a 45-second attempt limit, and preserves a valid Auto-Review denial if Guardian cannot complete. Unreviewed tools remain blocked, and a review outage stops the affected turn, including plugin and runbook calls, without retry loops.
 - V2 Auto-Review now receives the full bounded locator for repository surfaces, so a long authorized repo tier does not hide later entries from its scope check. Reviewer rules remain unchanged.
 - V2 Graphs now offers separate Concurrent and Sequential Research Pipelines. Sequential runs rotate one top-level agent at a time through the five stages and back to Audit Targets, using a configurable stage duration (60 minutes by default), a soft deadline reminder, a hard cutoff ten minutes later, and early advancement when downstream finding queues empty. Interrupted handoffs return to the queue. Protocol 2.23 adds the saved stage duration to requests and session details.

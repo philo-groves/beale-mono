@@ -1529,6 +1529,17 @@ fn webfetch_input(tool: &SessionToolSummary) -> Option<(&'static str, &str)> {
     }
 }
 
+fn summary_detail_value<'a>(summary: &'a str, prefix: &str) -> Option<&'a str> {
+    summary
+        .strip_prefix(prefix)
+        .or_else(|| {
+            summary
+                .split_once(": ")
+                .and_then(|(_, rest)| rest.strip_prefix(prefix))
+        })
+        .filter(|value| !value.is_empty())
+}
+
 fn tool_series_kind(tool: &SessionToolSummary) -> Option<&'static str> {
     match tool.name.as_str() {
         "read" => Some("read"),
@@ -1536,6 +1547,18 @@ fn tool_series_kind(tool: &SessionToolSummary) -> Option<&'static str> {
         "edit" => Some("edit"),
         "bash" => Some("bash"),
         "webfetch" => webfetch_input(tool).map(|(kind, _)| kind),
+        "surface_query" => Some("surface_query"),
+        "surface_read" => Some("surface_read"),
+        "surface_save" => Some("surface_save"),
+        "surface_mapping_edit" => Some("surface_mapping_edit"),
+        "surface_promote_element" => Some("surface_promote_element"),
+        "surface_threat_model_edit" => Some("surface_threat_model_edit"),
+        "findings_query" => Some("findings_query"),
+        "findings_read" => Some("findings_read"),
+        "findings_create" => Some("findings_create"),
+        "findings_update" => Some("findings_update"),
+        "findings_complete_state" => Some("findings_complete_state"),
+        "findings_reject" => Some("findings_reject"),
         _ => None,
     }
 }
@@ -1552,6 +1575,66 @@ fn tool_single_label(tool: &SessionToolSummary, active: bool) -> String {
             ("webfetch.url", true) => format!("Web viewing {value}"),
             _ => format!("Web viewed {value}"),
         };
+    }
+    if tool.name == "surface_query" {
+        let verb = if active {
+            "Searching surfaces"
+        } else {
+            "Searched surfaces"
+        };
+        return summary_detail_value(&tool.summary, "Surface query: ").map_or_else(
+            || verb.to_owned(),
+            |query| format!("{verb} for \"{query}\""),
+        );
+    }
+    let surface_verb = match (tool.name.as_str(), active) {
+        ("surface_read", true) => Some("Inspecting"),
+        ("surface_read", false) => Some("Inspected"),
+        ("surface_save", true) => Some("Persisting"),
+        ("surface_save", false) => Some("Persisted"),
+        ("surface_mapping_edit", true) => Some("Mapping"),
+        ("surface_mapping_edit", false) => Some("Mapped"),
+        ("surface_promote_element", true) => Some("Promoting"),
+        ("surface_promote_element", false) => Some("Promoted"),
+        ("surface_threat_model_edit", true) => Some("Modeling"),
+        ("surface_threat_model_edit", false) => Some("Modeled"),
+        _ => None,
+    };
+    if let Some(verb) = surface_verb {
+        return summary_detail_value(&tool.summary, "Surface name: ").map_or_else(
+            || format!("{verb} a surface"),
+            |name| format!("{verb} surface of {name}"),
+        );
+    }
+    if tool.name == "findings_query" {
+        let verb = if active {
+            "Searching findings"
+        } else {
+            "Searched findings"
+        };
+        return summary_detail_value(&tool.summary, "Finding query: ").map_or_else(
+            || verb.to_owned(),
+            |query| format!("{verb} for \"{query}\""),
+        );
+    }
+    let finding_verb = match (tool.name.as_str(), active) {
+        ("findings_read", true) => Some("Inspecting"),
+        ("findings_read", false) => Some("Inspected"),
+        ("findings_create", true) => Some("Creating"),
+        ("findings_create", false) => Some("Created"),
+        ("findings_update", true) => Some("Updating"),
+        ("findings_update", false) => Some("Updated"),
+        ("findings_complete_state", true) => Some("Transitioning"),
+        ("findings_complete_state", false) => Some("Transitioned"),
+        ("findings_reject", true) => Some("Rejecting"),
+        ("findings_reject", false) => Some("Rejected"),
+        _ => None,
+    };
+    if let Some(verb) = finding_verb {
+        return summary_detail_value(&tool.summary, "Finding title: ").map_or_else(
+            || format!("{verb} a finding"),
+            |title| format!("{verb} finding of {title}"),
+        );
     }
     let (present, past, prefix) = match tool.name.as_str() {
         "read" => ("Reading", "Read", "Read "),
@@ -1603,7 +1686,31 @@ fn combined_tool_series_label(tools: &[&SessionToolSummary], active: bool) -> St
                 "bash" => ("Running", "Ran", "command", "commands"),
                 "webfetch.query" => ("Web searching", "Web searched", "query", "queries"),
                 "webfetch.url" => ("Web viewing", "Web viewed", "page", "pages"),
-                _ => unreachable!("only base tools can form a series"),
+                "surface_query" => (
+                    "Searching surfaces for",
+                    "Searched surfaces for",
+                    "query",
+                    "queries",
+                ),
+                "surface_read" => ("Inspecting", "Inspected", "surface", "surfaces"),
+                "surface_save" => ("Persisting", "Persisted", "surface", "surfaces"),
+                "surface_mapping_edit" => ("Mapping", "Mapped", "surface", "surfaces"),
+                "surface_promote_element" => ("Promoting", "Promoted", "surface", "surfaces"),
+                "surface_threat_model_edit" => ("Modeling", "Modeled", "surface", "surfaces"),
+                "findings_query" => (
+                    "Searching findings for",
+                    "Searched findings for",
+                    "query",
+                    "queries",
+                ),
+                "findings_read" => ("Inspecting", "Inspected", "finding", "findings"),
+                "findings_create" => ("Creating", "Created", "finding", "findings"),
+                "findings_update" => ("Updating", "Updated", "finding", "findings"),
+                "findings_complete_state" => {
+                    ("Transitioning", "Transitioned", "finding", "findings")
+                }
+                "findings_reject" => ("Rejecting", "Rejected", "finding", "findings"),
+                _ => unreachable!("only supported tools can form a series"),
             };
             let verb = if active { present } else { past };
             let verb = if index == 0 {
@@ -1611,7 +1718,9 @@ fn combined_tool_series_label(tools: &[&SessionToolSummary], active: bool) -> St
             } else {
                 verb.to_lowercase()
             };
-            if count == 1 {
+            if count == 1 && matches!(name, "surface_query" | "findings_query") {
+                verb.trim_end_matches(" for").to_owned()
+            } else if count == 1 {
                 format!("{verb} a {noun}")
             } else {
                 format!("{verb} {count} {plural}")
@@ -3099,6 +3208,198 @@ mod tests {
             tool_single_label(&old_page, false),
             "Web viewed https://example.test/old"
         );
+    }
+
+    #[test]
+    fn surface_series_labels_use_queries_and_surface_names() {
+        let edit = SessionToolSummary {
+            name: "edit".to_owned(),
+            summary: "Edit example.txt".to_owned(),
+            ..Default::default()
+        };
+        for (name, summary, active, past, active_plural, past_plural, joined) in [
+            (
+                "surface_query",
+                "Surface query: parser",
+                "Searching surfaces for \"parser\"",
+                "Searched surfaces for \"parser\"",
+                "Searching surfaces for 2 queries",
+                "Searched surfaces for 2 queries",
+                "Searched surfaces, edited a file",
+            ),
+            (
+                "surface_read",
+                "Surface name: Example repository",
+                "Inspecting surface of Example repository",
+                "Inspected surface of Example repository",
+                "Inspecting 2 surfaces",
+                "Inspected 2 surfaces",
+                "Inspected a surface, edited a file",
+            ),
+            (
+                "surface_save",
+                "Surface name: Example repository",
+                "Persisting surface of Example repository",
+                "Persisted surface of Example repository",
+                "Persisting 2 surfaces",
+                "Persisted 2 surfaces",
+                "Persisted a surface, edited a file",
+            ),
+            (
+                "surface_mapping_edit",
+                "Surface name: Example repository",
+                "Mapping surface of Example repository",
+                "Mapped surface of Example repository",
+                "Mapping 2 surfaces",
+                "Mapped 2 surfaces",
+                "Mapped a surface, edited a file",
+            ),
+            (
+                "surface_promote_element",
+                "Surface name: Example repository",
+                "Promoting surface of Example repository",
+                "Promoted surface of Example repository",
+                "Promoting 2 surfaces",
+                "Promoted 2 surfaces",
+                "Promoted a surface, edited a file",
+            ),
+            (
+                "surface_threat_model_edit",
+                "Surface name: Example repository",
+                "Modeling surface of Example repository",
+                "Modeled surface of Example repository",
+                "Modeling 2 surfaces",
+                "Modeled 2 surfaces",
+                "Modeled a surface, edited a file",
+            ),
+        ] {
+            let tool = SessionToolSummary {
+                name: name.to_owned(),
+                summary: summary.to_owned(),
+                ..Default::default()
+            };
+            assert_eq!(tool_single_label(&tool, true), active);
+            assert_eq!(tool_single_label(&tool, false), past);
+            assert_eq!(
+                combined_tool_series_label(&[&tool, &tool], true),
+                active_plural
+            );
+            assert_eq!(
+                combined_tool_series_label(&[&tool, &tool], false),
+                past_plural
+            );
+            assert_eq!(combined_tool_series_label(&[&tool, &edit], false), joined);
+        }
+        let prefixed = SessionToolSummary {
+            name: "surface_read".to_owned(),
+            summary: "Discovery: Surface name: Example repository".to_owned(),
+            ..Default::default()
+        };
+        assert_eq!(
+            tool_single_label(&prefixed, false),
+            "Inspected surface of Example repository"
+        );
+        let old = SessionToolSummary {
+            summary: "read surface".to_owned(),
+            ..prefixed
+        };
+        assert_eq!(tool_single_label(&old, false), "Inspected a surface");
+    }
+
+    #[test]
+    fn findings_series_labels_use_queries_and_titles() {
+        let edit = SessionToolSummary {
+            name: "edit".to_owned(),
+            summary: "Edit example.txt".to_owned(),
+            ..Default::default()
+        };
+        for (name, summary, active, past, active_plural, past_plural, joined) in [
+            (
+                "findings_query",
+                "Finding query: parser",
+                "Searching findings for \"parser\"",
+                "Searched findings for \"parser\"",
+                "Searching findings for 2 queries",
+                "Searched findings for 2 queries",
+                "Searched findings, edited a file",
+            ),
+            (
+                "findings_read",
+                "Finding title: Example finding",
+                "Inspecting finding of Example finding",
+                "Inspected finding of Example finding",
+                "Inspecting 2 findings",
+                "Inspected 2 findings",
+                "Inspected a finding, edited a file",
+            ),
+            (
+                "findings_create",
+                "Finding title: Example finding",
+                "Creating finding of Example finding",
+                "Created finding of Example finding",
+                "Creating 2 findings",
+                "Created 2 findings",
+                "Created a finding, edited a file",
+            ),
+            (
+                "findings_update",
+                "Finding title: Example finding",
+                "Updating finding of Example finding",
+                "Updated finding of Example finding",
+                "Updating 2 findings",
+                "Updated 2 findings",
+                "Updated a finding, edited a file",
+            ),
+            (
+                "findings_complete_state",
+                "Finding title: Example finding",
+                "Transitioning finding of Example finding",
+                "Transitioned finding of Example finding",
+                "Transitioning 2 findings",
+                "Transitioned 2 findings",
+                "Transitioned a finding, edited a file",
+            ),
+            (
+                "findings_reject",
+                "Finding title: Example finding",
+                "Rejecting finding of Example finding",
+                "Rejected finding of Example finding",
+                "Rejecting 2 findings",
+                "Rejected 2 findings",
+                "Rejected a finding, edited a file",
+            ),
+        ] {
+            let tool = SessionToolSummary {
+                name: name.to_owned(),
+                summary: summary.to_owned(),
+                ..Default::default()
+            };
+            assert_eq!(tool_single_label(&tool, true), active);
+            assert_eq!(tool_single_label(&tool, false), past);
+            assert_eq!(
+                combined_tool_series_label(&[&tool, &tool], true),
+                active_plural
+            );
+            assert_eq!(
+                combined_tool_series_label(&[&tool, &tool], false),
+                past_plural
+            );
+            assert_eq!(combined_tool_series_label(&[&tool, &edit], false), joined);
+        }
+        let prefixed = SessionToolSummary {
+            name: "findings_read".to_owned(),
+            summary: "Discovery: Finding title: Example finding".to_owned(),
+            ..Default::default()
+        };
+        assert_eq!(
+            tool_single_label(&prefixed, false),
+            "Inspected finding of Example finding"
+        );
+        let old = SessionToolSummary {
+            summary: "read finding".to_owned(),
+            ..prefixed
+        };
+        assert_eq!(tool_single_label(&old, false), "Inspected a finding");
     }
 
     #[test]

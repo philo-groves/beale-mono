@@ -93,6 +93,51 @@ pub fn is_tool(name: &str) -> bool {
     matches!(name, QUERY | READ | CREATE | UPDATE | COMPLETE | REJECT)
 }
 
+fn summary_value(value: &str) -> String {
+    let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut result = String::new();
+    for character in normalized.chars() {
+        if result.len() + character.len_utf8() > 320 {
+            break;
+        }
+        result.push(character);
+    }
+    result
+}
+
+pub fn summary(db: &HostDatabase, workspace_id: &str, name: &str, args: &Value) -> String {
+    if name == QUERY {
+        return args
+            .get("text")
+            .and_then(Value::as_str)
+            .map(summary_value)
+            .filter(|value| !value.is_empty())
+            .map_or_else(
+                || "Finding query".to_owned(),
+                |value| format!("Finding query: {value}"),
+            );
+    }
+    let supplied_title = match name {
+        CREATE => args.get("title"),
+        UPDATE => args.get("patch").and_then(|patch| patch.get("title")),
+        _ => None,
+    }
+    .and_then(Value::as_str)
+    .map(summary_value)
+    .filter(|value| !value.is_empty());
+    let title = supplied_title.or_else(|| {
+        let id = args.get("id")?.as_str()?;
+        db.finding_get(workspace_id, id)
+            .ok()?
+            .map(|finding| summary_value(&finding.title))
+            .filter(|value| !value.is_empty())
+    });
+    title.map_or_else(
+        || "Finding".to_owned(),
+        |value| format!("Finding title: {value}"),
+    )
+}
+
 pub struct PendingSource<'a> {
     pub id: &'a str,
     pub name: &'a str,
@@ -710,6 +755,48 @@ mod tests {
             json!({"title":"Example boundary finding","summary":"A synthetic boundary issue","surface_ids":["S1","S2"],"hypothesis":"An example.test input crosses a boundary","root_cause":{"summary":"Example boundary mismatch","evidence_refs":[]},"attack_path":example_path()}),
         );
         let id = created["record"]["id"].as_str().unwrap();
+        assert_eq!(
+            summary(
+                &db,
+                "workspace-example",
+                QUERY,
+                &json!({"text":"example boundary"})
+            ),
+            "Finding query: example boundary"
+        );
+        assert_eq!(
+            summary(
+                &db,
+                "workspace-example",
+                QUERY,
+                &json!({"status":"candidate"})
+            ),
+            "Finding query"
+        );
+        assert_eq!(
+            summary(
+                &db,
+                "workspace-example",
+                CREATE,
+                &json!({"title":"New example"})
+            ),
+            "Finding title: New example"
+        );
+        for name in [READ, UPDATE, COMPLETE, REJECT] {
+            assert_eq!(
+                summary(&db, "workspace-example", name, &json!({"id":id})),
+                "Finding title: Example boundary finding"
+            );
+        }
+        assert_eq!(
+            summary(
+                &db,
+                "workspace-example",
+                UPDATE,
+                &json!({"id":id,"patch":{"title":"Renamed example"}})
+            ),
+            "Finding title: Renamed example"
+        );
         assert_eq!(created["record"]["status"], "candidate");
         assert!(execute(&db,"workspace-example","session-example",UPDATE,&json!({"id":id,"expected_revision":1,"state":"reported","patch":{"poc_steps":"Run an example"},"reason":"Draft"}),&[]).is_err());
         assert!(execute(&db,"workspace-example","session-example",UPDATE,&json!({"id":id,"expected_revision":1,"state":"screened","patch":{"scope_review":{"passed":true,"method":"Example review","conclusion":"In scope"}},"reason":"Draft"}),&[]).is_err());

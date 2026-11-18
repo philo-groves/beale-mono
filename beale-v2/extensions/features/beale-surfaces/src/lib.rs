@@ -59,6 +59,68 @@ pub fn is_tool(name: &str) -> bool {
     )
 }
 
+fn summary_value(value: &str) -> String {
+    let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut result = String::new();
+    for character in normalized.chars() {
+        if result.len() + character.len_utf8() > 320 {
+            break;
+        }
+        result.push(character);
+    }
+    result
+}
+
+pub fn summary(store: &WorkspaceStore, workspace_id: &str, name: &str, args: &Value) -> String {
+    if name == QUERY {
+        return args
+            .get("text")
+            .and_then(Value::as_str)
+            .map(summary_value)
+            .filter(|value| !value.is_empty())
+            .map_or_else(
+                || "Surface query".to_owned(),
+                |value| format!("Surface query: {value}"),
+            );
+    }
+    let supplied_name = matches!(name, SAVE | PROMOTE)
+        .then(|| args.get("definition")?.get("name")?.as_str())
+        .flatten()
+        .map(summary_value)
+        .filter(|value| !value.is_empty());
+    let selected_name = supplied_name.or_else(|| {
+        if name != PROMOTE {
+            return None;
+        }
+        let surface_id = args.get("surface_id")?.as_str()?;
+        let element_id = args.get("element_id")?.as_str()?;
+        store
+            .mapping_for_host(workspace_id, surface_id)
+            .ok()?
+            .elements
+            .into_iter()
+            .find(|element| element.id == element_id)
+            .map(|element| summary_value(&element.name))
+    });
+    let id = match name {
+        SAVE => args.get("id"),
+        READ | MAPPING_EDIT | PROMOTE | THREAT_MODEL_EDIT => args.get("surface_id"),
+        _ => None,
+    }
+    .and_then(Value::as_str);
+    selected_name
+        .or_else(|| {
+            id.and_then(|id| store.surface_for_host(workspace_id, id).ok().flatten())
+                .and_then(|(surface, _)| surface.definition)
+                .map(|definition| summary_value(&definition.name))
+                .filter(|value| !value.is_empty())
+        })
+        .map_or_else(
+            || "Surface".to_owned(),
+            |value| format!("Surface name: {value}"),
+        )
+}
+
 fn required<'a>(args: &'a Value, key: &str) -> Result<&'a str> {
     args.get(key)
         .and_then(Value::as_str)
@@ -693,6 +755,45 @@ mod tests {
                 .contains("locator kind is incompatible")
         );
         let added: Value = serde_json::from_str(&execute(&store, &workspace.id, SAVE, &json!({"operation":"create","definition":{"type_id":"repository","name":"Example repository","locator":{"kind":"freeform","value":"example repository"},"scope":"in_scope","description":"Example research code.","evidence_refs":[{"kind":"artifact","reference":"artifact-example-001"}]} }), false).unwrap()).unwrap();
+        assert_eq!(
+            summary(&store, &workspace.id, QUERY, &json!({"text":"parser"})),
+            "Surface query: parser"
+        );
+        assert_eq!(
+            summary(&store, &workspace.id, QUERY, &json!({"scope":"in_scope"})),
+            "Surface query"
+        );
+        assert_eq!(
+            summary(&store, &workspace.id, READ, &json!({"surface_id":"S1"})),
+            "Surface name: Example repository"
+        );
+        assert_eq!(
+            summary(
+                &store,
+                &workspace.id,
+                SAVE,
+                &json!({"id":"S1","operation":"revise"})
+            ),
+            "Surface name: Example repository"
+        );
+        assert_eq!(
+            summary(
+                &store,
+                &workspace.id,
+                MAPPING_EDIT,
+                &json!({"surface_id":"S1"})
+            ),
+            "Surface name: Example repository"
+        );
+        assert_eq!(
+            summary(
+                &store,
+                &workspace.id,
+                THREAT_MODEL_EDIT,
+                &json!({"surface_id":"S1"})
+            ),
+            "Surface name: Example repository"
+        );
         assert_eq!(added["id"], "S1");
         assert_eq!(added["lineage"][0]["number"], 1);
         assert_eq!(added["definition"]["scope_state"], "candidate");
@@ -754,6 +855,24 @@ mod tests {
         .unwrap();
         assert_eq!(queried["surfaces"].as_array().unwrap().len(), 1);
         let mapped: Value = serde_json::from_str(&execute(&store, &workspace.id, MAPPING_EDIT, &json!({"surface_id":"S1","element":{"category":"interface","type_id":"code.export","name":"Parse input","locator":{"kind":"source_symbol","value":"src/parser.rs::parse_input"},"observation":"Accepts untrusted input.","basis":"observed","evidence_refs":[{"kind":"artifact","reference":"artifact-example-001"}]}}), false).unwrap()).unwrap();
+        assert_eq!(
+            summary(
+                &store,
+                &workspace.id,
+                PROMOTE,
+                &json!({"surface_id":"S1","element_id":"E1","definition":{"type_id":"code.file","scope":"in_scope"}})
+            ),
+            "Surface name: Parse input"
+        );
+        assert_eq!(
+            summary(
+                &store,
+                &workspace.id,
+                PROMOTE,
+                &json!({"surface_id":"S1","element_id":"E1","definition":{"name":"Named surface"}})
+            ),
+            "Surface name: Named surface"
+        );
         assert_eq!(mapped["changed_id"], "E1");
         assert_eq!(mapped["revision"], 2);
         let read: Value = serde_json::from_str(
