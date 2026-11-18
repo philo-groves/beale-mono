@@ -12,7 +12,8 @@ use std::{
 };
 
 use crate::{
-    PROVIDER_ERROR_COLOR, PROVIDER_WARNING_COLOR, Provider, State, ThemeStyle, provider_auth,
+    HEALTHY_RING_COLOR, PROVIDER_ERROR_COLOR, PROVIDER_WARNING_COLOR, Provider, State, ThemeStyle,
+    provider_auth,
     provider_icons::{GROK, OPENAI},
     ui_font,
 };
@@ -101,17 +102,23 @@ fn arc_icon(percent_left: u32, inner: bool) -> &'static Icon {
     &icons[percent_left.min(100) as usize]
 }
 
+pub(crate) fn full_outer_ring_icon() -> &'static Icon {
+    arc_icon(100, false)
+}
+
+pub(crate) const INDICATOR_SIZE: f32 = 38.0;
+
 fn remaining(window: &ProviderUsageWindow) -> u32 {
     100 - window.used_percent.min(100)
 }
 
-fn progress_color(remaining_percent: u32, normal: &'static str) -> &'static str {
+fn progress_color(remaining_percent: u32) -> &'static str {
     if remaining_percent < 20 {
         PROVIDER_ERROR_COLOR
     } else if remaining_percent < 40 {
         PROVIDER_WARNING_COLOR
     } else {
-        normal
+        HEALTHY_RING_COLOR
     }
 }
 
@@ -141,20 +148,24 @@ pub(crate) fn indicator(
     };
     let mut ring = el()
         .key(key)
-        .role("group")
+        .role("button")
         .label(format!(
-            "{} subscription usage",
+            "Open {} provider settings from subscription usage",
             if provider == Provider::OpenAi {
                 "OpenAI"
             } else {
                 "xAI"
             }
         ))
-        .size(38.0, 38.0)
+        .size(INDICATOR_SIZE, INDICATOR_SIZE)
         .radius(19.0)
         .hover(theme.color("#292929"))
         .on_hover_change(move |s: &mut State, inside, _| {
             s.rail_usage_tooltip = if inside { Some(provider) } else { None };
+        })
+        .on_press(move |s: &mut State| {
+            s.rail_usage_tooltip = None;
+            s.navigate_to(crate::ViewLocation::Providers(provider));
         });
     ring = ring
         .child(
@@ -166,14 +177,7 @@ pub(crate) fn indicator(
         .child(
             icon(arc_icon(remaining(outer), false), 36.0)
                 .absolute(1.0, 1.0)
-                .color(theme.color(progress_color(
-                    remaining(outer),
-                    if inner.is_some() {
-                        "#888888"
-                    } else {
-                        "#aaaaaa"
-                    },
-                ))),
+                .color(theme.color(progress_color(remaining(outer)))),
         );
     if let Some(inner) = inner {
         ring = ring
@@ -186,7 +190,7 @@ pub(crate) fn indicator(
             .child(
                 icon(arc_icon(remaining(inner), true), 36.0)
                     .absolute(1.0, 1.0)
-                    .color(theme.color(progress_color(remaining(inner), "#aaaaaa"))),
+                    .color(theme.color(progress_color(remaining(inner)))),
             );
     }
     let logo_size = if provider == Provider::OpenAi {
@@ -281,10 +285,10 @@ mod tests {
 
     #[test]
     fn remaining_usage_colors_change_at_the_requested_thresholds() {
-        assert_eq!(progress_color(40, "#aaaaaa"), "#aaaaaa");
-        assert_eq!(progress_color(39, "#aaaaaa"), PROVIDER_WARNING_COLOR);
-        assert_eq!(progress_color(20, "#aaaaaa"), PROVIDER_WARNING_COLOR);
-        assert_eq!(progress_color(19, "#aaaaaa"), PROVIDER_ERROR_COLOR);
+        assert_eq!(progress_color(40), HEALTHY_RING_COLOR);
+        assert_eq!(progress_color(39), PROVIDER_WARNING_COLOR);
+        assert_eq!(progress_color(20), PROVIDER_WARNING_COLOR);
+        assert_eq!(progress_color(19), PROVIDER_ERROR_COLOR);
     }
 
     #[test]

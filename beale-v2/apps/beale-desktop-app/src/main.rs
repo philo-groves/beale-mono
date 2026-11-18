@@ -8,7 +8,6 @@ use std::time::{Duration, Instant};
 mod appearance;
 mod archive_view;
 mod automations_view;
-mod browser_logos;
 mod color_picker;
 mod connection;
 mod design;
@@ -69,6 +68,7 @@ use settings_scroll::SettingsScroll;
 
 const PROVIDER_WARNING_COLOR: &str = "#dca15f";
 const PROVIDER_ERROR_COLOR: &str = "#e07676";
+const HEALTHY_RING_COLOR: &str = "#72b783";
 
 // Rune sizes text per element, so keep the selected scale scoped to one synchronous view build.
 thread_local! {
@@ -102,14 +102,6 @@ fn view_title_font() -> TextStyle {
 
 fn form_label_font() -> TextStyle {
     ui_font(14.0, 550.0)
-}
-
-fn sidenav_heading(label: &'static str, theme: ThemeStyle<'_>) -> El {
-    row().h(30.0).center_y().child(
-        text(label)
-            .font(ui_font(16.0, 600.0))
-            .color(theme.color("#aaaaaa")),
-    )
 }
 
 #[cfg(target_os = "windows")]
@@ -241,9 +233,6 @@ enum SelectionMenu {
         index: usize,
     },
     FeatureWorkspaces {
-        index: usize,
-    },
-    BrowserWorkspaces {
         index: usize,
     },
     VirtualMachineWorkspaces {
@@ -518,6 +507,11 @@ const TYPOGRAPHY_ROWS: [TypographyRowSpec; 2] = [
 ];
 
 const NAVIGATION_RAIL_WIDTH: f32 = 50.0;
+const NAVIGATION_SHELL_INSET: f32 = 6.0;
+const NAVIGATION_HEADER_HEIGHT: f32 = 44.0;
+const HEADER_TITLE_INSET: f32 = 5.0;
+const SIDENAV_BOTTOM_GAP: f32 = 6.0;
+const SIDENAV_CORNER_RADIUS: f32 = 12.0;
 const NAVIGATION_DIVIDER_COLOR: &str = "#555555";
 const SIDENAV_DEFAULT_WIDTH: f32 = 264.0;
 const SIDENAV_MIN_WIDTH: f32 = 240.0;
@@ -525,9 +519,9 @@ const SIDENAV_MAX_WIDTH: f32 = 420.0;
 const CANVAS_MIN_CONTENT_WIDTH: f32 = 320.0;
 const CONTENT_SURFACE_COLOR: &str = "#0d0d0d";
 const HEADER_COLLAPSED_PREFIX_WIDTH: f32 = if cfg!(target_os = "macos") {
-    184.0
+    160.0
 } else {
-    106.0
+    NAVIGATION_RAIL_WIDTH
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3530,9 +3524,6 @@ fn selection_menu_items(state: &State, menu: SelectionMenu) -> Vec<in_place_menu
         SelectionMenu::PluginWorkspaces { .. } | SelectionMenu::FeatureWorkspaces { .. } => {
             extensions_view::workspace_scope_items(state, menu)
         }
-        SelectionMenu::BrowserWorkspaces { index } => {
-            fleet_view::workspace_scope_items(state, index)
-        }
         SelectionMenu::VirtualMachineWorkspaces { index } => {
             fleet_view::vm_workspace_scope_items(state, index)
         }
@@ -3599,9 +3590,6 @@ fn selection_menu_anchor(menu: SelectionMenu) -> String {
     match menu {
         SelectionMenu::PluginWorkspaces { index } => return format!("plugin-scope-{index}"),
         SelectionMenu::FeatureWorkspaces { index } => return format!("feature-scope-{index}"),
-        SelectionMenu::BrowserWorkspaces { index } => {
-            return format!("fleet-browser-scope-{index}");
-        }
         SelectionMenu::VirtualMachineWorkspaces { index } => {
             return format!("fleet-vm-scope-{index}");
         }
@@ -3681,7 +3669,6 @@ fn choose_selection_menu_item(state: &mut State, menu: SelectionMenu, value: Str
         menu,
         SelectionMenu::PluginWorkspaces { .. }
             | SelectionMenu::FeatureWorkspaces { .. }
-            | SelectionMenu::BrowserWorkspaces { .. }
             | SelectionMenu::VirtualMachineWorkspaces { .. }
     ) {
         state.selection_menu = None;
@@ -3787,9 +3774,6 @@ fn choose_selection_menu_item(state: &mut State, menu: SelectionMenu, value: Str
             if let Some((all, ids)) = extensions_view::next_workspace_scope(state, menu, &value) {
                 extensions_view::start_workspace_scope_save(state, menu, all, ids);
             }
-        }
-        SelectionMenu::BrowserWorkspaces { index } => {
-            fleet_view::select_workspace_scope(state, index, &value);
         }
         SelectionMenu::VirtualMachineWorkspaces { index } => {
             fleet_view::select_vm_workspace_scope(state, index, &value);
@@ -3927,7 +3911,12 @@ fn header_icon_button(
         .center()
         .radius(6.0)
         .hover(color("#303030"))
-        .child(icon(glyph, 16.0).color(color("#c8c8c8")))
+        .child(
+            icon(glyph, 16.0)
+                .key("header-sidebar-toggle-icon")
+                .color(color("#c8c8c8"))
+                .offset(0.0, 1.0),
+        )
 }
 
 #[derive(Clone, Copy)]
@@ -4051,11 +4040,30 @@ fn session_sidenav_toggle(open: bool, theme: ThemeStyle<'_>) -> El {
         })
 }
 
-fn canvas_width(window_width: f32, sidenav_width: f32) -> f32 {
-    (window_width * 0.5).min(
-        (window_width - NAVIGATION_RAIL_WIDTH - sidenav_width - CANVAS_MIN_CONTENT_WIDTH - 12.0)
-            .max(160.0),
-    )
+fn navigation_rail_width(state: &State) -> f32 {
+    if state.sidenav_visible {
+        NAVIGATION_RAIL_WIDTH
+    } else {
+        HEADER_COLLAPSED_PREFIX_WIDTH
+    }
+}
+
+fn navigation_shell_width(state: &State) -> f32 {
+    navigation_rail_width(state)
+        + if state.sidenav_visible {
+            state.sidenav_width
+        } else {
+            0.0
+        }
+}
+
+fn navigation_content_offset(state: &State) -> f32 {
+    NAVIGATION_SHELL_INSET + navigation_shell_width(state)
+}
+
+fn canvas_width(window_width: f32, navigation_width: f32) -> f32 {
+    (window_width * 0.5)
+        .min((window_width - navigation_width - CANVAS_MIN_CONTENT_WIDTH - 12.0).max(160.0))
 }
 
 fn header(state: &State, prefix_width: f32, window_width: f32) -> El {
@@ -4063,13 +4071,22 @@ fn header(state: &State, prefix_width: f32, window_width: f32) -> El {
     let color = |value| theme.color(value);
     let mut left = row()
         .key("header-leading")
+        .w_full()
         .h_full()
         .center_y()
         .gap(2.0)
-        .pl(8.0)
+        .pt(8.0)
+        .pl(if state.sidenav_visible {
+            8.0 + NAVIGATION_SHELL_INSET
+        } else {
+            NAVIGATION_SHELL_INSET
+        })
         .pr(if state.sidenav_visible { 8.0 } else { 0.0 });
-    if cfg!(target_os = "macos") {
+    if cfg!(target_os = "macos") && state.sidenav_visible {
         left = left.child(el().w(76.0));
+    }
+    if !state.sidenav_visible {
+        left = left.justify_center();
     }
     left = left.child(
         header_icon_button(
@@ -4086,17 +4103,38 @@ fn header(state: &State, prefix_width: f32, window_width: f32) -> El {
             s.sidenav_visible = !s.sidenav_visible;
         }),
     );
-    left = left
-        .child(history_button(
-            HistoryDirection::Back,
-            !state.view_history.back.is_empty(),
-            theme,
-        ))
-        .child(history_button(
-            HistoryDirection::Forward,
-            !state.view_history.forward.is_empty(),
-            theme,
-        ));
+    if state.sidenav_visible {
+        let sidenav_title = match state.primary_view {
+            PrimaryView::Settings => "Settings",
+            PrimaryView::Extensions => "Extensions",
+            PrimaryView::Fleet => "Fleet",
+            PrimaryView::Automations => "Automations",
+            PrimaryView::Tracking => "Tracking",
+            _ => "Beale",
+        };
+        left = left
+            .child(el().w(16.0))
+            .child(
+                text(sidenav_title)
+                    .key("header-sidenav-title")
+                    .min_w(0.0)
+                    .shrink()
+                    .truncate_fade()
+                    .font(ui_font(16.0, 600.0))
+                    .color(color("#aaaaaa")),
+            )
+            .child(el().grow(1.0))
+            .child(history_button(
+                HistoryDirection::Back,
+                !state.view_history.back.is_empty(),
+                theme,
+            ))
+            .child(history_button(
+                HistoryDirection::Forward,
+                !state.view_history.forward.is_empty(),
+                theme,
+            ));
+    }
     let mut title = row()
         .key("header-view-tab")
         .role("tab")
@@ -4227,6 +4265,7 @@ fn header(state: &State, prefix_width: f32, window_width: f32) -> El {
         .grow(1.0)
         .min_w(0.0)
         .h_full()
+        .pl(HEADER_TITLE_INSET)
         .center_y()
         .gap(10.0)
         .window_drag();
@@ -4239,7 +4278,7 @@ fn header(state: &State, prefix_width: f32, window_width: f32) -> El {
         .key("custom-header")
         .role("banner")
         .w_full()
-        .h(44.0)
+        .h(NAVIGATION_HEADER_HEIGHT)
         .center_y()
         .window_drag()
         .child(el().w(prefix_width).h_full().child(left))
@@ -4286,7 +4325,6 @@ fn nav_button(
             "nav-automations" => &AUTOMATIONS_FILLED,
             "nav-extensions" => &EXTENSIONS_FILLED,
             "nav-settings" => &SETTINGS_FILLED,
-            "nav-fleet" => &FLEET_FILLED,
             "nav-tracking" => &TRACKING_FILLED,
             _ => glyph,
         }
@@ -4338,11 +4376,6 @@ fn nav_button(
                 s.feature_tab,
             ));
         })
-    } else if key == "nav-fleet" {
-        button.on_press(|s: &mut State| {
-            s.rail_tooltip = None;
-            s.navigate_to(ViewLocation::Fleet(s.fleet_section, s.fleet.tab));
-        })
     } else if key == "nav-automations" {
         button.on_press(|s: &mut State| {
             s.rail_tooltip = None;
@@ -4366,12 +4399,69 @@ fn nav_button(
     }
 }
 
+fn fleet_ring_status(status: &ConnectionStatus) -> (&'static str, &'static str) {
+    match status {
+        ConnectionStatus::Connected { .. } => ("Healthy", HEALTHY_RING_COLOR),
+        ConnectionStatus::Offline => ("Offline", PROVIDER_ERROR_COLOR),
+        ConnectionStatus::Connecting => ("Connecting", PROVIDER_WARNING_COLOR),
+        ConnectionStatus::Incompatible => ("Incompatible protocol", PROVIDER_WARNING_COLOR),
+        ConnectionStatus::InvalidAddress => ("Invalid address", PROVIDER_WARNING_COLOR),
+    }
+}
+
+fn fleet_indicator(state: &State, theme: ThemeStyle<'_>) -> El {
+    let (status, ring_color) = fleet_ring_status(&state.connection);
+    el().key("fleet-status")
+        .role("button")
+        .label(format!("Fleet · {status}"))
+        .size(
+            provider_usage::INDICATOR_SIZE,
+            provider_usage::INDICATOR_SIZE,
+        )
+        .radius(provider_usage::INDICATOR_SIZE / 2.0)
+        .hover(theme.color("#292929"))
+        .on_hover_change(|state: &mut State, inside, _| {
+            if inside {
+                state.rail_tooltip = Some(("fleet-status", "Fleet"));
+            } else if state
+                .rail_tooltip
+                .is_some_and(|(key, _)| key == "fleet-status")
+            {
+                state.rail_tooltip = None;
+            }
+        })
+        .hover_delays(Duration::from_millis(350), Duration::ZERO)
+        .on_press(|state: &mut State| {
+            state.rail_tooltip = None;
+            state.navigate_to(ViewLocation::Fleet(state.fleet_section, state.fleet.tab));
+        })
+        .child(
+            el().key("fleet-status-track")
+                .absolute(3.0, 3.0)
+                .size(32.0, 32.0)
+                .radius(16.0)
+                .border(1.8, theme.color("#444444")),
+        )
+        .child(
+            icon(provider_usage::full_outer_ring_icon(), 36.0)
+                .key("fleet-status-ring")
+                .absolute(1.0, 1.0)
+                .color(theme.color(ring_color)),
+        )
+        .child(
+            icon(&FLEET, 12.0)
+                .key("fleet-status-icon")
+                .absolute(13.0, 13.0)
+                .color(theme.color("#bdbdbd")),
+        )
+}
+
 fn rail(state: &State, theme: ThemeStyle<'_>) -> El {
     let mut rail = col()
         .key("navigation")
         .role("navigation")
         .label("Main navigation")
-        .w(NAVIGATION_RAIL_WIDTH)
+        .w(navigation_rail_width(state))
         .h_full()
         .pt(8.0)
         .gap(6.0)
@@ -4408,20 +4498,12 @@ fn rail(state: &State, theme: ThemeStyle<'_>) -> El {
             state.primary_view == PrimaryView::Settings,
             theme,
         ));
-    let conditional_icons = [
-        extensions_view::fleet_enabled(state).then_some((
-            "nav-fleet",
-            "Fleet",
-            &FLEET,
-            state.primary_view == PrimaryView::Fleet,
-        )),
-        extensions_view::tracking_enabled(state).then_some((
-            "nav-tracking",
-            "Tracking",
-            &TRACKING,
-            state.primary_view == PrimaryView::Tracking,
-        )),
-    ];
+    let conditional_icons = [extensions_view::tracking_enabled(state).then_some((
+        "nav-tracking",
+        "Tracking",
+        &TRACKING,
+        state.primary_view == PrimaryView::Tracking,
+    ))];
     if conditional_icons.iter().any(Option::is_some) {
         rail = rail.child(
             el().key("navigation-conditional-divider")
@@ -4434,12 +4516,25 @@ fn rail(state: &State, theme: ThemeStyle<'_>) -> El {
         rail = rail.child(nav_button(key, label, glyph, active, theme));
     }
     rail = rail.child(el().grow(1.0));
+    let mut has_usage = false;
     for provider in [Provider::OpenAi, Provider::Xai] {
         if let Some(usage) = &state.provider_usage[provider.index()]
             && !usage.windows.is_empty()
         {
             rail = rail.child(provider_usage::indicator(provider, usage, theme));
+            has_usage = true;
         }
+    }
+    if extensions_view::fleet_enabled(state) {
+        if has_usage {
+            rail = rail.child(
+                el().key("fleet-usage-divider")
+                    .w(26.0)
+                    .h(1.0)
+                    .fill(theme.color(NAVIGATION_DIVIDER_COLOR)),
+            );
+        }
+        rail = rail.child(fleet_indicator(state, theme));
     }
     rail.pb(10.0)
 }
@@ -4522,14 +4617,7 @@ fn settings_sidenav(
         .w(width)
         .h_full()
         .px(8.0)
-        .pt(12.0)
-        .fill(color("#111111"))
-        .child(
-            sidenav_heading("Settings", theme)
-                .key("settings-sidenav-title")
-                .ml(4.0)
-                .mb(12.0),
-        )
+        .pt(10.0)
         .child(sections)
         .child(el().grow(1.0))
         .child(
@@ -5829,12 +5917,7 @@ fn providers_settings_view(state: &State, cx: &mut Cx<State>) -> Vec<El> {
     let theme = state.appearance.style();
     let color = |value| theme.color(value);
     let tabs_width = cx.layout_size("app-surface").map_or(1040.0, |size| size[0])
-        - NAVIGATION_RAIL_WIDTH
-        - if state.sidenav_visible {
-            state.sidenav_width + 1.0
-        } else {
-            0.0
-        }
+        - navigation_content_offset(state)
         - 78.0;
     let providers = [
         Provider::Anthropic,
@@ -5896,12 +5979,7 @@ fn appearance_settings_view(state: &State, cx: &mut Cx<State>) -> Vec<El> {
         ));
     }
     let tabs_width = cx.layout_size("app-surface").map_or(1040.0, |size| size[0])
-        - NAVIGATION_RAIL_WIDTH
-        - if state.sidenav_visible {
-            state.sidenav_width + 1.0
-        } else {
-            0.0
-        }
+        - navigation_content_offset(state)
         - 78.0;
     let tab_widths = AppearanceTab::ALL.map(|tab| design::segmented_tab_width(tab.label(), true));
     let (theme_control, theme_width) = color_theme_controls(state);
@@ -5933,12 +6011,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
     let palette = theme.palette();
     let color = |value| theme.color(value);
     let window_width = cx.layout_size("app-surface").map_or(1040.0, |size| size[0]);
-    let sidenav_width = if state.sidenav_visible {
-        state.sidenav_width + 1.0
-    } else {
-        0.0
-    };
-    let available_width = (window_width - NAVIGATION_RAIL_WIDTH - sidenav_width - 8.0).max(0.0);
+    let available_width = (window_width - navigation_content_offset(state) - 8.0).max(0.0);
     let compact_auxiliary = available_width < 680.0;
     let mut content = col()
         .key("settings-page")
@@ -5952,31 +6025,6 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
         .self_center()
         .gap(design::PAGE_GAP);
     if state.primary_view == PrimaryView::Settings {
-        content = content.child(design::breadcrumb_title(
-            "Settings",
-            text(state.settings_section.label())
-                .key("settings-view-title")
-                .role("heading")
-                .truncate_fade()
-                .font(view_title_font())
-                .color(color("#f2f2f2")),
-            theme,
-        ));
-        content = content.child(design::subtitle(
-            match state.settings_section {
-                SettingsSection::Providers => {
-                    "Connect models and choose the defaults for research and review."
-                }
-                SettingsSection::Appearance => {
-                    "Tune the workbench to your environment and reading preferences."
-                }
-                SettingsSection::Archive => {
-                    "Revisit saved work and restore a conversation when you need it."
-                }
-                _ => "Configure the review rules used before tool execution.",
-            },
-            theme,
-        ));
         for item in (state.settings_section.spec().render)(state, cx) {
             content = content.child(item);
         }
@@ -5988,20 +6036,6 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
             );
         }
     } else if state.primary_view == PrimaryView::Extensions {
-        content = content.child(design::breadcrumb_title(
-            "Extensions",
-            text(state.extensions_section.label())
-                .key("extensions-view-title")
-                .role("heading")
-                .truncate_fade()
-                .font(view_title_font())
-                .color(color("#f2f2f2")),
-            theme,
-        ));
-        content = content.child(design::subtitle(
-            "Build your research toolkit. Enable capabilities for the workspaces that need them.",
-            theme,
-        ));
         let page_width = cx
             .layout_size("content-surface")
             .map_or(1040.0, |size| (size[0] - 48.0).min(1300.0));
@@ -6042,40 +6076,50 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
             page_width,
         ));
     }
-    let mut body = row().key("body").w_full().grow(1.0).pr(6.0).pb(6.0);
+    let mut body = row()
+        .key("body")
+        .w_full()
+        .grow(1.0)
+        .pl(NAVIGATION_SHELL_INSET)
+        .pr(NAVIGATION_SHELL_INSET)
+        .pb(NAVIGATION_SHELL_INSET);
     body = body.child(rail(state, theme));
+    let content_corners = if state.sidenav_visible {
+        [16.0; 4]
+    } else {
+        [0.0, 16.0, 16.0, 0.0]
+    };
     let mut settings_surface = row()
         .key("settings-surface")
         .min_w(0.0)
         .grow(1.0)
         .h_full()
-        .radius(16.0)
-        .clip_rounded(16.0)
-        .fill(color(if state.primary_view == PrimaryView::NewResearch {
-            CONTENT_SURFACE_COLOR
-        } else {
-            "#111111"
-        }));
+        .corners(content_corners)
+        .clip_corners(content_corners)
+        .fill(Color::TRANSPARENT);
     if state.sidenav_visible {
-        settings_surface = settings_surface
-            .child(match state.primary_view {
-                PrimaryView::Settings => settings_sidenav(
-                    state.settings_section,
-                    &state.connection,
-                    state.sidenav_width,
-                    theme,
-                ),
-                PrimaryView::Extensions => {
-                    extensions_view::sidenav(state, state.sidenav_width, theme)
-                }
-                PrimaryView::Fleet => fleet_view::sidenav(state, state.sidenav_width, theme),
-                PrimaryView::Automations => {
-                    automations_view::sidenav(state, state.sidenav_width, theme)
-                }
-                PrimaryView::Tracking => tracking_view::sidenav(state, state.sidenav_width, theme),
-                _ => home_sidebar::render(state, state.sidenav_width, theme),
-            })
-            .child(el().w(1.0).h_full().fill(color("#2a2a2a")));
+        let sidenav = match state.primary_view {
+            PrimaryView::Settings => settings_sidenav(
+                state.settings_section,
+                &state.connection,
+                state.sidenav_width,
+                theme,
+            ),
+            PrimaryView::Extensions => extensions_view::sidenav(state, state.sidenav_width, theme),
+            PrimaryView::Fleet => fleet_view::sidenav(state, state.sidenav_width, theme),
+            PrimaryView::Automations => {
+                automations_view::sidenav(state, state.sidenav_width, theme)
+            }
+            PrimaryView::Tracking => tracking_view::sidenav(state, state.sidenav_width, theme),
+            _ => home_sidebar::render(state, state.sidenav_width, theme),
+        };
+        settings_surface = settings_surface.child(
+            col()
+                .w(state.sidenav_width)
+                .h_full()
+                .pb(SIDENAV_BOTTOM_GAP)
+                .child(sidenav),
+        );
     }
     let mut main_content = col()
         .key("content-surface")
@@ -6204,6 +6248,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
                 .h_full()
                 .pt(session_sidenav::INSET)
                 .pr(session_sidenav::INSET)
+                .fill(color(CONTENT_SURFACE_COLOR))
                 .transition(
                     Transition::offset(session_sidenav::WIDTH + session_sidenav::INSET, 0.0)
                         .combined(Transition::opacity()),
@@ -6220,15 +6265,10 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
     }
     if state.canvas_open {
         let window_width = cx.layout_size("app-surface").map_or(1040.0, |size| size[0]);
-        let sidenav_width = if state.sidenav_visible {
-            state.sidenav_width + 1.0
-        } else {
-            0.0
-        };
         let width = if compact_auxiliary {
             (available_width - 1.0).max(0.0)
         } else {
-            canvas_width(window_width, sidenav_width)
+            canvas_width(window_width, navigation_content_offset(state))
         };
         let window_height = cx.layout_size("window").map_or(720.0, |size| size[1]);
         let surface_top = cx.layout("settings-surface").map_or(0.0, |rect| rect[1]);
@@ -6279,14 +6319,10 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
     }
     let [background_width, background_height] =
         cx.layout_size("app-surface").unwrap_or([1040.0, 720.0]);
-    let header_prefix_width = if state.sidenav_visible {
-        NAVIGATION_RAIL_WIDTH + state.sidenav_width
-    } else {
-        HEADER_COLLAPSED_PREFIX_WIDTH
-    };
+    let header_prefix_width = navigation_content_offset(state);
     let upper_left_radius = ((background_width * 0.88).hypot(background_height * 0.92)) * 0.43;
     let lower_right_radius = ((background_width * 0.88).hypot(background_height * 0.92)) * 0.48;
-    let surface = col()
+    let mut surface = col()
         .key("app-surface")
         .w_full()
         .grow(1.0)
@@ -6332,6 +6368,55 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
                     ],
                 ),
         )
+        .child(
+            el().key("navigation-shell")
+                .pin(
+                    Some(NAVIGATION_SHELL_INSET),
+                    Some(NAVIGATION_SHELL_INSET),
+                    None,
+                    Some(NAVIGATION_SHELL_INSET),
+                )
+                .w(navigation_shell_width(state))
+                .corners([18.0, 18.0, 0.0, 18.0])
+                .continuous_corners()
+                .fill(color(CONTENT_SURFACE_COLOR))
+                .inert(),
+        );
+    if state.sidenav_visible {
+        surface = surface.child(
+            el().key("navigation-sidenav-background")
+                .pin(
+                    Some(NAVIGATION_SHELL_INSET + NAVIGATION_RAIL_WIDTH),
+                    Some(NAVIGATION_HEADER_HEIGHT),
+                    None,
+                    Some(NAVIGATION_SHELL_INSET + SIDENAV_BOTTOM_GAP),
+                )
+                .w(state.sidenav_width)
+                .corners([SIDENAV_CORNER_RADIUS; 4])
+                .continuous_corners()
+                .fill(color("#111111"))
+                .inert(),
+        );
+    }
+    surface = surface.child(
+        el().key("navigation-sidenav-inverse-corner")
+            .absolute(
+                navigation_content_offset(state),
+                NAVIGATION_HEADER_HEIGHT - SIDENAV_CORNER_RADIUS,
+            )
+            .size(SIDENAV_CORNER_RADIUS, SIDENAV_CORNER_RADIUS)
+            .radial_gradient(
+                [1.0, 0.0],
+                SIDENAV_CORNER_RADIUS,
+                [
+                    (0.0, Color::TRANSPARENT),
+                    (0.98, Color::TRANSPARENT),
+                    (1.0, color(CONTENT_SURFACE_COLOR)),
+                ],
+            )
+            .inert(),
+    );
+    let surface = surface
         .child(header(state, header_prefix_width, window_width))
         .child(body);
     window = window.child(surface);
@@ -6469,11 +6554,6 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
             window = window.child(layer);
         }
     }
-    if state.primary_view == PrimaryView::Fleet && state.fleet.browser_dialog_open {
-        for layer in fleet_view::browser_dialog(state, theme) {
-            window = window.child(layer);
-        }
-    }
     if state.primary_view == PrimaryView::Fleet && state.fleet.import_dialog_open {
         for layer in fleet_view::import_dialog(state, theme) {
             window = window.child(layer);
@@ -6551,11 +6631,6 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
                         .get(index)
                         .is_some_and(|feature| feature.enabled)
             }
-            SelectionMenu::BrowserWorkspaces { index } => {
-                state.primary_view == PrimaryView::Fleet
-                    && state.fleet_section == fleet_view::FleetSection::Browsers
-                    && state.fleet.browser_scope_enabled(index)
-            }
             SelectionMenu::VirtualMachineWorkspaces { index } => {
                 state.primary_view == PrimaryView::Fleet
                     && state.fleet_section == fleet_view::FleetSection::VirtualMachines
@@ -6592,7 +6667,6 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
                     SelectionMenu::TextSize => ("Text Size", 178.0),
                     SelectionMenu::PluginWorkspaces { .. }
                     | SelectionMenu::FeatureWorkspaces { .. }
-                    | SelectionMenu::BrowserWorkspaces { .. }
                     | SelectionMenu::VirtualMachineWorkspaces { .. } => ("Workspaces", 240.0),
                     SelectionMenu::SourcePriority { .. } => ("Source Priority", 178.0),
                     SelectionMenu::Model { .. } => ("Choose model", 380.0),
@@ -7298,7 +7372,7 @@ mod tests {
         let mut runtime = Runtime::new(state, view, (1040.0, 720.0), Env::new(true, 1.0));
         runtime.frame(0.0);
         assert!(runtime.find("nav-tracking").is_some());
-        assert!(runtime.find("tracking-title").is_some());
+        assert!(runtime.find("tracking-title").is_none());
         assert!(runtime.find("tracking-sidenav").is_some());
         assert!(runtime.find("tracking-tokens-nav").is_some());
         assert!(runtime.find("tracking-metrics").is_some());
@@ -8496,6 +8570,70 @@ mod tests {
     }
 
     #[test]
+    fn top_level_pages_start_without_repeated_breadcrumbs_and_intros() {
+        for (primary_view, old_title_key, old_intro, content_key) in [
+            (
+                PrimaryView::Home,
+                None,
+                Some("Define your scope. Follow the evidence. Build a defensible finding."),
+                "overview-new-research",
+            ),
+            (
+                PrimaryView::Settings,
+                Some("settings-view-title"),
+                Some("Configure the review rules used before tool execution."),
+                "safety-view-tabs",
+            ),
+            (
+                PrimaryView::Extensions,
+                Some("extensions-view-title"),
+                Some(
+                    "Build your research toolkit. Enable capabilities for the workspaces that need them.",
+                ),
+                "feature-view-tabs",
+            ),
+            (
+                PrimaryView::Tracking,
+                Some("tracking-title"),
+                Some(
+                    "Follow the tokens behind your research. See what went in, what came out, and what was reused.",
+                ),
+                "tracking-sidenav",
+            ),
+            (
+                PrimaryView::Automations,
+                Some("automations-view-title"),
+                None,
+                "automations-sidenav",
+            ),
+        ] {
+            let mut runtime = Runtime::new(
+                State {
+                    primary_view,
+                    ..State::default()
+                },
+                view,
+                (1040.0, 720.0),
+                Env::new(true, 1.0),
+            );
+            runtime.frame(0.0);
+            assert!(runtime.find(content_key).is_some());
+            if let Some(key) = old_title_key {
+                assert!(runtime.find(key).is_none());
+            }
+            let texts = runtime
+                .elements()
+                .into_iter()
+                .filter_map(|element| element.text)
+                .collect::<Vec<_>>();
+            assert!(!texts.iter().any(|text| text == "Research desk"));
+            if let Some(intro) = old_intro {
+                assert!(!texts.iter().any(|text| text == intro));
+            }
+        }
+    }
+
+    #[test]
     fn home_uses_its_sidebar_and_exposes_research_actions() {
         let mut runtime =
             Runtime::new(State::default(), view, (1040.0, 720.0), Env::new(true, 1.0));
@@ -8507,7 +8645,7 @@ mod tests {
         assert_eq!(runtime.state.primary_view, PrimaryView::Home);
         for key in [
             "home-sidenav",
-            "home-wordmark",
+            "header-sidenav-title",
             "home-new-research",
             "home-quick-chat",
             "home-collection-header",
@@ -10523,6 +10661,20 @@ active_runbook_count: 0,
                             is_error: false,
                             agent_role: "main".to_owned(),
                         },
+                        beale_contracts::v1::SessionToolSummary {
+                            id: "00000000-0000-4000-8000-000000000008".to_owned(),
+                            name: "memory_read".to_owned(),
+                            summary: "Memory name: Example service".to_owned(),
+                            is_error: false,
+                            agent_role: "main".to_owned(),
+                        },
+                        beale_contracts::v1::SessionToolSummary {
+                            id: "00000000-0000-4000-8000-000000000009".to_owned(),
+                            name: "runbook_get".to_owned(),
+                            summary: "Runbook title: Example procedure".to_owned(),
+                            is_error: false,
+                            agent_role: "main".to_owned(),
+                        },
                     ],
                     reasoning_summaries: vec![beale_contracts::v1::SessionReasoningSummary {
                         text: "Checking the example file.".to_owned(),
@@ -10565,8 +10717,8 @@ active_runbook_count: 0,
         runtime.frame(0.0);
         assert!(runtime.find("session-work-header-0").is_some());
         assert!(runtime.find("session-message-0").is_some());
-        assert!(runtime.find("session-reasoning-0-0").is_some());
-        assert!(runtime.find("session-commentary-0-0").is_some());
+        assert!(runtime.find("session-reasoning-0-0").is_none());
+        assert!(runtime.find("session-commentary-0-0").is_none());
         assert!(
             runtime
                 .find(&format!("session-tool-button-{tool_id}"))
@@ -11895,14 +12047,13 @@ active_runbook_count: 0,
             Env::new(true, 1.0),
         );
         runtime.frame(0.0);
-        let (settings_title, _) = runtime.presented("settings-view-title").unwrap();
         click(&mut runtime, "nav-home");
         click(&mut runtime, "home-add-workspace");
         assert_eq!(runtime.state.primary_view, PrimaryView::WorkspaceCreation);
         assert!(runtime.find("workspace-creation-title").is_some());
         let (creation_title, _) = runtime.presented("workspace-creation-title").unwrap();
         assert!(creation_title[1] >= 60.0);
-        assert!((creation_title[3] - settings_title[3]).abs() < 1.0);
+        assert!(creation_title[3] > 20.0);
         assert_eq!(
             runtime.state.workspace_draft.tab,
             workspace_creation::CreationTab::Import
@@ -12389,6 +12540,19 @@ active_runbook_count: 0,
         assert!(entering.rect[0] > settled.rect[0] + 10.0);
         let (card, _) = session.presented("session-sidenav").unwrap();
         let (surface, _) = session.presented("settings-surface").unwrap();
+        let content_fill = session
+            .elements()
+            .into_iter()
+            .find(|element| element.key.as_deref() == Some("content-surface"))
+            .unwrap()
+            .fill;
+        let slot_fill = session
+            .elements()
+            .into_iter()
+            .find(|element| element.key.as_deref() == Some("session-sidenav-slot"))
+            .unwrap()
+            .fill;
+        assert_eq!(slot_fill, content_fill);
         assert!(card[1] >= surface[1] + session_sidenav::INSET - 1.0);
         assert!(card[3] >= 100.0 && card[3] < 220.0);
         let (title, _) = session.presented("session-sidenav-title").unwrap();
@@ -13377,6 +13541,54 @@ active_runbook_count: 0,
     }
 
     #[test]
+    fn subscription_circles_open_their_provider_settings() {
+        for (provider, circle_key) in [
+            (Provider::OpenAi, "usage-openai"),
+            (Provider::Xai, "usage-xai"),
+        ] {
+            let mut usage = [None, None];
+            usage[provider.index()] = Some(beale_contracts::v1::ProviderUsageSnapshot {
+                provider: provider.id() as i32,
+                windows: vec![beale_contracts::v1::ProviderUsageWindow {
+                    label: "Weekly Limit".to_owned(),
+                    used_percent: 25,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            });
+            let state = State {
+                primary_view: PrimaryView::Home,
+                provider_usage: usage,
+                ..State::default()
+            };
+            let mut runtime = Runtime::new(state, view, (1040.0, 720.0), Env::new(true, 1.0));
+            runtime.frame(0.0);
+            let (x, y) = runtime.find(circle_key).unwrap();
+            runtime.pointer_down(x, y);
+            runtime.pointer_up(x, y);
+            runtime.frame(0.0);
+            assert_eq!(runtime.state.primary_view, PrimaryView::Settings);
+            assert_eq!(runtime.state.settings_section, SettingsSection::Providers);
+            assert_eq!(runtime.state.selected, provider);
+            assert!(
+                runtime
+                    .find(&format!("provider-{}", provider.key()))
+                    .is_some()
+            );
+            assert_eq!(
+                runtime.state.view_history.back.last(),
+                Some(&ViewLocation::Home)
+            );
+
+            let (x, y) = runtime.find("header-back").unwrap();
+            runtime.pointer_down(x, y);
+            runtime.pointer_up(x, y);
+            runtime.frame(0.0);
+            assert_eq!(runtime.state.primary_view, PrimaryView::Home);
+        }
+    }
+
+    #[test]
     fn workspace_row_new_research_opens_a_draft_for_that_workspace() {
         let workspace_id = "00000000-0000-4000-8000-000000000003";
         let state = State {
@@ -13433,6 +13645,191 @@ active_runbook_count: 0,
     }
 
     #[test]
+    fn navigation_shell_wraps_header_rail_and_sidenav() {
+        let state = State {
+            primary_view: PrimaryView::Home,
+            ..State::default()
+        };
+        let shell_color = state.appearance.style().color(CONTENT_SURFACE_COLOR);
+        let sidenav_color = state.appearance.style().color("#111111");
+        let mut runtime = Runtime::new(state, view, (1040.0, 720.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        let (app, _) = runtime.presented("app-surface").unwrap();
+        let (shell, _) = runtime.presented("navigation-shell").unwrap();
+        let (rail, _) = runtime.presented("navigation").unwrap();
+        let (sidenav_background, _) = runtime.presented("navigation-sidenav-background").unwrap();
+        let (inverse_corner, _) = runtime
+            .presented("navigation-sidenav-inverse-corner")
+            .unwrap();
+        let (sidenav, _) = runtime.presented("home-sidenav").unwrap();
+        let (content, _) = runtime.presented("content-surface").unwrap();
+        let (toggle, _) = runtime.presented("header-sidebar-toggle").unwrap();
+        let (toggle_icon, _) = runtime.presented("header-sidebar-toggle-icon").unwrap();
+        let (back, _) = runtime.presented("header-back").unwrap();
+        let (forward, _) = runtime.presented("header-forward").unwrap();
+        assert_eq!(shell[0], app[0] + NAVIGATION_SHELL_INSET);
+        assert_eq!(shell[1], app[1] + NAVIGATION_SHELL_INSET);
+        assert_eq!(shell[3], app[3] - NAVIGATION_SHELL_INSET * 2.0);
+        assert_eq!(shell[2], NAVIGATION_RAIL_WIDTH + SIDENAV_DEFAULT_WIDTH);
+        assert_eq!(rail[0], shell[0]);
+        assert_eq!(rail[2], NAVIGATION_RAIL_WIDTH);
+        assert_eq!(sidenav_background[0], rail[0] + rail[2]);
+        assert_eq!(sidenav_background[1], content[1]);
+        assert!(sidenav_background[1] > shell[1]);
+        assert_eq!(sidenav_background[2], sidenav[2]);
+        assert_eq!(
+            sidenav_background[1] + sidenav_background[3],
+            shell[1] + shell[3] - SIDENAV_BOTTOM_GAP
+        );
+        assert_eq!(sidenav[0], sidenav_background[0]);
+        assert_eq!(
+            sidenav[1] + sidenav[3],
+            sidenav_background[1] + sidenav_background[3]
+        );
+        assert_eq!(content[0], sidenav[0] + sidenav[2]);
+        assert_eq!(content[0], shell[0] + shell[2]);
+        assert_eq!(inverse_corner[0], content[0]);
+        assert_eq!(inverse_corner[1] + inverse_corner[3], content[1]);
+        assert_eq!(inverse_corner[2], SIDENAV_CORNER_RADIUS);
+        assert_eq!(inverse_corner[3], SIDENAV_CORNER_RADIUS);
+        assert_eq!(toggle[0] + toggle[2] * 0.5, rail[0] + rail[2] * 0.5);
+        assert!(toggle[1] > shell[1]);
+        assert_eq!(
+            toggle_icon[1] + toggle_icon[3] * 0.5,
+            toggle[1] + toggle[3] * 0.5 + 1.0
+        );
+        assert!(back[0] >= sidenav[0]);
+        assert_eq!(forward[0] + forward[2], sidenav[0] + sidenav[2] - 8.0);
+        assert_eq!(back[1], forward[1]);
+        let shell_element = runtime
+            .elements()
+            .into_iter()
+            .find(|item| item.key.as_deref() == Some("navigation-shell"))
+            .unwrap();
+        assert_eq!(shell_element.fill, shell_color);
+        assert_eq!(shell_element.radius, 18.0);
+        let sidenav_background_element = runtime
+            .elements()
+            .into_iter()
+            .find(|item| item.key.as_deref() == Some("navigation-sidenav-background"))
+            .unwrap();
+        assert_eq!(sidenav_background_element.fill, sidenav_color);
+        assert_eq!(sidenav_background_element.radius, SIDENAV_CORNER_RADIUS);
+
+        let mut collapsed = Runtime::new(
+            State {
+                primary_view: PrimaryView::Home,
+                sidenav_visible: false,
+                ..State::default()
+            },
+            view,
+            (1040.0, 720.0),
+            Env::new(true, 1.0),
+        );
+        collapsed.frame(0.0);
+        let (shell, _) = collapsed.presented("navigation-shell").unwrap();
+        let (rail, _) = collapsed.presented("navigation").unwrap();
+        let (content, _) = collapsed.presented("content-surface").unwrap();
+        let (inverse_corner, _) = collapsed
+            .presented("navigation-sidenav-inverse-corner")
+            .unwrap();
+        let (toggle, _) = collapsed.presented("header-sidebar-toggle").unwrap();
+        assert_eq!(shell[2], HEADER_COLLAPSED_PREFIX_WIDTH);
+        assert_eq!(rail[0], shell[0]);
+        assert_eq!(rail[2], shell[2]);
+        assert_eq!(toggle[0] + toggle[2] * 0.5, rail[0] + rail[2] * 0.5);
+        assert_eq!(content[0], shell[0] + shell[2]);
+        assert_eq!(inverse_corner[0], content[0]);
+        assert_eq!(inverse_corner[1] + inverse_corner[3], content[1]);
+        assert!(collapsed.find("home-sidenav").is_none());
+        assert!(collapsed.find("navigation-sidenav-background").is_none());
+        assert!(collapsed.find("header-sidenav-title").is_none());
+        assert!(collapsed.find("header-back").is_none());
+        assert!(collapsed.find("header-forward").is_none());
+
+        let mut wide = Runtime::new(
+            State {
+                primary_view: PrimaryView::Home,
+                sidenav_width: SIDENAV_MAX_WIDTH,
+                ..State::default()
+            },
+            view,
+            (1040.0, 720.0),
+            Env::new(true, 1.0),
+        );
+        wide.frame(0.0);
+        let (shell, _) = wide.presented("navigation-shell").unwrap();
+        let (sidenav_background, _) = wide.presented("navigation-sidenav-background").unwrap();
+        assert_eq!(shell[2], NAVIGATION_RAIL_WIDTH + SIDENAV_MAX_WIDTH);
+        assert_eq!(sidenav_background[2], SIDENAV_MAX_WIDTH);
+    }
+
+    #[test]
+    fn sidenav_titles_live_in_the_header_above_each_view() {
+        for (primary_view, label, sidenav_key, first_row_key) in [
+            (
+                PrimaryView::Home,
+                "Beale",
+                "home-sidenav",
+                "home-new-research",
+            ),
+            (
+                PrimaryView::Settings,
+                "Settings",
+                "settings-sidenav",
+                "settings-safety",
+            ),
+            (
+                PrimaryView::Extensions,
+                "Extensions",
+                "extensions-sidenav",
+                "extensions-features",
+            ),
+            (
+                PrimaryView::Fleet,
+                "Fleet",
+                "fleet-sidenav",
+                "fleet-app-servers",
+            ),
+            (
+                PrimaryView::Automations,
+                "Automations",
+                "automations-sidenav",
+                "automations-schedule-job",
+            ),
+            (
+                PrimaryView::Tracking,
+                "Tracking",
+                "tracking-sidenav",
+                "tracking-tokens-nav",
+            ),
+        ] {
+            let mut runtime = Runtime::new(
+                State {
+                    primary_view,
+                    ..State::default()
+                },
+                view,
+                (1040.0, 720.0),
+                Env::new(true, 1.0),
+            );
+            runtime.frame(0.0);
+            let title = runtime
+                .elements()
+                .into_iter()
+                .find(|item| item.key.as_deref() == Some("header-sidenav-title"))
+                .unwrap();
+            let (sidenav, _) = runtime.presented(sidenav_key).unwrap();
+            let (first_row, _) = runtime.presented(first_row_key).unwrap();
+            assert_eq!(title.text.as_deref(), Some(label));
+            assert!(title.rect[0] >= sidenav[0]);
+            assert!(title.rect[1] + title.rect[3] <= sidenav[1]);
+            assert_eq!(first_row[1], sidenav[1] + 10.0);
+            assert_eq!(first_row[3], 34.0);
+        }
+    }
+
+    #[test]
     fn header_titles_render_as_wide_tabs_without_close_controls() {
         for primary_view in [
             PrimaryView::Settings,
@@ -13459,7 +13856,10 @@ active_runbook_count: 0,
             assert_eq!(tab[3], 34.0, "{primary_view:?}: {tab:?}");
             assert!(tab[2] >= 160.0, "{primary_view:?}: {tab:?}");
             assert!(tab[2] > tab[3] * 3.0, "{primary_view:?}: {tab:?}");
-            assert!((tab[0] - title_area[0]).abs() < 1.0, "{primary_view:?}");
+            assert!(
+                (tab[0] - title_area[0] - HEADER_TITLE_INSET).abs() < 1.0,
+                "{primary_view:?}"
+            );
             assert!(
                 tab[0] + tab[2] <= title_area[0] + title_area[2],
                 "{primary_view:?}: title={title_area:?} tab={tab:?}"
@@ -13483,15 +13883,24 @@ active_runbook_count: 0,
     }
 
     #[test]
-    fn fleet_opens_below_the_conditional_rail_divider() {
+    fn fleet_circle_opens_from_icon_rail() {
         let mut state = State {
             primary_view: PrimaryView::Home,
+            connection: ConnectionStatus::Connected { major: 2, minor: 0 },
             ..State::default()
         };
-        let mut disabled =
-            Runtime::new(State::default(), view, (1040.0, 720.0), Env::new(true, 1.0));
+        let mut disabled = Runtime::new(
+            State {
+                primary_view: PrimaryView::Home,
+                ..State::default()
+            },
+            view,
+            (1040.0, 720.0),
+            Env::new(true, 1.0),
+        );
         disabled.frame(0.0);
-        assert!(disabled.find("nav-fleet").is_none());
+        assert!(disabled.find("fleet-status").is_none());
+        assert!(disabled.find("fleet-usage-divider").is_none());
         assert!(disabled.find("navigation-conditional-divider").is_none());
         state
             .features
@@ -13499,27 +13908,74 @@ active_runbook_count: 0,
             .find(|feature| feature.id == "fleet")
             .unwrap()
             .enabled = true;
+        let mut no_usage_state = State {
+            primary_view: PrimaryView::Home,
+            ..State::default()
+        };
+        no_usage_state
+            .features
+            .iter_mut()
+            .find(|feature| feature.id == "fleet")
+            .unwrap()
+            .enabled = true;
+        let mut no_usage = Runtime::new(no_usage_state, view, (1040.0, 720.0), Env::new(true, 1.0));
+        no_usage.frame(0.0);
+        let (fleet_without_usage, _) = no_usage.presented("fleet-status").unwrap();
+        let (rail_without_usage, _) = no_usage.presented("navigation").unwrap();
+        assert_eq!(fleet_without_usage[2], provider_usage::INDICATOR_SIZE);
+        assert!(fleet_without_usage[1] > rail_without_usage[1] + 200.0);
+        assert!(no_usage.find("fleet-usage-divider").is_none());
+        state.provider_usage[0] = Some(beale_contracts::v1::ProviderUsageSnapshot {
+            provider: ProviderId::Openai as i32,
+            windows: vec![beale_contracts::v1::ProviderUsageWindow {
+                label: "Weekly Limit".to_owned(),
+                used_percent: 25,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
         let mut runtime = Runtime::new(state, view, (1040.0, 720.0), Env::new(true, 1.0));
         runtime.frame(0.0);
-        let (settings, _) = runtime.presented("nav-settings").unwrap();
-        let (divider, _) = runtime.presented("navigation-conditional-divider").unwrap();
-        let (fleet, _) = runtime.presented("nav-fleet").unwrap();
-        assert!(settings[1] + settings[3] < divider[1]);
-        assert!(divider[1] + divider[3] < fleet[1]);
+        let (usage, _) = runtime.presented("usage-openai").unwrap();
+        let (rail, _) = runtime.presented("navigation").unwrap();
+        let (divider, _) = runtime.presented("fleet-usage-divider").unwrap();
+        let (sidenav, _) = runtime.presented("home-sidenav").unwrap();
+        let (title, _) = runtime.presented("header-sidenav-title").unwrap();
+        let (fleet, _) = runtime.presented("fleet-status").unwrap();
+        assert!(title[0] >= sidenav[0]);
+        assert!(title[1] + title[3] <= sidenav[1]);
+        assert!(fleet[0] + fleet[2] <= sidenav[0]);
+        assert_eq!(fleet[0] + fleet[2] * 0.5, rail[0] + rail[2] * 0.5);
+        assert_eq!([fleet[2], fleet[3]], [usage[2], usage[3]]);
+        assert!(divider[1] >= usage[1] + usage[3]);
+        assert!(fleet[1] >= divider[1] + divider[3]);
+        assert!(fleet[1] + fleet[3] <= rail[1] + rail[3]);
+        assert_eq!(divider[2], 26.0);
+        let (ring, _) = runtime.presented("fleet-status-ring").unwrap();
+        let (glyph, _) = runtime.presented("fleet-status-icon").unwrap();
+        assert_eq!([ring[2], ring[3]], [36.0, 36.0]);
+        assert_eq!([glyph[2], glyph[3]], [12.0, 12.0]);
+        assert!(glyph[0] > ring[0] + 8.0);
+        assert!(runtime.find("nav-fleet").is_none());
+        assert!(runtime.find("fleet-usage-divider").is_some());
+        assert!(runtime.find("navigation-conditional-divider").is_none());
+        assert!(runtime.find("fleet-status-ring").is_some());
+        assert!(runtime.find("fleet-status-icon").is_some());
 
-        let (x, y) = runtime.find("nav-fleet").unwrap();
+        let (x, y) = runtime.find("fleet-status").unwrap();
         runtime.pointer_down(x, y);
         runtime.pointer_up(x, y);
         runtime.frame(0.0);
         assert_eq!(runtime.state.primary_view, PrimaryView::Fleet);
-        assert!(runtime.find("fleet-sidenav-title").is_some());
-        assert!(runtime.find("fleet-view-title").is_some());
+        assert!(runtime.find("fleet-status").is_some());
+        assert!(runtime.find("header-sidenav-title").is_some());
+        assert!(runtime.find("fleet-view-tabs").is_some());
         assert_eq!(
             runtime.state.fleet_section,
             fleet_view::FleetSection::AppServers
         );
         assert!(runtime.find("fleet-app-servers").is_some());
-        assert!(runtime.find("fleet-browsers").is_some());
+        assert!(runtime.find("fleet-browsers").is_none());
         assert!(runtime.find("fleet-virtual-machines").is_some());
         assert!(runtime.find("fleet-server-card-local").is_some());
         assert!(runtime.find("fleet-local-qr").is_some());
@@ -13535,36 +13991,6 @@ active_runbook_count: 0,
         assert_eq!(runtime.state.fleet.tab, fleet_view::FleetTab::Available);
         assert!(runtime.find("home-no-workspace").is_none());
 
-        let (x, y) = runtime.find("fleet-browsers").unwrap();
-        runtime.pointer_move(x, y);
-        runtime.frame(1.0);
-        runtime.pointer_down(x, y);
-        runtime.pointer_up(x, y);
-        runtime.frame(0.0);
-        assert_eq!(
-            runtime.state.fleet_section,
-            fleet_view::FleetSection::Browsers
-        );
-        assert_eq!(runtime.state.fleet.tab, fleet_view::FleetTab::All);
-        assert!(runtime.find("fleet-tab-all").is_some());
-        assert!(runtime.find("fleet-tab-available").is_some());
-        assert!(runtime.find("fleet-tab-enabled").is_some());
-
-        let (x, y) = runtime.find("fleet-add-browser").unwrap();
-        runtime.pointer_move(x, y);
-        runtime.frame(1.0);
-        runtime.pointer_down(x, y);
-        runtime.pointer_up(x, y);
-        runtime.frame(0.0);
-        assert!(runtime.state.fleet.browser_dialog_open);
-        assert!(runtime.find("fleet-browser-name").is_some());
-        assert!(runtime.find("fleet-browser-path").is_some());
-        let (x, y) = runtime.find("fleet-browser-cancel").unwrap();
-        runtime.pointer_down(x, y);
-        runtime.pointer_up(x, y);
-        runtime.frame(0.0);
-        assert!(!runtime.state.fleet.browser_dialog_open);
-
         let (x, y) = runtime.find("fleet-virtual-machines").unwrap();
         runtime.pointer_down(x, y);
         runtime.pointer_up(x, y);
@@ -13578,12 +14004,6 @@ active_runbook_count: 0,
         assert!(runtime.find("fleet-tab-available").is_some());
         assert!(runtime.find("fleet-tab-enabled").is_some());
 
-        runtime.state.go_back();
-        runtime.frame(0.0);
-        assert_eq!(
-            runtime.state.fleet_section,
-            fleet_view::FleetSection::Browsers
-        );
         runtime.state.go_back();
         runtime.frame(0.0);
         assert_eq!(
@@ -13608,9 +14028,62 @@ active_runbook_count: 0,
             state.navigate_to(ViewLocation::Home);
         });
         runtime.frame(0.0);
-        assert!(runtime.find("nav-fleet").is_none());
+        assert!(runtime.find("fleet-status").is_none());
         runtime.state.go_back();
         assert_eq!(runtime.state.primary_view, PrimaryView::Home);
+    }
+
+    #[test]
+    fn fleet_ring_colors_follow_local_app_server_status() {
+        for (status, expected) in [
+            (
+                ConnectionStatus::Connected { major: 2, minor: 0 },
+                ("Healthy", "#72b783"),
+            ),
+            (ConnectionStatus::Offline, ("Offline", PROVIDER_ERROR_COLOR)),
+            (
+                ConnectionStatus::Incompatible,
+                ("Incompatible protocol", PROVIDER_WARNING_COLOR),
+            ),
+            (
+                ConnectionStatus::InvalidAddress,
+                ("Invalid address", PROVIDER_WARNING_COLOR),
+            ),
+            (
+                ConnectionStatus::Connecting,
+                ("Connecting", PROVIDER_WARNING_COLOR),
+            ),
+        ] {
+            assert_eq!(fleet_ring_status(&status), expected);
+            let mut state = State {
+                primary_view: PrimaryView::Home,
+                connection: status,
+                ..State::default()
+            };
+            state
+                .features
+                .iter_mut()
+                .find(|feature| feature.id == "fleet")
+                .unwrap()
+                .enabled = true;
+            let expected_color = state.appearance.style().color(expected.1);
+            let mut runtime = Runtime::new(state, view, (1040.0, 720.0), Env::new(true, 1.0));
+            runtime.frame(0.0);
+            let elements = runtime.elements();
+            let circle = elements
+                .iter()
+                .find(|item| item.key.as_deref() == Some("fleet-status"))
+                .unwrap();
+            assert_eq!(
+                circle.label.as_deref(),
+                Some(format!("Fleet · {}", expected.0).as_str())
+            );
+            let ring = elements
+                .iter()
+                .find(|item| item.key.as_deref() == Some("fleet-status-ring"))
+                .unwrap();
+            assert_eq!(ring.text_color, Some(expected_color));
+        }
     }
 
     #[test]
@@ -13681,14 +14154,17 @@ active_runbook_count: 0,
         runtime.pointer_up(x, y);
         runtime.frame(0.0);
         runtime.frame(1.0);
-        let (forward, _) = runtime.presented("header-forward").unwrap();
         let (title_area, _) = runtime.presented("header-title").unwrap();
+        let (shell, _) = runtime.presented("navigation-shell").unwrap();
         assert!(
-            (title_area[0] - forward[0] - forward[2]).abs() < 1.0,
-            "forward={forward:?}, title={title_area:?}"
+            (title_area[0] - shell[0] - shell[2]).abs() < 1.0,
+            "shell={shell:?}, title={title_area:?}"
         );
+        assert!(runtime.find("header-back").is_none());
+        assert!(runtime.find("header-forward").is_none());
         assert!(runtime.find("settings-sidenav-resize").is_none());
 
+        let (x, y) = runtime.find("header-sidebar-toggle").unwrap();
         runtime.pointer_down(x, y);
         runtime.pointer_up(x, y);
         runtime.frame(0.0);
@@ -13716,22 +14192,20 @@ active_runbook_count: 0,
         assert!(runtime.find("settings-profile").is_none());
         assert!(runtime.find("settings-prompt").is_none());
         assert!(runtime.find("settings-features").is_none());
-        let (providers_title, _) = runtime.presented("settings-view-title").unwrap();
         let (tabs, _) = runtime.presented("provider-view-tabs").unwrap();
         let (provider_header, _) = runtime.presented("provider-view-header").unwrap();
-        assert!(providers_title[1] + providers_title[3] < tabs[1]);
-        let gap_above_tabs = tabs[1] - (providers_title[1] + providers_title[3]);
+        let (scroll, _) = runtime.presented("settings-scroll").unwrap();
+        assert!(runtime.find("settings-view-title").is_none());
+        assert!((tabs[1] - scroll[1] - 36.0).abs() < 1.0);
         let gap_below_tabs = provider_header[1] - (tabs[1] + tabs[3]);
-        assert!(gap_above_tabs >= design::PAGE_GAP);
         assert!(gap_below_tabs >= 16.0);
         let (x, y) = runtime.find("settings-appearance").unwrap();
         runtime.pointer_down(x, y);
         runtime.pointer_up(x, y);
         runtime.frame(0.0);
         assert_eq!(runtime.state.settings_section, SettingsSection::Appearance);
-        let (appearance_title, _) = runtime.presented("settings-view-title").unwrap();
-        assert_eq!(appearance_title[0], providers_title[0]);
-        assert_eq!(appearance_title[1], providers_title[1]);
+        let (appearance_tabs, _) = runtime.presented("appearance-view-tabs").unwrap();
+        assert_eq!(appearance_tabs[1], tabs[1]);
         assert!(runtime.find("provider-openai").is_none());
         let (x, y) = runtime.find("settings-providers").unwrap();
         runtime.pointer_down(x, y);
@@ -13755,7 +14229,7 @@ active_runbook_count: 0,
             runtime.state.extensions_section,
             extensions_view::ExtensionSection::Features
         );
-        assert!(runtime.find("extensions-sidenav-title").is_some());
+        assert!(runtime.find("header-sidenav-title").is_some());
         assert!(runtime.find("feature-tab-all").is_some());
         let (features, _) = runtime.presented("extensions-features").unwrap();
         let (plugins, _) = runtime.presented("extensions-plugins").unwrap();

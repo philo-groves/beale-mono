@@ -13,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::{
     AUTH_HANDLE, ConnectionStatus, SelectionMenu, State, ThemeStyle, form_button,
     icons::{ARCHIVE, AUTOMATION_ACTIVE, AUTOMATION_SCHEDULE, AUTOMATIONS, SEARCH},
-    sidenav_heading, start_session_load, ui_font, view_title_font,
+    start_session_load, ui_font,
 };
 
 #[derive(Default)]
@@ -475,9 +475,7 @@ pub(crate) fn sidenav(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
         .w(width)
         .h_full()
         .px(12.0)
-        .pt(12.0)
-        .fill(theme.color("#111111"))
-        .child(sidenav_heading("Automations", theme).mb(12.0))
+        .pt(10.0)
         .child(
             row()
                 .key("automations-schedule-job")
@@ -566,20 +564,7 @@ fn repeat_label(preset: &str) -> &'static str {
 }
 
 pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
-    let mut body =
-        col()
-            .w_full()
-            .gap(crate::design::PAGE_GAP)
-            .child(crate::design::breadcrumb_title(
-                "Workbench",
-                text("Automations")
-                    .key("automations-view-title")
-                    .role("heading")
-                    .truncate_fade()
-                    .font(view_title_font())
-                    .color(theme.color("#f2f2f2")),
-                theme,
-            ));
+    let mut body = col().w_full().gap(crate::design::PAGE_GAP);
     if let Some(job) = selected_job(state) {
         let workspace = state
             .workspaces

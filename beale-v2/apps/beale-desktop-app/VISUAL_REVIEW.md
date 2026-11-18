@@ -59,7 +59,6 @@ Each row identifies a screenshot scene; all four themes were visually reviewed. 
 | Plugins | `plugins` | 8.0 | 8.0 | 8.0 | 8.0 |
 | Research Kits / empty state | `kits` | 8.0 | 8.0 | 8.0 | 8.0 |
 | Fleet / App Servers | `fleet` | 8.0 | 8.0 | 8.0 | 8.0 |
-| Fleet / Browsers | `browsers` | 8.0 | 8.0 | 8.0 | 8.0 |
 | Fleet / Virtual Machines | `vms` | 8.0 | 8.0 | 8.0 | 8.0 |
 | Automation job | `automations` | 8.0 | 8.0 | 8.0 | 8.0 |
 | Session Insights | `session-insights` | 8.5 | 8.5 | 8.5 | 8.5 |
@@ -95,7 +94,6 @@ Each row identifies a screenshot scene; all four themes were visually reviewed. 
 | App-server connection dialog | `fleet-connect` | 8.0 | 8.0 | 8.0 | 8.0 |
 | Tailscale import | `fleet-import` | 8.0 | 8.0 | 8.0 | 8.0 |
 | App-server details | `fleet-detail` | 8.0 | 8.0 | 8.0 | 8.0 |
-| Browser editor | `browser-add` | 8.0 | 8.0 | 8.0 | 8.0 |
 | Safety rule editor | `safety-rule` | 8.0 | 8.0 | 8.0 | 8.0 |
 | Finding details | `finding-detail` | 8.0 | 8.0 | 8.0 | 8.0 |
 | Campaign compatibility empty state | `campaign` | 8.0 | 8.0 | 8.0 | 8.0 |

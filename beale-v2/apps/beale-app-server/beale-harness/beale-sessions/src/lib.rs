@@ -163,6 +163,15 @@ fn tool_summary(name: &str, arguments: &Value) -> String {
     base_tool_summary(name, arguments)
 }
 
+fn goal_status_summary(arguments: &Value) -> String {
+    match arguments.get("state").and_then(Value::as_str) {
+        Some(state @ ("achieved" | "continue" | "waiting_on_external_state")) => {
+            format!("Goal status: {state}")
+        }
+        _ => "Record Goal Mode status".to_owned(),
+    }
+}
+
 #[cfg(feature = "agent-feedback")]
 fn agent_feedback_feature_enabled(
     db: &HostDatabase,
@@ -418,6 +427,81 @@ fn validate_delegations(
         .assignments(arguments, config, fallback)
         .map_err(|error| format!("Invalid delegation: {error}"))?;
     Ok(())
+}
+
+#[cfg(feature = "graphs")]
+async fn graph_child_role_label(
+    state: &SessionState,
+    session_id: &str,
+    parent_role: beale_graphs::Role,
+    groups: &HashMap<beale_graphs::Role, graphs::Subagents>,
+    id: &str,
+) -> Option<&'static str> {
+    if let Some(role) = match groups.get(&parent_role) {
+        Some(group) => group.role_of(id).await,
+        None => None,
+    } {
+        return Some(role.label());
+    }
+    let child = state.db.session_child(session_id, id).ok().flatten()?;
+    if child.parent_role != parent_role.id() {
+        return None;
+    }
+    beale_graphs::Role::from_id(&child.turn.role).map(beale_graphs::Role::label)
+}
+
+#[cfg(feature = "graphs")]
+async fn graph_tool_summary(
+    state: &SessionState,
+    session_id: &str,
+    parent_role: beale_graphs::Role,
+    groups: &HashMap<beale_graphs::Role, graphs::Subagents>,
+    name: &str,
+    args: &Value,
+) -> String {
+    match name {
+        beale_graphs::SPAWN_TOOL => format!(
+            "Graph spawn count: {}",
+            args.get("assignments")
+                .and_then(Value::as_array)
+                .map_or(0, Vec::len)
+        ),
+        beale_graphs::LIST_TOOL => "Graph list".to_owned(),
+        beale_graphs::INSPECT_TOOL | beale_graphs::MESSAGE_TOOL | beale_graphs::KILL_TOOL => {
+            let target = if name == beale_graphs::MESSAGE_TOOL {
+                "recipient"
+            } else {
+                "subagent_id"
+            };
+            let role = match args.get(target).and_then(Value::as_str) {
+                Some(id) => {
+                    graph_child_role_label(state, session_id, parent_role, groups, id).await
+                }
+                None => None,
+            };
+            let action = match name {
+                beale_graphs::INSPECT_TOOL => "inspect",
+                beale_graphs::MESSAGE_TOOL => "message",
+                _ => "kill",
+            };
+            role.map_or_else(
+                || format!("Graph {action}"),
+                |role| format!("Graph {action} role: {role}"),
+            )
+        }
+        beale_graphs::HANDOFF_TOOL => {
+            let role = args
+                .get("role")
+                .and_then(Value::as_str)
+                .and_then(beale_graphs::Role::from_id)
+                .map(beale_graphs::Role::label);
+            role.map_or_else(
+                || "Graph handoff".to_owned(),
+                |role| format!("Graph handoff role: {role}"),
+            )
+        }
+        _ => base_tool_summary(name, args),
+    }
 }
 
 #[cfg(feature = "runbooks")]
@@ -2719,10 +2803,10 @@ async fn run_one_turn(
             beale_host_log::error!("plugin directory failed: {error:#}");
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
-    let agent_files = AgentFiles::new().map_err(|error| {
+    let agent_files = Arc::new(AgentFiles::new().map_err(|error| {
         beale_host_log::error!("agent files failed: {error:#}");
         StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+    })?);
     let mut definitions = definitions();
     let mut extension_entries = String::new();
     #[cfg(feature = "graphs")]
@@ -2769,7 +2853,11 @@ async fn run_one_turn(
             #[cfg(feature = "graphs")]
             beale_graphs::FEATURE_ID => (
                 active_graph
-                    .map(|runtime| vec![runtime.tool_definition()])
+                    .map(|runtime| {
+                        let mut tools = vec![runtime.tool_definition()];
+                        tools.extend(beale_graphs::subagent_tools());
+                        tools
+                    })
                     .unwrap_or_default(),
                 graph_section
                     .as_deref()
@@ -2969,7 +3057,11 @@ async fn run_one_turn(
     #[cfg(feature = "graphs")]
     let mut child_turns = Vec::<ChildTurnRow>::new();
     #[cfg(feature = "graphs")]
-    let child_message_sequence = AtomicU32::new(0x8000_0000);
+    let child_message_sequence = Arc::new(AtomicU32::new(0x8000_0000));
+    #[cfg(feature = "graphs")]
+    let mut subagents = HashMap::<beale_graphs::Role, graphs::Subagents>::new();
+    #[cfg(feature = "graphs")]
+    let child_usage = Arc::new(Mutex::new(Vec::<ModelUsageRow>::new()));
     #[cfg(not(feature = "graphs"))]
     let child_turns = Vec::<ChildTurnRow>::new();
     let mut reasoning_rows = Vec::<ReasoningSummaryRow>::new();
@@ -2982,6 +3074,42 @@ async fn run_one_turn(
     #[cfg(feature = "graphs")]
     let mut stage_reminder_sent = false;
     'rounds: loop {
+        #[cfg(feature = "graphs")]
+        if let Some(manager) = subagents.get(&active_role) {
+            let incoming = manager.parent_messages().await;
+            if !incoming.is_empty() {
+                for (from, message) in &incoming {
+                    if let Some(from_role) = manager.role_of(from).await {
+                        tool_rows.push(
+                            graphs::received_message(
+                                from,
+                                from_role,
+                                message,
+                                graphs::ReceiveContext {
+                                    agent_role: active_role,
+                                    subagent_id: "",
+                                    turn_number: next_turn_number,
+                                    ordinal: tool_rows.len() as i64,
+                                    progress: progress.as_ref(),
+                                },
+                            )
+                            .await,
+                        );
+                    }
+                }
+                input.extend(input_messages(&[TextMessage {
+                    role: TextRole::User,
+                    text: format!(
+                        "Messages from your subagents:\n{}",
+                        incoming
+                            .iter()
+                            .map(|(from, message)| format!("From {from}: {message}"))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    ),
+                }]));
+            }
+        }
         #[cfg(feature = "graphs")]
         if !stage_reminder_sent
             && peer
@@ -3217,7 +3345,7 @@ async fn run_one_turn(
             let id = Uuid::new_v4().to_string();
             let args: Result<Value, _> = serde_json::from_str(&call.arguments);
             let summary = if call.name == "goal_status" {
-                "Record Goal Mode status".to_owned()
+                goal_status_summary(args.as_ref().unwrap_or(&Value::Null))
             } else if cfg!(feature = "agent-feedback") && call.name == "agent_feedback" {
                 "Record agent feedback".to_owned()
             } else if cfg!(feature = "surfaces") && call.name.starts_with("surface_") {
@@ -3249,23 +3377,51 @@ async fn run_one_turn(
                     base_tool_summary(&call.name, args.as_ref().unwrap_or(&Value::Null))
                 }
             } else if cfg!(feature = "memories") && call.name.starts_with("memory_") {
-                format!(
-                    "{} memory",
-                    call.name.trim_start_matches("memory_").replace('_', " ")
-                )
+                #[cfg(feature = "memories")]
+                {
+                    beale_memories::summary(
+                        state.workspaces.root(),
+                        &request.workspace_id,
+                        &call.name,
+                        args.as_ref().unwrap_or(&Value::Null),
+                    )
+                }
+                #[cfg(not(feature = "memories"))]
+                {
+                    base_tool_summary(&call.name, args.as_ref().unwrap_or(&Value::Null))
+                }
             } else if cfg!(feature = "runbooks") && call.name.starts_with("runbook_") {
-                format!("{} runbook", call.name.trim_start_matches("runbook_"))
-            } else if cfg!(feature = "graphs") && call.name == "graph_delegate" {
-                "Delegate to graph subagents".to_owned()
-            } else if cfg!(feature = "graphs") && call.name == "graph_handoff" {
-                format!(
-                    "Hand off to {}",
-                    args.as_ref()
-                        .ok()
-                        .and_then(|value| value.get("role"))
-                        .and_then(Value::as_str)
-                        .unwrap_or("peer agent")
-                )
+                #[cfg(feature = "runbooks")]
+                {
+                    beale_runbooks::summary(
+                        &state.db,
+                        &request.workspace_id,
+                        &session.id,
+                        &call.name,
+                        args.as_ref().unwrap_or(&Value::Null),
+                    )
+                }
+                #[cfg(not(feature = "runbooks"))]
+                {
+                    base_tool_summary(&call.name, args.as_ref().unwrap_or(&Value::Null))
+                }
+            } else if cfg!(feature = "graphs") && call.name.starts_with("graph_") {
+                #[cfg(feature = "graphs")]
+                {
+                    graph_tool_summary(
+                        state,
+                        &session.id,
+                        active_role,
+                        &subagents,
+                        &call.name,
+                        args.as_ref().unwrap_or(&Value::Null),
+                    )
+                    .await
+                }
+                #[cfg(not(feature = "graphs"))]
+                {
+                    base_tool_summary(&call.name, args.as_ref().unwrap_or(&Value::Null))
+                }
             } else {
                 tool_summary(&call.name, args.as_ref().unwrap_or(&Value::Null))
             };
@@ -3314,8 +3470,6 @@ async fn run_one_turn(
                     })
                     .await;
             }
-            #[cfg(feature = "graphs")]
-            let mut child_tools = Vec::<ToolCallRow>::new();
             let mut review_unavailable = false;
             let (review_denial, feature_review_approved) =
                 if feature_tool_requires_review(&call.name) {
@@ -3709,9 +3863,7 @@ async fn run_one_turn(
                         }
                     }
                     #[cfg(feature = "graphs")]
-                    Ok(args)
-                        if call.name == beale_graphs::DELEGATE_TOOL && active_graph.is_some() =>
-                    {
+                    Ok(args) if call.name == beale_graphs::SPAWN_TOOL && active_graph.is_some() => {
                         let reservation = active_graph
                             .ok_or_else(|| "Graph runtime is unavailable.".to_owned())
                             .and_then(|runtime| {
@@ -3725,51 +3877,123 @@ async fn run_one_turn(
                         if let Err(error) = reservation {
                             (error, true)
                         } else {
-                            let child_usage = Mutex::new(Vec::new());
-                            let result = until_stopped(
-                                graphs::delegate(
-                                    &saved_graph_id,
+                            let assignments = active_graph
+                                .and_then(|runtime| {
+                                    runtime
+                                        .assignments(&args, &active_graph_config, &graph_fallback)
+                                        .ok()
+                                })
+                                .unwrap_or_default();
+                            let manager = subagents
+                                .entry(active_role)
+                                .or_insert_with(|| graphs::Subagents::new(&active_graph_config));
+                            let output = manager
+                                .spawn(
+                                    assignments,
                                     graphs::ChildContext {
                                         parent_role: active_role,
-                                        state,
-                                        workspace: &workspace,
-                                        agent_files: &agent_files,
+                                        state: state.clone(),
+                                        workspace: workspace.clone(),
+                                        agent_files: Arc::clone(&agent_files),
                                         #[cfg(any(
                                             feature = "agent-feedback",
                                             feature = "webfetch"
                                         ))]
-                                        workspace_id: &request.workspace_id,
+                                        workspace_id: request.workspace_id.clone(),
                                         #[cfg(feature = "webfetch")]
                                         webfetch_enabled: webfetch_tools_enabled,
                                         #[cfg(feature = "agent-feedback")]
-                                        session_id: &session.id,
+                                        session_id: session.id.clone(),
                                         #[cfg(feature = "agent-feedback")]
                                         feedback_enabled: agent_feedback_tools_enabled,
-                                        workspace_context: &review_context,
-                                        surfaces_context: &surfaces_context,
-                                        base_system: &child_system,
-                                        reasoning_effort,
+                                        workspace_context: review_context.clone(),
+                                        surfaces_context: surfaces_context.clone(),
+                                        base_system: child_system.clone(),
+                                        reasoning_effort: reasoning_effort.map(str::to_owned),
                                         turn_number: next_turn_number,
                                         turn_started: started,
-                                        progress: progress.as_ref(),
-                                        message_sequence: &child_message_sequence,
-                                        model_usage: &child_usage,
+                                        progress: progress.clone(),
+                                        message_sequence: Arc::clone(&child_message_sequence),
+                                        model_usage: Arc::clone(&child_usage),
                                     },
-                                    &args,
-                                    &active_graph_config,
-                                    &graph_fallback,
-                                ),
-                                &mut stop,
-                            )
-                            .await;
-                            model_usage.extend(child_usage.into_inner());
-                            if let Some(result) = result {
-                                child_tools = result.tools;
-                                child_turns.extend(result.child_turns);
-                                (result.output, result.is_error)
-                            } else {
-                                ("Delegation stopped by user.".to_owned(), true)
+                                )
+                                .await;
+                            match output {
+                                Ok(output) => (output, false),
+                                Err(error) => (error.to_owned(), true),
                             }
+                        }
+                    }
+                    #[cfg(feature = "graphs")]
+                    Ok(args) if call.name == beale_graphs::LIST_TOOL && active_graph.is_some() => {
+                        if !args.as_object().is_some_and(serde_json::Map::is_empty) {
+                            ("Invalid subagent list arguments.".to_owned(), true)
+                        } else {
+                            let manager = subagents
+                                .entry(active_role)
+                                .or_insert_with(|| graphs::Subagents::new(&active_graph_config));
+                            (manager.list().await, false)
+                        }
+                    }
+                    #[cfg(feature = "graphs")]
+                    Ok(args)
+                        if call.name == beale_graphs::INSPECT_TOOL && active_graph.is_some() =>
+                    {
+                        match graphs::InspectRequest::parse(&args) {
+                            Err(error) => (error.to_owned(), true),
+                            Ok(request) => {
+                                if let Some(value) = match subagents.get(&active_role) {
+                                    Some(manager) => manager.inspect(&request).await,
+                                    None => None,
+                                } {
+                                    (value, false)
+                                } else {
+                                    match graphs::inspect_saved(
+                                        &state.db,
+                                        &session.id,
+                                        active_role,
+                                        &request,
+                                    ) {
+                                        Ok(Some(value)) => (value, false),
+                                        Ok(None) => (
+                                            "Subagent not found for this top-level agent."
+                                                .to_owned(),
+                                            true,
+                                        ),
+                                        Err(error) => {
+                                            beale_host_log::error!(
+                                                "saved graph subagent inspect failed: {error:#}"
+                                            );
+                                            (
+                                                "Subagent transcript could not be read.".to_owned(),
+                                                true,
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    #[cfg(feature = "graphs")]
+                    Ok(args)
+                        if call.name == beale_graphs::MESSAGE_TOOL && active_graph.is_some() =>
+                    {
+                        let manager = subagents
+                            .entry(active_role)
+                            .or_insert_with(|| graphs::Subagents::new(&active_graph_config));
+                        match manager.message("parent", &args).await {
+                            Ok(output) => (output, false),
+                            Err(error) => (error.to_owned(), true),
+                        }
+                    }
+                    #[cfg(feature = "graphs")]
+                    Ok(args) if call.name == beale_graphs::KILL_TOOL && active_graph.is_some() => {
+                        let manager = subagents
+                            .entry(active_role)
+                            .or_insert_with(|| graphs::Subagents::new(&active_graph_config));
+                        match manager.kill(&args).await {
+                            Ok(output) => (output, false),
+                            Err(error) => (error.to_owned(), true),
                         }
                     }
                     Ok(args) => {
@@ -3873,11 +4097,6 @@ async fn run_one_turn(
                     is_error,
                     agent_role: active_model.node_id.clone(),
                 });
-                #[cfg(feature = "graphs")]
-                for mut child in child_tools {
-                    child.ordinal = tool_rows.len() as i64;
-                    tool_rows.push(child);
-                }
                 model_tool_preview(&call.name, &id, &output, is_error, &agent_files)
             };
             append_tool_result(
@@ -3927,6 +4146,20 @@ async fn run_one_turn(
             continue 'rounds;
         }
     }
+    #[cfg(feature = "graphs")]
+    for (_, mut manager) in subagents {
+        if stop_requested(&stop) {
+            manager.abort_all().await;
+        }
+        let result = manager.finish().await;
+        for mut tool in result.tools {
+            tool.ordinal = tool_rows.len() as i64;
+            tool_rows.push(tool);
+        }
+        child_turns.extend(result.child_turns);
+    }
+    #[cfg(feature = "graphs")]
+    model_usage.extend(child_usage.lock().await.drain(..));
     let mut answer = answer.ok_or(StatusCode::BAD_GATEWAY)?;
     if answer.trim().is_empty() || history_bytes.saturating_add(answer.len()) > MAX_HISTORY_BYTES {
         if tool_rows.is_empty() {
@@ -4123,6 +4356,20 @@ mod tests {
     use beale_storage::WorkspaceRow;
     use prost::Message;
     use tower::ServiceExt;
+
+    #[test]
+    fn goal_status_summary_records_known_state_only() {
+        for state in ["achieved", "continue", "waiting_on_external_state"] {
+            assert_eq!(
+                goal_status_summary(&serde_json::json!({"state": state})),
+                format!("Goal status: {state}")
+            );
+        }
+        assert_eq!(
+            goal_status_summary(&serde_json::json!({"state": "unexpected"})),
+            "Record Goal Mode status"
+        );
+    }
 
     #[test]
     fn repository_scope_context_keeps_every_named_repo() {
@@ -4480,7 +4727,15 @@ mod tests {
             #[cfg(feature = "agent-feedback")]
             beale_agent_feedback::TOOL_NAME,
             #[cfg(feature = "graphs")]
-            beale_graphs::DELEGATE_TOOL,
+            beale_graphs::SPAWN_TOOL,
+            #[cfg(feature = "graphs")]
+            beale_graphs::LIST_TOOL,
+            #[cfg(feature = "graphs")]
+            beale_graphs::INSPECT_TOOL,
+            #[cfg(feature = "graphs")]
+            beale_graphs::MESSAGE_TOOL,
+            #[cfg(feature = "graphs")]
+            beale_graphs::KILL_TOOL,
             "read",
             "write",
             "edit",
@@ -5583,11 +5838,23 @@ mod tests {
             is_error: false,
             messages_json: json!([
                 {"role":"assistant","text":"Checking the example input."},
+                {"role":"tool","tool_call_id":"tool-example-child","name":"read","summary":"Read example.txt","is_error":false},
                 {"role":"assistant","text":"Example result"}
             ])
             .to_string(),
             reasoning_json: "[]".to_owned(),
             completed_at_ms: 2,
+        };
+        let child_tool = ToolCallRow {
+            id: "tool-example-child".to_owned(),
+            turn_number: 1,
+            ordinal: 0,
+            name: "read".to_owned(),
+            summary: "Read example.txt".to_owned(),
+            arguments: json!({"path":"example.txt"}).to_string(),
+            output: "Example file contents".to_owned(),
+            is_error: false,
+            agent_role: "main".to_owned(),
         };
         db.append_turn_with_metadata(
             &session,
@@ -5603,14 +5870,14 @@ mod tests {
             },
             true,
             TurnActivity {
-                tools: &[],
+                tools: &[child_tool],
                 reasoning: &[],
                 commentary: &[],
                 goal: None,
             },
             None,
             TurnMetadata {
-                child_turns: &[child],
+                child_turns: std::slice::from_ref(&child),
                 ..TurnMetadata::default()
             },
         )
@@ -5631,6 +5898,22 @@ mod tests {
                 .turn
                 .messages_json
                 .contains("Checking the example input.")
+        );
+        let inspect =
+            graphs::InspectRequest::parse(&json!({"subagent_id":child.agent_id})).unwrap();
+        let page: Value = serde_json::from_str(
+            &graphs::inspect_saved(&db, &session.id, beale_graphs::Role::Main, &inspect)
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(page["status"], "completed");
+        assert_eq!(page["items"][1]["name"], "read");
+        assert_eq!(page["items"][1]["output"], "Example file contents");
+        assert!(
+            graphs::inspect_saved(&db, &session.id, beale_graphs::Role::Discovery, &inspect)
+                .unwrap()
+                .is_none()
         );
         drop(db);
         std::fs::remove_dir_all(root).unwrap();

@@ -87,6 +87,7 @@ fn activates_sidenav(name: &str) -> bool {
             | "surface_threat_model_edit"
             | "surface_promote_element"
             | "graph_delegate"
+            | "graph_subagents_spawn"
     )
 }
 
@@ -1364,6 +1365,7 @@ mod tests {
             ..Default::default()
         };
         assert!(campaign_activity_event(&event));
+        assert!(activates_sidenav("graph_subagents_spawn"));
         assert!(campaign_activity_event(&SessionStreamEvent {
             runbook_progress: None,
             kind: SessionStreamKind::ToolFinished as i32,

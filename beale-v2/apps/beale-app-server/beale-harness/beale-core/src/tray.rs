@@ -1,6 +1,9 @@
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use std::{net::SocketAddr, ptr, thread};
 use tokio::sync::oneshot;
+#[cfg(feature = "fleet")]
+#[path = "tray_qr.rs"]
+mod qr;
 use windows_sys::Win32::{
     Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM},
     System::{LibraryLoader::GetModuleHandleW, Threading::GetCurrentThreadId},
@@ -23,6 +26,8 @@ use windows_sys::Win32::{
 
 const TRAY_MESSAGE: u32 = WM_APP + 1;
 const EXIT_COMMAND: usize = 1;
+#[cfg(feature = "fleet")]
+const QR_COMMAND: usize = 2;
 const CLASS_NAME: &str = "BealeAppServerTray";
 const ICON_BYTES: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -35,12 +40,18 @@ pub(super) struct TrayHandle {
 }
 
 impl TrayHandle {
-    pub(super) fn start(addr: SocketAddr, exit: oneshot::Sender<()>) -> Result<Self> {
+    pub(super) fn start(
+        addr: SocketAddr,
+        #[cfg(feature = "fleet")] token: String,
+        exit: oneshot::Sender<()>,
+    ) -> Result<Self> {
         let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
         let thread = thread::Builder::new()
             .name("beale-app-server-tray".to_owned())
             .spawn(move || match TrayResources::new(addr) {
                 Ok(mut tray) => {
+                    #[cfg(feature = "fleet")]
+                    qr::configure(addr, token);
                     // The hidden window has created this thread's message queue.
                     let thread_id = unsafe { GetCurrentThreadId() };
                     if ready_tx.send(Ok(thread_id)).is_ok() {
@@ -211,6 +222,8 @@ impl TrayResources {
 
 impl Drop for TrayResources {
     fn drop(&mut self) {
+        #[cfg(feature = "fleet")]
+        qr::shutdown();
         // Shell, USER32, and the window class all use handles from this thread.
         unsafe {
             if self.added {
@@ -244,6 +257,11 @@ unsafe extern "system" fn window_proc(
             unsafe { PostQuitMessage(EXIT_COMMAND as i32) };
             0
         }
+        #[cfg(feature = "fleet")]
+        WM_COMMAND if wparam & 0xffff == QR_COMMAND => {
+            qr::show();
+            0
+        }
         _ => unsafe { DefWindowProcW(window, message, wparam, lparam) },
     }
 }
@@ -257,12 +275,21 @@ fn show_menu(window: HWND) {
         }
         let status = wide("Beale app-server is running");
         let exit = wide("Exit");
+        #[cfg(feature = "fleet")]
+        let qr = wide("Show QR Code");
         let mut point: POINT = std::mem::zeroed();
-        if AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, status.as_ptr()) != 0
-            && AppendMenuW(menu, MF_SEPARATOR, 0, ptr::null()) != 0
-            && AppendMenuW(menu, MF_STRING, EXIT_COMMAND, exit.as_ptr()) != 0
-            && GetCursorPos(&mut point) != 0
+        let mut ready = AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, status.as_ptr()) != 0
+            && AppendMenuW(menu, MF_SEPARATOR, 0, ptr::null()) != 0;
+        #[cfg(feature = "fleet")]
         {
+            ready = ready
+                && AppendMenuW(menu, MF_STRING, QR_COMMAND, qr.as_ptr()) != 0
+                && AppendMenuW(menu, MF_SEPARATOR, 0, ptr::null()) != 0;
+        }
+        ready = ready
+            && AppendMenuW(menu, MF_STRING, EXIT_COMMAND, exit.as_ptr()) != 0
+            && GetCursorPos(&mut point) != 0;
+        if ready {
             SetForegroundWindow(window);
             TrackPopupMenu(
                 menu,
@@ -309,7 +336,10 @@ fn icon_image(bytes: &[u8], width: u8) -> Result<&[u8]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
     use windows_sys::Win32::UI::WindowsAndMessaging::EnumThreadWindows;
+
+    static TRAY_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn bundled_icon_contains_a_small_tray_image() {
@@ -319,8 +349,15 @@ mod tests {
 
     #[test]
     fn exit_menu_command_requests_shutdown() {
+        let _lock = TRAY_TEST_LOCK.lock().unwrap();
         let (exit_tx, exit_rx) = oneshot::channel();
-        let tray = TrayHandle::start("127.0.0.1:43831".parse().unwrap(), exit_tx).unwrap();
+        let tray = TrayHandle::start(
+            "127.0.0.1:43831".parse().unwrap(),
+            #[cfg(feature = "fleet")]
+            "example-token".to_owned(),
+            exit_tx,
+        )
+        .unwrap();
         unsafe extern "system" fn request_exit(window: HWND, _: LPARAM) -> i32 {
             // EnumThreadWindows supplies a window owned by this test's tray thread.
             unsafe { PostMessageW(window, WM_COMMAND, EXIT_COMMAND, 0) }
@@ -343,5 +380,90 @@ mod tests {
             );
         });
         drop(tray);
+    }
+
+    #[cfg(feature = "fleet")]
+    #[test]
+    fn qr_menu_command_opens_a_window_on_the_tray_thread() {
+        let _lock = TRAY_TEST_LOCK.lock().unwrap();
+        use axum::{
+            Router,
+            http::{HeaderMap, StatusCode},
+            routing::get,
+        };
+        use beale_contracts::{
+            FLEET_TOTP_PROVISION_PATH, PROTOBUF_CONTENT_TYPE, v1::FleetTotpProvisioningResponse,
+        };
+        use prost::Message;
+        use std::time::{Duration, Instant};
+        use windows_sys::Win32::UI::WindowsAndMessaging::{GetWindowTextW, IsWindowVisible};
+
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        let listener =
+            runtime.block_on(async { tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap() });
+        let addr = listener.local_addr().unwrap();
+        let app = Router::new().route(
+            FLEET_TOTP_PROVISION_PATH,
+            get(|headers: HeaderMap| async move {
+                let authorized = headers
+                    .get("authorization")
+                    .and_then(|value| value.to_str().ok())
+                    == Some("Bearer example-token");
+                let status = if authorized {
+                    StatusCode::OK
+                } else {
+                    StatusCode::UNAUTHORIZED
+                };
+                let body = FleetTotpProvisioningResponse {
+                    otpauth_uri: "otpauth://totp/Beale:example-host?secret=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&issuer=Beale&algorithm=SHA1&digits=6&period=30".to_owned(),
+                }
+                .encode_to_vec();
+                (status, [("content-type", PROTOBUF_CONTENT_TYPE)], body)
+            }),
+        );
+        let server = runtime.spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let (exit_tx, _exit_rx) = oneshot::channel();
+        let tray = TrayHandle::start(addr, "example-token".to_owned(), exit_tx).unwrap();
+        unsafe extern "system" fn request_qr(window: HWND, _: LPARAM) -> i32 {
+            // EnumThreadWindows supplies a window owned by this test's tray thread.
+            unsafe { PostMessageW(window, WM_COMMAND, QR_COMMAND, 0) }
+        }
+        assert_ne!(
+            unsafe { EnumThreadWindows(tray.thread_id, Some(request_qr), 0) },
+            0
+        );
+        unsafe extern "system" fn find_qr(window: HWND, found: LPARAM) -> i32 {
+            let mut title = [0_u16; 64];
+            let length = unsafe { GetWindowTextW(window, title.as_mut_ptr(), title.len() as i32) };
+            if length > 0
+                && String::from_utf16_lossy(&title[..length as usize])
+                    == "Beale Authenticator QR Code"
+                && unsafe { IsWindowVisible(window) } != 0
+            {
+                // The callback runs synchronously while the stack flag is alive.
+                unsafe { *(found as *mut bool) = true };
+                return 0;
+            }
+            1
+        }
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut found = false;
+        while !found && Instant::now() < deadline {
+            unsafe {
+                EnumThreadWindows(
+                    tray.thread_id,
+                    Some(find_qr),
+                    (&raw mut found).cast::<()>() as LPARAM,
+                );
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(found, "the tray command opens a visible QR window");
+        drop(tray);
+        server.abort();
     }
 }

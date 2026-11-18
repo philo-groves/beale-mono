@@ -12,14 +12,14 @@ VIEWS = [
     'home', 'empty', 'research', 'session', 'canvas', 'chat',
     'workspace', 'rules', 'surfaces', 'surface-detail', 'surface-manage', 'findings',
     'import', 'create-general', 'create-surfaces', 'create-rules',
-    'features', 'plugins', 'kits', 'fleet', 'browsers', 'vms',
+    'features', 'plugins', 'kits', 'fleet', 'vms',
     'automations', 'tracking', 'providers', 'custom', 'safety', 'guardian',
     'appearance', 'typography', 'archive', 'archive-chats', 'dialog', 'menu', 'picker',
     'anthropic', 'openrouter', 'xai', 'zai', 'api-key', 'custom-editor',
     'graph-editor', 'model-menu', 'goal-menu', 'surface-add', 'surface-delete',
     'relationship', 'workspace-name', 'workspace-rule', 'feature-detail',
     'plugin-add', 'plugin-detail', 'fleet-connect', 'fleet-import', 'fleet-detail',
-    'browser-add', 'safety-rule', 'finding-detail', 'campaign',
+    'safety-rule', 'finding-detail', 'campaign',
 ]
 
 def main():

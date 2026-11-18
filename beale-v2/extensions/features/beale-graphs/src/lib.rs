@@ -8,10 +8,16 @@ pub const FEATURE_NAME: &str = "Graphs";
 pub const FEATURE_DESCRIPTION: &str =
     "Coordinate peer research agents and focused Scout, Reviewer, and Prover subagents.";
 pub const HAS_PROMPT_EXTENSION: bool = true;
-pub const PROMPT_EXTENSION: &str = "The main agent may delegate bounded tasks to Scout, Reviewer, or Prover. Give each subagent a concrete task. Subagents use fresh context and cannot delegate further. Wait for their results and synthesize the final answer yourself.";
-pub const TOOL_COUNT: u32 = 2;
+pub const PROMPT_EXTENSION: &str = "Spawn bounded Scout, Reviewer, or Prover tasks, then continue your work while they run. Use graph_subagents_list to check status, graph_subagents_inspect to read a child's transcript and tool calls, graph_subagents_message to guide a child, and graph_subagents_kill to stop one. Children may inspect or message siblings in their parent group but cannot spawn or kill. Check all spawned children before ending your turn and synthesize their results yourself.";
+pub const TOOL_COUNT: u32 = 6;
 pub const MAX_CONCURRENT: u32 = 64;
-pub const DELEGATE_TOOL: &str = "graph_delegate";
+pub const SPAWN_TOOL: &str = "graph_subagents_spawn";
+pub const LIST_TOOL: &str = "graph_subagents_list";
+pub const INSPECT_TOOL: &str = "graph_subagents_inspect";
+pub const MESSAGE_TOOL: &str = "graph_subagents_message";
+pub const KILL_TOOL: &str = "graph_subagents_kill";
+/// Transcript-only activity generated when an agent receives a graph message.
+pub const RECEIVE_EVENT: &str = "graph_subagents_receive";
 pub const HANDOFF_TOOL: &str = "graph_handoff";
 pub const MAX_BATCH: usize = 8;
 
@@ -41,6 +47,47 @@ pub struct FlowRuntime(&'static str);
 pub static CLOUDFLARE_RUNTIME: FlowRuntime = FlowRuntime(CLOUDFLARE_ID);
 pub static OPENAI_RUNTIME: FlowRuntime = FlowRuntime(OPENAI_ID);
 pub static SEQUENTIAL_RUNTIME: FlowRuntime = FlowRuntime(SEQUENTIAL_ID);
+
+pub fn subagent_tools() -> Vec<Value> {
+    vec![
+        json!({"type":"function","name":LIST_TOOL,
+            "description":"List this top-level agent's subagents, status, time since their last message, and completed results.",
+            "parameters":{"type":"object","properties":{},"additionalProperties":false}}),
+        inspect_definition(false),
+        message_definition(false),
+        json!({"type":"function","name":KILL_TOOL,
+            "description":"Immediately stop one of this top-level agent's active subagents.",
+            "parameters":{"type":"object","properties":{"subagent_id":{"type":"string","minLength":1,"maxLength":64}},
+                "required":["subagent_id"],"additionalProperties":false}}),
+    ]
+}
+
+pub fn inspect_definition(for_child: bool) -> Value {
+    let description = if for_child {
+        "Inspect a sibling subagent's live transcript and tool calls in your parent group."
+    } else {
+        "Inspect one of your subagents' live or saved transcript and tool calls. Omit offset for the newest page."
+    };
+    json!({"type":"function","name":INSPECT_TOOL,"description":description,
+        "parameters":{"type":"object","properties":{
+            "subagent_id":{"type":"string","minLength":1,"maxLength":64},
+            "offset":{"type":"integer","minimum":0},
+            "limit":{"type":"integer","minimum":1,"maximum":40}},
+            "required":["subagent_id"],"additionalProperties":false}})
+}
+
+pub fn message_definition(for_child: bool) -> Value {
+    let description = if for_child {
+        "Send a message to your parent (recipient: parent) or a sibling subagent in the same parent group."
+    } else {
+        "Send a message to one of your active subagents."
+    };
+    json!({"type":"function","name":MESSAGE_TOOL,"description":description,
+        "parameters":{"type":"object","properties":{
+            "recipient":{"type":"string","minLength":1,"maxLength":64},
+            "message":{"type":"string","minLength":1,"maxLength":4096}},
+            "required":["recipient","message"],"additionalProperties":false}})
+}
 
 pub fn runtime(id: &str) -> Option<&'static dyn GraphRuntime> {
     match id {
@@ -114,8 +161,8 @@ impl GraphRuntime for SimpleRuntime {
     }
 
     fn tool_definition(&self) -> Value {
-        json!({"type":"function","name":DELEGATE_TOOL,
-            "description":"Run one or more focused Scout, Reviewer, or Prover tasks in fresh subagent contexts. Results return to the main agent. Batch independent tasks for parallel execution.",
+        json!({"type":"function","name":SPAWN_TOOL,
+            "description":"Start focused Scout, Reviewer, or Prover tasks in fresh subagent contexts. Return their IDs immediately; use graph_subagents_list for progress and results.",
             "parameters":{"type":"object","properties":{"assignments":{"type":"array","minItems":1,"maxItems":MAX_BATCH,
                 "items":{"type":"object","properties":{"role":{"type":"string","enum":["scout","reviewer","prover"]},
                     "task":{"type":"string","minLength":1,"maxLength":4096},
@@ -126,7 +173,7 @@ impl GraphRuntime for SimpleRuntime {
 
     fn system_section(&self, config: &SessionGraphConfig, fallback: &GraphNodeModel) -> String {
         let mut section = format!(
-            "## Simple Orchestra\n\n{PROMPT_EXTENSION}\n\nUse `{DELEGATE_TOOL}` only when a specialist can help. Delegate at most {MAX_BATCH} tasks per batch. Model indices by role (omit `model_index` for the first):\n"
+            "## Simple Orchestra\n\n{PROMPT_EXTENSION}\n\nUse `{SPAWN_TOOL}` only when a specialist can help. Spawn at most {MAX_BATCH} tasks per batch. Model indices by role (omit `model_index` for the first):\n"
         );
         append_subagent_models(&mut section, config, fallback);
         section
@@ -188,7 +235,7 @@ impl GraphRuntime for FlowRuntime {
     fn tool_definition(&self) -> Value {
         let mut tool = SIMPLE_RUNTIME.tool_definition();
         tool["description"] = json!(
-            "Run focused Scout, Reviewer, or Prover tasks for the active top-level agent. Results return to that agent."
+            "Start focused Scout, Reviewer, or Prover tasks for the active top-level agent. Return their IDs immediately."
         );
         tool
     }
@@ -196,7 +243,7 @@ impl GraphRuntime for FlowRuntime {
     fn system_section(&self, config: &SessionGraphConfig, fallback: &GraphNodeModel) -> String {
         let graph = graph_definition(self.0).expect("registered flow graph");
         let mut section = format!(
-            "## {}\n\nYou are one of several top-level agents in this session. There is no central main agent. Your conversation history is separate from other top-level agents. Stay within your role even while a peer is idle; queue work for that peer instead of performing its stage. Use `{HANDOFF_TOOL}` to queue a concrete task and evidence references for an allowed peer. The recipient starts when work is queued and remains idle otherwise. You may continue your own role's work while the recipient runs concurrently. The recipient starts with the handoff task and its own history. Use `{DELEGATE_TOOL}` for focused Scout, Reviewer, or Prover subagent tasks within your role. Each top-level agent may use its own subagents.\n\nTop-level roles and models:\n",
+            "## {}\n\nYou are one of several top-level agents in this session. There is no central main agent. Your conversation history is separate from other top-level agents. Stay within your role even while a peer is idle; queue work for that peer instead of performing its stage. Use `{HANDOFF_TOOL}` to queue a concrete task and evidence references for an allowed peer. The recipient starts when work is queued and remains idle otherwise. You may continue your own role's work while the recipient runs concurrently. The recipient starts with the handoff task and its own history. {PROMPT_EXTENSION} Use `{SPAWN_TOOL}` within your role. Each top-level agent has its own children.\n\nTop-level roles and models:\n",
             graph.name
         );
         for role in graph.nodes.iter().filter(|role| role.is_top_level()) {
@@ -417,7 +464,7 @@ pub const SIMPLE_NAME: &str = "Simple Orchestra";
 pub const SIMPLE_DESCRIPTION: &str =
     "One main agent with a single layer of Scout, Reviewer, and Prover subagents.";
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Role {
     Main,
     Scout,
@@ -968,7 +1015,14 @@ mod tests {
         };
         let engine = runtime(SIMPLE_ID).unwrap();
         assert_eq!(engine.id(), SIMPLE_ID);
-        assert_eq!(engine.tool_definition()["name"], DELEGATE_TOOL);
+        assert_eq!(engine.tool_definition()["name"], SPAWN_TOOL);
+        assert_eq!(subagent_tools().len(), 4);
+        assert_eq!(subagent_tools()[0]["name"], LIST_TOOL);
+        assert_eq!(subagent_tools()[1]["name"], INSPECT_TOOL);
+        assert_eq!(subagent_tools()[2]["name"], MESSAGE_TOOL);
+        assert_eq!(subagent_tools()[3]["name"], KILL_TOOL);
+        assert_eq!(inspect_definition(true)["name"], INSPECT_TOOL);
+        assert_eq!(message_definition(true)["name"], MESSAGE_TOOL);
         let section = engine.system_section(&config, &fallback);
         assert!(section.contains("example-scout-b"));
         let assignments = engine

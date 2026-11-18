@@ -5,24 +5,22 @@ use crate::{
     AUTH_HANDLE, ConnectionStatus, PrimaryView, SelectionMenu, State, ThemeStyle, ViewLocation,
     extensions_view::{workspace_scope_button, workspace_scope_label},
     fleet_connection::{
-        self, BrowserItem, BrowserMutation, FleetServer, Mutation, MutationResult, TailnetDevice,
-        VirtualMachineItem, VirtualMachineMutation,
+        self, FleetServer, Mutation, MutationResult, TailnetDevice, VirtualMachineItem,
+        VirtualMachineMutation,
     },
     form_button,
     form_controls::toggle_button,
     icons::{
-        FLEET, FLEET_APPLE, FLEET_BROWSER, FLEET_LINUX, FLEET_QR, FLEET_VIRTUAL_MACHINE,
-        FLEET_WINDOWS, INFO, PLUS, STAR, STAR_FILLED, TRASH, VM_CLONE, VM_CLONE_FILLED, VM_RUN,
-        VM_RUN_FILLED,
+        FLEET, FLEET_APPLE, FLEET_LINUX, FLEET_QR, FLEET_VIRTUAL_MACHINE, FLEET_WINDOWS, INFO,
+        PLUS, VM_CLONE, VM_CLONE_FILLED, VM_RUN, VM_RUN_FILLED,
     },
-    modal_dialog, sidenav_heading, ui_font,
+    modal_dialog, ui_font,
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum FleetSection {
     #[default]
     AppServers,
-    Browsers,
     VirtualMachines,
 }
 
@@ -40,10 +38,8 @@ impl FleetTab {
     fn label(self, section: FleetSection) -> String {
         match self {
             Self::All => format!("All {}", section.label()),
-            Self::Available if section == FleetSection::Browsers => "Detected".to_owned(),
             Self::Available if section == FleetSection::VirtualMachines => "Running".to_owned(),
             Self::Available => "Available".to_owned(),
-            Self::Enabled if section == FleetSection::Browsers => "Manually Added".to_owned(),
             Self::Enabled if section == FleetSection::VirtualMachines => "Not Running".to_owned(),
             Self::Enabled => "Enabled".to_owned(),
         }
@@ -60,23 +56,14 @@ impl FleetTab {
 
 pub(crate) struct FleetState {
     pub(crate) tab: FleetTab,
-    tabs: [FleetTab; 3],
+    tabs: [FleetTab; 2],
     local: FleetServer,
     servers: Vec<FleetServer>,
-    browsers: Vec<BrowserItem>,
-    browser_loading: bool,
-    browser_busy: bool,
-    browser_error: String,
-    browser_generation: u64,
     virtual_machines: Vec<VirtualMachineItem>,
     vm_loading: bool,
     vm_busy: bool,
     vm_error: String,
     vm_generation: u64,
-    pub(crate) browser_dialog_open: bool,
-    browser_host_id: String,
-    browser_name_edit: TextEdit,
-    browser_path_edit: TextEdit,
     loading: bool,
     busy: bool,
     error: String,
@@ -107,23 +94,14 @@ impl Default for FleetState {
     fn default() -> Self {
         Self {
             tab: FleetTab::All,
-            tabs: [FleetTab::All; 3],
+            tabs: [FleetTab::All; 2],
             local: fleet_connection::local_placeholder(),
             servers: Vec::new(),
-            browsers: Vec::new(),
-            browser_loading: false,
-            browser_busy: false,
-            browser_error: String::new(),
-            browser_generation: 0,
             virtual_machines: Vec::new(),
             vm_loading: false,
             vm_busy: false,
             vm_error: String::new(),
             vm_generation: 0,
-            browser_dialog_open: false,
-            browser_host_id: "local".to_owned(),
-            browser_name_edit: TextEdit::new(""),
-            browser_path_edit: TextEdit::new(""),
             loading: false,
             busy: false,
             error: String::new(),
@@ -153,20 +131,18 @@ impl Default for FleetState {
 }
 
 impl FleetSection {
-    const ALL: [Self; 3] = [Self::AppServers, Self::Browsers, Self::VirtualMachines];
+    const ALL: [Self; 2] = [Self::AppServers, Self::VirtualMachines];
 
     fn index(self) -> usize {
         match self {
             Self::AppServers => 0,
-            Self::Browsers => 1,
-            Self::VirtualMachines => 2,
+            Self::VirtualMachines => 1,
         }
     }
 
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::AppServers => "App Servers",
-            Self::Browsers => "Browsers",
             Self::VirtualMachines => "Virtual Machines",
         }
     }
@@ -174,7 +150,6 @@ impl FleetSection {
     fn key(self) -> &'static str {
         match self {
             Self::AppServers => "fleet-app-servers",
-            Self::Browsers => "fleet-browsers",
             Self::VirtualMachines => "fleet-virtual-machines",
         }
     }
@@ -182,7 +157,6 @@ impl FleetSection {
     fn glyph(self) -> &'static Icon {
         match self {
             Self::AppServers => &FLEET,
-            Self::Browsers => &FLEET_BROWSER,
             Self::VirtualMachines => &FLEET_VIRTUAL_MACHINE,
         }
     }
@@ -195,21 +169,6 @@ impl FleetState {
         self.local.condition = "Connected".into();
         self.local.os_name = "Windows".into();
         self.local.os_vendor = "Microsoft".into();
-        for name in ["Firefox", "Chrome"] {
-            self.browsers.push(BrowserItem {
-                host_id: "local".into(),
-                host_name: "Example research host".into(),
-                browser: beale_contracts::v1::FleetBrowser {
-                    id: format!("example-{name}"),
-                    name: name.into(),
-                    available: true,
-                    enabled: true,
-                    all_workspaces: true,
-                    preferred: name == "Firefox",
-                    ..Default::default()
-                },
-            });
-        }
         self.virtual_machines.push(VirtualMachineItem {
             host_id: "local".into(),
             host_name: "Example research host".into(),
@@ -224,12 +183,6 @@ impl FleetState {
                 ..Default::default()
             },
         });
-    }
-
-    pub(crate) fn browser_scope_enabled(&self, index: usize) -> bool {
-        self.browsers
-            .get(index)
-            .is_some_and(|item| item.browser.enabled)
     }
 
     pub(crate) fn vm_scope_enabled(&self, index: usize) -> bool {
@@ -291,22 +244,11 @@ pub(crate) fn sidenav(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
         .w(width)
         .h_full()
         .px(8.0)
-        .pt(12.0)
-        .fill(theme.color("#111111"))
-        .child(
-            sidenav_heading("Fleet", theme)
-                .key("fleet-sidenav-title")
-                .ml(4.0)
-                .mb(12.0),
-        )
+        .pt(10.0)
         .child(items)
 }
 
 pub(crate) fn start_load(state: &mut State) {
-    if state.primary_view == PrimaryView::Fleet && state.fleet_section == FleetSection::Browsers {
-        start_browser_load(state);
-        return;
-    }
     if state.primary_view == PrimaryView::Fleet
         && state.fleet_section == FleetSection::VirtualMachines
     {
@@ -346,40 +288,6 @@ pub(crate) fn start_load(state: &mut State) {
                     state.fleet.error.clear();
                 }
                 Err(error) => state.fleet.error = error,
-            }
-        });
-    });
-}
-
-fn start_browser_load(state: &mut State) {
-    if state.fleet.browser_loading || state.fleet.browser_busy {
-        return;
-    }
-    let Some(handle) = AUTH_HANDLE.get().cloned() else {
-        return;
-    };
-    state.fleet.browser_loading = true;
-    state.fleet.browser_generation = state.fleet.browser_generation.wrapping_add(1);
-    let generation = state.fleet.browser_generation;
-    std::thread::spawn(move || {
-        let result = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map(|runtime| runtime.block_on(fleet_connection::load_browsers()));
-        handle.update(move |state, _| {
-            if state.fleet.browser_generation != generation {
-                return;
-            }
-            state.fleet.browser_loading = false;
-            match result {
-                Ok(snapshot) => {
-                    state.fleet.browsers = snapshot.items;
-                    state.fleet.servers = snapshot.servers;
-                    state.fleet.browser_error = snapshot.error;
-                }
-                Err(_) => {
-                    state.fleet.browser_error = "Could not initialize browser inventory.".to_owned()
-                }
             }
         });
     });
@@ -453,112 +361,6 @@ fn virtual_machine_mutation(item: &VirtualMachineItem) -> VirtualMachineMutation
         can_run: item.machine.can_run,
         can_clone: item.machine.can_clone,
     }
-}
-
-fn start_browser_mutation(state: &mut State, action: BrowserMutation) {
-    if state.fleet.browser_busy {
-        return;
-    }
-    let Some(handle) = AUTH_HANDLE.get().cloned() else {
-        state.fleet.browser_error = "Desktop is not ready.".to_owned();
-        return;
-    };
-    state.fleet.browser_busy = true;
-    state.fleet.browser_error.clear();
-    std::thread::spawn(move || {
-        let result = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|_| "Could not initialize browser inventory.".to_owned())
-            .and_then(|runtime| runtime.block_on(fleet_connection::mutate_browser(action)));
-        handle.update(move |state, _| {
-            state.fleet.browser_busy = false;
-            match result {
-                Ok(()) => {
-                    state.fleet.browser_dialog_open = false;
-                    state.fleet.browser_name_edit.clear();
-                    state.fleet.browser_path_edit.clear();
-                    start_browser_load(state);
-                }
-                Err(error) => state.fleet.browser_error = error,
-            }
-        });
-    });
-}
-
-pub(crate) fn workspace_scope_items(
-    state: &State,
-    index: usize,
-) -> Vec<crate::in_place_menu::MenuItem> {
-    let Some(browser) = state
-        .fleet
-        .browsers
-        .get(index)
-        .filter(|item| item.browser.enabled)
-    else {
-        return Vec::new();
-    };
-    std::iter::once(crate::in_place_menu::MenuItem {
-        value: String::new(),
-        label: "All Workspaces".to_owned(),
-        detail: None,
-        selected: browser.browser.all_workspaces,
-    })
-    .chain(
-        state
-            .workspaces
-            .iter()
-            .map(|workspace| crate::in_place_menu::MenuItem {
-                value: workspace.id.clone(),
-                label: workspace.name.clone(),
-                detail: None,
-                selected: browser.browser.workspace_ids.contains(&workspace.id),
-            }),
-    )
-    .collect()
-}
-
-pub(crate) fn select_workspace_scope(state: &mut State, index: usize, value: &str) {
-    let Some(item) = state
-        .fleet
-        .browsers
-        .get(index)
-        .filter(|item| item.browser.enabled)
-    else {
-        return;
-    };
-    let (all_workspaces, workspace_ids) = if value.is_empty() {
-        (true, Vec::new())
-    } else {
-        if !state
-            .workspaces
-            .iter()
-            .any(|workspace| workspace.id == value)
-        {
-            return;
-        }
-        let mut ids = if item.browser.all_workspaces {
-            Vec::new()
-        } else {
-            item.browser.workspace_ids.clone()
-        };
-        if let Some(position) = ids.iter().position(|id| id == value) {
-            ids.remove(position);
-        } else {
-            ids.push(value.to_owned());
-        }
-        (false, ids)
-    };
-    start_browser_mutation(
-        state,
-        BrowserMutation::SetSettings {
-            host_id: item.host_id.clone(),
-            id: item.browser.id.clone(),
-            enabled: item.browser.enabled,
-            all_workspaces,
-            workspace_ids,
-        },
-    );
 }
 
 pub(crate) fn vm_workspace_scope_items(
@@ -803,8 +605,6 @@ fn start_qr(state: &mut State) {
 fn tab_button(tab: FleetTab, section: FleetSection, active: bool, theme: ThemeStyle<'_>) -> El {
     let glyph = match (tab, section) {
         (FleetTab::All, _) => section.glyph(),
-        (FleetTab::Available, FleetSection::Browsers) => &crate::icons::SEARCH,
-        (FleetTab::Enabled, FleetSection::Browsers) => &crate::icons::PEN,
         (FleetTab::Available, FleetSection::VirtualMachines) => &VM_RUN,
         (FleetTab::Enabled, FleetSection::VirtualMachines) => &crate::icons::STOP,
         (FleetTab::Available, FleetSection::AppServers) => &PLUS,
@@ -989,213 +789,6 @@ fn server_card(server: &FleetServer, state: &State, theme: ThemeStyle<'_>) -> El
         )
 }
 
-fn browser_card(index: usize, item: &BrowserItem, state: &State, theme: ThemeStyle<'_>) -> El {
-    let host_id = item.host_id.clone();
-    let browser_id = item.browser.id.clone();
-    let name = item.browser.name.clone();
-    let enabled = item.browser.enabled;
-    let all_workspaces = item.browser.all_workspaces;
-    let workspace_ids = item.browser.workspace_ids.clone();
-    let mut action = toggle_button(
-        format!("fleet-browser-toggle-{}-{}", host_id, browser_id),
-        format!("{} browser", item.browser.name),
-        enabled,
-        !state.fleet.browser_busy,
-        theme,
-    );
-    if !state.fleet.browser_busy {
-        let host_id = host_id.clone();
-        let browser_id = browser_id.clone();
-        action = action.on_press(move |state: &mut State| {
-            start_browser_mutation(
-                state,
-                BrowserMutation::SetSettings {
-                    host_id: host_id.clone(),
-                    id: browser_id.clone(),
-                    enabled: !enabled,
-                    all_workspaces,
-                    workspace_ids: workspace_ids.clone(),
-                },
-            );
-        });
-    }
-    let mut preferred_action = el()
-        .key(format!(
-            "fleet-browser-preferred-{}-{}",
-            host_id, browser_id
-        ))
-        .role("button")
-        .label(format!(
-            "{} {} browser",
-            if item.browser.preferred {
-                "Preferred"
-            } else {
-                "Prefer"
-            },
-            item.browser.name
-        ))
-        .help(if item.browser.preferred {
-            "Preferred browser"
-        } else {
-            "Make preferred browser"
-        })
-        .size(26.0, 26.0)
-        .mr(-5.0)
-        .center()
-        .radius(8.0)
-        .continuous_corners()
-        .hover(theme.color("#303030"))
-        .child(
-            icon(
-                if item.browser.preferred {
-                    &STAR_FILLED
-                } else {
-                    &STAR
-                },
-                17.0,
-            )
-            .color(theme.color(if item.browser.preferred {
-                "#e9c873"
-            } else {
-                "#bdbdbd"
-            })),
-        );
-    if !item.browser.preferred && enabled && item.browser.available && !state.fleet.browser_busy {
-        let host_id = host_id.clone();
-        let browser_id = browser_id.clone();
-        preferred_action = preferred_action.on_press(move |state: &mut State| {
-            start_browser_mutation(
-                state,
-                BrowserMutation::SetPreferred {
-                    host_id: host_id.clone(),
-                    id: browser_id.clone(),
-                },
-            );
-        });
-    }
-    let footer = row()
-        .w_full()
-        .pt(12.0)
-        .center_y()
-        .child(action)
-        .child(if enabled {
-            let menu = SelectionMenu::BrowserWorkspaces { index };
-            workspace_scope_button(
-                workspace_scope_label(
-                    state,
-                    item.browser.all_workspaces,
-                    &item.browser.workspace_ids,
-                ),
-                state.selection_menu == Some(menu),
-                move |state| crate::toggle_selection_menu(state, menu),
-                theme,
-            )
-            .key(format!("fleet-browser-scope-{index}"))
-            .ml(5.0)
-            .min_w(0.0)
-            .max_w(160.0)
-        } else {
-            el().size(0.0, 0.0)
-        })
-        .child(el().grow(1.0))
-        .child(preferred_action);
-    let remove = if item.browser.manual {
-        el().key(format!("fleet-browser-remove-{}-{}", host_id, browser_id))
-            .role("button")
-            .label(format!("Remove {} browser", item.browser.name))
-            .help("Remove browser")
-            .size(26.0, 26.0)
-            .center()
-            .radius(8.0)
-            .continuous_corners()
-            .hover(theme.color("#303030"))
-            .on_press(move |state: &mut State| {
-                start_browser_mutation(
-                    state,
-                    BrowserMutation::Remove {
-                        host_id: host_id.clone(),
-                        id: browser_id.clone(),
-                    },
-                );
-            })
-            .child(icon(&TRASH, 17.0).color(theme.color("#bdbdbd")))
-    } else {
-        el().size(0.0, 0.0)
-    };
-    col()
-        .key(format!(
-            "fleet-browser-card-{}-{}",
-            item.host_id, item.browser.id
-        ))
-        .w_full()
-        .min_w(0.0)
-        .min_h(170.0)
-        .px(12.0)
-        .pt(16.0)
-        .pb(14.0)
-        .radius(crate::design::CARD_RADIUS)
-        .continuous_corners()
-        .fill(theme.color("#191919"))
-        .border(1.0, theme.color("#2a2a2a"))
-        .child(
-            row()
-                .w_full()
-                .gap(10.0)
-                .center_y()
-                .child(browser_mark(&item.browser.name, theme))
-                .child(
-                    text(name)
-                        .grow(1.0)
-                        .min_w(0.0)
-                        .max_lines(2)
-                        .font(ui_font(16.0, 600.0))
-                        .color(theme.color("#f2f2f2")),
-                )
-                .child(remove),
-        )
-        .child(stat_block(
-            [
-                stat_row("Host", item.host_name.clone(), theme),
-                stat_row(
-                    "Status",
-                    if item.browser.available {
-                        "Available"
-                    } else {
-                        "Missing"
-                    }
-                    .to_owned(),
-                    theme,
-                ),
-                stat_row(
-                    "Source",
-                    if item.browser.manual {
-                        "Added"
-                    } else {
-                        "Detected"
-                    }
-                    .to_owned(),
-                    theme,
-                ),
-            ],
-            12.0,
-            theme,
-        ))
-        .child(footer)
-}
-
-fn browser_mark(name: &str, theme: ThemeStyle<'_>) -> El {
-    let mark = el()
-        .size(40.0, 40.0)
-        .center()
-        .radius(12.0)
-        .fill(theme.color("#303030"));
-    if let Some(pixels) = crate::browser_logos::for_name(name) {
-        mark.child(el().size(32.0, 32.0).pixels(pixels))
-    } else {
-        mark.child(icon(&FLEET_BROWSER, 23.0).color(theme.color("#d8d8d8")))
-    }
-}
-
 #[derive(Clone, Copy)]
 enum VmAllowance {
     Run,
@@ -1378,12 +971,6 @@ fn virtual_machine_card(
 
 pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> Vec<El> {
     let section = state.fleet_section;
-    let title = text(section.label())
-        .key("fleet-view-title")
-        .role("heading")
-        .truncate_fade()
-        .font(crate::view_title_font())
-        .color(theme.color("#f2f2f2"));
     let mut tabs = crate::design::segmented_control(theme)
         .key("fleet-view-tabs")
         .label("Fleet views");
@@ -1413,55 +1000,11 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> V
                 .child(icon(&PLUS, 17.0).color(theme.color("#bdbdbd"))),
         );
     }
-    if section == FleetSection::Browsers {
-        tabs = tabs.child(
-            el().key("fleet-add-browser")
-                .role("button")
-                .label("Add a browser")
-                .help("Add a browser")
-                .size(26.0, 26.0)
-                .center()
-                .radius(8.0)
-                .continuous_corners()
-                .hover(theme.color("#303030"))
-                .on_press(|state: &mut State| {
-                    state.fleet.browser_error.clear();
-                    state.fleet.browser_dialog_open = true;
-                })
-                .child(icon(&PLUS, 17.0).color(theme.color("#bdbdbd"))),
-        );
-    }
-    let mut content = vec![
-        crate::design::breadcrumb_title("Fleet", title, theme),
-        crate::design::subtitle(
-            match section {
-                FleetSection::AppServers => {
-                    "Manage the hosts that power your research environment."
-                }
-                FleetSection::Browsers => {
-                    "Choose available browsers and assign their workspace scope."
-                }
-                FleetSection::VirtualMachines => {
-                    "Inspect virtual machines and configure their workspace allowances."
-                }
-            },
-            theme,
-        ),
-        tabs,
-    ];
+    let mut content = vec![tabs];
     if !state.fleet.error.is_empty() {
         content.push(
             text(state.fleet.error.clone())
                 .key("fleet-error")
-                .mt(10.0)
-                .font(ui_font(13.0, 400.0))
-                .color(theme.color("#e07676")),
-        );
-    }
-    if section == FleetSection::Browsers && !state.fleet.browser_error.is_empty() {
-        content.push(
-            text(state.fleet.browser_error.clone())
-                .key("fleet-browser-error")
                 .mt(10.0)
                 .font(ui_font(13.0, 400.0))
                 .color(theme.color("#e07676")),
@@ -1512,22 +1055,6 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> V
             cards = cards.child(server_card(server, state, theme));
         }
     }
-    if section == FleetSection::Browsers {
-        for (index, item) in state
-            .fleet
-            .browsers
-            .iter()
-            .enumerate()
-            .filter(|(_, item)| match state.fleet.tab {
-                FleetTab::All => true,
-                FleetTab::Available => !item.browser.manual,
-                FleetTab::Enabled => item.browser.manual,
-            })
-        {
-            count += 1;
-            cards = cards.child(browser_card(index, item, state, theme));
-        }
-    }
     if section == FleetSection::VirtualMachines {
         for (index, item) in state
             .fleet
@@ -1555,10 +1082,6 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> V
             (FleetSection::AppServers, FleetTab::All) => "No remote app servers connected.",
             (FleetSection::AppServers, FleetTab::Available) => "No app servers available.",
             (FleetSection::AppServers, FleetTab::Enabled) => "No app servers enabled.",
-            (FleetSection::Browsers, _) if state.fleet.browser_loading => "Loading browsers…",
-            (FleetSection::Browsers, FleetTab::Enabled) => "No manually added browsers.",
-            (FleetSection::Browsers, FleetTab::Available) => "No browsers detected.",
-            (FleetSection::Browsers, _) => "No browsers available.",
             (FleetSection::VirtualMachines, _) if state.fleet.vm_loading => {
                 "Loading virtual machines…"
             }
@@ -1609,141 +1132,6 @@ fn input_field(
                 .color(theme.color("#d4d4d4")),
         )
         .child(input)
-}
-
-fn close_browser_dialog(state: &mut State) {
-    if state.fleet.browser_busy {
-        return;
-    }
-    state.fleet.browser_dialog_open = false;
-    state.fleet.browser_error.clear();
-}
-
-pub(crate) fn browser_dialog(state: &State, theme: ThemeStyle<'_>) -> [El; 2] {
-    let mut host_rows = col().w_full().gap(5.0);
-    let host_count = 1 + state
-        .fleet
-        .servers
-        .iter()
-        .filter(|server| server.enabled)
-        .count();
-    let hosts_label = text("App Server")
-        .font(ui_font(14.0, 500.0))
-        .color(theme.color("#d4d4d4"));
-    let host_choices = std::iter::once((&state.fleet.local, "local")).chain(
-        state
-            .fleet
-            .servers
-            .iter()
-            .filter(|server| server.enabled)
-            .map(|server| (server, server.id.as_str())),
-    );
-    for (server, id) in host_choices {
-        let selected = state.fleet.browser_host_id == id;
-        let host_id = id.to_owned();
-        let label = if id == "local" {
-            "Local App Server".to_owned()
-        } else {
-            server_name(server).to_owned()
-        };
-        host_rows = host_rows.child(
-            row()
-                .w_full()
-                .h(32.0)
-                .center_y()
-                .gap(10.0)
-                .child(
-                    text(label.clone())
-                        .grow(1.0)
-                        .min_w(0.0)
-                        .truncate()
-                        .font(ui_font(13.0, 400.0))
-                        .color(theme.color("#bdbdbd")),
-                )
-                .child(
-                    form_button(if selected { "Selected" } else { "Select" }, theme)
-                        .key(format!("fleet-browser-host-{id}"))
-                        .on_press(move |state: &mut State| {
-                            state.fleet.browser_host_id = host_id.clone()
-                        })
-                        .help(label.clone()),
-                ),
-        );
-    }
-    let hosts = col().w_full().gap(5.0).child(hosts_label).child(
-        col()
-            .w_full()
-            .h((host_count as f32 * 37.0).min(170.0))
-            .min_h(0.0)
-            .scroll(ScrollSpec {
-                stick_bottom: false,
-            })
-            .child(host_rows),
-    );
-    let body = col()
-        .w_full()
-        .gap(12.0)
-        .child(
-            text("Enter the browser executable path on the selected app-server host.")
-                .font(ui_font(13.0, 400.0))
-                .color(theme.color("#969696"))
-                .wrap(),
-        )
-        .child(hosts)
-        .child(input_field(
-            "Browser Name",
-            "fleet-browser-name",
-            &state.fleet.browser_name_edit,
-            false,
-            |state| &mut state.fleet.browser_name_edit,
-            theme,
-        ))
-        .child(input_field(
-            "Executable Path",
-            "fleet-browser-path",
-            &state.fleet.browser_path_edit,
-            false,
-            |state| &mut state.fleet.browser_path_edit,
-            theme,
-        ))
-        .child(
-            text(state.fleet.browser_error.clone())
-                .font(ui_font(13.0, 400.0))
-                .color(theme.color("#e07676")),
-        );
-    let mut actions = row().w_full().child(el().grow(1.0)).child(
-        form_button("Cancel", theme)
-            .key("fleet-browser-cancel")
-            .on_press(close_browser_dialog),
-    );
-    if !state.fleet.browser_busy {
-        actions = actions.child(
-            form_button("Add Browser", theme)
-                .key("fleet-browser-save")
-                .on_press(|state: &mut State| {
-                    start_browser_mutation(
-                        state,
-                        BrowserMutation::Add {
-                            host_id: state.fleet.browser_host_id.clone(),
-                            name: state.fleet.browser_name_edit.text.trim().to_owned(),
-                            executable: state.fleet.browser_path_edit.text.trim().to_owned(),
-                        },
-                    );
-                }),
-        );
-    }
-    modal_dialog::render(
-        modal_dialog::DialogSpec {
-            key: "fleet-browser-dialog",
-            title: "Add a Browser",
-            width: 520.0,
-            focus_return: "fleet-add-browser",
-        },
-        body,
-        actions,
-        theme,
-        close_browser_dialog,
-    )
 }
 
 fn close_connect(state: &mut State) {
@@ -2236,54 +1624,6 @@ pub(crate) fn qr_dialog(state: &State, theme: ThemeStyle<'_>) -> [El; 2] {
 mod tests {
     use super::*;
     use rune::{Env, Runtime};
-
-    #[test]
-    fn browser_card_exposes_settings_and_workspace_scope() {
-        let workspace_id = uuid::Uuid::nil().to_string();
-        let mut state = State::default();
-        state.fleet.browsers.push(BrowserItem {
-            host_id: "local".to_owned(),
-            host_name: "Local App Server".to_owned(),
-            browser: beale_contracts::v1::FleetBrowser {
-                id: "detected:example".to_owned(),
-                name: "Example Browser".to_owned(),
-                manual: false,
-                available: true,
-                enabled: true,
-                all_workspaces: false,
-                workspace_ids: vec![workspace_id.clone()],
-                preferred: false,
-            },
-        });
-        state
-            .workspaces
-            .push(beale_contracts::v1::WorkspaceSummary {
-                id: workspace_id,
-                name: "Example Workspace".to_owned(),
-                directory: "example-workspace".to_owned(),
-            });
-        let items = workspace_scope_items(&state, 0);
-        assert!(!items[0].selected);
-        assert!(items[1].selected);
-        let mut runtime = Runtime::new(
-            state,
-            |state, _| browser_card(0, &state.fleet.browsers[0], state, state.appearance.style()),
-            (300.0, 240.0),
-            Env::new(true, 1.0),
-        );
-        runtime.frame(0.0);
-        assert!(
-            runtime
-                .find("fleet-browser-toggle-local-detected:example")
-                .is_some()
-        );
-        assert!(runtime.find("fleet-browser-scope-0").is_some());
-        assert!(
-            runtime
-                .find("fleet-browser-preferred-local-detected:example")
-                .is_some()
-        );
-    }
 
     #[test]
     fn hyper_v_card_uses_fleet_card_layout() {

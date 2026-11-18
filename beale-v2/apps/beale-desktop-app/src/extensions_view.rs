@@ -24,7 +24,7 @@ use crate::{
         FLEET_VIRTUAL_MACHINE, FLEET_WINDOWS, INFO, PLUGIN_META, PLUGINS, PLUS, RESEARCH_KITS,
         WRENCH,
     },
-    in_place_menu, modal_dialog, sidenav_heading, ui_font,
+    in_place_menu, modal_dialog, ui_font,
     workspace_creation::field,
 };
 
@@ -1318,14 +1318,7 @@ pub(crate) fn sidenav(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
         .w(width)
         .h_full()
         .px(8.0)
-        .pt(12.0)
-        .fill(theme.color("#111111"))
-        .child(
-            sidenav_heading("Extensions", theme)
-                .key("extensions-sidenav-title")
-                .ml(4.0)
-                .mb(12.0),
-        )
+        .pt(10.0)
         .child(items)
 }
 

@@ -9,24 +9,6 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
         .padding(36.0)
         .gap(28.0)
         .child(
-            col()
-                .w_full()
-                .gap(10.0)
-                .child(design::breadcrumb_title(
-                    "Beale",
-                    text("Research desk")
-                        .role("heading")
-                        .truncate_fade()
-                        .font(crate::view_title_font())
-                        .color(theme.color("#f2f2f2")),
-                    theme,
-                ))
-                .child(design::subtitle(
-                    "Define your scope. Follow the evidence. Build a defensible finding.",
-                    theme,
-                )),
-        )
-        .child(
             row()
                 .gap(10.0)
                 .child(

@@ -28,6 +28,8 @@ pub(crate) fn initial_state() -> State {
 
 pub(crate) fn fixture(variant: &str) -> State {
     let name = match variant {
+        "home-collapsed" => "home",
+        "home-usage" => "home",
         "session-insights"
         | "session-insights-empty"
         | "session-insights-missing"
@@ -63,7 +65,6 @@ pub(crate) fn fixture(variant: &str) -> State {
         "feature-detail" => "features",
         "plugin-add" | "plugin-detail" => "plugins",
         "fleet-connect" | "fleet-import" | "fleet-detail" => "fleet",
-        "browser-add" => "browsers",
         "safety-rule" => "safety",
         "finding-detail"
         | "findings-plot"
@@ -656,10 +657,9 @@ pub(crate) fn fixture(variant: &str) -> State {
                 _ => extensions_view::ExtensionSection::Features,
             };
         }
-        "fleet" | "browsers" | "vms" => {
+        "fleet" | "vms" => {
             s.primary_view = PrimaryView::Fleet;
             s.fleet_section = match name {
-                "browsers" => fleet_view::FleetSection::Browsers,
                 "vms" => fleet_view::FleetSection::VirtualMachines,
                 _ => fleet_view::FleetSection::AppServers,
             };
@@ -1060,7 +1060,6 @@ pub(crate) fn fixture(variant: &str) -> State {
         "fleet-connect" => s.fleet.connect_dialog_open = true,
         "fleet-import" => s.fleet.import_dialog_open = true,
         "fleet-detail" => s.fleet.details_id = Some("local".into()),
-        "browser-add" => s.fleet.browser_dialog_open = true,
         "safety-rule" => {
             s.permission_creating = true;
             s.permission_name_edit = TextEdit::new("Example scope review");
@@ -1070,6 +1069,22 @@ pub(crate) fn fixture(variant: &str) -> State {
         }
         "finding-detail" => s.workspace_findings.preview_detail(),
         _ => {}
+    }
+    if variant == "home-collapsed" {
+        s.sidenav_visible = false;
+    }
+    if variant == "home-usage" {
+        s.provider_usage = [ProviderId::Openai, ProviderId::Xai].map(|provider| {
+            Some(ProviderUsageSnapshot {
+                provider: provider as i32,
+                windows: vec![ProviderUsageWindow {
+                    label: "Weekly Limit".into(),
+                    used_percent: 25,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })
+        });
     }
     s
 }

@@ -69,18 +69,6 @@ pub(crate) static TRASH: Icon = Icon {
     body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M3 6h18"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m19 6-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M10 11v6M14 11v6"/>"#,
 };
 
-pub(crate) static STAR: Icon = Icon {
-    name: "lucide-star",
-    view: 24.0,
-    body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 2.5 15.1 8.8l7 1-5.05 4.92 1.2 6.96L12 18.4l-6.25 3.28 1.2-6.96L1.9 9.8l7-1z"/>"#,
-};
-
-pub(crate) static STAR_FILLED: Icon = Icon {
-    name: "beale-star-filled",
-    view: 24.0,
-    body: r#"<path fill="currentColor" d="M12 2.5 15.1 8.8l7 1-5.05 4.92 1.2 6.96L12 18.4l-6.25 3.28 1.2-6.96L1.9 9.8l7-1z"/>"#,
-};
-
 pub(crate) static VM_RUN: Icon = Icon {
     name: "beale-vm-run",
     view: 24.0,
@@ -169,12 +157,6 @@ pub(crate) static FLEET: Icon = Icon {
     name: "lucide-server",
     view: 24.0,
     body: r#"<rect fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="8" x="2" y="2" rx="2" ry="2"/><rect fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="8" x="2" y="14" rx="2" ry="2"/><line fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" x1="6" x2="6.01" y1="6" y2="6"/><line fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" x1="6" x2="6.01" y1="18" y2="18"/>"#,
-};
-
-pub(crate) static FLEET_FILLED: Icon = Icon {
-    name: "beale-server-filled",
-    view: 24.0,
-    body: r#"<path fill="currentColor" fill-rule="evenodd" d="M4 2h16a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Zm2 3a1 1 0 1 0 0 2 1 1 0 0 0 0-2ZM4 14h16a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2Zm2 3a1 1 0 1 0 0 2 1 1 0 0 0 0-2Z"/>"#,
 };
 
 pub(crate) static FLEET_BROWSER: Icon = Icon {
@@ -451,8 +433,8 @@ pub(crate) static SETTINGS_FILLED: Icon = Icon {
 mod tests {
     use super::{
         AUTOMATION_ACTIVE, AUTOMATION_SCHEDULE, AUTOMATIONS_FILLED, CANVAS, CANVAS_FILLED,
-        EXTENSIONS_FILLED, FINDINGS, FLEET_APPLE, FLEET_FILLED, FLEET_LINUX, FLEET_WINDOWS,
-        HOME_FILLED, PLUGIN_META, RUNBOOK, SESSION_CACHE_RATE, SESSION_TOKENS, SETTINGS_FILLED,
+        EXTENSIONS_FILLED, FINDINGS, FLEET_APPLE, FLEET_LINUX, FLEET_WINDOWS, HOME_FILLED,
+        PLUGIN_META, RUNBOOK, SESSION_CACHE_RATE, SESSION_TOKENS, SETTINGS_FILLED,
         WORKSPACE_SURFACES,
     };
 
@@ -475,7 +457,6 @@ mod tests {
             &AUTOMATIONS_FILLED,
             &EXTENSIONS_FILLED,
             &SETTINGS_FILLED,
-            &FLEET_FILLED,
         ] {
             let coverage = rune::text::icon_coverage(mark, 32);
             assert!(

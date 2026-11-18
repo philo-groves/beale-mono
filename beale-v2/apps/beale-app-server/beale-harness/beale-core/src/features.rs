@@ -92,7 +92,11 @@ fn feature_specs() -> Vec<FeatureSpec> {
             tool_count: beale_graphs::TOOL_COUNT,
             prompt_extension: beale_graphs::PROMPT_EXTENSION,
             tool_names: vec![
-                beale_graphs::DELEGATE_TOOL.to_owned(),
+                beale_graphs::SPAWN_TOOL.to_owned(),
+                beale_graphs::LIST_TOOL.to_owned(),
+                beale_graphs::INSPECT_TOOL.to_owned(),
+                beale_graphs::MESSAGE_TOOL.to_owned(),
+                beale_graphs::KILL_TOOL.to_owned(),
                 beale_graphs::HANDOFF_TOOL.to_owned(),
             ],
         },

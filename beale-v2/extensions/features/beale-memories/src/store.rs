@@ -61,6 +61,22 @@ fn valid_kind(kind: &str) -> bool {
 }
 
 impl MemoryStore {
+    pub fn display_name(&self, workspace_id: &str, id: &str) -> Result<Option<String>> {
+        ensure!(!id.is_empty() && id.len() <= 80, "invalid memory ID");
+        self.with_connection(|connection| {
+            connection
+                .query_row(
+                    "SELECT name FROM entities WHERE workspace_id=?1 AND id=?2
+                     UNION ALL SELECT statement FROM assertions WHERE workspace_id=?1 AND id=?2
+                     LIMIT 1",
+                    params![workspace_id, id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(Into::into)
+        })
+    }
+
     pub fn open(root: &Path) -> Result<Self> {
         let path = root.join("memories.sqlite");
         let connection = Connection::open(&path).context("open memory database")?;
@@ -692,6 +708,43 @@ mod tests {
             .unwrap()["id"]
             .as_str()
             .unwrap();
+        assert_eq!(
+            store
+                .display_name("workspace-example", entity_id)
+                .unwrap()
+                .as_deref(),
+            Some("Example endpoint")
+        );
+        assert_eq!(
+            store.display_name("other-workspace", entity_id).unwrap(),
+            None
+        );
+        assert_eq!(
+            crate::summary(
+                &root,
+                "workspace-example",
+                crate::READ,
+                &json!({"id":entity_id})
+            ),
+            "Memory name: Example endpoint"
+        );
+        let assertion_id = result["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["type"] == "assertion")
+            .unwrap()["id"]
+            .as_str()
+            .unwrap();
+        assert_eq!(
+            crate::summary(
+                &root,
+                "workspace-example",
+                crate::GRAPH,
+                &json!({"id":assertion_id})
+            ),
+            "Memory name: Example service exposes Example endpoint"
+        );
         let graph = store
             .graph("workspace-example", entity_id, 2, 20, false)
             .unwrap();

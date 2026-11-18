@@ -257,6 +257,8 @@ dependencies = [
  "beale-webfetch",
  "beale-workspaces",
  "prost",
+ "qrcodegen",
+ "reqwest",
  "serde_json",
  "tokio",
  "tower",

@@ -1559,6 +1559,25 @@ fn tool_series_kind(tool: &SessionToolSummary) -> Option<&'static str> {
         "findings_update" => Some("findings_update"),
         "findings_complete_state" => Some("findings_complete_state"),
         "findings_reject" => Some("findings_reject"),
+        "memory_session_query" => Some("memory_session_query"),
+        "memory_query" => Some("memory_query"),
+        "memory_read" => Some("memory_read"),
+        "memory_graph" => Some("memory_graph"),
+        "runbook_query" => Some("runbook_query"),
+        "runbook_get" => Some("runbook_get"),
+        "runbook_create" => Some("runbook_create"),
+        "runbook_edit" => Some("runbook_edit"),
+        "runbook_run" => Some("runbook_run"),
+        "runbook_status" => Some("runbook_status"),
+        "graph_subagents_spawn" => Some("graph_subagents_spawn"),
+        "graph_subagents_list" => Some("graph_subagents_list"),
+        "graph_subagents_inspect" => Some("graph_subagents_inspect"),
+        "graph_subagents_message" => Some("graph_subagents_message"),
+        "graph_subagents_receive" => Some("graph_subagents_receive"),
+        "graph_subagents_kill" => Some("graph_subagents_kill"),
+        "graph_handoff" => Some("graph_handoff"),
+        "agent_feedback" => Some("agent_feedback"),
+        "goal_status" => Some("goal_status"),
         _ => None,
     }
 }
@@ -1568,6 +1587,99 @@ pub(crate) fn series_tool(tool: &SessionToolSummary) -> bool {
 }
 
 fn tool_single_label(tool: &SessionToolSummary, active: bool) -> String {
+    if tool.name == "agent_feedback" {
+        return if active {
+            "Providing agent feedback"
+        } else {
+            "Provided agent feedback"
+        }
+        .to_owned();
+    }
+    if tool.name == "goal_status" {
+        let verb = if active {
+            "Marking goal status"
+        } else {
+            "Marked goal status"
+        };
+        return summary_detail_value(&tool.summary, "Goal status: ")
+            .map_or_else(|| verb.to_owned(), |status| format!("{verb} as {status}"));
+    }
+    let graph_label = match tool.name.as_str() {
+        "graph_subagents_spawn" => {
+            let verb = if active { "Spawning" } else { "Spawned" };
+            let count = summary_detail_value(&tool.summary, "Graph spawn count: ")
+                .and_then(|value| value.parse::<usize>().ok());
+            Some(count.map_or_else(
+                || format!("{verb} subagents"),
+                |count| format!("{verb} {count} subagents"),
+            ))
+        }
+        "graph_subagents_list" => Some(
+            if active {
+                "Checking subagents"
+            } else {
+                "Checked subagents"
+            }
+            .to_owned(),
+        ),
+        "graph_subagents_inspect"
+        | "graph_subagents_message"
+        | "graph_subagents_kill"
+        | "graph_subagents_receive"
+        | "graph_handoff" => {
+            let (prefix, present, past, suffix, fallback) = match tool.name.as_str() {
+                "graph_subagents_inspect" => (
+                    "Graph inspect role: ",
+                    "Inspecting",
+                    "Inspected",
+                    " subagent",
+                    "a subagent",
+                ),
+                "graph_subagents_message" => (
+                    "Graph message role: ",
+                    "Sending message to",
+                    "Sent message to",
+                    "",
+                    "a subagent",
+                ),
+                "graph_subagents_receive" => (
+                    "Graph receive role: ",
+                    "Receiving message from",
+                    "Received message from",
+                    "",
+                    "a subagent",
+                ),
+                "graph_subagents_kill" => (
+                    "Graph kill role: ",
+                    "Stopping",
+                    "Stopped",
+                    " subagent",
+                    "a subagent",
+                ),
+                _ => (
+                    "Graph handoff role: ",
+                    "Handing off to",
+                    "Handed off to",
+                    " agent",
+                    "an agent",
+                ),
+            };
+            let verb = if active { present } else { past };
+            let role = summary_detail_value(&tool.summary, prefix).or_else(|| {
+                (tool.name == "graph_handoff")
+                    .then(|| summary_detail_value(&tool.summary, "Hand off to "))
+                    .flatten()
+            });
+            Some(role.map_or_else(
+                || format!("{verb} {fallback}"),
+                |role| format!("{verb} {role}{suffix}"),
+            ))
+        }
+        _ => None,
+    };
+    if let Some(label) = graph_label {
+        return label;
+    }
     if let Some((kind, value)) = webfetch_input(tool) {
         return match (kind, active) {
             ("webfetch.query", true) => format!("Web searching \"{value}\""),
@@ -1634,6 +1746,61 @@ fn tool_single_label(tool: &SessionToolSummary, active: bool) -> String {
         return summary_detail_value(&tool.summary, "Finding title: ").map_or_else(
             || format!("{verb} a finding"),
             |title| format!("{verb} finding of {title}"),
+        );
+    }
+    if matches!(tool.name.as_str(), "memory_session_query" | "memory_query") {
+        let (subject, prefix) = if tool.name == "memory_session_query" {
+            ("session", "Memory session query: ")
+        } else {
+            ("memory", "Memory query: ")
+        };
+        let verb = if active { "Searching" } else { "Searched" };
+        return summary_detail_value(&tool.summary, prefix).map_or_else(
+            || format!("{verb} {subject}"),
+            |query| format!("{verb} {subject} for \"{query}\""),
+        );
+    }
+    let memory_verb = match (tool.name.as_str(), active) {
+        ("memory_read", true) => Some("Reading"),
+        ("memory_read", false) => Some("Read"),
+        ("memory_graph", true) => Some("Graphing"),
+        ("memory_graph", false) => Some("Graphed"),
+        _ => None,
+    };
+    if let Some(verb) = memory_verb {
+        return summary_detail_value(&tool.summary, "Memory name: ").map_or_else(
+            || format!("{verb} a memory"),
+            |name| format!("{verb} memory of {name}"),
+        );
+    }
+    if tool.name == "runbook_query" {
+        let verb = if active {
+            "Searching runbooks"
+        } else {
+            "Searched runbooks"
+        };
+        return summary_detail_value(&tool.summary, "Runbook query: ").map_or_else(
+            || verb.to_owned(),
+            |query| format!("{verb} for \"{query}\""),
+        );
+    }
+    let runbook_verb = match (tool.name.as_str(), active) {
+        ("runbook_get", true) => Some("Reading"),
+        ("runbook_get", false) => Some("Read"),
+        ("runbook_create", true) => Some("Creating"),
+        ("runbook_create", false) => Some("Created"),
+        ("runbook_edit", true) => Some("Editing"),
+        ("runbook_edit", false) => Some("Edited"),
+        ("runbook_run", true) => Some("Running"),
+        ("runbook_run", false) => Some("Ran"),
+        ("runbook_status", true) => Some("Checking"),
+        ("runbook_status", false) => Some("Checked"),
+        _ => None,
+    };
+    if let Some(verb) = runbook_verb {
+        return summary_detail_value(&tool.summary, "Runbook title: ").map_or_else(
+            || format!("{verb} a runbook"),
+            |title| format!("{verb} runbook of {title}"),
         );
     }
     let (present, past, prefix) = match tool.name.as_str() {
@@ -1710,6 +1877,40 @@ fn combined_tool_series_label(tools: &[&SessionToolSummary], active: bool) -> St
                     ("Transitioning", "Transitioned", "finding", "findings")
                 }
                 "findings_reject" => ("Rejecting", "Rejected", "finding", "findings"),
+                "memory_session_query" => (
+                    "Searching session for",
+                    "Searched session for",
+                    "query",
+                    "queries",
+                ),
+                "memory_query" => (
+                    "Searching memory for",
+                    "Searched memory for",
+                    "query",
+                    "queries",
+                ),
+                "memory_read" => ("Reading", "Read", "memory", "memories"),
+                "memory_graph" => ("Graphing", "Graphed", "memory", "memories"),
+                "runbook_query" => (
+                    "Searching runbooks for",
+                    "Searched runbooks for",
+                    "query",
+                    "queries",
+                ),
+                "runbook_get" => ("Reading", "Read", "runbook", "runbooks"),
+                "runbook_create" => ("Creating", "Created", "runbook", "runbooks"),
+                "runbook_edit" => ("Editing", "Edited", "runbook", "runbooks"),
+                "runbook_run" => ("Running", "Ran", "runbook", "runbooks"),
+                "runbook_status" => ("Checking", "Checked", "runbook", "runbooks"),
+                "graph_subagents_spawn" => ("Spawning", "Spawned", "subagent", "subagents"),
+                "graph_subagents_list" => ("Checking", "Checked", "subagent", "subagents"),
+                "graph_subagents_inspect" => ("Inspecting", "Inspected", "subagent", "subagents"),
+                "graph_subagents_message" => ("Sending", "Sent", "message", "messages"),
+                "graph_subagents_receive" => ("Receiving", "Received", "message", "messages"),
+                "graph_subagents_kill" => ("Stopping", "Stopped", "subagent", "subagents"),
+                "graph_handoff" => ("Handing off", "Handed off", "agent", "agents"),
+                "agent_feedback" => ("Providing", "Provided", "feedback", "feedback"),
+                "goal_status" => ("Marking", "Marked", "status", "times"),
                 _ => unreachable!("only supported tools can form a series"),
             };
             let verb = if active { present } else { past };
@@ -1718,7 +1919,69 @@ fn combined_tool_series_label(tools: &[&SessionToolSummary], active: bool) -> St
             } else {
                 verb.to_lowercase()
             };
-            if count == 1 && matches!(name, "surface_query" | "findings_query") {
+            if name == "graph_subagents_spawn" {
+                let per_call: Vec<_> = tools
+                    .iter()
+                    .filter(|tool| tool.name == name)
+                    .filter_map(|tool| {
+                        summary_detail_value(&tool.summary, "Graph spawn count: ")
+                            .and_then(|value| value.parse::<usize>().ok())
+                    })
+                    .collect();
+                if per_call.len() == count {
+                    format!("{verb} {} subagents", per_call.iter().sum::<usize>())
+                } else {
+                    format!("{verb} subagents")
+                }
+            } else if name == "graph_subagents_list" {
+                format!("{verb} subagents")
+            } else if name == "agent_feedback" {
+                format!("{verb} agent feedback")
+            } else if name == "goal_status" {
+                if count == 1 {
+                    let label = tools.iter().find(|tool| tool.name == name).map_or_else(
+                        || format!("{verb} goal status"),
+                        |tool| tool_single_label(tool, active),
+                    );
+                    if index == 0 {
+                        label
+                    } else {
+                        let (first, rest) = label.split_at(1);
+                        format!("{}{rest}", first.to_lowercase())
+                    }
+                } else {
+                    format!("{verb} goal status {count} times")
+                }
+            } else if name == "graph_subagents_message" {
+                if count == 1 {
+                    format!("{verb} a message to a subagent")
+                } else if active {
+                    format!("{verb} {count} subagent messages")
+                } else {
+                    format!("{verb} {count} messages to subagents")
+                }
+            } else if name == "graph_subagents_receive" {
+                if count == 1 {
+                    format!("{verb} a subagent message")
+                } else {
+                    format!("{verb} {count} subagent messages")
+                }
+            } else if name == "graph_handoff" {
+                if count == 1 {
+                    format!("{verb} to an agent")
+                } else {
+                    format!("{verb} to {count} agents")
+                }
+            } else if count == 1
+                && matches!(
+                    name,
+                    "surface_query"
+                        | "findings_query"
+                        | "memory_session_query"
+                        | "memory_query"
+                        | "runbook_query"
+                )
+            {
                 verb.trim_end_matches(" for").to_owned()
             } else if count == 1 {
                 format!("{verb} a {noun}")
@@ -2781,72 +3044,72 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
                         theme,
                     ));
                 }
-                let mut summaries = message.reasoning_summaries.iter().enumerate().peekable();
-                let mut commentary = message.commentary.iter().enumerate().peekable();
-                let mut grouped_through = 0;
-                for position in 0..=message.tools.len() {
-                    while summaries
-                        .peek()
-                        .is_some_and(|(_, summary)| summary.after_tool_count as usize == position)
-                    {
-                        if let Some((summary_index, summary)) = summaries.next() {
-                            if !visible_role(&summary.agent_role) {
-                                continue;
-                            }
-                            transcript = transcript.child(transcript_reasoning(
-                                summary.text.clone(),
-                                format!("session-reasoning-{index}-{summary_index}"),
-                                false,
-                                theme,
-                            ));
-                        }
-                    }
-                    while commentary
-                        .peek()
-                        .is_some_and(|(_, item)| item.after_tool_count as usize == position)
-                    {
-                        if let Some((commentary_index, item)) = commentary.next() {
-                            if !visible_role(&item.agent_role) {
-                                continue;
-                            }
-                            transcript = transcript.child(transcript_message(
-                                format!("session-commentary-{index}-{commentary_index}"),
-                                item.text.clone(),
-                                false,
-                                false,
-                                theme,
-                            ));
-                        }
-                    }
-                    if expanded
-                        && position >= grouped_through
-                        && let Some(tool) = message.tools.get(position)
-                        && visible_role(&tool.agent_role)
-                    {
-                        let mut end = position + 1;
-                        if series_tool(tool) {
-                            while let Some(next) = message.tools.get(end) {
-                                if !series_tool(next)
-                                    || next.agent_role != tool.agent_role
-                                    || !visible_role(&next.agent_role)
-                                    || message
-                                        .reasoning_summaries
-                                        .iter()
-                                        .any(|item| item.after_tool_count as usize == end)
-                                    || message
-                                        .commentary
-                                        .iter()
-                                        .any(|item| item.after_tool_count as usize == end)
-                                {
-                                    break;
+                if expanded {
+                    let mut summaries = message.reasoning_summaries.iter().enumerate().peekable();
+                    let mut commentary = message.commentary.iter().enumerate().peekable();
+                    let mut grouped_through = 0;
+                    for position in 0..=message.tools.len() {
+                        while summaries.peek().is_some_and(|(_, summary)| {
+                            summary.after_tool_count as usize == position
+                        }) {
+                            if let Some((summary_index, summary)) = summaries.next() {
+                                if !visible_role(&summary.agent_role) {
+                                    continue;
                                 }
-                                end += 1;
+                                transcript = transcript.child(transcript_reasoning(
+                                    summary.text.clone(),
+                                    format!("session-reasoning-{index}-{summary_index}"),
+                                    false,
+                                    theme,
+                                ));
                             }
                         }
-                        let series: Vec<_> = message.tools[position..end].iter().collect();
-                        transcript = transcript
-                            .child(transcript_tool_series(&series, false, true, state, theme));
-                        grouped_through = end;
+                        while commentary
+                            .peek()
+                            .is_some_and(|(_, item)| item.after_tool_count as usize == position)
+                        {
+                            if let Some((commentary_index, item)) = commentary.next() {
+                                if !visible_role(&item.agent_role) {
+                                    continue;
+                                }
+                                transcript = transcript.child(transcript_message(
+                                    format!("session-commentary-{index}-{commentary_index}"),
+                                    item.text.clone(),
+                                    false,
+                                    false,
+                                    theme,
+                                ));
+                            }
+                        }
+                        if position >= grouped_through
+                            && let Some(tool) = message.tools.get(position)
+                            && visible_role(&tool.agent_role)
+                        {
+                            let mut end = position + 1;
+                            if series_tool(tool) {
+                                while let Some(next) = message.tools.get(end) {
+                                    if !series_tool(next)
+                                        || next.agent_role != tool.agent_role
+                                        || !visible_role(&next.agent_role)
+                                        || message
+                                            .reasoning_summaries
+                                            .iter()
+                                            .any(|item| item.after_tool_count as usize == end)
+                                        || message
+                                            .commentary
+                                            .iter()
+                                            .any(|item| item.after_tool_count as usize == end)
+                                    {
+                                        break;
+                                    }
+                                    end += 1;
+                                }
+                            }
+                            let series: Vec<_> = message.tools[position..end].iter().collect();
+                            transcript = transcript
+                                .child(transcript_tool_series(&series, false, true, state, theme));
+                            grouped_through = end;
+                        }
                     }
                 }
             }
@@ -3062,11 +3325,45 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
 mod tests {
     use super::{
         MenuSection, choices, combined_tool_series_label, has_configured_provider, is_web_link,
-        normalize_goal_limit, options, selected_model, tool_single_label, work_duration,
+        normalize_goal_limit, options, selected_model, series_tool, tool_single_label,
+        work_duration,
     };
-    use crate::{AuthStatus, Provider, State};
+    use crate::{AuthStatus, Provider, State, view, visual_preview};
     use beale_contracts::v1::{CustomProvider, ModelEntry, SessionToolSummary};
-    use rune::TextEdit;
+    use rune::{Env, Runtime, TextEdit};
+
+    #[test]
+    fn collapsed_work_shows_only_the_agent_final_message() {
+        let mut state = visual_preview::fixture("session-activity");
+        state.session_work_expanded.clear();
+        let mut runtime = Runtime::new(state, view, (1040.0, 720.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        assert!(runtime.find("session-work-header-1").is_some());
+        assert!(runtime.find("session-message-1").is_some());
+        for key in [
+            "session-reasoning-1-0",
+            "session-reasoning-1-1",
+            "session-commentary-1-0",
+            "session-tool-tool-example",
+        ] {
+            assert!(runtime.find(key).is_none(), "collapsed work shows {key}");
+        }
+
+        let (x, y) = runtime.find("session-work-header-1").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+        assert!(runtime.state.session_work_expanded.contains(&1));
+        for key in [
+            "session-reasoning-1-0",
+            "session-reasoning-1-1",
+            "session-commentary-1-0",
+            "session-tool-tool-example",
+            "session-message-1",
+        ] {
+            assert!(runtime.find(key).is_some(), "expanded work omits {key}");
+        }
+    }
 
     #[test]
     fn base_tool_series_labels_match_active_and_completed_calls() {
@@ -3400,6 +3697,364 @@ mod tests {
             ..prefixed
         };
         assert_eq!(tool_single_label(&old, false), "Inspected a finding");
+    }
+
+    #[test]
+    fn memory_series_labels_use_queries_and_record_names() {
+        let edit = SessionToolSummary {
+            name: "edit".to_owned(),
+            summary: "Edit example.txt".to_owned(),
+            ..Default::default()
+        };
+        for (name, summary, active, past, active_plural, past_plural, joined) in [
+            (
+                "memory_session_query",
+                "Memory session query: parser",
+                "Searching session for \"parser\"",
+                "Searched session for \"parser\"",
+                "Searching session for 2 queries",
+                "Searched session for 2 queries",
+                "Searched session, edited a file",
+            ),
+            (
+                "memory_query",
+                "Memory query: boundary",
+                "Searching memory for \"boundary\"",
+                "Searched memory for \"boundary\"",
+                "Searching memory for 2 queries",
+                "Searched memory for 2 queries",
+                "Searched memory, edited a file",
+            ),
+            (
+                "memory_read",
+                "Memory name: Example service",
+                "Reading memory of Example service",
+                "Read memory of Example service",
+                "Reading 2 memories",
+                "Read 2 memories",
+                "Read a memory, edited a file",
+            ),
+            (
+                "memory_graph",
+                "Memory name: Example service",
+                "Graphing memory of Example service",
+                "Graphed memory of Example service",
+                "Graphing 2 memories",
+                "Graphed 2 memories",
+                "Graphed a memory, edited a file",
+            ),
+        ] {
+            let tool = SessionToolSummary {
+                name: name.to_owned(),
+                summary: summary.to_owned(),
+                ..Default::default()
+            };
+            assert_eq!(tool_single_label(&tool, true), active);
+            assert_eq!(tool_single_label(&tool, false), past);
+            assert_eq!(
+                combined_tool_series_label(&[&tool, &tool], true),
+                active_plural
+            );
+            assert_eq!(
+                combined_tool_series_label(&[&tool, &tool], false),
+                past_plural
+            );
+            assert_eq!(combined_tool_series_label(&[&tool, &edit], false), joined);
+        }
+        let prefixed = SessionToolSummary {
+            name: "memory_read".to_owned(),
+            summary: "Discovery: Memory name: Example service".to_owned(),
+            ..Default::default()
+        };
+        assert_eq!(
+            tool_single_label(&prefixed, false),
+            "Read memory of Example service"
+        );
+        let old = SessionToolSummary {
+            summary: "read memory".to_owned(),
+            ..prefixed
+        };
+        assert_eq!(tool_single_label(&old, false), "Read a memory");
+    }
+
+    #[test]
+    fn runbook_series_labels_use_queries_and_titles() {
+        let edit = SessionToolSummary {
+            name: "edit".to_owned(),
+            summary: "Edit example.txt".to_owned(),
+            ..Default::default()
+        };
+        for (name, summary, active, past, active_plural, past_plural, joined) in [
+            (
+                "runbook_query",
+                "Runbook query: parser",
+                "Searching runbooks for \"parser\"",
+                "Searched runbooks for \"parser\"",
+                "Searching runbooks for 2 queries",
+                "Searched runbooks for 2 queries",
+                "Searched runbooks, edited a file",
+            ),
+            (
+                "runbook_get",
+                "Runbook title: Example procedure",
+                "Reading runbook of Example procedure",
+                "Read runbook of Example procedure",
+                "Reading 2 runbooks",
+                "Read 2 runbooks",
+                "Read a runbook, edited a file",
+            ),
+            (
+                "runbook_create",
+                "Runbook title: Example procedure",
+                "Creating runbook of Example procedure",
+                "Created runbook of Example procedure",
+                "Creating 2 runbooks",
+                "Created 2 runbooks",
+                "Created a runbook, edited a file",
+            ),
+            (
+                "runbook_edit",
+                "Runbook title: Example procedure",
+                "Editing runbook of Example procedure",
+                "Edited runbook of Example procedure",
+                "Editing 2 runbooks",
+                "Edited 2 runbooks",
+                "Edited a runbook, edited a file",
+            ),
+            (
+                "runbook_run",
+                "Runbook title: Example procedure",
+                "Running runbook of Example procedure",
+                "Ran runbook of Example procedure",
+                "Running 2 runbooks",
+                "Ran 2 runbooks",
+                "Ran a runbook, edited a file",
+            ),
+            (
+                "runbook_status",
+                "Runbook title: Example procedure",
+                "Checking runbook of Example procedure",
+                "Checked runbook of Example procedure",
+                "Checking 2 runbooks",
+                "Checked 2 runbooks",
+                "Checked a runbook, edited a file",
+            ),
+        ] {
+            let tool = SessionToolSummary {
+                name: name.to_owned(),
+                summary: summary.to_owned(),
+                ..Default::default()
+            };
+            assert_eq!(tool_single_label(&tool, true), active);
+            assert_eq!(tool_single_label(&tool, false), past);
+            assert_eq!(
+                combined_tool_series_label(&[&tool, &tool], true),
+                active_plural
+            );
+            assert_eq!(
+                combined_tool_series_label(&[&tool, &tool], false),
+                past_plural
+            );
+            assert_eq!(combined_tool_series_label(&[&tool, &edit], false), joined);
+        }
+        let prefixed = SessionToolSummary {
+            name: "runbook_get".to_owned(),
+            summary: "Discovery: Runbook title: Example procedure".to_owned(),
+            ..Default::default()
+        };
+        assert_eq!(
+            tool_single_label(&prefixed, false),
+            "Read runbook of Example procedure"
+        );
+        let old = SessionToolSummary {
+            summary: "get runbook".to_owned(),
+            ..prefixed
+        };
+        assert_eq!(tool_single_label(&old, false), "Read a runbook");
+    }
+
+    #[test]
+    fn graph_series_labels_cover_tools_and_received_messages() {
+        let edit = SessionToolSummary {
+            name: "edit".to_owned(),
+            summary: "Edit example.txt".to_owned(),
+            ..Default::default()
+        };
+        for (name, summary, active, past, active_plural, past_plural, joined) in [
+            (
+                "graph_subagents_list",
+                "Graph list",
+                "Checking subagents",
+                "Checked subagents",
+                "Checking subagents",
+                "Checked subagents",
+                "Checked subagents, edited a file",
+            ),
+            (
+                "graph_subagents_inspect",
+                "Graph inspect role: Scout",
+                "Inspecting Scout subagent",
+                "Inspected Scout subagent",
+                "Inspecting 2 subagents",
+                "Inspected 2 subagents",
+                "Inspected a subagent, edited a file",
+            ),
+            (
+                "graph_subagents_message",
+                "Graph message role: Reviewer",
+                "Sending message to Reviewer",
+                "Sent message to Reviewer",
+                "Sending 2 subagent messages",
+                "Sent 2 messages to subagents",
+                "Sent a message to a subagent, edited a file",
+            ),
+            (
+                "graph_subagents_receive",
+                "Graph receive role: Scout",
+                "Receiving message from Scout",
+                "Received message from Scout",
+                "Receiving 2 subagent messages",
+                "Received 2 subagent messages",
+                "Received a subagent message, edited a file",
+            ),
+            (
+                "graph_subagents_kill",
+                "Graph kill role: Scout",
+                "Stopping Scout subagent",
+                "Stopped Scout subagent",
+                "Stopping 2 subagents",
+                "Stopped 2 subagents",
+                "Stopped a subagent, edited a file",
+            ),
+            (
+                "graph_handoff",
+                "Graph handoff role: Discovery",
+                "Handing off to Discovery agent",
+                "Handed off to Discovery agent",
+                "Handing off to 2 agents",
+                "Handed off to 2 agents",
+                "Handed off to an agent, edited a file",
+            ),
+        ] {
+            let tool = SessionToolSummary {
+                name: name.to_owned(),
+                summary: summary.to_owned(),
+                ..Default::default()
+            };
+            assert_eq!(tool_single_label(&tool, true), active);
+            assert_eq!(tool_single_label(&tool, false), past);
+            assert_eq!(
+                combined_tool_series_label(&[&tool, &tool], true),
+                active_plural
+            );
+            assert_eq!(
+                combined_tool_series_label(&[&tool, &tool], false),
+                past_plural
+            );
+            assert_eq!(combined_tool_series_label(&[&tool, &edit], false), joined);
+        }
+        let spawn = SessionToolSummary {
+            name: "graph_subagents_spawn".to_owned(),
+            summary: "Graph spawn count: 2".to_owned(),
+            ..Default::default()
+        };
+        assert_eq!(tool_single_label(&spawn, true), "Spawning 2 subagents");
+        assert_eq!(tool_single_label(&spawn, false), "Spawned 2 subagents");
+        assert_eq!(
+            combined_tool_series_label(&[&spawn, &spawn], true),
+            "Spawning 4 subagents"
+        );
+        assert_eq!(
+            combined_tool_series_label(&[&spawn, &spawn], false),
+            "Spawned 4 subagents"
+        );
+        assert_eq!(
+            combined_tool_series_label(&[&spawn, &edit], false),
+            "Spawned 2 subagents, edited a file"
+        );
+        let old_spawn = SessionToolSummary {
+            summary: "Spawn graph subagents".to_owned(),
+            ..spawn
+        };
+        assert_eq!(
+            combined_tool_series_label(&[&old_spawn, &old_spawn], false),
+            "Spawned subagents"
+        );
+        let prefixed = SessionToolSummary {
+            name: "graph_subagents_inspect".to_owned(),
+            summary: "Discovery: Graph inspect role: Prover".to_owned(),
+            ..Default::default()
+        };
+        assert_eq!(
+            tool_single_label(&prefixed, false),
+            "Inspected Prover subagent"
+        );
+    }
+
+    #[test]
+    fn agent_feedback_and_goal_status_series_labels() {
+        let feedback = SessionToolSummary {
+            name: "agent_feedback".to_owned(),
+            summary: "Record agent feedback".to_owned(),
+            ..Default::default()
+        };
+        assert!(series_tool(&feedback));
+        assert_eq!(
+            tool_single_label(&feedback, true),
+            "Providing agent feedback"
+        );
+        assert_eq!(
+            tool_single_label(&feedback, false),
+            "Provided agent feedback"
+        );
+        assert_eq!(
+            combined_tool_series_label(&[&feedback, &feedback], true),
+            "Providing agent feedback"
+        );
+        assert_eq!(
+            combined_tool_series_label(&[&feedback, &feedback], false),
+            "Provided agent feedback"
+        );
+
+        let status = SessionToolSummary {
+            name: "goal_status".to_owned(),
+            summary: "Goal status: achieved".to_owned(),
+            ..Default::default()
+        };
+        assert!(series_tool(&status));
+        assert_eq!(
+            tool_single_label(&status, true),
+            "Marking goal status as achieved"
+        );
+        assert_eq!(
+            tool_single_label(&status, false),
+            "Marked goal status as achieved"
+        );
+        assert_eq!(
+            combined_tool_series_label(&[&status, &status], true),
+            "Marking goal status 2 times"
+        );
+        assert_eq!(
+            combined_tool_series_label(&[&status, &status], false),
+            "Marked goal status 2 times"
+        );
+        assert_eq!(
+            combined_tool_series_label(&[&feedback, &status], false),
+            "Provided agent feedback, marked goal status as achieved"
+        );
+        let prefixed = SessionToolSummary {
+            summary: "Discovery: Goal status: waiting_on_external_state".to_owned(),
+            ..status
+        };
+        assert_eq!(
+            tool_single_label(&prefixed, false),
+            "Marked goal status as waiting_on_external_state"
+        );
+        let old = SessionToolSummary {
+            summary: "Record Goal Mode status".to_owned(),
+            ..prefixed
+        };
+        assert_eq!(tool_single_label(&old, false), "Marked goal status");
     }
 
     #[test]

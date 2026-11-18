@@ -2509,7 +2509,7 @@ impl HostDatabase {
                 .query_row(
                     "SELECT EXISTS(SELECT 1 FROM runbook_runs WHERE session_id = ?1)
                      OR EXISTS(SELECT 1 FROM session_tool_calls
-                 WHERE session_id = ?1 AND (name = 'graph_delegate'
+                 WHERE session_id = ?1 AND (name IN ('graph_delegate','graph_subagents_spawn')
                  OR (name = 'graph_handoff' AND is_error = 0)
                  OR (is_error = 0 AND name IN ('memory_create', 'memory_save', 'lead_create',
                      'finding_create', 'findings_create', 'claim_create', 'runbook_create', 'runbook_edit', 'surface_add', 'surface_save',

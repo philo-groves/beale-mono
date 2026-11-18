@@ -73,12 +73,10 @@ const NEW_WORKSPACE: SidebarAction = SidebarAction {
 };
 
 struct HomeSidebarSpec {
-    title: &'static str,
     empty_workspaces: &'static str,
 }
 
 const HOME_SIDEBAR: HomeSidebarSpec = HomeSidebarSpec {
-    title: "Beale",
     empty_workspaces: "No workspaces yet",
 };
 
@@ -177,7 +175,7 @@ fn session_row(key: String, label: &str, italic: bool, active: bool, theme: Them
 
 pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
     let color = |value| theme.color(value);
-    let mut primary = col().w_full().my(12.0).gap(2.0);
+    let mut primary = col().w_full().mb(12.0).gap(2.0);
     for spec in &PRIMARY_ACTIONS {
         primary = primary.child(primary_action(spec, state, theme));
     }
@@ -522,26 +520,7 @@ pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
         .w(width)
         .h_full()
         .px(12.0)
-        .pt(12.0)
-        .fill(color("#111111"))
-        .child(
-            row()
-                .key("home-wordmark")
-                .h(32.0)
-                .gap(10.0)
-                .center_y()
-                .child(
-                    row()
-                        .size(32.0, 32.0)
-                        .center()
-                        .gap(4.0)
-                        .radius(10.0)
-                        .fill(theme.subtle_accent())
-                        .child(el().size(5.0, 8.0).radius(3.0).fill(theme.accent()))
-                        .child(el().size(7.0, 11.0).radius(4.0).fill(theme.accent())),
-                )
-                .child(crate::sidenav_heading(HOME_SIDEBAR.title, theme)),
-        )
+        .pt(10.0)
         .child(primary)
         .child(collection)
 }

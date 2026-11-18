@@ -37,27 +37,59 @@ pub(crate) fn workspace(state: &State) -> Option<(uuid::Uuid, WorkspaceTab)> {
     Some((id, tab))
 }
 
+struct TabSeparators {
+    left: bool,
+    right: bool,
+}
+
 fn tab(
     key: impl Into<String>,
     label: &str,
     glyph: Option<&'static Icon>,
     active: bool,
     dense: bool,
+    separators: TabSeparators,
     theme: ThemeStyle<'_>,
 ) -> El {
+    let key = key.into();
     let mut item = row()
-        .key(key)
+        .key(key.clone())
         .role("tab")
         .label(format!("{label}{}", if active { ", selected" } else { "" }))
         .h(34.0)
+        .grow(1.0)
+        .max_w(240.0)
+        .shrink()
         .px(if dense { 7.0 } else { 12.0 })
         .gap(if dense { 5.0 } else { 8.0 })
         .center_y()
         .radius(11.0)
         .continuous_corners()
-        .fill(theme.color(if active { "#303030" } else { "#191919" }))
-        .border(1.0, theme.color(if active { "#3a3a3a" } else { "#282828" }))
         .hover(theme.color("#303030"));
+    if active {
+        item = item
+            .fill(theme.color("#303030"))
+            .border(1.0, theme.color("#3a3a3a"));
+    } else {
+        if separators.left {
+            item = item.child(
+                el().key(format!("{key}-left-separator"))
+                    .pin(Some(0.0), Some(0.0), None, Some(0.0))
+                    .w(1.0)
+                    .fill(theme.color("#3a3a3a"))
+                    .inert(),
+            );
+        }
+        if separators.right {
+            item = item.child(
+                el().key(format!("{key}-right-separator"))
+                    .pin(None, Some(0.0), Some(0.0), Some(0.0))
+                    .w(1.0)
+                    .fill(theme.color("#3a3a3a"))
+                    .inert(),
+            );
+        }
+    }
     if let Some(glyph) = glyph {
         item = item.child(
             icon(glyph, if dense { 14.0 } else { 16.0 }).color(theme.color(if active {
@@ -174,25 +206,28 @@ pub(crate) fn tabs(state: &State, theme: ThemeStyle<'_>, window_width: f32) -> O
     };
     let compact = peer_graph && window_width < 1250.0;
     let narrow = peer_graph && window_width < 950.0;
+    let selected_role = peer_graph.then(|| selected_role(state, graph_id));
+    let next_tab_active = !in_workspace
+        && if peer_graph {
+            beale_graphs::graph_definition(graph_id)
+                .and_then(|graph| graph.nodes.iter().find(|role| role.is_top_level()))
+                .is_some_and(|role| selected_role.as_deref() == Some(role.id()))
+        } else {
+            true
+        };
     let mut workspace_tab = tab(
         "header-view-tab".to_owned(),
         &format!("{name}, {}", section.label()),
         Some(&icons::FOLDER_OPEN),
         in_workspace,
         peer_graph,
+        TabSeparators {
+            left: false,
+            right: !next_tab_active,
+        },
         theme,
     )
-    .min_w(0.0)
-    .max_w(if narrow {
-        36.0
-    } else if compact {
-        120.0
-    } else if peer_graph {
-        220.0
-    } else {
-        440.0
-    })
-    .shrink();
+    .min_w(0.0);
     if !compact {
         workspace_tab = workspace_tab.child(
             text(name)
@@ -218,22 +253,27 @@ pub(crate) fn tabs(state: &State, theme: ThemeStyle<'_>, window_width: f32) -> O
         .key("header-research-tabs")
         .role("tablist")
         .label("Workspace and agents")
+        .grow(1.0)
         .min_w(0.0)
         .shrink()
         .h_full()
         .center_y()
-        .gap(6.0)
+        .gap(2.0)
         .child(workspace_tab);
     if peer_graph {
         if let Some(graph) = beale_graphs::graph_definition(graph_id) {
-            let selected = selected_role(state, graph_id);
-            for role in graph
+            let roles: Vec<_> = graph
                 .nodes
                 .iter()
                 .copied()
                 .filter(|role| role.is_top_level())
-            {
+                .collect();
+            for (index, role) in roles.iter().copied().enumerate() {
                 let role_id = role.id().to_owned();
+                let next_active = !in_workspace
+                    && roles
+                        .get(index + 1)
+                        .is_some_and(|next| selected_role.as_deref() == Some(next.id()));
                 let label = role.label();
                 let tab_label = role_tab_label(role, narrow);
                 let status = state
@@ -257,18 +297,14 @@ pub(crate) fn tabs(state: &State, theme: ThemeStyle<'_>, window_width: f32) -> O
                         format!("header-agent-tab-{role_id}"),
                         &format!("{label}, {status}"),
                         (!narrow).then_some(&icons::AGENT),
-                        !in_workspace && selected == role_id,
+                        !in_workspace && selected_role.as_deref() == Some(role_id.as_str()),
                         true,
+                        TabSeparators {
+                            left: false,
+                            right: !next_active,
+                        },
                         theme,
                     )
-                    .max_w(if narrow {
-                        85.0
-                    } else if compact {
-                        115.0
-                    } else {
-                        150.0
-                    })
-                    .shrink()
                     .child(
                         el().size(6.0, 6.0)
                             .radius(3.0)
@@ -304,6 +340,10 @@ pub(crate) fn tabs(state: &State, theme: ThemeStyle<'_>, window_width: f32) -> O
                 }),
                 !in_workspace,
                 false,
+                TabSeparators {
+                    left: false,
+                    right: true,
+                },
                 theme,
             )
             .child(
@@ -513,6 +553,76 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn header_tabs_expand_then_shrink_with_tab_count() {
+        let mut sparse = Runtime::new(
+            visual_preview::fixture("session"),
+            view,
+            (1100.0, 720.0),
+            Env::new(true, 1.0),
+        );
+        sparse.frame(0.0);
+        let (sparse_workspace, _) = sparse.presented("header-view-tab").unwrap();
+        let (sparse_session, _) = sparse.presented("header-session-tab").unwrap();
+        assert!(sparse.find("header-view-tab-left-separator").is_none());
+        assert!(sparse_workspace[2] >= 200.0);
+        assert!(sparse_session[2] >= 200.0);
+
+        let mut crowded = Runtime::new(
+            visual_preview::fixture("graph-session"),
+            view,
+            (1100.0, 720.0),
+            Env::new(true, 1.0),
+        );
+        crowded.frame(0.0);
+        let (header, _) = crowded.presented("header-title").unwrap();
+        let (crowded_workspace, _) = crowded.presented("header-view-tab").unwrap();
+        assert!(crowded_workspace[2] < sparse_workspace[2]);
+        for role in ["discovery", "validation", "reporter", "patch_generation"] {
+            let (area, _) = crowded
+                .presented(&format!("header-agent-tab-{role}"))
+                .unwrap();
+            assert!(area[0] >= header[0]);
+            assert!(area[0] + area[2] <= header[0] + header[2] + 1.0);
+        }
+    }
+
+    #[test]
+    fn hovered_inactive_tab_has_the_active_tab_shape() {
+        let mut runtime = Runtime::new(
+            visual_preview::fixture("graph-session"),
+            view,
+            (1100.0, 720.0),
+            Env::new(true, 1.0),
+        );
+        runtime.frame(0.0);
+        let (x, y) = runtime.find("header-agent-tab-validation").unwrap();
+        runtime.pointer_move(x, y);
+        runtime.frame(0.0);
+        runtime.frame(0.2);
+        let elements = runtime.elements();
+        let active = elements
+            .iter()
+            .find(|item| item.key.as_deref() == Some("header-agent-tab-discovery"))
+            .unwrap();
+        let hovered = elements
+            .iter()
+            .find(|item| item.key.as_deref() == Some("header-agent-tab-validation"))
+            .unwrap();
+        assert!(hovered.hover > 0.0);
+        assert_eq!(hovered.radius, active.radius);
+        let separator = elements
+            .iter()
+            .find(|item| item.key.as_deref() == Some("header-agent-tab-validation-right-separator"))
+            .unwrap();
+        assert_eq!(separator.radius, 0.0);
+        assert_eq!(separator.rect[2], 1.0);
+        assert_eq!(separator.rect[3], hovered.rect[3]);
+        assert!(elements.iter().all(|item| {
+            item.key.as_deref() != Some("header-agent-tab-reporter-left-separator")
+        }));
     }
 
     #[test]

@@ -6,6 +6,8 @@
 
 #### Fixed
 
+- V2 session sidenav now uses the main content background behind its card instead of exposing the window gradient.
+- Collapsing completed v2 session work now hides reasoning summaries and commentary alongside tool activity while keeping the agent's final message visible.
 - V2 desktop now writes private, rotating diagnostics with connection transitions and session load and turn failures while retaining console output.
 - V2 Providers now opens the official Codex sign-in for OpenAI subscriptions and reports Codex host sign-in state; the Beale OpenAI Reconnect and Forget controls are removed.
 - V2 sessions close unreviewed parallel tool calls before saving OpenAI context and repair earlier incomplete context when resumed. OpenAI input rejections now show a specific session error instead of a generic provider failure.
@@ -19,7 +21,15 @@
 
 #### Changed
 
-- V2 session transcripts combine adjacent base, Webfetch, Surfaces, and Findings calls between commentary or reasoning entries, with counts by tool type and expandable call details. Standalone calls retain available paths, commands, queries, URLs, surface names, or finding titles.
+- V2 Fleet now shows only App Servers and Virtual Machines, without repeated page breadcrumbs and descriptions.
+- V2 provider usage circles in the icon rail now open the matching provider settings tab.
+- V2 per-view sidenav navigation and list rows are 34px high, reduced from 36px.
+- V2 Home, Settings, Tracking, Extensions, and Automations content no longer repeats the view hierarchy in a breadcrumb and introductory description below the header and sidenav.
+- V2 desktop chrome now places the icon rail and full header on the main content background, with the distinct per-view sidenav beginning at the content's top edge, four rounded corners, a main-content-colored inverse curve at its upper-right header junction, and a bottom gap. The inverse curve remains when the sidenav collapses, while the main content's left corners become square. Per-view sidenav titles sit in the header above the sidebar content, freeing a row in each view. Header title tabs have a 5px inset. The inner and outer dividers are removed, the collapsed rail is narrower, and history arrows sit at the sidenav's upper right and hide when collapsed.
+- V2 Fleet now opens from a status circle below the provider usage rings in the icon rail, with a divider when provider rings are present; its center icon is slightly larger without changing the circle size. The decorative squircle before the Beale title is removed. Fleet and healthy provider usage rings are green, while Fleet is red when offline and orange for connecting or incompatible configuration and protocol states.
+- V2 research header tabs now expand to a wider default width and shrink together when agent tabs fill the window. Neighboring tabs share one straight vertical separator, with no line before the first tab; hover highlights use the selected tab's rounded shape.
+- V2 Graphs `graph_subagents_spawn` starts children without blocking the parent agent's next step. Each top-level agent can list its own children with activity ages, inspect live or saved transcripts and tool calls, message them, or stop them; children can inspect or message siblings. The host saves child results with the parent turn.
+- V2 session transcripts combine adjacent base, Webfetch, Surfaces, Findings, Memories, Runbooks, Graphs, Agent Feedback, and Goal Mode calls between commentary or reasoning entries, with counts by tool type and expandable call details. Graph labels include target roles and spawn counts; delivered subagent messages appear as transcript activity. Standalone calls retain available paths, commands, queries, URLs, record titles, or goal states.
 - V2 Auto-Review now labels unavailable decisions by safe failure category, retries one transient provider failure or malformed reply with a 45-second attempt limit, and preserves a valid Auto-Review denial if Guardian cannot complete. Unreviewed tools remain blocked, and a review outage stops the affected turn, including plugin and runbook calls, without retry loops.
 - V2 Auto-Review now receives the full bounded locator for repository surfaces, so a long authorized repo tier does not hide later entries from its scope check. Reviewer rules remain unchanged.
 - V2 Graphs now offers separate Concurrent and Sequential Research Pipelines. Sequential runs rotate one top-level agent at a time through the five stages and back to Audit Targets, using a configurable stage duration (60 minutes by default), a soft deadline reminder, a hard cutoff ten minutes later, and early advancement when downstream finding queues empty. Interrupted handoffs return to the queue. Protocol 2.23 adds the saved stage duration to requests and session details.
@@ -28,7 +38,7 @@
 - V2 session sidebars and Insights now scope usage to the selected top-level agent and its subagents. A Subagents popover shows per-agent active counts and opens saved or live child transcripts in Canvas using the shared session components. Protocol 2.22 adds role metrics, child summaries, lifecycle events, and an authenticated child-detail route; rebuild and restart the host and desktop together.
 
 - Goal Mode keeps working without an implicit turn or duration limit, including when a completed model turn omits `goal_status`. The desktop Stop control pauses a running goal and saves completed activity. Canceling an automation series also stops its active run. Configured limits still apply.
-- V2 sessions keep intermediate model commentary and supplied reasoning summaries visible in the transcript after a turn completes; the Working disclosure controls tool activity.
+- V2 sessions retain intermediate model commentary and supplied reasoning summaries after a turn completes; the Working disclosure reveals them with tool activity.
 - V2 peer graph agents retain separate provider context across turns. Graph prompts list configured subagent model indices and stage handoffs, and feedback records the active top-level role. Agents, subagents, delegations, and handoffs now continue without implicit per-turn work quotas.
 - New v2 peer graph sessions run top-level agents with separate role histories and models. Durable handoffs start recipients concurrently while idle roles wait for an addressed prompt or handoff; the desktop shows role status and handoff activity in each agent tab.
 - V2 graph sessions now give each top-level role a separate header tab and role-scoped activity. The active tab follows handoffs until manually selected, and new prompts address the selected role. Live tool rows open arguments and a bounded result preview; full saved output remains paged. Research Pipeline sessions resume with the configured model for the active role.
@@ -297,6 +307,10 @@
 - Bundled Inter for the v2 desktop so the Beale interface font remains distinct from the system font when Inter is not installed.
 
 ### app-server
+
+#### Added
+
+- The v2 Windows tray menu can show the local Fleet authenticator QR code in a native window, using the same authenticated provisioning endpoint as Beale Desktop.
 
 #### Fixed
 

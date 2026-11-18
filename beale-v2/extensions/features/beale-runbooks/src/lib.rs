@@ -49,6 +49,59 @@ pub fn is_tool(name: &str) -> bool {
     matches!(name, QUERY | GET | CREATE | EDIT | RUN | STATUS)
 }
 
+fn summary_value(value: &str) -> String {
+    let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut result = String::new();
+    for character in normalized.chars() {
+        if result.len() + character.len_utf8() > 320 {
+            break;
+        }
+        result.push(character);
+    }
+    result
+}
+
+pub fn summary(
+    db: &HostDatabase,
+    workspace_id: &str,
+    session_id: &str,
+    name: &str,
+    args: &Value,
+) -> String {
+    if name == QUERY {
+        return args
+            .get("text")
+            .and_then(Value::as_str)
+            .map(summary_value)
+            .filter(|value| !value.is_empty())
+            .map_or_else(
+                || "Runbook query".to_owned(),
+                |value| format!("Runbook query: {value}"),
+            );
+    }
+    let supplied_title = matches!(name, CREATE | EDIT)
+        .then(|| args.get("title")?.as_str())
+        .flatten()
+        .map(summary_value)
+        .filter(|value| !value.is_empty());
+    let title = supplied_title.or_else(|| {
+        let id = if name == STATUS {
+            let run_id = args.get("run_id")?.as_str()?;
+            db.runbook_run_status(session_id, run_id).ok()??.runbook_id
+        } else {
+            args.get("id")?.as_str()?.to_owned()
+        };
+        db.runbook_get(workspace_id, &id)
+            .ok()?
+            .map(|runbook| summary_value(&runbook.title))
+            .filter(|value| !value.is_empty())
+    });
+    title.map_or_else(
+        || "Runbook".to_owned(),
+        |value| format!("Runbook title: {value}"),
+    )
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CreateInput {
@@ -444,6 +497,58 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
+        assert_eq!(
+            summary(
+                &db,
+                "workspace-example-a",
+                "session-example",
+                QUERY,
+                &json!({"text":"example"})
+            ),
+            "Runbook query: example"
+        );
+        assert_eq!(
+            summary(
+                &db,
+                "workspace-example-a",
+                "session-example",
+                QUERY,
+                &json!({"language":"python"})
+            ),
+            "Runbook query"
+        );
+        assert_eq!(
+            summary(
+                &db,
+                "workspace-example-a",
+                "session-example",
+                CREATE,
+                &create
+            ),
+            "Runbook title: Example procedure"
+        );
+        for name in [GET, EDIT, RUN] {
+            assert_eq!(
+                summary(
+                    &db,
+                    "workspace-example-a",
+                    "session-example",
+                    name,
+                    &json!({"id":"R1"})
+                ),
+                "Runbook title: Example procedure"
+            );
+        }
+        assert_eq!(
+            summary(
+                &db,
+                "workspace-example-a",
+                "session-example",
+                EDIT,
+                &json!({"id":"R1","title":"Revised example"})
+            ),
+            "Runbook title: Revised example"
+        );
         assert_eq!(created["runbook"]["id"], "R1");
         assert_eq!(
             created["runbook"]["languages"],
@@ -515,6 +620,16 @@ mod tests {
         let run = db
             .runbook_run_start("workspace-example-a", "session-example", "R1", 2)
             .unwrap();
+        assert_eq!(
+            summary(
+                &db,
+                "workspace-example-a",
+                "session-example",
+                STATUS,
+                &json!({"run_id":run.id.clone()})
+            ),
+            "Runbook title: Example procedure"
+        );
         let status: Value = serde_json::from_str(
             &execute(
                 &db,

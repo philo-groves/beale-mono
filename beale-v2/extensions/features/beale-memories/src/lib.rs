@@ -2,7 +2,10 @@
 
 mod store;
 
-use std::{path::PathBuf, sync::OnceLock};
+use std::{
+    path::{Path, PathBuf},
+    sync::OnceLock,
+};
 
 use anyhow::{Context, Result, bail, ensure};
 use axum::{
@@ -52,6 +55,50 @@ pub fn definitions() -> Vec<Value> {
 
 pub fn is_tool(name: &str) -> bool {
     matches!(name, SESSION_QUERY | QUERY | READ | GRAPH)
+}
+
+fn summary_value(value: &str) -> String {
+    let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut result = String::new();
+    for character in normalized.chars() {
+        if result.len() + character.len_utf8() > 320 {
+            break;
+        }
+        result.push(character);
+    }
+    result
+}
+
+pub fn summary(root: &Path, workspace_id: &str, name: &str, args: &Value) -> String {
+    if matches!(name, SESSION_QUERY | QUERY) {
+        let prefix = if name == SESSION_QUERY {
+            "Memory session query"
+        } else {
+            "Memory query"
+        };
+        return args
+            .get("text")
+            .and_then(Value::as_str)
+            .map(summary_value)
+            .filter(|value| !value.is_empty())
+            .map_or_else(|| prefix.to_owned(), |value| format!("{prefix}: {value}"));
+    }
+    let title = args
+        .get("id")
+        .and_then(Value::as_str)
+        .and_then(|id| {
+            MemoryStore::open(root)
+                .ok()?
+                .display_name(workspace_id, id)
+                .ok()
+                .flatten()
+        })
+        .map(|value| summary_value(&value))
+        .filter(|value| !value.is_empty());
+    title.map_or_else(
+        || "Memory".to_owned(),
+        |value| format!("Memory name: {value}"),
+    )
 }
 
 #[derive(Clone)]
@@ -477,6 +524,38 @@ mod tests {
     use super::*;
     use axum::{body::Body, http::Request};
     use tower::ServiceExt;
+
+    #[test]
+    fn summaries_distinguish_session_and_workspace_queries() {
+        let root = Path::new("example-root");
+        assert_eq!(
+            summary(
+                root,
+                "workspace-example",
+                SESSION_QUERY,
+                &json!({"text":"parser"})
+            ),
+            "Memory session query: parser"
+        );
+        assert_eq!(
+            summary(
+                root,
+                "workspace-example",
+                QUERY,
+                &json!({"text":"boundary"})
+            ),
+            "Memory query: boundary"
+        );
+        assert_eq!(
+            summary(
+                root,
+                "workspace-example",
+                QUERY,
+                &json!({"kind":"component"})
+            ),
+            "Memory query"
+        );
+    }
 
     #[tokio::test]
     async fn clear_requires_host_auth_and_disabled_workspace_feature() {

@@ -21,10 +21,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use crate::{
-    AUTH_HANDLE, ConnectionStatus, State, ThemeStyle, connection, provider_auth, ui_font,
-    view_title_font,
-};
+use crate::{AUTH_HANDLE, ConnectionStatus, State, ThemeStyle, connection, provider_auth, ui_font};
 
 const DAY_MS: u64 = 86_400_000;
 const WEEK_MS: u64 = 7 * DAY_MS;
@@ -249,10 +246,8 @@ pub(crate) fn sidenav(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
         .w(width)
         .h_full()
         .px(8.0)
-        .pt(12.0)
+        .pt(10.0)
         .pb(18.0)
-        .fill(theme.color("#111111"))
-        .child(crate::sidenav_heading("Tracking", theme).ml(4.0).mb(12.0))
         .child(
             row()
                 .key("tracking-tokens-nav")
@@ -315,21 +310,7 @@ fn filter_tabs(state: &State, theme: ThemeStyle<'_>) -> El {
 
 pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> Vec<El> {
     let now = now_ms();
-    let mut content = vec![
-        design::breadcrumb_title(
-            "Tracking",
-            copy("Token Tracking", 24.0, 600.0, theme)
-                .key("tracking-title")
-                .font(view_title_font())
-                .role("heading")
-                .truncate_fade(),
-            theme,
-        ),
-        design::subtitle(
-            "Follow the tokens behind your research. See what went in, what came out, and what was reused.",
-            theme,
-        ),
-    ];
+    let mut content = Vec::new();
     if !state.tracking.error.is_empty() {
         content.push(
             muted(

@@ -1,14 +1,11 @@
 //! Desktop-owned app-server connections. Tokens never cross the local app-server API.
 
 use beale_contracts::{
-    FLEET_BROWSER_PREFERRED_PATH, FLEET_BROWSER_REMOVE_PATH, FLEET_BROWSER_SETTINGS_PATH,
-    FLEET_BROWSERS_PATH, FLEET_DESCRIPTOR_PATH, FLEET_PAIR_PATH, FLEET_TOTP_PROVISION_PATH,
+    FLEET_DESCRIPTOR_PATH, FLEET_PAIR_PATH, FLEET_TOTP_PROVISION_PATH,
     FLEET_VIRTUAL_MACHINE_SETTINGS_PATH, FLEET_VIRTUAL_MACHINES_PATH, PROTOBUF_CONTENT_TYPE,
     PROTOCOL_MAJOR, PROTOCOL_MINOR, SERVICE_NAME,
     v1::{
-        FleetAddBrowserRequest, FleetAppServerDescriptor, FleetBrowser, FleetBrowsersResponse,
-        FleetPairingRequest, FleetPairingResponse, FleetRemoveBrowserRequest,
-        FleetSetBrowserSettingsRequest, FleetSetPreferredBrowserRequest,
+        FleetAppServerDescriptor, FleetPairingRequest, FleetPairingResponse,
         FleetSetVirtualMachineSettingsRequest, FleetTotpProvisioningResponse, FleetVirtualMachine,
         FleetVirtualMachinesResponse,
     },
@@ -60,19 +57,6 @@ pub(crate) struct FleetSnapshot {
 }
 
 #[derive(Clone)]
-pub(crate) struct BrowserItem {
-    pub(crate) host_id: String,
-    pub(crate) host_name: String,
-    pub(crate) browser: FleetBrowser,
-}
-
-pub(crate) struct BrowserSnapshot {
-    pub(crate) items: Vec<BrowserItem>,
-    pub(crate) servers: Vec<FleetServer>,
-    pub(crate) error: String,
-}
-
-#[derive(Clone)]
 pub(crate) struct VirtualMachineItem {
     pub(crate) host_id: String,
     pub(crate) host_name: String,
@@ -94,29 +78,6 @@ pub(crate) struct VirtualMachineMutation {
     pub(crate) workspace_ids: Vec<String>,
     pub(crate) can_run: bool,
     pub(crate) can_clone: bool,
-}
-
-pub(crate) enum BrowserMutation {
-    Add {
-        host_id: String,
-        name: String,
-        executable: String,
-    },
-    Remove {
-        host_id: String,
-        id: String,
-    },
-    SetSettings {
-        host_id: String,
-        id: String,
-        enabled: bool,
-        all_workspaces: bool,
-        workspace_ids: Vec<String>,
-    },
-    SetPreferred {
-        host_id: String,
-        id: String,
-    },
 }
 
 #[derive(Clone, Debug)]
@@ -762,7 +723,7 @@ pub(crate) async fn load() -> Result<FleetSnapshot, String> {
     Ok(FleetSnapshot { local, servers })
 }
 
-async fn local_browser_client() -> Result<(Client, String, String), String> {
+async fn local_fleet_client() -> Result<(Client, String, String), String> {
     let addr = crate::connection::configured_addr()
         .map_err(|_| "Invalid local app-server address.".to_owned())?;
     let client = Client::builder()
@@ -780,9 +741,9 @@ async fn local_browser_client() -> Result<(Client, String, String), String> {
     Ok((client, format!("http://{addr}"), token))
 }
 
-async fn browser_client(host_id: &str) -> Result<(Client, String, String), String> {
+async fn fleet_client(host_id: &str) -> Result<(Client, String, String), String> {
     if host_id == "local" {
-        return local_browser_client().await;
+        return local_fleet_client().await;
     }
     let mut server = read_saved()?
         .servers
@@ -793,142 +754,6 @@ async fn browser_client(host_id: &str) -> Result<(Client, String, String), Strin
     probe(&mut server, &status).await?;
     let client = remote_client(&server.endpoint, &status)?;
     Ok((client, server.endpoint, server.token))
-}
-
-async fn fetch_browsers(
-    client: &Client,
-    base: &str,
-    token: &str,
-) -> Result<Vec<FleetBrowser>, String> {
-    let response = client
-        .get(format!("{base}{FLEET_BROWSERS_PATH}"))
-        .bearer_auth(token)
-        .send()
-        .await
-        .map_err(|_| "Could not reach app-server browser inventory.".to_owned())?;
-    if !response.status().is_success()
-        || response
-            .headers()
-            .get(CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            != Some(PROTOBUF_CONTENT_TYPE)
-    {
-        return Err("App-server browser inventory is unavailable.".to_owned());
-    }
-    let response = FleetBrowsersResponse::decode(read_bounded(response).await?.as_slice())
-        .map_err(|_| "Invalid app-server browser inventory.".to_owned())?;
-    if response.browsers.len() > 64
-        || response
-            .browsers
-            .iter()
-            .filter(|browser| browser.preferred)
-            .count()
-            > 1
-        || response.browsers.iter().any(|browser| {
-            !valid_text(&browser.id, 80)
-                || !valid_text(&browser.name, 80)
-                || browser.workspace_ids.len() > 128
-                || (browser.all_workspaces && !browser.workspace_ids.is_empty())
-                || browser
-                    .workspace_ids
-                    .iter()
-                    .any(|id| uuid::Uuid::parse_str(id).is_err())
-                || browser.workspace_ids.iter().collect::<HashSet<_>>().len()
-                    != browser.workspace_ids.len()
-                || (browser.preferred && (!browser.enabled || !browser.available))
-        })
-    {
-        return Err("Invalid app-server browser inventory.".to_owned());
-    }
-    Ok(response.browsers)
-}
-
-pub(crate) async fn load_browsers() -> BrowserSnapshot {
-    let mut items = Vec::new();
-    let mut errors = Vec::new();
-    let mut servers = Vec::new();
-    match local_browser_client().await {
-        Ok((client, base, token)) => match fetch_browsers(&client, &base, &token).await {
-            Ok(browsers) => items.extend(browsers.into_iter().map(|browser| BrowserItem {
-                host_id: "local".to_owned(),
-                host_name: "Local App Server".to_owned(),
-                browser,
-            })),
-            Err(error) => errors.push(error),
-        },
-        Err(error) => errors.push(error),
-    }
-    match read_saved() {
-        Ok(saved) => {
-            servers = saved.servers;
-            let enabled = servers
-                .iter()
-                .filter(|server| server.enabled)
-                .collect::<Vec<_>>();
-            let status = if enabled.is_empty() {
-                None
-            } else {
-                Some(tailnet_status().await)
-            };
-            let remote = join_all(enabled.into_iter().map(|server| {
-                let status = status.as_ref();
-                async move {
-                    let result = match status {
-                        Some(Ok(status)) => {
-                            let mut verified = server.clone();
-                            match probe(&mut verified, status).await {
-                                Ok(()) => match remote_client(&server.endpoint, status) {
-                                    Ok(client) => {
-                                        fetch_browsers(&client, &server.endpoint, &server.token)
-                                            .await
-                                    }
-                                    Err(error) => Err(error),
-                                },
-                                Err(error) => Err(error),
-                            }
-                        }
-                        Some(Err(error)) => Err(error.clone()),
-                        None => Err("Tailscale status is unavailable.".to_owned()),
-                    };
-                    (server, result)
-                }
-            }))
-            .await;
-            for (server, result) in remote {
-                match result {
-                    Ok(browsers) => items.extend(browsers.into_iter().map(|browser| BrowserItem {
-                        host_id: server.id.clone(),
-                        host_name: if server.display_name.is_empty() {
-                            server.host_name.clone()
-                        } else {
-                            server.display_name.clone()
-                        },
-                        browser,
-                    })),
-                    Err(_) => errors.push(format!(
-                        "Browser inventory unavailable on {}.",
-                        if server.display_name.is_empty() {
-                            &server.host_name
-                        } else {
-                            &server.display_name
-                        }
-                    )),
-                }
-            }
-        }
-        Err(error) => errors.push(error),
-    }
-    items.sort_by(|left, right| {
-        left.browser
-            .name
-            .cmp(&right.browser.name)
-            .then(left.host_name.cmp(&right.host_name))
-    });
-    BrowserSnapshot {
-        items,
-        servers,
-        error: errors.join(" "),
-    }
 }
 
 async fn fetch_virtual_machines(
@@ -990,7 +815,7 @@ pub(crate) async fn load_virtual_machines() -> VirtualMachineSnapshot {
     let mut items = Vec::new();
     let mut errors = Vec::new();
     let mut servers = Vec::new();
-    match local_browser_client().await {
+    match local_fleet_client().await {
         Ok((client, base, token)) => match fetch_virtual_machines(&client, &base, &token).await {
             Ok(machines) => items.extend(machines.into_iter().map(|machine| VirtualMachineItem {
                 host_id: "local".to_owned(),
@@ -1081,7 +906,7 @@ pub(crate) async fn load_virtual_machines() -> VirtualMachineSnapshot {
 }
 
 pub(crate) async fn mutate_virtual_machine(action: VirtualMachineMutation) -> Result<(), String> {
-    let (client, base, token) = browser_client(&action.host_id).await?;
+    let (client, base, token) = fleet_client(&action.host_id).await?;
     let request = FleetSetVirtualMachineSettingsRequest {
         id: action.id,
         enabled: action.enabled,
@@ -1107,63 +932,6 @@ pub(crate) async fn mutate_virtual_machine(action: VirtualMachineMutation) -> Re
             Err("Fleet is disabled on the selected app server.".to_owned())
         }
         _ => Err("Could not update app-server VM settings.".to_owned()),
-    }
-}
-
-pub(crate) async fn mutate_browser(action: BrowserMutation) -> Result<(), String> {
-    let host_id = match &action {
-        BrowserMutation::Add { host_id, .. }
-        | BrowserMutation::Remove { host_id, .. }
-        | BrowserMutation::SetSettings { host_id, .. }
-        | BrowserMutation::SetPreferred { host_id, .. } => host_id,
-    };
-    let (client, base, token) = browser_client(host_id).await?;
-    let (path, body) = match action {
-        BrowserMutation::Add {
-            name, executable, ..
-        } => (
-            FLEET_BROWSERS_PATH,
-            FleetAddBrowserRequest { name, executable }.encode_to_vec(),
-        ),
-        BrowserMutation::Remove { id, .. } => (
-            FLEET_BROWSER_REMOVE_PATH,
-            FleetRemoveBrowserRequest { id }.encode_to_vec(),
-        ),
-        BrowserMutation::SetSettings {
-            id,
-            enabled,
-            all_workspaces,
-            workspace_ids,
-            ..
-        } => (
-            FLEET_BROWSER_SETTINGS_PATH,
-            FleetSetBrowserSettingsRequest {
-                id,
-                enabled,
-                all_workspaces,
-                workspace_ids,
-            }
-            .encode_to_vec(),
-        ),
-        BrowserMutation::SetPreferred { id, .. } => (
-            FLEET_BROWSER_PREFERRED_PATH,
-            FleetSetPreferredBrowserRequest { id }.encode_to_vec(),
-        ),
-    };
-    let response = client
-        .post(format!("{base}{path}"))
-        .bearer_auth(token)
-        .header(CONTENT_TYPE, PROTOBUF_CONTENT_TYPE)
-        .body(body)
-        .send()
-        .await
-        .map_err(|_| "Could not reach app-server browser inventory.".to_owned())?;
-    match response.status() {
-        reqwest::StatusCode::CREATED | reqwest::StatusCode::NO_CONTENT => Ok(()),
-        reqwest::StatusCode::BAD_REQUEST => Err("Enter a name and an absolute path to an existing browser executable on the selected host.".to_owned()),
-        reqwest::StatusCode::CONFLICT => Err("That browser executable is already added.".to_owned()),
-        reqwest::StatusCode::FORBIDDEN => Err("Fleet is disabled on the selected app server.".to_owned()),
-        _ => Err("Could not update app-server browser inventory.".to_owned()),
     }
 }
 
