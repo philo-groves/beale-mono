@@ -1018,6 +1018,8 @@ pub mod v1 {
         pub agent_metrics: Vec<SessionAgentMetrics>,
         #[prost(message, repeated, tag = "22")]
         pub subagents: Vec<SessionSubagentSummary>,
+        #[prost(uint32, tag = "23")]
+        pub stage_duration_minutes: u32,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1200,6 +1202,8 @@ pub mod v1 {
         pub models: Vec<GraphNodeModel>,
         #[prost(message, repeated, tag = "2")]
         pub concurrency: Vec<GraphNodeConcurrency>,
+        #[prost(uint32, tag = "3")]
+        pub stage_duration_minutes: u32,
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq, ::prost::Enumeration)]
@@ -1275,6 +1279,8 @@ pub mod v1 {
         pub graph_node_concurrency: Vec<GraphNodeConcurrency>,
         #[prost(string, tag = "15")]
         pub agent_role: String,
+        #[prost(uint32, tag = "16")]
+        pub stage_duration_minutes: u32,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1693,7 +1699,7 @@ pub mod v1 {
 }
 
 pub const PROTOCOL_MAJOR: u32 = 2;
-pub const PROTOCOL_MINOR: u32 = 22;
+pub const PROTOCOL_MINOR: u32 = 23;
 pub const SERVICE_NAME: &str = "beale-app-server";
 pub const HEALTH_PATH: &str = "/v1/health";
 pub const AUTH_STATUS_PATH: &str = "/v1/providers/status";

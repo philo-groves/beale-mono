@@ -226,7 +226,7 @@ pub(crate) fn detail_for_agent(
     let detail = detail?;
     if !matches!(
         detail.graph_id.as_str(),
-        beale_graphs::CLOUDFLARE_ID | beale_graphs::OPENAI_ID
+        beale_graphs::CLOUDFLARE_ID | beale_graphs::OPENAI_ID | beale_graphs::SEQUENTIAL_ID
     ) {
         return detail_with_live_usage(Some(detail), events, live_ms);
     }
@@ -345,10 +345,26 @@ fn valid_scoped_snapshots(detail: &SessionDetail) -> bool {
 }
 
 fn valid_graph_state(detail: &SessionDetail) -> bool {
-    if detail.graph_agents.len() > 4 || detail.graph_handoffs.len() > 128 {
+    if detail.graph_handoffs.len() > 128 {
         return false;
     }
     let graph = beale_graphs::graph_definition(&detail.graph_id);
+    if detail.graph_id == beale_graphs::SEQUENTIAL_ID
+        && !(1..=1_440).contains(&detail.stage_duration_minutes)
+    {
+        return false;
+    }
+    if detail.graph_agents.len()
+        > graph.map_or(0, |graph| {
+            graph
+                .nodes
+                .iter()
+                .filter(|role| role.is_top_level())
+                .count()
+        })
+    {
+        return false;
+    }
     let mut roles = std::collections::BTreeSet::new();
     if !detail.graph_agents.iter().all(|agent| {
         beale_graphs::Role::from_id(&agent.role).is_some_and(|role| {
@@ -1169,13 +1185,19 @@ mod tests {
                 subagent_usage: Some(SessionTokenUsage::default()),
                 ..Default::default()
             }],
-            graph_agents: ["discovery", "validation", "reporter", "patch_generation"]
-                .into_iter()
-                .map(|role| SessionGraphAgent {
-                    role: role.to_owned(),
-                    status: "idle".to_owned(),
-                })
-                .collect(),
+            graph_agents: [
+                "audit_targets",
+                "discovery",
+                "validation",
+                "reporter",
+                "patch_generation",
+            ]
+            .into_iter()
+            .map(|role| SessionGraphAgent {
+                role: role.to_owned(),
+                status: "idle".to_owned(),
+            })
+            .collect(),
             ..Default::default()
         };
         let message = &mut detail.messages[1];
@@ -1189,6 +1211,15 @@ mod tests {
             });
         }
         assert!(valid_detail(&detail));
+        let mut earlier_pipeline = detail.clone();
+        earlier_pipeline.graph_agents.remove(0);
+        assert!(valid_detail(&earlier_pipeline));
+        let mut sequential = detail.clone();
+        sequential.graph_id = beale_graphs::SEQUENTIAL_ID.to_owned();
+        sequential.stage_duration_minutes = 60;
+        assert!(valid_detail(&sequential));
+        sequential.stage_duration_minutes = 0;
+        assert!(!valid_detail(&sequential));
         detail.messages[1].commentary = (0..40)
             .map(|index| beale_contracts::v1::SessionCommentary {
                 text: format!("Example progress {index}"),

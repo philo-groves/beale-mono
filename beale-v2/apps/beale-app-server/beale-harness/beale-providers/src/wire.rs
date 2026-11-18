@@ -177,21 +177,68 @@ async fn rejected_response(mut response: reqwest::Response) -> ProviderFailure {
     rejected_failure(status, &body)
 }
 
-pub fn provider_error_message(provider: Provider, mode: AuthMode, error: &anyhow::Error) -> String {
-    if let Some(refresh) = error.downcast_ref::<oauth::OAuthRefreshError>()
-        && provider == Provider::OpenAi
-        && mode == AuthMode::Subscription
+pub fn provider_error_retryable(error: &anyhow::Error) -> bool {
+    if matches!(
+        error.downcast_ref::<tokio_tungstenite::tungstenite::Error>(),
+        Some(
+            tokio_tungstenite::tungstenite::Error::Io(_)
+                | tokio_tungstenite::tungstenite::Error::ConnectionClosed
+                | tokio_tungstenite::tungstenite::Error::AlreadyClosed
+        )
+    ) {
+        return true;
+    }
+    let websocket_failure = error
+        .downcast_ref::<tokio_tungstenite::tungstenite::Error>()
+        .and_then(|error| match error {
+            tokio_tungstenite::tungstenite::Error::Http(response) => Some(rejected_failure(
+                response.status().as_u16(),
+                response.body().as_deref().unwrap_or_default(),
+            )),
+            _ => None,
+        });
+    if let Some(failure) = error
+        .downcast_ref::<ProviderFailure>()
+        .or(websocket_failure.as_ref())
     {
-        return if refresh.requires_reconnect() || refresh.status == 400 {
-            "Beale's OpenAI sign-in could not refresh. Reconnect OpenAI in Providers, then retry."
-                .to_owned()
-        } else {
-            "OpenAI sign-in renewal is temporarily unavailable. Try again shortly.".to_owned()
-        };
+        return matches!(
+            failure.kind,
+            FailureKind::Http(408 | 429 | 500..=599) | FailureKind::StreamEnded
+        ) || matches!(
+            failure.code.as_deref(),
+            Some("SERVER_ERROR" | "server_error" | "rate_limit_exceeded")
+        );
+    }
+    if let Some(network) = error.downcast_ref::<reqwest::Error>() {
+        return network.is_timeout()
+            || network.is_connect()
+            || network.is_body()
+            || network.is_decode();
+    }
+    error.chain().any(|cause| {
+        matches!(
+            cause.to_string().as_str(),
+            "OpenAI WebSocket connection timed out"
+                | "OpenAI response timed out"
+                | "OpenAI WebSocket is unavailable"
+                | "OpenAI WebSocket recovery failed"
+                | "OpenAI WebSocket send failed"
+        )
+    })
+}
+
+pub fn provider_error_message(provider: Provider, mode: AuthMode, error: &anyhow::Error) -> String {
+    if provider == Provider::OpenAi
+        && mode == AuthMode::Subscription
+        && error
+            .downcast_ref::<crate::codex::CodexSignInError>()
+            .is_some()
+    {
+        return "Sign in to Codex on this host, then retry.".to_owned();
     }
     if let Some(selection) = error.downcast_ref::<DaybreakSelectionError>() {
         return format!(
-            "OpenAI selected {} instead of {} for this request. Check the approved workspace or API project and its Daybreak setting.",
+            "OpenAI selected {} instead of {} for this request. Check Codex account access and the Daybreak setting.",
             selection.selected, selection.requested
         );
     }
@@ -244,48 +291,20 @@ pub fn provider_error_message(provider: Provider, mode: AuthMode, error: &anyhow
         }
         return "The provider could not complete this turn. Try again.".to_owned();
     };
-    if provider == Provider::OpenAi && mode == AuthMode::Subscription {
-        match failure.code.as_deref() {
-            Some("access_program_not_enabled") => {
-                return "Daybreak access is not enabled for Beale's OpenAI sign-in and selected model. Check the approved account or project in Providers.".to_owned();
-            }
-            Some("subscription_sharing_route_not_supported") => {
-                return "OpenAI rejected this subscription route. Reconnect OpenAI in Providers or choose API Key.".to_owned();
-            }
-            Some(
-                "chatpass_v2_scope_not_authorized" | "chatpass_v2_invalid_authorization_context",
-            ) => {
-                return "Beale's OpenAI sign-in is not authorized for ChatGPT plan inference. Reconnect OpenAI in Providers.".to_owned();
-            }
-            Some("subscription_sharing_usage_limit_exceeded") => {
-                return "OpenAI reported a subscription usage limit for this app. Check usage or choose API Key.".to_owned();
-            }
-            Some("subscription_sharing_usage_unavailable") => {
-                return "OpenAI could not check subscription usage. Try again shortly.".to_owned();
-            }
-            Some("subscription_sharing_unsupported_capability") => {
-                return match failure.param.as_deref() {
-                    Some(param) => {
-                        format!("OpenAI subscription does not support {param} in this request.")
-                    }
-                    None => {
-                        "OpenAI subscription does not support a feature in this request.".to_owned()
-                    }
-                };
-            }
-            Some("subscription_sharing_user_not_eligible") => {
-                return "OpenAI subscription access is unavailable for this account or workspace."
-                    .to_owned();
-            }
-            _ => {}
-        }
+    if provider == Provider::OpenAi
+        && mode == AuthMode::Subscription
+        && failure.code.as_deref() == Some("access_program_not_enabled")
+    {
+        return "Daybreak access is not enabled for this Codex account and selected model."
+            .to_owned();
     }
     match failure.kind {
-        FailureKind::Http(401) => {
-            "The provider sign-in was rejected. Reconnect this provider.".to_owned()
+        FailureKind::Http(401) if provider == Provider::OpenAi && mode == AuthMode::Subscription => {
+            "Codex sign-in was rejected. Sign in to Codex again, then retry.".to_owned()
         }
+        FailureKind::Http(401) => "The provider sign-in was rejected. Reconnect this provider.".to_owned(),
         FailureKind::Http(403) if provider == Provider::OpenAi && mode == AuthMode::Subscription => {
-            "OpenAI denied Beale's subscription request. Check the Beale sign-in, model, and Daybreak access in Providers.".to_owned()
+            "OpenAI denied this Codex request. Check the Codex account, model, and Daybreak access.".to_owned()
         }
         FailureKind::Http(403) => {
             "The provider denied this request for the selected account or model.".to_owned()
@@ -590,8 +609,15 @@ fn tool_request_body(
 
 fn route(provider: Provider, mode: AuthMode) -> Route {
     match (provider, mode) {
-        (Provider::OpenAi, _) => Route {
+        (Provider::OpenAi, AuthMode::ApiKey) => Route {
             endpoint: "https://api.openai.com/v1/responses",
+            shape: WireShape::Responses,
+            oauth_name: "openai",
+            api_key_env: "OPENAI_API_KEY",
+            proxy_header: false,
+        },
+        (Provider::OpenAi, AuthMode::Subscription) => Route {
+            endpoint: "https://chatgpt.com/backend-api/codex/responses",
             shape: WireShape::Responses,
             oauth_name: "openai",
             api_key_env: "OPENAI_API_KEY",
@@ -742,6 +768,46 @@ where
     read_tool_events(events, WireShape::Responses, progress).await
 }
 
+fn codex_request_body(request: ToolStepRequest<'_>, cyber_program: Option<&str>) -> Value {
+    let mut body = tool_request_body(
+        Provider::OpenAi,
+        WireShape::Responses,
+        request.model,
+        request.input,
+        request.tools,
+        RequestOptions {
+            instructions: request.instructions,
+            reasoning_effort: request.reasoning_effort,
+            cyber_program,
+        },
+    );
+    // Match v1's Codex Responses wire shape. The Codex backend expects plain
+    // function tools and a complete input on every request.
+    body["tools"] = json!(
+        request
+            .tools
+            .iter()
+            .map(|tool| {
+                let mut tool = tool.clone();
+                tool["strict"] = Value::Null;
+                tool
+            })
+            .collect::<Vec<_>>()
+    );
+    body["instructions"] = json!(
+        request
+            .instructions
+            .unwrap_or("You are a helpful assistant.")
+    );
+    body["text"] = json!({"verbosity":"low"});
+    body["tool_choice"] = json!("auto");
+    body["parallel_tool_calls"] = json!(true);
+    if let Some(fields) = body.as_object_mut() {
+        fields.remove("context_management");
+    }
+    body
+}
+
 impl ProviderClient {
     pub async fn openai_tool_step(
         &self,
@@ -756,6 +822,9 @@ impl ProviderClient {
             "invalid model name"
         );
         ensure!(!request.input.is_empty(), "empty provider input");
+        if mode == AuthMode::Subscription {
+            return self.codex_tool_step(request, store, progress).await;
+        }
         let token = self.token(Provider::OpenAi, mode, store).await?;
         let cyber_program = request_cyber_program(Provider::OpenAi, request.model, store)?;
         for attempt in 0..2 {
@@ -849,6 +918,34 @@ impl ProviderClient {
         }
         bail!("OpenAI WebSocket recovery failed")
     }
+
+    async fn codex_tool_step(
+        &self,
+        request: ToolStepRequest<'_>,
+        store: &CredentialStore,
+        progress: Option<&mpsc::Sender<ProviderProgress>>,
+    ) -> Result<ProviderStep> {
+        let credential = crate::codex::credential()?;
+        let cyber_program = request_cyber_program(Provider::OpenAi, request.model, store)?;
+        let body = codex_request_body(request, cyber_program);
+        let response = self
+            .http
+            .post(route(Provider::OpenAi, AuthMode::Subscription).endpoint)
+            .bearer_auth(&credential.access_token)
+            .header("ChatGPT-Account-Id", &credential.account_id)
+            .header("originator", "pi")
+            .header("OpenAI-Beta", "responses=experimental")
+            .header("Accept", "text/event-stream")
+            .json(&body)
+            .send()
+            .await
+            .context("Codex provider request failed")?;
+        if !response.status().is_success() {
+            return Err(rejected_response(response).await.into());
+        }
+        read_tool_stream_with_program(response, WireShape::Responses, progress, cyber_program).await
+    }
+
     fn custom_request(
         &self,
         model: &str,
@@ -904,6 +1001,9 @@ impl ProviderClient {
                 .or_else(|| std::env::var(route.api_key_env).ok())
                 .with_context(|| format!("{} is unavailable", route.api_key_env))?,
             AuthMode::Subscription => {
+                if provider == Provider::OpenAi {
+                    bail!("OpenAI subscription requires the Codex adapter");
+                }
                 let mut credential = store
                     .load(route.oauth_name)?
                     .context("subscription sign-in is required")?;
@@ -1172,6 +1272,15 @@ async fn read_tool_stream(
     shape: WireShape,
     progress: Option<&mpsc::Sender<ProviderProgress>>,
 ) -> Result<ProviderStep> {
+    read_tool_stream_with_program(response, shape, progress, None).await
+}
+
+async fn read_tool_stream_with_program(
+    response: reqwest::Response,
+    shape: WireShape,
+    progress: Option<&mpsc::Sender<ProviderProgress>>,
+    requested_cyber_program: Option<&str>,
+) -> Result<ProviderStep> {
     if matches!(shape, WireShape::Anthropic) {
         return anthropic::read_stream(response, progress).await;
     }
@@ -1179,13 +1288,25 @@ async fn read_tool_stream(
         item.map(|bytes| bytes.to_vec())
             .map_err(anyhow::Error::from)
     });
-    read_tool_events(stream, shape, progress).await
+    read_tool_events_with_program(stream, shape, progress, requested_cyber_program).await
 }
 
 async fn read_tool_events<S>(
     stream: S,
     shape: WireShape,
     progress: Option<&mpsc::Sender<ProviderProgress>>,
+) -> Result<ProviderStep>
+where
+    S: Stream<Item = Result<Vec<u8>>>,
+{
+    read_tool_events_with_program(stream, shape, progress, None).await
+}
+
+async fn read_tool_events_with_program<S>(
+    stream: S,
+    shape: WireShape,
+    progress: Option<&mpsc::Sender<ProviderProgress>>,
+    requested_cyber_program: Option<&str>,
 ) -> Result<ProviderStep>
 where
     S: Stream<Item = Result<Vec<u8>>>,
@@ -1233,6 +1354,21 @@ where
             let event: Value = serde_json::from_str(data).context("invalid provider event JSON")?;
             match shape {
                 WireShape::Responses => {
+                    if matches!(
+                        event["type"].as_str(),
+                        Some("response.created" | "response.completed" | "response.done")
+                    ) && let Some(selected) = event
+                        .pointer("/response/access_programs/cyber")
+                        .and_then(Value::as_str)
+                        && Some(selected) != requested_cyber_program
+                    {
+                        return Err(DaybreakSelectionError {
+                            requested: requested_cyber_program.unwrap_or("none").to_owned(),
+                            selected: safe_code(Some(selected))
+                                .unwrap_or_else(|| "unknown".to_owned()),
+                        }
+                        .into());
+                    }
                     match event
                         .get("type")
                         .and_then(Value::as_str)
@@ -1326,6 +1462,19 @@ where
                             }
                         }
                         "response.completed" | "response.done" => {
+                            match event.pointer("/response/status").and_then(Value::as_str) {
+                                Some("failed") => {
+                                    return Err(
+                                        terminal_failure(&event, FailureKind::Failed).into()
+                                    );
+                                }
+                                Some("incomplete") => {
+                                    return Err(
+                                        terminal_failure(&event, FailureKind::Incomplete).into()
+                                    );
+                                }
+                                _ => {}
+                            }
                             usage = event.pointer("/response/usage").and_then(|value| {
                                 token_usage_with_cache(
                                     value,
@@ -1794,7 +1943,7 @@ mod tests {
     fn routes_keep_subscription_paths_separate() {
         assert_eq!(
             route(Provider::OpenAi, AuthMode::Subscription).endpoint,
-            "https://api.openai.com/v1/responses"
+            "https://chatgpt.com/backend-api/codex/responses"
         );
         assert_eq!(
             route(Provider::Xai, AuthMode::Subscription).endpoint,
@@ -1841,10 +1990,42 @@ mod tests {
     }
 
     #[test]
+    fn reviewer_retries_transient_provider_failures_only() {
+        for status in [408, 429, 500, 503] {
+            let error: anyhow::Error = ProviderFailure {
+                kind: FailureKind::Http(status),
+                code: None,
+                param: None,
+            }
+            .into();
+            assert!(provider_error_retryable(&error));
+        }
+        for status in [400, 401, 403] {
+            let error: anyhow::Error = ProviderFailure {
+                kind: FailureKind::Http(status),
+                code: None,
+                param: None,
+            }
+            .into();
+            assert!(!provider_error_retryable(&error));
+        }
+        let websocket_closed: anyhow::Error =
+            tokio_tungstenite::tungstenite::Error::ConnectionClosed.into();
+        assert!(provider_error_retryable(&websocket_closed));
+        let stream_ended: anyhow::Error = ProviderFailure {
+            kind: FailureKind::StreamEnded,
+            code: None,
+            param: None,
+        }
+        .into();
+        assert!(provider_error_retryable(&stream_ended));
+    }
+
+    #[test]
     fn responses_failures_keep_safe_codes_without_upstream_messages() {
         let mut output = String::new();
         let mut completed = false;
-        let mut pending = b"data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"subscription_sharing_usage_limit_exceeded\",\"message\":\"private upstream detail\"}}}\n\n".to_vec();
+        let mut pending = b"data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"usage_limit_exceeded\",\"message\":\"private upstream detail\"}}}\n\n".to_vec();
         let error = process_frames(
             &mut pending,
             &mut output,
@@ -1854,7 +2035,7 @@ mod tests {
         .unwrap_err();
         assert_eq!(
             provider_error_message(Provider::OpenAi, AuthMode::Subscription, &error),
-            "OpenAI reported a subscription usage limit for this app. Check usage or choose API Key."
+            "The provider ended the response with error code usage_limit_exceeded."
         );
         assert!(!error.to_string().contains("private upstream detail"));
 
@@ -1872,7 +2053,7 @@ mod tests {
         );
         let error: anyhow::Error = terminal_failure(
             &json!({"type":"response.failed","response":{"error":{
-                "code":"subscription_sharing_unsupported_capability",
+                "code":"unsupported_capability",
                 "param":"tools[0].type"
             }}}),
             FailureKind::Failed,
@@ -1880,7 +2061,7 @@ mod tests {
         .into();
         assert_eq!(
             provider_error_message(Provider::OpenAi, AuthMode::Subscription, &error),
-            "OpenAI subscription does not support tools[0].type in this request."
+            "The provider ended the response with error code unsupported_capability."
         );
         let mut pending = b"event: response.incomplete\ndata: {\"response\":{\"incomplete_details\":{\"reason\":\"max_output_tokens\"}}}\n\n".to_vec();
         let error = process_frames(
@@ -1909,14 +2090,10 @@ mod tests {
 
     #[test]
     fn provider_protocol_errors_have_specific_sanitized_messages() {
-        let expired: anyhow::Error = oauth::OAuthRefreshError {
-            status: 400,
-            code: Some("invalid_grant".to_owned()),
-        }
-        .into();
+        let missing: anyhow::Error = crate::codex::CodexSignInError.into();
         assert_eq!(
-            provider_error_message(Provider::OpenAi, AuthMode::Subscription, &expired),
-            "Beale's OpenAI sign-in could not refresh. Reconnect OpenAI in Providers, then retry."
+            provider_error_message(Provider::OpenAi, AuthMode::Subscription, &missing),
+            "Sign in to Codex on this host, then retry."
         );
         let response = tokio_tungstenite::tungstenite::http::Response::builder()
             .status(403)
@@ -1926,7 +2103,7 @@ mod tests {
             tokio_tungstenite::tungstenite::Error::Http(Box::new(response)).into();
         assert_eq!(
             provider_error_message(Provider::OpenAi, AuthMode::Subscription, &error),
-            "OpenAI denied Beale's subscription request. Check the Beale sign-in, model, and Daybreak access in Providers."
+            "OpenAI denied this Codex request. Check the Codex account, model, and Daybreak access."
         );
         let denial = rejected_failure(
             403,
@@ -1940,7 +2117,7 @@ mod tests {
                 AuthMode::Subscription,
                 &anyhow::Error::new(denial)
             ),
-            "Daybreak access is not enabled for Beale's OpenAI sign-in and selected model. Check the approved account or project in Providers."
+            "Daybreak access is not enabled for this Codex account and selected model."
         );
         let error = anyhow::anyhow!("too many provider output items");
         assert_eq!(
@@ -2143,36 +2320,52 @@ mod tests {
         assert!(!request.headers().contains_key("originator"));
     }
 
-    #[tokio::test]
-    async fn openai_subscription_uses_beale_oauth_token() {
-        let root = std::env::temp_dir().join(format!(
-            "beale-openai-route-example-{}",
-            uuid::Uuid::new_v4()
-        ));
-        let store = CredentialStore::at(root.clone());
-        store
-            .save(
-                "openai",
-                &crate::credentials::OAuthCredential {
-                    access_token: "beale-example-token".to_owned(),
-                    refresh_token: "refresh-example-token".to_owned(),
-                    expires_at: 4_000_000_000,
-                    client_id: "client-example".to_owned(),
-                    id_token: None,
-                    subject: None,
-                    scopes: vec!["chatgpt.tokens.use.direct".to_owned()],
-                },
-            )
-            .unwrap();
-        let client = ProviderClient::new().unwrap();
-        assert_eq!(
-            client
-                .token(Provider::OpenAi, AuthMode::Subscription, &store)
-                .await
-                .unwrap(),
-            "beale-example-token"
+    #[test]
+    fn codex_request_uses_stateless_input_and_plain_tools() {
+        let input = [json!({"role":"user","content":"Synthetic research question"})];
+        let tools = [
+            json!({"type":"function","name":"read_example","description":"Read synthetic data","parameters":{"type":"object","properties":{}}}),
+        ];
+        let body = codex_request_body(
+            ToolStepRequest {
+                model: "gpt-6-sol",
+                input: &input,
+                tools: &tools,
+                instructions: Some("Synthetic instructions"),
+                reasoning_effort: Some("high"),
+                workspace_root: None,
+            },
+            Some("daybreak_blue"),
         );
-        std::fs::remove_dir_all(root).unwrap();
+        assert_eq!(body["input"], json!(input));
+        assert_eq!(body["tools"][0]["name"], "read_example");
+        assert!(body["tools"][0].get("namespace").is_none());
+        assert!(body.get("context_management").is_none());
+        assert_eq!(body["store"], false);
+        assert_eq!(body["access_programs"]["cyber"], "daybreak_blue");
+    }
+
+    #[tokio::test]
+    async fn codex_stream_rejects_a_downgraded_program() {
+        let events = futures_util::stream::iter([Ok(b"data: {\"type\":\"response.done\",\"response\":{\"status\":\"completed\",\"access_programs\":{\"cyber\":\"standard\"},\"output\":[]}}\n\n".to_vec())]);
+        let error = read_tool_events_with_program(
+            events,
+            WireShape::Responses,
+            None,
+            Some("daybreak_blue"),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.downcast_ref::<DaybreakSelectionError>().is_some());
+    }
+
+    #[tokio::test]
+    async fn codex_done_with_failed_status_is_not_a_success() {
+        let events = futures_util::stream::iter([Ok(b"data: {\"type\":\"response.done\",\"response\":{\"status\":\"failed\",\"error\":{\"code\":\"server_error\"}}}\n\n".to_vec())]);
+        let error = read_tool_events_with_program(events, WireShape::Responses, None, None)
+            .await
+            .unwrap_err();
+        assert!(error.downcast_ref::<ProviderFailure>().is_some());
     }
 
     #[test]
@@ -2694,10 +2887,10 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires a signed-in Beale subscription and live network access"]
-    async fn beale_subscription_selects_daybreak_blue_with_tools() {
+    #[ignore = "requires a signed-in Codex account and live network access"]
+    async fn codex_subscription_selects_daybreak_blue_with_tools() {
         let store = CredentialStore::new().unwrap();
-        assert!(store.load("openai").unwrap().is_some());
+        assert!(crate::codex::configured());
         assert_eq!(store.daybreak_mode().unwrap(), "blue");
         let client = ProviderClient::new().unwrap();
         let input = vec![json!({"role":"user","content":"Reply with OK without using tools."})];

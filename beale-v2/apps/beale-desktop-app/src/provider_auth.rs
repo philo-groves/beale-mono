@@ -17,6 +17,18 @@ pub(crate) fn launch_official_sign_in(provider: ProviderId) -> Result<&'static s
     {
         use std::process::Command;
         match provider {
+            ProviderId::Openai => {
+                // Codex Desktop can bundle the CLI outside Beale's inherited PATH.
+                let script = "$cli = (Get-Command codex -ErrorAction SilentlyContinue | Select-Object -First 1).Source; if (-not $cli) { $root = Join-Path $env:LOCALAPPDATA 'OpenAI\\Codex\\bin'; $cli = Get-ChildItem -LiteralPath $root -Filter codex.exe -Recurse -ErrorAction SilentlyContinue | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1 -ExpandProperty FullName }; if (-not $cli) { $package = Get-AppxPackage -Name OpenAI.Codex -ErrorAction SilentlyContinue | Sort-Object Version -Descending | Select-Object -First 1; if ($package) { $candidate = Join-Path $package.InstallLocation 'app\\resources\\codex.exe'; if (Test-Path -LiteralPath $candidate) { $cli = $candidate } } }; if (-not $cli) { exit 2 }; Start-Process -FilePath $cli -ArgumentList login -WindowStyle Normal";
+                let status = Command::new("powershell.exe")
+                    .args(["-NoProfile", "-NonInteractive", "-Command", script])
+                    .status()
+                    .map_err(|_| "Could not open the Codex sign-in terminal".to_owned())?;
+                if !status.success() {
+                    return Err("Could not find Codex CLI on PATH or in Codex Desktop.".to_owned());
+                }
+                Ok("Complete sign-in in the Codex terminal. Beale will detect it automatically.")
+            }
             ProviderId::Anthropic => {
                 let installed = Command::new("where.exe")
                     .arg("claude")
@@ -54,6 +66,21 @@ pub(crate) fn launch_official_sign_in(provider: ProviderId) -> Result<&'static s
     {
         use std::process::Command;
         match provider {
+            ProviderId::Openai => {
+                let status = Command::new("osascript")
+                    .args([
+                        "-e",
+                        "tell application \"Terminal\" to do script \"codex login\"",
+                        "-e",
+                        "tell application \"Terminal\" to activate",
+                    ])
+                    .status()
+                    .map_err(|_| "Could not open the Codex sign-in terminal".to_owned())?;
+                if !status.success() {
+                    return Err("Could not open the Codex sign-in terminal".to_owned());
+                }
+                Ok("Complete sign-in in the Codex terminal. Beale will detect it automatically.")
+            }
             ProviderId::Anthropic => {
                 let status = Command::new("osascript").args(["-e", "tell application \"Terminal\" to do script \"claude auth login --claudeai\"", "-e", "tell application \"Terminal\" to activate"])
                     .status().map_err(|_| "Could not open the Claude sign-in terminal".to_owned())?;
@@ -79,6 +106,13 @@ pub(crate) fn launch_official_sign_in(provider: ProviderId) -> Result<&'static s
     {
         use std::process::Command;
         match provider {
+            ProviderId::Openai => {
+                Command::new("x-terminal-emulator")
+                    .args(["-e", "codex", "login"])
+                    .spawn()
+                    .map_err(|_| "Open a terminal and run: codex login".to_owned())?;
+                Ok("Complete sign-in in the Codex terminal. Beale will detect it automatically.")
+            }
             ProviderId::Anthropic => {
                 Command::new("x-terminal-emulator")
                     .args(["-e", "claude", "auth", "login", "--claudeai"])
@@ -496,7 +530,7 @@ pub(crate) fn check_cli() -> std::process::ExitCode {
             std::process::ExitCode::SUCCESS
         }
         Err(error) => {
-            eprintln!("{error}");
+            beale_host_log::error!("{error}");
             std::process::ExitCode::FAILURE
         }
     }
@@ -507,9 +541,9 @@ pub(crate) async fn perform(
     action: Action,
 ) -> Result<Option<SignInPrompt>, String> {
     let external_provider = match &action {
-        Action::StartSubscription(provider @ (ProviderId::Anthropic | ProviderId::Zai)) => {
-            Some(*provider)
-        }
+        Action::StartSubscription(
+            provider @ (ProviderId::Openai | ProviderId::Anthropic | ProviderId::Zai),
+        ) => Some(*provider),
         _ => None,
     };
     let client = Client::builder()
@@ -615,6 +649,12 @@ mod tests {
                 .unwrap()
                 .external_provider,
             Some(ProviderId::Anthropic)
+        );
+        assert_eq!(
+            sign_in_prompt(reply.clone(), Some(ProviderId::Openai))
+                .unwrap()
+                .external_provider,
+            Some(ProviderId::Openai)
         );
         assert!(sign_in_prompt(reply, None).is_err());
         let browser = StartSubscriptionResponse {

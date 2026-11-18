@@ -179,7 +179,7 @@ async fn default_model(state: &SessionState) -> Result<(Provider, AuthMode, Stri
             .list_models(provider, mode, &state.credentials)
             .await
             .map_err(|error| {
-                eprintln!("quick chat model selection failed: {error:#}");
+                beale_host_log::error!("quick chat model selection failed: {error:#}");
                 StatusCode::BAD_GATEWAY
             })?;
         return Ok((provider, mode, catalog.lead_model));
@@ -296,7 +296,7 @@ pub(super) async fn turn(
     }
     let system = system_prompt::load(state.workspaces.root(), &[QUICK_CHAT_CONTEXT, &context])
         .map_err(|error| {
-            eprintln!("quick chat system prompt failed: {error:#}");
+            beale_host_log::error!("quick chat system prompt failed: {error:#}");
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
     messages.insert(
@@ -324,7 +324,7 @@ pub(super) async fn turn(
         )
         .await
         .map_err(|error| {
-            eprintln!("quick chat provider turn failed: {error:#}");
+            beale_host_log::error!("quick chat provider turn failed: {error:#}");
             StatusCode::BAD_GATEWAY
         })?;
     if answer.trim().is_empty() || answer.len() > MAX_ANSWER_BYTES {

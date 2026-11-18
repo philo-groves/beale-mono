@@ -231,7 +231,11 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, height: f32) -> El {
     if let Some(detail) = &view.detail
         && state.session_work_expanded.contains(&usize::MAX)
     {
+        let mut grouped_through = 0;
         for (index, item) in detail.items.iter().enumerate() {
+            if index < grouped_through {
+                continue;
+            }
             transcript = match item.kind.as_str() {
                 "message" => transcript.child(crate::new_research::transcript_message(
                     format!("subagent-message-{index}"),
@@ -248,7 +252,28 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, height: f32) -> El {
                 )),
                 "tool" => match item.tool.as_ref() {
                     Some(tool) => {
-                        transcript.child(crate::new_research::transcript_tool(tool, state, theme))
+                        let mut end = index + 1;
+                        if crate::new_research::series_tool(tool) {
+                            while let Some(next) = detail.items.get(end) {
+                                if next.kind != "tool"
+                                    || next.tool.as_ref().is_none_or(|next_tool| {
+                                        !crate::new_research::series_tool(next_tool)
+                                            || next_tool.agent_role != tool.agent_role
+                                    })
+                                {
+                                    break;
+                                }
+                                end += 1;
+                            }
+                        }
+                        grouped_through = end;
+                        let series: Vec<_> = detail.items[index..end]
+                            .iter()
+                            .filter_map(|item| item.tool.as_ref())
+                            .collect();
+                        transcript.child(crate::new_research::transcript_tool_series(
+                            &series, false, true, state, theme,
+                        ))
                     }
                     None => transcript,
                 },
@@ -290,12 +315,17 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, height: f32) -> El {
             );
         }
     } else {
-        for (index, event) in state
+        let events: Vec<_> = state
             .session_live_events
             .iter()
             .enumerate()
             .filter(|(_, event)| event.subagent_id == view.summary.id)
-        {
+            .collect();
+        let mut grouped_through = 0;
+        for (position, &(index, event)) in events.iter().enumerate() {
+            if position < grouped_through {
+                continue;
+            }
             transcript = match SessionStreamKind::try_from(event.kind) {
                 Ok(SessionStreamKind::MessageDelta) => {
                     transcript.child(crate::new_research::transcript_message(
@@ -316,12 +346,35 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, height: f32) -> El {
                 }
                 Ok(SessionStreamKind::ToolStarted | SessionStreamKind::ToolFinished) => {
                     match event.tool.as_ref() {
-                        Some(tool) => transcript.child(crate::new_research::live_tool(
-                            tool,
-                            event.kind == SessionStreamKind::ToolFinished as i32,
-                            state,
-                            theme,
-                        )),
+                        Some(tool) => {
+                            let mut end = position + 1;
+                            if crate::new_research::series_tool(tool) {
+                                while let Some((_, next)) = events.get(end) {
+                                    if !matches!(
+                                        SessionStreamKind::try_from(next.kind),
+                                        Ok(SessionStreamKind::ToolStarted
+                                            | SessionStreamKind::ToolFinished)
+                                    ) || next.tool.as_ref().is_none_or(|next_tool| {
+                                        !crate::new_research::series_tool(next_tool)
+                                            || next_tool.agent_role != tool.agent_role
+                                    }) {
+                                        break;
+                                    }
+                                    end += 1;
+                                }
+                            }
+                            grouped_through = end;
+                            let series: Vec<_> = events[position..end]
+                                .iter()
+                                .filter_map(|(_, event)| event.tool.as_ref())
+                                .collect();
+                            let active = events[position..end].iter().any(|(_, event)| {
+                                event.kind == SessionStreamKind::ToolStarted as i32
+                            });
+                            transcript.child(crate::new_research::transcript_tool_series(
+                                &series, active, false, state, theme,
+                            ))
+                        }
                         None => transcript,
                     }
                 }

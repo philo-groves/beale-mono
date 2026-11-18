@@ -32,8 +32,8 @@ pub const SAVE: &str = "surface_save";
 
 pub fn definitions() -> Vec<Value> {
     let evidence = json!({"type":"object","properties":{"kind":{"type":"string"},"reference":{"type":"string"},"note":{"type":"string"}},"required":["kind","reference"],"additionalProperties":false});
-    let locator = json!({"type":"object","properties":{"kind":{"type":"string"},"value":{"type":"string"}},"required":["kind","value"],"additionalProperties":false});
-    let definition = json!({"type":"object","properties":{"type_id":{"type":"string"},"name":{"type":"string"},"locator":locator,"scope":{"type":"string","enum":["in_scope","out_of_scope"]},"description":{"type":"string"},"out_of_scope_reason":{"type":"string"},"evidence_refs":{"type":"array","items":evidence}},"additionalProperties":false});
+    let locator = json!({"type":"object","properties":{"kind":{"type":"string","description":"Use repository_path or freeform for code.module, code.package, and code.file; use url, git_url, or freeform for repository. Other surface types accept their matching locator kinds."},"value":{"type":"string"}},"required":["kind","value"],"additionalProperties":false});
+    let definition = json!({"type":"object","properties":{"type_id":{"type":"string","description":"Built-in types: repository, code.module, code.package, code.file, documentation, binary, service, api.endpoint, domain, host, container, configuration, other. Extensions use kit.* or custom.*. Use code.module for a module, not module."},"name":{"type":"string"},"locator":locator,"scope":{"type":"string","enum":["in_scope","out_of_scope"]},"description":{"type":"string"},"out_of_scope_reason":{"type":"string"},"evidence_refs":{"type":"array","items":evidence}},"additionalProperties":false});
     let mut promote_definition = definition.clone();
     promote_definition["required"] = json!(["type_id", "scope"]);
     let relationship = json!({"type":"object","properties":{"target_id":{"type":"string"},"label":{"type":"string"},"type_id":{"type":"string"},"source_element_id":{"type":"string"},"evidence_refs":{"type":"array","items":evidence}},"required":["target_id","label"],"additionalProperties":false});
@@ -48,7 +48,7 @@ pub fn definitions() -> Vec<Value> {
         json!({"type":"function","name":SAVE,"description":"Create or revise a surface definition and inter-surface relationships. Create requires type_id, locator, and scope; revise requires id and workspace_surfaces_revision from surface_read. Evidence references are candidate context, not proof of authorization.","parameters":{"type":"object","properties":{"operation":{"type":"string","enum":["create","revise"]},"id":{"type":"string"},"expected_revision":{"type":"integer","minimum":1},"definition":definition,"relationships":{"type":"array","items":relationship}},"required":["operation"],"additionalProperties":false}}),
         json!({"type":"function","name":MAPPING_EDIT,"description":"Add or replace one local element, flow, or gap, or remove one by ID. Supply one operation. Flows connect elements in this mapping only.","parameters":{"type":"object","properties":{"surface_id":{"type":"string"},"element":map_element,"flow":map_flow,"gap":map_gap,"remove":{"type":"object","properties":{"kind":{"type":"string","enum":["element","flow","gap"]},"id":{"type":"string"}},"required":["kind","id"],"additionalProperties":false}},"required":["surface_id"],"additionalProperties":false}}),
         json!({"type":"function","name":PROMOTE,"description":"Promote a mapped element when it needs its own scope or internal map. The host creates the surface and anchored relationship; the original element stays as a concise marker.","parameters":{"type":"object","properties":{"surface_id":{"type":"string"},"element_id":{"type":"string"},"definition":promote_definition},"required":["surface_id","element_id","definition"],"additionalProperties":false}}),
-        json!({"type":"function","name":THREAT_MODEL_EDIT,"description":"Add or replace one plausible local failure, remove one, or mark the current map reviewed. Anchor scenarios to this surface's map; record investigation results as Knowledge claims.","parameters":{"type":"object","properties":{"surface_id":{"type":"string"},"scenario":scenario,"remove_id":{"type":"string"},"review_mapping":{"type":"boolean"}},"required":["surface_id"],"additionalProperties":false}}),
+        json!({"type":"function","name":THREAT_MODEL_EDIT,"description":"Add or replace one plausible local failure, remove one, or mark the current map reviewed. A scenario or removal can be combined with review_mapping=true. Anchor scenarios to this surface's map; record investigation results as Knowledge claims.","parameters":{"type":"object","properties":{"surface_id":{"type":"string"},"scenario":scenario,"remove_id":{"type":"string"},"review_mapping":{"type":"boolean"}},"required":["surface_id"],"additionalProperties":false}}),
     ]
 }
 
@@ -420,6 +420,9 @@ pub fn execute(
                 } else {
                     SurfaceScopeState::Candidate
                 } as i32;
+                if let Some(hint) = beale_workspaces::surface_definition_hint(&definition) {
+                    bail!("{hint}");
+                }
                 inputs.push(WorkspaceSurfaceInput {
                     id: String::new(),
                     definition: Some(definition),
@@ -437,6 +440,9 @@ pub fn execute(
                 } else {
                     SurfaceScopeState::Candidate
                 } as i32;
+                if let Some(hint) = beale_workspaces::surface_definition_hint(&updated) {
+                    bail!("{hint}");
+                }
                 item.definition = Some(updated);
                 item.relationships = relationships(
                     args.get("relationships"),
@@ -564,13 +570,14 @@ mod tests {
                 &store,
                 &workspace.id,
                 THREAT_MODEL_EDIT,
-                &json!({"surface_id":"S1","scenario":scenario}),
+                &json!({"surface_id":"S1","scenario":scenario,"review_mapping":true}),
                 false,
             )
             .unwrap(),
         )
         .unwrap();
         assert_eq!(saved["changed_id"], "T1");
+        assert_eq!(saved["reviewed_mapping_revision"], 2);
         let read: Value = serde_json::from_str(
             &execute(
                 &store,
@@ -583,7 +590,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(read["scenarios"][0]["id"], "T1");
-        assert_eq!(read["mapping_review_needed"], true);
+        assert_eq!(read["mapping_review_needed"], false);
         let reviewed: Value = serde_json::from_str(
             &execute(
                 &store,
@@ -659,6 +666,32 @@ mod tests {
         assert_eq!(response.status(), axum::http::StatusCode::CREATED);
         let workspace =
             WorkspaceSummary::decode(to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+        let invalid_type = execute(
+            &store,
+            &workspace.id,
+            SAVE,
+            &json!({"operation":"create","definition":{"type_id":"module","locator":{"kind":"url","value":"https://example.test/module"},"scope":"in_scope"}}),
+            false,
+        )
+        .unwrap_err();
+        assert!(
+            invalid_type
+                .to_string()
+                .contains("use repository, code.module")
+        );
+        let invalid_locator = execute(
+            &store,
+            &workspace.id,
+            SAVE,
+            &json!({"operation":"create","definition":{"type_id":"code.module","locator":{"kind":"url","value":"https://example.test/module"},"scope":"in_scope"}}),
+            false,
+        )
+        .unwrap_err();
+        assert!(
+            invalid_locator
+                .to_string()
+                .contains("locator kind is incompatible")
+        );
         let added: Value = serde_json::from_str(&execute(&store, &workspace.id, SAVE, &json!({"operation":"create","definition":{"type_id":"repository","name":"Example repository","locator":{"kind":"freeform","value":"example repository"},"scope":"in_scope","description":"Example research code.","evidence_refs":[{"kind":"artifact","reference":"artifact-example-001"}]} }), false).unwrap()).unwrap();
         assert_eq!(added["id"], "S1");
         assert_eq!(added["lineage"][0]["number"], 1);

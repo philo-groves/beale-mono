@@ -191,10 +191,12 @@ pub(super) fn execute(
                 .map(|value| value.as_bool().context("invalid review_mapping"))
                 .transpose()?
                 .unwrap_or(false);
-            let count = usize::from(args.get("scenario").is_some())
-                + usize::from(args.get("remove_id").is_some())
-                + usize::from(review);
-            ensure!(count == 1, "supply exactly one threat model operation");
+            let changes = usize::from(args.get("scenario").is_some())
+                + usize::from(args.get("remove_id").is_some());
+            ensure!(
+                changes <= 1 && (changes == 1 || review),
+                "supply one scenario or removal, optionally with review_mapping, or review_mapping alone"
+            );
             let changed_id = if let Some(value) = args.get("scenario") {
                 let id = value
                     .get("id")
@@ -220,9 +222,11 @@ pub(super) fn execute(
                 ensure!(before != model.scenarios.len(), "scenario not found");
                 id.to_owned()
             } else {
-                model.reviewed_mapping_revision = mapping.revision;
                 String::new()
             };
+            if review {
+                model.reviewed_mapping_revision = mapping.revision;
+            }
             let saved = store
                 .update_threat_model_for_agent(
                     workspace_id,

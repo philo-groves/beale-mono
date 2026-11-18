@@ -2134,7 +2134,7 @@ impl HostDatabase {
                     "SELECT EXISTS(SELECT 1 FROM session_graph_turns WHERE session_id=?1)
                     OR EXISTS(SELECT 1 FROM session_graph_handoffs WHERE session_id=?1)
                     OR EXISTS(SELECT 1 FROM session_graphs WHERE session_id=?1
-                        AND graph_id IN ('cloudflare_harness','openai_pipeline')
+                        AND graph_id IN ('cloudflare_harness','openai_pipeline','sequential_pipeline')
                         AND NOT EXISTS(SELECT 1 FROM session_turns WHERE session_id=?1))",
                     [session_id],
                     |row| row.get(0),

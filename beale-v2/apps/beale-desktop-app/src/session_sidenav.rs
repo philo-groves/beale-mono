@@ -230,7 +230,7 @@ pub(crate) fn render(
     let peer_graph = detail.is_some_and(|detail| {
         matches!(
             detail.graph_id.as_str(),
-            beale_graphs::CLOUDFLARE_ID | beale_graphs::OPENAI_ID
+            beale_graphs::CLOUDFLARE_ID | beale_graphs::OPENAI_ID | beale_graphs::SEQUENTIAL_ID
         )
     });
     let sidebar_title = if peer_graph {

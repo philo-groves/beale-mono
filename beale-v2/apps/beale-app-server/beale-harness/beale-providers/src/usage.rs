@@ -4,10 +4,7 @@ use crate::{AuthMode, CredentialStore, Provider, ProviderClient};
 use anyhow::{Context, Result, ensure};
 use futures_util::StreamExt;
 use serde_json::Value;
-use std::{
-    path::PathBuf,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const MAX_USAGE_BYTES: usize = 65_536;
 
@@ -121,45 +118,13 @@ async fn read_json(request: reqwest::RequestBuilder) -> Result<Value> {
     serde_json::from_slice(&bytes).context("invalid usage response")
 }
 
-fn codex_auth_path() -> Option<PathBuf> {
-    if let Some(path) = std::env::var_os("APP_SERVER_CODEX_AUTH_FILE")
-        .or_else(|| std::env::var_os("BEALE_OPENAI_CODEX_AUTH_FILE"))
-    {
-        return Some(PathBuf::from(path));
-    }
-    let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })?;
-    Some(PathBuf::from(home).join(".codex").join("auth.json"))
-}
-
 pub async fn openai_codex_usage(client: &reqwest::Client) -> Result<Vec<UsageWindow>> {
-    let path = codex_auth_path().context("Codex sign-in unavailable")?;
-    ensure!(
-        std::fs::metadata(&path)?.len() <= MAX_USAGE_BYTES as u64,
-        "Codex credential file too large"
-    );
-    let bytes = std::fs::read(path).context("Codex sign-in unavailable")?;
-    ensure!(
-        bytes.len() <= MAX_USAGE_BYTES,
-        "Codex credential file too large"
-    );
-    let auth: Value = serde_json::from_slice(&bytes).context("invalid Codex credential file")?;
-    let token = auth
-        .pointer("/tokens/access_token")
-        .and_then(Value::as_str)
-        .context("Codex access token unavailable")?;
-    let account = auth
-        .pointer("/tokens/account_id")
-        .and_then(Value::as_str)
-        .context("Codex account unavailable")?;
-    ensure!(
-        !token.is_empty() && !account.is_empty(),
-        "Codex sign-in unavailable"
-    );
+    let credential = crate::codex::credential()?;
     let value = read_json(
         client
             .get("https://chatgpt.com/backend-api/wham/usage")
-            .bearer_auth(token)
-            .header("ChatGPT-Account-Id", account)
+            .bearer_auth(&credential.access_token)
+            .header("ChatGPT-Account-Id", &credential.account_id)
             .header("Accept", "application/json"),
     )
     .await?;

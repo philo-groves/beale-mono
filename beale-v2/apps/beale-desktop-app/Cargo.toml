@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+beale-host-log = { path = "../beale-app-server/beale-harness/beale-host-log" }
 beale-webfetch = { path = "../../extensions/features/beale-webfetch" }
 beale-agent-feedback = { path = "../../extensions/features/beale-agent-feedback" }
 beale-graphs = { path = "../../extensions/features/beale-graphs" }

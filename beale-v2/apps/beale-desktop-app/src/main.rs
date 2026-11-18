@@ -194,7 +194,7 @@ impl Provider {
 
     fn description(self) -> &'static str {
         match self {
-            Self::OpenAi => "Connect a ChatGPT subscription or use an OpenAI API key.",
+            Self::OpenAi => "Use your Codex sign-in or an OpenAI API key.",
             Self::Xai => "Connect a Grok subscription or use an xAI API key.",
             Self::Anthropic => "Use an Anthropic API key to access Claude models.",
             Self::Zai => "Use a Z.ai API key to access GLM models.",
@@ -597,8 +597,9 @@ struct State {
     new_research_goal_max_turns: TextEdit,
     new_research_goal_max_duration_minutes: TextEdit,
     new_research_graph_id: String,
-    new_research_graph_models: [Option<Vec<new_research::ModelSelection>>; 10],
-    new_research_graph_concurrency: [Option<u32>; 10],
+    new_research_stage_duration_minutes: TextEdit,
+    new_research_graph_models: [Option<Vec<new_research::ModelSelection>>; 11],
+    new_research_graph_concurrency: [Option<u32>; 11],
     graph_editor: Option<new_research::GraphEditor>,
     graph_editor_max_concurrent: TextEdit,
     quick_chat_open: bool,
@@ -652,6 +653,7 @@ struct State {
     session_runbook_expanded: [bool; 3],
     session_subagent_expanded: [bool; 3],
     session_work_expanded: std::collections::HashSet<usize>,
+    expanded_tool_series_id: Option<String>,
     expanded_tool_id: Option<String>,
     tool_detail: Option<SessionToolDetailPage>,
     tool_detail_busy: bool,
@@ -843,6 +845,7 @@ impl Default for State {
             new_research_goal_max_turns: TextEdit::new(""),
             new_research_goal_max_duration_minutes: TextEdit::new(""),
             new_research_graph_id: beale_graphs::SIMPLE_ID.to_owned(),
+            new_research_stage_duration_minutes: TextEdit::new("60"),
             new_research_graph_models: std::array::from_fn(|_| None),
             new_research_graph_concurrency: std::array::from_fn(|index| {
                 if index == 0 { Some(1) } else { None }
@@ -900,6 +903,7 @@ impl Default for State {
             session_runbook_expanded: [false; 3],
             session_subagent_expanded: [false; 3],
             session_work_expanded: std::collections::HashSet::new(),
+            expanded_tool_series_id: None,
             expanded_tool_id: None,
             tool_detail: None,
             tool_detail_busy: false,
@@ -1419,6 +1423,7 @@ impl State {
             self.new_research_goal_max_duration_minutes.clear();
         }
         self.new_research_graph_id = beale_graphs::SIMPLE_ID.to_owned();
+        self.new_research_stage_duration_minutes = TextEdit::new("60");
         self.new_research_graph_models = std::array::from_fn(|_| None);
         self.new_research_graph_concurrency =
             std::array::from_fn(|index| if index == 0 { Some(1) } else { None });
@@ -1466,6 +1471,7 @@ impl State {
                 self.session_error.clear();
             }
             Err(error) => {
+                beale_host_log::error!("session turn failed: {error}");
                 self.session_error = error;
                 if !self.session_live_events.is_empty() {
                     self.session_work_expanded.insert(
@@ -1542,6 +1548,7 @@ impl State {
                 self.session_error.clear();
             }
             Err(error) => {
+                beale_host_log::error!("session load failed: {error}");
                 self.session_error = error;
                 if !self.session_live_events.is_empty() {
                     self.session_work_expanded.insert(
@@ -1567,7 +1574,7 @@ impl State {
         if !self.session_agent_tab_manual
             && matches!(
                 graph_id,
-                beale_graphs::CLOUDFLARE_ID | beale_graphs::OPENAI_ID
+                beale_graphs::CLOUDFLARE_ID | beale_graphs::OPENAI_ID | beale_graphs::SEQUENTIAL_ID
             )
             && beale_graphs::Role::from_id(&event.agent_role)
                 .is_some_and(|role| role.is_top_level())
@@ -1751,7 +1758,7 @@ impl State {
             });
         if matches!(
             graph_id,
-            beale_graphs::CLOUDFLARE_ID | beale_graphs::OPENAI_ID
+            beale_graphs::CLOUDFLARE_ID | beale_graphs::OPENAI_ID | beale_graphs::SEQUENTIAL_ID
         ) {
             self.session_agent_started_at
                 .contains_key(&self.session_agent_role)
@@ -1772,7 +1779,7 @@ impl State {
             });
         if matches!(
             graph_id,
-            beale_graphs::CLOUDFLARE_ID | beale_graphs::OPENAI_ID
+            beale_graphs::CLOUDFLARE_ID | beale_graphs::OPENAI_ID | beale_graphs::SEQUENTIAL_ID
         ) {
             self.session_agent_started_at
                 .get(&self.session_agent_role)
@@ -2268,6 +2275,7 @@ fn start_session_turn(state: &mut State) {
         .filter(|summary| summary.workspace_id == workspace_id)
         .map_or_else(String::new, |summary| summary.id.clone());
     let goal_mode = state.new_research_goal_mode
+        && state.new_research_graph_id != beale_graphs::SEQUENTIAL_ID
         && extensions_view::goal_mode_enabled(state)
         && session_id.is_empty();
     let (goal_max_turns, goal_max_duration_minutes) = if goal_mode {
@@ -2286,12 +2294,14 @@ fn start_session_turn(state: &mut State) {
     } else {
         (0, 0)
     };
-    let repeat_preset =
-        if session_id.is_empty() && state.new_research_repeat != new_research::RepeatPreset::None {
-            state.new_research_repeat.key().to_owned()
-        } else {
-            String::new()
-        };
+    let repeat_preset = if session_id.is_empty()
+        && state.new_research_graph_id != beale_graphs::SEQUENTIAL_ID
+        && state.new_research_repeat != new_research::RepeatPreset::None
+    {
+        state.new_research_repeat.key().to_owned()
+    } else {
+        String::new()
+    };
     let graph_id = if session_id.is_empty() && extensions_view::graphs_enabled(state) {
         state.new_research_graph_id.clone()
     } else {
@@ -2328,10 +2338,19 @@ fn start_session_turn(state: &mut State) {
         graph_id,
         graph_models,
         graph_node_concurrency,
+        stage_duration_minutes: if state.new_research_graph_id == beale_graphs::SEQUENTIAL_ID {
+            state
+                .new_research_stage_duration_minutes
+                .text
+                .parse()
+                .unwrap_or(60)
+        } else {
+            0
+        },
         agent_role: if let Some(detail) = &state.active_session {
             if matches!(
                 detail.graph_id.as_str(),
-                beale_graphs::CLOUDFLARE_ID | beale_graphs::OPENAI_ID
+                beale_graphs::CLOUDFLARE_ID | beale_graphs::OPENAI_ID | beale_graphs::SEQUENTIAL_ID
             ) {
                 research_header::selected_role(state, &detail.graph_id)
             } else {
@@ -3387,6 +3406,10 @@ fn selection_menu_items(state: &State, menu: SelectionMenu) -> Vec<in_place_menu
                 beale_graphs::CLOUDFLARE_GRAPH.name,
             ),
             (beale_graphs::OPENAI_ID, beale_graphs::OPENAI_GRAPH.name),
+            (
+                beale_graphs::SEQUENTIAL_ID,
+                beale_graphs::SEQUENTIAL_GRAPH.name,
+            ),
             ("", "No Graph"),
         ]
         .into_iter()
@@ -3686,7 +3709,13 @@ fn choose_selection_menu_item(state: &mut State, menu: SelectionMenu, value: Str
             }
         }
         SelectionMenu::GoalMode => state.new_research_goal_mode = !state.new_research_goal_mode,
-        SelectionMenu::SessionGraph => state.new_research_graph_id = value,
+        SelectionMenu::SessionGraph => {
+            if value == beale_graphs::SEQUENTIAL_ID {
+                state.new_research_goal_mode = false;
+                state.new_research_repeat = new_research::RepeatPreset::None;
+            }
+            state.new_research_graph_id = value;
+        }
         SelectionMenu::ResearchWorkspace | SelectionMenu::ResearchWorkspaceHeading => {
             state.new_research_workspace_id = Some(value);
         }
@@ -4748,7 +4777,13 @@ fn authentication_row(
         "Not Configured"
     };
     let action = if subscription {
-        if configured {
+        if configured && provider == Provider::OpenAi {
+            credential_button(
+                "Open Codex sign-in",
+                move |s| start_auth_action(s, Action::StartSubscription(provider.id())),
+                theme,
+            )
+        } else if configured {
             row()
                 .gap(8.0)
                 .child(credential_button(
@@ -4763,7 +4798,11 @@ fn authentication_row(
                 ))
         } else {
             credential_button(
-                "Sign in",
+                if provider == Provider::OpenAi {
+                    "Sign in to Codex"
+                } else {
+                    "Sign in"
+                },
                 move |s| start_auth_action(s, Action::StartSubscription(provider.id())),
                 theme,
             )
@@ -4811,9 +4850,13 @@ fn authentication_row(
                         )),
                 )
                 .child(
-                    text(spec.description)
-                        .font(ui_font(14.0, 400.0))
-                        .color(color("#969696")),
+                    text(if provider == Provider::OpenAi && subscription {
+                        "Use the Codex account signed in on this host."
+                    } else {
+                        spec.description
+                    })
+                    .font(ui_font(14.0, 400.0))
+                    .color(color("#969696")),
                 ),
         )
         .child(if !loaded || busy || (subscription && status.in_progress) {
@@ -6637,6 +6680,14 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
 }
 
 fn main() -> std::process::ExitCode {
+    let log_path = match beale_host_log::init("desktop") {
+        Ok(path) => path,
+        Err(error) => {
+            beale_host_log::error!("desktop logging could not start: {error}");
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+    beale_host_log::info!("desktop starting; log file: {}", log_path.display());
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     if args == ["--check-connection"] {
         return connection::check_cli();
@@ -6646,7 +6697,7 @@ fn main() -> std::process::ExitCode {
     }
     #[cfg(target_os = "macos")]
     if let Err(error) = rune::set_app_icon(include_bytes!("../assets/app-icon.png")) {
-        eprintln!("Beale app icon could not be loaded: {error}");
+        beale_host_log::error!("Beale app icon could not be loaded: {error}");
     }
     let font_spec = desktop_fonts::v1_font_spec();
     let saved_font = visual_preview::initial_state().appearance.interface_font;
@@ -6808,10 +6859,12 @@ fn main() -> std::process::ExitCode {
     let _ = AUTH_HANDLE.set(handle.clone());
     std::thread::spawn(move || {
         let Ok(addr) = connection::configured_addr() else {
+            beale_host_log::error!("app-server address is invalid");
             handle.update(|state, _| state.connection = ConnectionStatus::InvalidAddress);
             return;
         };
         let Ok(client) = connection::http_client() else {
+            beale_host_log::error!("app-server HTTP client could not start");
             handle.update(|state, _| state.connection = ConnectionStatus::Offline);
             return;
         };
@@ -6819,6 +6872,7 @@ fn main() -> std::process::ExitCode {
             .enable_all()
             .build()
         else {
+            beale_host_log::error!("desktop connection runtime could not start");
             handle.update(|state, _| state.connection = ConnectionStatus::Offline);
             return;
         };
@@ -6826,8 +6880,13 @@ fn main() -> std::process::ExitCode {
         let mut usage_refresh_at = Instant::now() - Duration::from_secs(20 * 60);
         let mut previous_subscriptions = [false; 2];
         let mut usage_generation = 0_u64;
+        let mut previous_status = ConnectionStatus::Connecting;
         loop {
             let status = runtime.block_on(connection::probe(&client, addr));
+            if status != previous_status {
+                beale_host_log::info!("app-server connection: {}", status.label());
+                previous_status = status.clone();
+            }
             let poll_archive =
                 workspace_poll == 0 && matches!(status, ConnectionStatus::Connected { .. });
             let workspace_result =
@@ -7054,6 +7113,7 @@ fn main() -> std::process::ExitCode {
         }
     });
     app.run();
+    beale_host_log::info!("desktop stopped");
     std::process::ExitCode::SUCCESS
 }
 
@@ -9335,6 +9395,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
                 None
             ]
         );
@@ -9401,7 +9462,7 @@ mod tests {
             runtime.state.selection_menu,
             Some(SelectionMenu::SessionGraph)
         );
-        let (x, y) = runtime.find("selection-menu-item-3").unwrap();
+        let (x, y) = runtime.find("selection-menu-item-4").unwrap();
         runtime.pointer_down(x, y);
         runtime.pointer_up(x, y);
         runtime.frame(0.2);
@@ -9606,6 +9667,7 @@ mod tests {
         for (variant, graph) in [
             ("graph-cloudflare", &beale_graphs::CLOUDFLARE_GRAPH),
             ("graph-openai", &beale_graphs::OPENAI_GRAPH),
+            ("graph-sequential", &beale_graphs::SEQUENTIAL_GRAPH),
         ] {
             for width in [1200.0, 600.0] {
                 let state = visual_preview::fixture(variant);
@@ -9614,6 +9676,14 @@ mod tests {
                 let (stage, _) = runtime
                     .presented(&format!("new-research-{}-graph", graph.id))
                     .unwrap();
+                if graph.id == beale_graphs::SEQUENTIAL_ID {
+                    assert!(
+                        runtime
+                            .find("new-research-stage-duration-minutes")
+                            .is_some()
+                    );
+                    assert_eq!(runtime.state.new_research_stage_duration_minutes.text, "60");
+                }
                 for role in graph.nodes {
                     let (node, _) = runtime
                         .presented(&format!("new-research-graph-node-{}", role.id()))
@@ -9635,7 +9705,7 @@ mod tests {
 
     #[test]
     fn peer_graph_configs_include_each_top_level_model_and_limit() {
-        for variant in ["graph-cloudflare", "graph-openai"] {
+        for variant in ["graph-cloudflare", "graph-openai", "graph-sequential"] {
             let state = visual_preview::fixture(variant);
             let graph = beale_graphs::graph_definition(&state.new_research_graph_id).unwrap();
             let models = new_research::graph_model_config(&state);
@@ -9781,6 +9851,7 @@ mod tests {
             graph_id: String::new(),
             graph_models: vec![],
             graph_node_concurrency: vec![],
+            stage_duration_minutes: 0,
             total_duration_ms: 0,
             has_campaign_activity: false,
             token_usage: None,
@@ -10041,6 +10112,7 @@ mod tests {
             graph_id: String::new(),
             graph_models: vec![],
             graph_node_concurrency: vec![],
+            stage_duration_minutes: 0,
             total_duration_ms: 1_234,
             has_campaign_activity: false,
             token_usage: None,
@@ -10162,6 +10234,7 @@ mod tests {
                     graph_id: String::new(),
                     graph_models: vec![],
                     graph_node_concurrency: vec![],
+                    stage_duration_minutes: 0,
                     total_duration_ms: 0,
                     has_campaign_activity: false,
                     token_usage: None,
@@ -10287,6 +10360,7 @@ mod tests {
                 graph_id: String::new(),
                 graph_models: vec![],
                 graph_node_concurrency: vec![],
+                stage_duration_minutes: 0,
                 total_duration_ms: 1_000,
                 has_campaign_activity: false,
                 token_usage: None,
@@ -10365,6 +10439,7 @@ active_runbook_count: 0,
                 graph_id: String::new(),
                 graph_models: vec![],
                 graph_node_concurrency: vec![],
+                stage_duration_minutes: 0,
                 total_duration_ms: 0,
                 has_campaign_activity: false,
                 token_usage: None,
@@ -10419,13 +10494,22 @@ active_runbook_count: 0,
                 messages: vec![beale_contracts::v1::SessionMessage {
                     role: beale_contracts::v1::SessionRole::Assistant as i32,
                     text: "Done".to_owned(),
-                    tools: vec![beale_contracts::v1::SessionToolSummary {
-                        id: tool_id.to_owned(),
-                        name: "read".to_owned(),
-                        summary: "Read example.txt".to_owned(),
-                        is_error: false,
-                        agent_role: "main".to_owned(),
-                    }],
+                    tools: vec![
+                        beale_contracts::v1::SessionToolSummary {
+                            id: tool_id.to_owned(),
+                            name: "read".to_owned(),
+                            summary: "Read example.txt".to_owned(),
+                            is_error: false,
+                            agent_role: "main".to_owned(),
+                        },
+                        beale_contracts::v1::SessionToolSummary {
+                            id: "00000000-0000-4000-8000-000000000005".to_owned(),
+                            name: "webfetch".to_owned(),
+                            summary: "Web view https://example.test/a".to_owned(),
+                            is_error: false,
+                            agent_role: "main".to_owned(),
+                        },
+                    ],
                     reasoning_summaries: vec![beale_contracts::v1::SessionReasoningSummary {
                         text: "Checking the example file.".to_owned(),
                         after_tool_count: 0,
@@ -10447,6 +10531,7 @@ active_runbook_count: 0,
                 graph_id: String::new(),
                 graph_models: vec![],
                 graph_node_concurrency: vec![],
+                stage_duration_minutes: 0,
                 total_duration_ms: 2_345,
                 has_campaign_activity: false,
                 token_usage: None,
@@ -10480,6 +10565,22 @@ active_runbook_count: 0,
         assert!(runtime.find("session-reasoning-0-0").is_some());
         assert!(runtime.find("session-commentary-0-0").is_some());
         let (reasoning_bounds, _) = runtime.presented("session-reasoning-0-0").unwrap();
+        assert!(
+            runtime
+                .find(&format!("session-tool-series-button-{tool_id}"))
+                .is_some()
+        );
+        assert!(
+            runtime
+                .find(&format!("session-tool-button-{tool_id}"))
+                .is_none()
+        );
+        let (x, y) = runtime
+            .find(&format!("session-tool-series-button-{tool_id}"))
+            .unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.75);
         let (tool_bounds, _) = runtime
             .presented(&format!("session-tool-button-{tool_id}"))
             .unwrap();

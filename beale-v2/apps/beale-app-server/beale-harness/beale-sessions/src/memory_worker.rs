@@ -18,7 +18,7 @@ pub(super) async fn run(state: SessionState) {
             Ok(Some(job)) => job,
             Ok(None) => continue,
             Err(error) => {
-                eprintln!("memory queue read failed: {error:#}");
+                beale_host_log::error!("memory queue read failed: {error:#}");
                 continue;
             }
         };
@@ -43,13 +43,13 @@ pub(super) async fn run(state: SessionState) {
         match result {
             Ok(()) => {
                 if let Err(error) = state.db.finish_memory_job(job.id) {
-                    eprintln!("memory queue acknowledgment failed: {error:#}");
+                    beale_host_log::error!("memory queue acknowledgment failed: {error:#}");
                 }
             }
             Err(error) => {
-                eprintln!("memory job {} failed: {error:#}", job.id);
+                beale_host_log::error!("memory job {} failed: {error:#}", job.id);
                 if let Err(error) = state.db.fail_memory_job(job.id, now_ms()) {
-                    eprintln!("memory retry update failed: {error:#}");
+                    beale_host_log::error!("memory retry update failed: {error:#}");
                 }
             }
         }

@@ -134,7 +134,7 @@ pub(crate) fn dialog(state: &State, theme: ThemeStyle<'_>, window_width: f32) ->
     let main_label = if detail.is_some_and(|detail| {
         matches!(
             detail.graph_id.as_str(),
-            beale_graphs::CLOUDFLARE_ID | beale_graphs::OPENAI_ID
+            beale_graphs::CLOUDFLARE_ID | beale_graphs::OPENAI_ID | beale_graphs::SEQUENTIAL_ID
         )
     }) {
         "Top-level"

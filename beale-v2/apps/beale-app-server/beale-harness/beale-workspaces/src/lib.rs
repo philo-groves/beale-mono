@@ -251,7 +251,7 @@ impl WorkspaceError {
 
     fn report(&self) {
         if let Self::Internal(stage) = self {
-            eprintln!("workspace operation failed: {stage}");
+            beale_host_log::error!("workspace operation failed: {stage}");
         }
     }
 }
@@ -1355,7 +1355,8 @@ fn validate_evidence_refs(
         .collect()
 }
 
-fn validate_definition(input: SurfaceDefinition) -> Result<StoredDefinition, WorkspaceError> {
+/// A model-facing hint for the type and locator constraints enforced by workspace storage.
+pub fn surface_definition_hint(input: &SurfaceDefinition) -> Option<&'static str> {
     let type_id = input.type_id.as_str();
     let known = matches!(
         type_id,
@@ -1381,15 +1382,11 @@ fn validate_definition(input: SurfaceDefinition) -> Result<StoredDefinition, Wor
             byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'.' || byte == b'_'
         })
     {
-        return Err(WorkspaceError::Invalid);
+        return Some(
+            "invalid surface type_id; use repository, code.module, code.package, code.file, documentation, binary, service, api.endpoint, domain, host, container, configuration, other, or a kit./custom. extension type",
+        );
     }
-    let locator = input.locator.ok_or(WorkspaceError::Invalid)?;
-    let value = locator.value.trim();
-    let name = if input.name.trim().is_empty() {
-        default_surface_name(value)
-    } else {
-        input.name.trim().to_owned()
-    };
+    let locator = input.locator.as_ref()?;
     let locator_allowed = match type_id {
         "repository" => matches!(locator.kind.as_str(), "freeform" | "git_url" | "url"),
         "code.module" | "code.package" | "code.file" => {
@@ -1412,12 +1409,31 @@ fn validate_definition(input: SurfaceDefinition) -> Result<StoredDefinition, Wor
             "freeform" | "git_url" | "repository_path" | "url" | "domain" | "artifact"
         ),
     };
+    if !locator_allowed {
+        return Some(
+            "locator kind is incompatible with surface type_id; code.module, code.package, and code.file require freeform or repository_path, while a repository can use freeform, git_url, or url",
+        );
+    }
+    None
+}
+
+fn validate_definition(input: SurfaceDefinition) -> Result<StoredDefinition, WorkspaceError> {
+    if surface_definition_hint(&input).is_some() {
+        return Err(WorkspaceError::Invalid);
+    }
+    let type_id = input.type_id.as_str();
+    let locator = input.locator.ok_or(WorkspaceError::Invalid)?;
+    let value = locator.value.trim();
+    let name = if input.name.trim().is_empty() {
+        default_surface_name(value)
+    } else {
+        input.name.trim().to_owned()
+    };
     if !valid_text(&name, 200, false)
         || !matches!(
             locator.kind.as_str(),
             "freeform" | "git_url" | "repository_path" | "url" | "domain" | "artifact"
         )
-        || !locator_allowed
         || !valid_text(&locator.value, 2_048, false)
         || (locator.kind == "repository_path" && !valid_repository_path(&locator.value))
         || !valid_optional_text(&input.description, 10_000, true)

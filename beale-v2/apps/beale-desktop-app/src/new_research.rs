@@ -1416,6 +1416,35 @@ fn new_research_setup(state: &State, theme: ThemeStyle<'_>, available_width: f32
         .role("button")
         .label(format!("Session graph: {label}"));
         content = content.child(row().w_full().py(6.0).center().child(selector));
+        if state.new_research_graph_id == beale_graphs::SEQUENTIAL_ID {
+            content = content.child(
+                row()
+                    .w_full()
+                    .center()
+                    .gap(10.0)
+                    .child(
+                        text("Minutes per stage")
+                            .font(ui_font(13.0, 450.0))
+                            .color(theme.color("#bdbdbd")),
+                    )
+                    .child(
+                        field(
+                            &state.new_research_stage_duration_minutes,
+                            "new-research-stage-duration-minutes",
+                            "60",
+                            theme,
+                            |state| &mut state.new_research_stage_duration_minutes,
+                        )
+                        .w(86.0)
+                        .on_input_change(|state: &mut State, _| {
+                            normalize_goal_limit(
+                                &mut state.new_research_stage_duration_minutes,
+                                1_440,
+                            );
+                        }),
+                    ),
+            );
+        }
         content = content.child(
             if selected && state.new_research_graph_id == beale_graphs::SIMPLE_ID {
                 graph_preview(state, theme, available_width)
@@ -1473,12 +1502,202 @@ pub(crate) fn transcript_message(
     }
 }
 
-pub(crate) fn transcript_tool(
-    tool: &SessionToolSummary,
+fn webfetch_input(tool: &SessionToolSummary) -> Option<(&'static str, &str)> {
+    if tool.name != "webfetch" {
+        return None;
+    }
+    let body = tool
+        .summary
+        .strip_prefix("Web ")
+        .or_else(|| tool.summary.split_once(": Web ").map(|(_, body)| body))?;
+    if let Some(query) = body
+        .strip_prefix("search ")
+        .filter(|value| !value.is_empty())
+    {
+        return Some(("webfetch.query", query));
+    }
+    if let Some(url) = body.strip_prefix("view ").filter(|value| !value.is_empty()) {
+        return Some(("webfetch.url", url));
+    }
+    // Earlier sessions stored only "Web <value>" without the input mode.
+    if body.starts_with("https://") || body.starts_with("http://") {
+        Some(("webfetch.url", body))
+    } else if !body.is_empty() && body != "request" {
+        Some(("webfetch.query", body))
+    } else {
+        None
+    }
+}
+
+fn tool_series_kind(tool: &SessionToolSummary) -> Option<&'static str> {
+    match tool.name.as_str() {
+        "read" => Some("read"),
+        "write" => Some("write"),
+        "edit" => Some("edit"),
+        "bash" => Some("bash"),
+        "webfetch" => webfetch_input(tool).map(|(kind, _)| kind),
+        _ => None,
+    }
+}
+
+pub(crate) fn series_tool(tool: &SessionToolSummary) -> bool {
+    tool_series_kind(tool).is_some()
+}
+
+fn tool_single_label(tool: &SessionToolSummary, active: bool) -> String {
+    if let Some((kind, value)) = webfetch_input(tool) {
+        return match (kind, active) {
+            ("webfetch.query", true) => format!("Web searching \"{value}\""),
+            ("webfetch.query", false) => format!("Web searched \"{value}\""),
+            ("webfetch.url", true) => format!("Web viewing {value}"),
+            _ => format!("Web viewed {value}"),
+        };
+    }
+    let (present, past, prefix) = match tool.name.as_str() {
+        "read" => ("Reading", "Read", "Read "),
+        "write" => ("Writing", "Wrote", "Write "),
+        "edit" => ("Editing", "Edited", "Edit "),
+        "bash" => ("Running", "Ran", "Run "),
+        _ => {
+            return if active {
+                format!("{}…", tool.summary)
+            } else {
+                tool.summary.clone()
+            };
+        }
+    };
+    let value = tool.summary.strip_prefix(prefix).or_else(|| {
+        tool.summary
+            .split_once(": ")
+            .and_then(|(_, rest)| rest.strip_prefix(prefix))
+    });
+    let Some(value) = value.filter(|value| !value.is_empty()) else {
+        return tool.summary.clone();
+    };
+    format!("{} {value}", if active { present } else { past })
+}
+
+fn combined_tool_series_label(tools: &[&SessionToolSummary], active: bool) -> String {
+    if tools.len() == 1 {
+        return tool_single_label(tools[0], active);
+    }
+    let mut counts: Vec<(&str, usize)> = Vec::new();
+    for tool in tools {
+        let Some(kind) = tool_series_kind(tool) else {
+            return tool.summary.clone();
+        };
+        if let Some((_, count)) = counts.iter_mut().find(|(name, _)| *name == kind) {
+            *count += 1;
+        } else {
+            counts.push((kind, 1));
+        }
+    }
+    counts
+        .into_iter()
+        .enumerate()
+        .map(|(index, (name, count))| {
+            let (present, past, noun, plural) = match name {
+                "read" => ("Reading", "Read", "file", "files"),
+                "write" => ("Writing", "Wrote", "file", "files"),
+                "edit" => ("Editing", "Edited", "file", "files"),
+                "bash" => ("Running", "Ran", "command", "commands"),
+                "webfetch.query" => ("Web searching", "Web searched", "query", "queries"),
+                "webfetch.url" => ("Web viewing", "Web viewed", "page", "pages"),
+                _ => unreachable!("only base tools can form a series"),
+            };
+            let verb = if active { present } else { past };
+            let verb = if index == 0 {
+                verb.to_owned()
+            } else {
+                verb.to_lowercase()
+            };
+            if count == 1 {
+                format!("{verb} a {noun}")
+            } else {
+                format!("{verb} {count} {plural}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+pub(crate) fn transcript_tool_series(
+    tools: &[&SessionToolSummary],
+    active: bool,
+    saved: bool,
     state: &State,
     theme: ThemeStyle<'_>,
 ) -> El {
-    transcript_tool_view(tool, state, theme, true)
+    let first = tools[0];
+    let label = combined_tool_series_label(tools, active);
+    if tools.len() == 1 {
+        return transcript_tool_view(first, state, theme, saved, &label);
+    }
+    let expanded = state.expanded_tool_series_id.as_deref() == Some(first.id.as_str());
+    let id = first.id.clone();
+    let mut series = col()
+        .key(format!("session-tool-series-{}", first.id))
+        .w_full()
+        .gap(4.0)
+        .child(
+            row()
+                .key(format!("session-tool-series-button-{}", first.id))
+                .w_full()
+                .gap(10.0)
+                .py(3.0)
+                .on_press(move |state: &mut State| {
+                    if state.expanded_tool_series_id.as_deref() == Some(id.as_str()) {
+                        state.expanded_tool_series_id = None;
+                        state.clear_tool_detail();
+                    } else {
+                        state.expanded_tool_series_id = Some(id.clone());
+                    }
+                })
+                .child(
+                    icon(
+                        if first.name == "bash" {
+                            &TERMINAL
+                        } else {
+                            &WRENCH
+                        },
+                        16.0,
+                    )
+                    .color(theme.color("#969696")),
+                )
+                .child(
+                    text(label)
+                        .font(ui_font(13.0, 400.0))
+                        .color(theme.color(if tools.iter().any(|tool| tool.is_error) {
+                            "#e07676"
+                        } else {
+                            "#969696"
+                        }))
+                        .truncate(),
+                )
+                .child(
+                    icon(
+                        if expanded {
+                            &CHEVRON_DOWN
+                        } else {
+                            &CHEVRON_RIGHT
+                        },
+                        13.0,
+                    )
+                    .color(theme.color("#777777")),
+                ),
+        );
+    if expanded {
+        for tool in tools {
+            series = series.child(transcript_tool_view(
+                tool,
+                state,
+                theme,
+                saved,
+                &tool.summary,
+            ));
+        }
+    }
+    series
 }
 
 fn transcript_tool_view(
@@ -1486,6 +1705,7 @@ fn transcript_tool_view(
     state: &State,
     theme: ThemeStyle<'_>,
     saved: bool,
+    label: &str,
 ) -> El {
     let expanded = state.expanded_tool_id.as_deref() == Some(&tool.id);
     let id = tool.id.clone();
@@ -1512,7 +1732,7 @@ fn transcript_tool_view(
                     .color(theme.color("#969696")),
                 )
                 .child(
-                    text(tool.summary.clone())
+                    text(label.to_owned())
                         .font(ui_font(13.0, 400.0))
                         .color(theme.color(if tool.is_error { "#e07676" } else { "#969696" }))
                         .truncate(),
@@ -1726,19 +1946,6 @@ pub(crate) fn work_header(
         .w_full()
         .child(header)
         .child(el().w_full().h(1.0).fill(theme.color("#303030")))
-}
-
-pub(crate) fn live_tool(
-    tool: &SessionToolSummary,
-    finished: bool,
-    state: &State,
-    theme: ThemeStyle<'_>,
-) -> El {
-    let mut summary = tool.clone();
-    if !finished {
-        summary.summary.push('…');
-    }
-    transcript_tool_view(&summary, state, theme, false)
 }
 
 fn previous_input(state: &mut State) {
@@ -2064,7 +2271,9 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
                 if state.active_session.as_ref().is_some_and(|detail| {
                     matches!(
                         detail.graph_id.as_str(),
-                        beale_graphs::CLOUDFLARE_ID | beale_graphs::OPENAI_ID
+                        beale_graphs::CLOUDFLARE_ID
+                            | beale_graphs::OPENAI_ID
+                            | beale_graphs::SEQUENTIAL_ID
                     )
                 }) {
                     beale_graphs::Role::from_id(&state.session_agent_role)
@@ -2254,7 +2463,9 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
         .fill(theme.color("#1b1b1b"))
         .child(workspace_control)
         .child(el().grow(1.0));
-    if crate::extensions_view::goal_mode_enabled(state) {
+    if crate::extensions_view::goal_mode_enabled(state)
+        && state.new_research_graph_id != beale_graphs::SEQUENTIAL_ID
+    {
         ribbon = ribbon.child(
             row()
                 .key("new-research-goal-control")
@@ -2290,39 +2501,41 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
                 }),
         );
     }
-    ribbon = ribbon.child(
-        row()
-            .key("new-research-repeat-control")
-            .role("button")
-            .label(format!(
-                "Repeat schedule: {}",
-                state.new_research_repeat.label()
-            ))
-            .size(28.0, 28.0)
-            .justify_center()
-            .center_y()
-            .radius(8.0)
-            .continuous_corners()
-            .fill(if repeat_active {
-                theme.color("#303030")
-            } else {
-                Color::TRANSPARENT
-            })
-            .hover(theme.color("#303030"))
-            .on_press(|state: &mut State| toggle_selection_menu(state, SelectionMenu::Repeat))
-            .child(icon(&REPEAT, 15.0).color(theme.color(
-                if state.new_research_repeat == RepeatPreset::None {
-                    "#a0a0a0"
+    if state.new_research_graph_id != beale_graphs::SEQUENTIAL_ID {
+        ribbon = ribbon.child(
+            row()
+                .key("new-research-repeat-control")
+                .role("button")
+                .label(format!(
+                    "Repeat schedule: {}",
+                    state.new_research_repeat.label()
+                ))
+                .size(28.0, 28.0)
+                .justify_center()
+                .center_y()
+                .radius(8.0)
+                .continuous_corners()
+                .fill(if repeat_active {
+                    theme.color("#303030")
                 } else {
-                    "#eeeeee"
-                },
-            )))
-            .child(if state.new_research_repeat != RepeatPreset::None {
-                ribbon_status_dot("new-research-repeat-indicator", theme)
-            } else {
-                el().size(0.0, 0.0)
-            }),
-    );
+                    Color::TRANSPARENT
+                })
+                .hover(theme.color("#303030"))
+                .on_press(|state: &mut State| toggle_selection_menu(state, SelectionMenu::Repeat))
+                .child(icon(&REPEAT, 15.0).color(theme.color(
+                    if state.new_research_repeat == RepeatPreset::None {
+                        "#a0a0a0"
+                    } else {
+                        "#eeeeee"
+                    },
+                )))
+                .child(if state.new_research_repeat != RepeatPreset::None {
+                    ribbon_status_dot("new-research-repeat-indicator", theme)
+                } else {
+                    el().size(0.0, 0.0)
+                }),
+        );
+    }
     let mut transcript = col()
         .key("session-transcript")
         .w_full()
@@ -2340,7 +2553,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
         });
     let peer_graph = matches!(
         graph_id,
-        beale_graphs::CLOUDFLARE_ID | beale_graphs::OPENAI_ID
+        beale_graphs::CLOUDFLARE_ID | beale_graphs::OPENAI_ID | beale_graphs::SEQUENTIAL_ID
     );
     let selected_role = crate::research_header::selected_role(state, graph_id);
     let visible_role =
@@ -2461,6 +2674,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
                 }
                 let mut summaries = message.reasoning_summaries.iter().enumerate().peekable();
                 let mut commentary = message.commentary.iter().enumerate().peekable();
+                let mut grouped_through = 0;
                 for position in 0..=message.tools.len() {
                     while summaries
                         .peek()
@@ -2496,10 +2710,34 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
                         }
                     }
                     if expanded
+                        && position >= grouped_through
                         && let Some(tool) = message.tools.get(position)
                         && visible_role(&tool.agent_role)
                     {
-                        transcript = transcript.child(transcript_tool(tool, state, theme));
+                        let mut end = position + 1;
+                        if series_tool(tool) {
+                            while let Some(next) = message.tools.get(end) {
+                                if !series_tool(next)
+                                    || next.agent_role != tool.agent_role
+                                    || !visible_role(&next.agent_role)
+                                    || message
+                                        .reasoning_summaries
+                                        .iter()
+                                        .any(|item| item.after_tool_count as usize == end)
+                                    || message
+                                        .commentary
+                                        .iter()
+                                        .any(|item| item.after_tool_count as usize == end)
+                                {
+                                    break;
+                                }
+                                end += 1;
+                            }
+                        }
+                        let series: Vec<_> = message.tools[position..end].iter().collect();
+                        transcript = transcript
+                            .child(transcript_tool_series(&series, false, true, state, theme));
+                        grouped_through = end;
                     }
                 }
             }
@@ -2601,7 +2839,11 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
                     .map_or(0, |detail| detail.messages.len()),
             )
         {
+            let mut grouped_through = 0;
             for (index, event) in state.session_live_events.iter().enumerate() {
+                if index < grouped_through {
+                    continue;
+                }
                 if !event.subagent_id.is_empty() {
                     continue;
                 }
@@ -2628,12 +2870,34 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
                     }
                     Ok(SessionStreamKind::ToolStarted | SessionStreamKind::ToolFinished) => {
                         if let Some(tool) = &event.tool {
-                            transcript = transcript.child(live_tool(
-                                tool,
-                                event.kind == SessionStreamKind::ToolFinished as i32,
-                                state,
-                                theme,
+                            let mut end = index + 1;
+                            if series_tool(tool) {
+                                while let Some(next) = state.session_live_events.get(end) {
+                                    if !matches!(
+                                        SessionStreamKind::try_from(next.kind),
+                                        Ok(SessionStreamKind::ToolStarted
+                                            | SessionStreamKind::ToolFinished)
+                                    ) || next.tool.as_ref().is_none_or(|next_tool| {
+                                        !series_tool(next_tool)
+                                            || next_tool.agent_role != tool.agent_role
+                                            || !next.subagent_id.is_empty()
+                                    }) {
+                                        break;
+                                    }
+                                    end += 1;
+                                }
+                            }
+                            let series: Vec<_> = state.session_live_events[index..end]
+                                .iter()
+                                .filter_map(|item| item.tool.as_ref())
+                                .collect();
+                            let active = state.session_live_events[index..end]
+                                .iter()
+                                .any(|item| item.kind == SessionStreamKind::ToolStarted as i32);
+                            transcript = transcript.child(transcript_tool_series(
+                                &series, active, false, state, theme,
                             ));
+                            grouped_through = end;
                         }
                     }
                     _ => {}
@@ -2688,12 +2952,154 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
 #[cfg(test)]
 mod tests {
     use super::{
-        MenuSection, choices, has_configured_provider, is_web_link, normalize_goal_limit, options,
-        selected_model, work_duration,
+        MenuSection, choices, combined_tool_series_label, has_configured_provider, is_web_link,
+        normalize_goal_limit, options, selected_model, tool_single_label, work_duration,
     };
     use crate::{AuthStatus, Provider, State};
-    use beale_contracts::v1::{CustomProvider, ModelEntry};
+    use beale_contracts::v1::{CustomProvider, ModelEntry, SessionToolSummary};
     use rune::TextEdit;
+
+    #[test]
+    fn base_tool_series_labels_match_active_and_completed_calls() {
+        for (name, summary, active, past, active_plural, past_plural) in [
+            (
+                "read",
+                "Read example.txt",
+                "Reading example.txt",
+                "Read example.txt",
+                "Reading 2 files",
+                "Read 2 files",
+            ),
+            (
+                "write",
+                "Write example.txt",
+                "Writing example.txt",
+                "Wrote example.txt",
+                "Writing 2 files",
+                "Wrote 2 files",
+            ),
+            (
+                "edit",
+                "Edit example.txt",
+                "Editing example.txt",
+                "Edited example.txt",
+                "Editing 2 files",
+                "Edited 2 files",
+            ),
+            (
+                "bash",
+                "Run cargo check",
+                "Running cargo check",
+                "Ran cargo check",
+                "Running 2 commands",
+                "Ran 2 commands",
+            ),
+        ] {
+            let tool = SessionToolSummary {
+                name: name.to_owned(),
+                summary: summary.to_owned(),
+                ..Default::default()
+            };
+            assert_eq!(tool_single_label(&tool, true), active);
+            assert_eq!(tool_single_label(&tool, false), past);
+            assert_eq!(
+                combined_tool_series_label(&[&tool, &tool], true),
+                active_plural
+            );
+            assert_eq!(
+                combined_tool_series_label(&[&tool, &tool], false),
+                past_plural
+            );
+        }
+        let prefixed = SessionToolSummary {
+            name: "read".to_owned(),
+            summary: "Discovery: Read example.txt".to_owned(),
+            ..Default::default()
+        };
+        assert_eq!(tool_single_label(&prefixed, true), "Reading example.txt");
+        let command = SessionToolSummary {
+            name: "bash".to_owned(),
+            summary: "Run whoami".to_owned(),
+            ..Default::default()
+        };
+        let edit = SessionToolSummary {
+            name: "edit".to_owned(),
+            summary: "Edit example.txt".to_owned(),
+            ..Default::default()
+        };
+        assert_eq!(tool_single_label(&command, false), "Ran whoami");
+        assert_eq!(
+            combined_tool_series_label(&[&command, &edit, &edit], false),
+            "Ran a command, edited 2 files"
+        );
+        assert_eq!(
+            combined_tool_series_label(&[&edit, &command, &edit], false),
+            "Edited 2 files, ran a command"
+        );
+    }
+
+    #[test]
+    fn webfetch_series_labels_distinguish_queries_and_pages() {
+        let query = SessionToolSummary {
+            name: "webfetch".to_owned(),
+            summary: "Web search example research".to_owned(),
+            ..Default::default()
+        };
+        let page = SessionToolSummary {
+            name: "webfetch".to_owned(),
+            summary: "Web view https://example.test/a".to_owned(),
+            ..Default::default()
+        };
+        let edit = SessionToolSummary {
+            name: "edit".to_owned(),
+            summary: "Edit example.txt".to_owned(),
+            ..Default::default()
+        };
+        assert_eq!(
+            tool_single_label(&query, true),
+            "Web searching \"example research\""
+        );
+        assert_eq!(
+            tool_single_label(&query, false),
+            "Web searched \"example research\""
+        );
+        assert_eq!(
+            tool_single_label(&page, true),
+            "Web viewing https://example.test/a"
+        );
+        assert_eq!(
+            tool_single_label(&page, false),
+            "Web viewed https://example.test/a"
+        );
+        assert_eq!(
+            combined_tool_series_label(&[&query, &query], true),
+            "Web searching 2 queries"
+        );
+        assert_eq!(
+            combined_tool_series_label(&[&query, &query], false),
+            "Web searched 2 queries"
+        );
+        assert_eq!(
+            combined_tool_series_label(&[&page, &page], true),
+            "Web viewing 2 pages"
+        );
+        assert_eq!(
+            combined_tool_series_label(&[&page, &page], false),
+            "Web viewed 2 pages"
+        );
+        assert_eq!(
+            combined_tool_series_label(&[&query, &page, &edit], false),
+            "Web searched a query, web viewed a page, edited a file"
+        );
+        let old_page = SessionToolSummary {
+            summary: "Web https://example.test/old".to_owned(),
+            ..page.clone()
+        };
+        assert_eq!(
+            tool_single_label(&old_page, false),
+            "Web viewed https://example.test/old"
+        );
+    }
 
     #[test]
     fn goal_limit_fields_keep_only_positive_bounded_digits() {

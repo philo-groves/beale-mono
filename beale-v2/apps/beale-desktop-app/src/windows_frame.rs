@@ -176,7 +176,7 @@ pub(super) fn configure(window: &WindowHandle, appearance: &AppearancePreference
         // no borrowed data and removes itself when that HWND is destroyed.
         unsafe {
             if SetWindowSubclass(hwnd, Some(frame_proc), SUBCLASS_ID, 0) == 0 {
-                eprintln!("Beale window edge resizing could not be enabled");
+                beale_host_log::error!("Beale window edge resizing could not be enabled");
             } else {
                 set_app_window_icon(hwnd);
             }

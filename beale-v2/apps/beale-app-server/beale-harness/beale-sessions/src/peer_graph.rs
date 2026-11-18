@@ -5,6 +5,7 @@ struct Work {
     role: beale_graphs::Role,
     prompt: String,
     handoff_id: Option<String>,
+    soft_reminder: Option<watch::Receiver<bool>>,
 }
 
 type WorkResult = (
@@ -25,7 +26,10 @@ struct StartContext<'a> {
 }
 
 fn is_peer_graph(id: &str) -> bool {
-    matches!(id, beale_graphs::CLOUDFLARE_ID | beale_graphs::OPENAI_ID)
+    matches!(
+        id,
+        beale_graphs::CLOUDFLARE_ID | beale_graphs::OPENAI_ID | beale_graphs::SEQUENTIAL_ID
+    )
 }
 
 pub(super) fn applies(
@@ -46,6 +50,7 @@ fn start(
     tasks: &mut JoinSet<WorkResult>,
     context: &StartContext<'_>,
     work: Work,
+    stop_override: Option<watch::Receiver<bool>>,
 ) -> Result<(), StatusCode> {
     let number = context
         .state
@@ -84,9 +89,10 @@ fn start(
         turn_number: number,
         notify: context.notify.clone(),
         handoff: work.handoff_id.is_some(),
+        soft_reminder: work.soft_reminder,
     };
     let progress = context.progress.clone();
-    let stop = context.stop.clone();
+    let stop = stop_override.or_else(|| context.stop.clone());
     tasks.spawn(async move {
         let result = run_one_turn(&state, request, progress, false, &lock, stop, Some(peer)).await;
         (work.role, work.handoff_id, number, result)
@@ -119,6 +125,12 @@ pub(super) async fn run(
                 && (request.goal_max_turns != 0 || request.goal_max_duration_minutes != 0))
             || request.goal_max_turns > i64::MAX as u64
             || request.goal_max_duration_minutes > i64::MAX as u64 / 60_000
+            || (request.graph_id == beale_graphs::SEQUENTIAL_ID
+                && (request.stage_duration_minutes > 1_440
+                    || request.goal_mode
+                    || !request.repeat_preset.is_empty()))
+            || (request.graph_id != beale_graphs::SEQUENTIAL_ID
+                && request.stage_duration_minutes != 0)
             || (!request.repeat_preset.is_empty()
                 && !matches!(
                     request.repeat_preset.as_str(),
@@ -234,11 +246,11 @@ pub(super) async fn run(
     };
     let graph = beale_graphs::graph_definition(&graph_id).ok_or(StatusCode::BAD_REQUEST)?;
     let role = requested_top_level_role(Some(graph), &request.agent_role)?
-        .or_else(|| beale_graphs::entry_role(&graph_id))
+        .or_else(|| beale_graphs::entry_role_for_config(&graph_id, &config))
         .ok_or(StatusCode::BAD_REQUEST)?;
     let (notify, mut notified) = mpsc::unbounded_channel();
     let mut tasks = JoinSet::new();
-    let mut active = [false; 10];
+    let mut active = [false; 11];
     request.graph_id = graph_id.clone();
     let context = StartContext {
         state,
@@ -249,6 +261,12 @@ pub(super) async fn run(
         notify: &notify,
         stop: stop.clone(),
     };
+    if graph_id == beale_graphs::SEQUENTIAL_ID {
+        let minutes = config.stage_duration_minutes;
+        if !(1..=1_440).contains(&minutes) {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    }
     if first && let Some(tx) = &progress {
         let (session, turns) = load_persisted(&state.db, parse_id(&request.session_id)?)?;
         let _ = tx
@@ -260,6 +278,9 @@ pub(super) async fn run(
             })
             .await;
     }
+    if graph_id == beale_graphs::SEQUENTIAL_ID {
+        return run_sequential(&context, role, request.prompt.clone(), &mut notified).await;
+    }
     start(
         &mut tasks,
         &context,
@@ -267,7 +288,9 @@ pub(super) async fn run(
             role,
             prompt: request.prompt.clone(),
             handoff_id: None,
+            soft_reminder: None,
         },
+        None,
     )?;
     active[role.index()] = true;
     if let Some(tx) = &progress {
@@ -309,7 +332,9 @@ pub(super) async fn run(
                         role: target,
                         prompt,
                         handoff_id: Some(item.id.clone()),
+                        soft_reminder: None,
                     },
+                    None,
                 ) {
                     state
                         .db
@@ -369,4 +394,281 @@ pub(super) async fn run(
     }
     let (session, turns) = load_persisted(&state.db, parse_id(&request.session_id)?)?;
     detail(&state.db, &session, &turns)
+}
+
+fn discovery_stage(role: beale_graphs::Role) -> bool {
+    matches!(
+        role,
+        beale_graphs::Role::AuditTargets | beale_graphs::Role::Discovery
+    )
+}
+
+fn stage_should_advance(
+    role: beale_graphs::Role,
+    queue_empty: bool,
+    deadline_reached: bool,
+) -> bool {
+    deadline_reached || (queue_empty && !discovery_stage(role))
+}
+
+const SEQUENTIAL_STAGES: [beale_graphs::Role; 5] = [
+    beale_graphs::Role::AuditTargets,
+    beale_graphs::Role::Discovery,
+    beale_graphs::Role::Validation,
+    beale_graphs::Role::Reporter,
+    beale_graphs::Role::PatchGeneration,
+];
+
+fn stage_deadlines(
+    started: tokio::time::Instant,
+    duration_minutes: u32,
+) -> (tokio::time::Instant, tokio::time::Instant) {
+    let soft = started + std::time::Duration::from_secs(u64::from(duration_minutes) * 60);
+    (soft, soft + std::time::Duration::from_secs(10 * 60))
+}
+
+fn queued_for_stage(
+    db: &HostDatabase,
+    session_id: &str,
+    role: beale_graphs::Role,
+) -> Result<Option<beale_storage::GraphHandoffRow>, StatusCode> {
+    Ok(db
+        .pending_graph_handoffs(session_id)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .into_iter()
+        .find(|item| item.to_role == role.id()))
+}
+
+async fn sequential_started(
+    context: &StartContext<'_>,
+    role: beale_graphs::Role,
+) -> Result<(), StatusCode> {
+    if let Some(tx) = &context.progress {
+        let (session, turns) =
+            load_persisted(&context.state.db, parse_id(&context.base.session_id)?)?;
+        let _ = tx
+            .send(SessionStreamEvent {
+                kind: SessionStreamKind::AgentStarted as i32,
+                detail: Some(detail(&context.state.db, &session, &turns)?),
+                agent_role: role.id().to_owned(),
+                ..Default::default()
+            })
+            .await;
+    }
+    Ok(())
+}
+
+async fn sequential_finished(
+    context: &StartContext<'_>,
+    finished: WorkResult,
+    requeue: bool,
+) -> Result<(), StatusCode> {
+    let (role, handoff_id, turn_number, result) = finished;
+    if let Some(id) = handoff_id {
+        context
+            .state
+            .db
+            .set_graph_handoff_status(
+                &id,
+                if requeue {
+                    "pending"
+                } else if result.is_ok() {
+                    "completed"
+                } else {
+                    "failed"
+                },
+            )
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
+    if result.is_err() {
+        context
+            .state
+            .db
+            .finish_graph_turn(&context.base.session_id, turn_number, false)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
+    if let Some(tx) = &context.progress {
+        let detail = if let Ok(detail) = result {
+            detail
+        } else {
+            let (session, turns) =
+                load_persisted(&context.state.db, parse_id(&context.base.session_id)?)?;
+            detail(&context.state.db, &session, &turns)?
+        };
+        let _ = tx
+            .send(SessionStreamEvent {
+                kind: SessionStreamKind::AgentTurnCompleted as i32,
+                detail: Some(detail),
+                agent_role: role.id().to_owned(),
+                ..Default::default()
+            })
+            .await;
+    }
+    Ok(())
+}
+
+async fn run_sequential(
+    context: &StartContext<'_>,
+    initial_role: beale_graphs::Role,
+    initial_prompt: String,
+    notified: &mut mpsc::UnboundedReceiver<()>,
+) -> Result<SessionDetail, StatusCode> {
+    let mut stage_index = SEQUENTIAL_STAGES
+        .iter()
+        .position(|role| *role == initial_role)
+        .ok_or(StatusCode::BAD_REQUEST)?;
+    let mut first_prompt = Some(initial_prompt);
+    loop {
+        let role = SEQUENTIAL_STAGES[stage_index];
+        let (deadline, hard_deadline) = stage_deadlines(
+            tokio::time::Instant::now(),
+            context.config.stage_duration_minutes,
+        );
+        let (soft_tx, soft_rx) = watch::channel(false);
+        let (hard_tx, hard_rx) = watch::channel(false);
+        let mut tasks = JoinSet::new();
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(1));
+        loop {
+            if stop_requested(&context.stop) {
+                hard_tx.send_replace(true);
+            }
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                soft_tx.send_replace(true);
+            }
+            if (now >= hard_deadline || stop_requested(&context.stop)) && !tasks.is_empty() {
+                hard_tx.send_replace(true);
+                if let Ok(Some(Ok(finished))) =
+                    tokio::time::timeout(std::time::Duration::from_secs(2), tasks.join_next()).await
+                {
+                    sequential_finished(context, finished, true).await?;
+                } else {
+                    tasks.abort_all();
+                    while tasks.join_next().await.is_some() {}
+                    context
+                        .state
+                        .db
+                        .recover_graph_session(&context.base.session_id)
+                        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                }
+                break;
+            }
+            if tasks.is_empty() {
+                if stop_requested(&context.stop) {
+                    break;
+                }
+                let handoff = queued_for_stage(&context.state.db, &context.base.session_id, role)?;
+                if stage_should_advance(
+                    role,
+                    first_prompt.is_none() && handoff.is_none(),
+                    now >= deadline,
+                ) {
+                    break;
+                }
+                let work = if let Some(prompt) = first_prompt.take() {
+                    Work {
+                        role,
+                        prompt,
+                        handoff_id: None,
+                        soft_reminder: Some(soft_rx.clone()),
+                    }
+                } else if let Some(item) = handoff {
+                    context
+                        .state
+                        .db
+                        .set_graph_handoff_status(&item.id, "running")
+                        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                    Work {
+                        role,
+                        prompt: format!("Handoff from {}: {}", item.from_role, item.task),
+                        handoff_id: Some(item.id),
+                        soft_reminder: Some(soft_rx.clone()),
+                    }
+                } else if discovery_stage(role) {
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    if tokio::time::Instant::now() >= deadline || stop_requested(&context.stop) {
+                        continue;
+                    }
+                    Work {
+                        role,
+                        prompt: "Continue this discovery stage. Use current evidence and coverage; pursue fresh in-scope work, update durable records, and hand off concrete results. Summarize gaps if no further work is available.".to_owned(),
+                        handoff_id: None,
+                        soft_reminder: Some(soft_rx.clone()),
+                    }
+                } else {
+                    break;
+                };
+                let handoff_id = work.handoff_id.clone();
+                if let Err(error) = start(&mut tasks, context, work, Some(hard_rx.clone())) {
+                    if let Some(id) = handoff_id {
+                        context
+                            .state
+                            .db
+                            .set_graph_handoff_status(&id, "pending")
+                            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                    }
+                    return Err(error);
+                }
+                sequential_started(context, role).await?;
+            }
+            tokio::select! {
+                _ = tick.tick() => {},
+                _ = notified.recv() => {},
+                finished = tasks.join_next() => {
+                    let finished = finished.ok_or(StatusCode::INTERNAL_SERVER_ERROR)?
+                        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                    let failed = finished.3.is_err();
+                    sequential_finished(context, finished, false).await?;
+                    if failed {
+                        return Err(StatusCode::BAD_GATEWAY);
+                    }
+                }
+            }
+        }
+        if stop_requested(&context.stop) {
+            break;
+        }
+        stage_index = (stage_index + 1) % SEQUENTIAL_STAGES.len();
+    }
+    let (session, turns) = load_persisted(&context.state.db, parse_id(&context.base.session_id)?)?;
+    detail(&context.state.db, &session, &turns)
+}
+
+#[cfg(test)]
+mod sequential_tests {
+    use super::*;
+
+    #[test]
+    fn deadline_has_ten_minute_grace_after_configured_stage() {
+        let started = tokio::time::Instant::now();
+        let (soft, hard) = stage_deadlines(started, 60);
+        assert_eq!(soft - started, std::time::Duration::from_secs(60 * 60));
+        assert_eq!(hard - soft, std::time::Duration::from_secs(10 * 60));
+    }
+
+    #[test]
+    fn cycle_returns_to_audit_targets_and_only_downstream_empty_queues_advance() {
+        assert_eq!(SEQUENTIAL_STAGES[0], beale_graphs::Role::AuditTargets);
+        assert_eq!(SEQUENTIAL_STAGES[1], beale_graphs::Role::Discovery);
+        assert_eq!(SEQUENTIAL_STAGES[4], beale_graphs::Role::PatchGeneration);
+        assert_eq!(
+            SEQUENTIAL_STAGES[(4 + 1) % SEQUENTIAL_STAGES.len()],
+            beale_graphs::Role::AuditTargets
+        );
+        for role in [
+            beale_graphs::Role::AuditTargets,
+            beale_graphs::Role::Discovery,
+        ] {
+            assert!(!stage_should_advance(role, true, false));
+            assert!(stage_should_advance(role, true, true));
+        }
+        for role in [
+            beale_graphs::Role::Validation,
+            beale_graphs::Role::Reporter,
+            beale_graphs::Role::PatchGeneration,
+        ] {
+            assert!(!stage_should_advance(role, false, false));
+            assert!(stage_should_advance(role, true, false));
+        }
+    }
 }

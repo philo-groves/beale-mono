@@ -34,7 +34,7 @@ pub(super) async fn run_worker(state: SessionState) {
         timer.tick().await;
         let now = now_ms();
         if state.db.interrupt_automation_runs(now).is_err() {
-            eprintln!("Beale automation recovery could not read host storage.");
+            beale_host_log::error!("Beale automation recovery could not read host storage.");
             continue;
         }
         while let Ok(permit) = permits.clone().try_acquire_owned() {
@@ -48,7 +48,7 @@ pub(super) async fn run_worker(state: SessionState) {
                 }
                 Ok(None) => break,
                 Err(_) => {
-                    eprintln!("Beale automation scheduler could not claim a due job.");
+                    beale_host_log::error!("Beale automation scheduler could not claim a due job.");
                     break;
                 }
             }
@@ -101,6 +101,7 @@ async fn execute_claim(state: SessionState, claim: AutomationClaim) {
         graph_models,
         graph_node_concurrency: graph_config.concurrency,
         agent_role: String::new(),
+        stage_duration_minutes: graph_config.stage_duration_minutes,
     };
     let heartbeat_state = state.clone();
     let heartbeat_id = claim.run_id.clone();
@@ -162,7 +163,7 @@ async fn execute_claim(state: SessionState, claim: AutomationClaim) {
         )
         .is_err()
     {
-        eprintln!("Beale automation outcome could not be saved.");
+        beale_host_log::error!("Beale automation outcome could not be saved.");
     }
 }
 

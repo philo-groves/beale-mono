@@ -40,12 +40,14 @@ pub static SIMPLE_RUNTIME: SimpleRuntime = SimpleRuntime;
 pub struct FlowRuntime(&'static str);
 pub static CLOUDFLARE_RUNTIME: FlowRuntime = FlowRuntime(CLOUDFLARE_ID);
 pub static OPENAI_RUNTIME: FlowRuntime = FlowRuntime(OPENAI_ID);
+pub static SEQUENTIAL_RUNTIME: FlowRuntime = FlowRuntime(SEQUENTIAL_ID);
 
 pub fn runtime(id: &str) -> Option<&'static dyn GraphRuntime> {
     match id {
         SIMPLE_ID => Some(&SIMPLE_RUNTIME),
         CLOUDFLARE_ID => Some(&CLOUDFLARE_RUNTIME),
         OPENAI_ID => Some(&OPENAI_RUNTIME),
+        SEQUENTIAL_ID => Some(&SEQUENTIAL_RUNTIME),
         _ => None,
     }
 }
@@ -214,6 +216,12 @@ impl GraphRuntime for FlowRuntime {
             "\nSubagent model indices (omit `model_index` for the first). Delegate at most {MAX_BATCH} tasks per batch:\n"
         ));
         append_subagent_models(&mut section, config, fallback);
+        if is_pipeline_graph(self.0) {
+            section.push_str("\nResearch Pipeline discovery has two peer stages. Audit Targets maps and ranks diverse, authorized codebase scopes; Discovery investigates those ranked targets for candidate vulnerabilities. The Audit Targets handoff requires an ordered `ranked_targets` array with target IDs or locators, ranking signals, rationale, and evidence references. State uncertainty in the task. Do not skip directly from Audit Targets to Dynamic Validation.\n");
+        }
+        if self.0 == SEQUENTIAL_ID {
+            section.push_str("\nSequential scheduling: only one top-level role runs at a time. The host rotates Audit Targets, Discovery, Dynamic Validation, Reporter, and Patch Generation, then returns to Audit Targets. Handoffs queue work for the recipient stage. At a stage deadline, finish the current action and yield to the next role; the host stops the turn ten minutes later if necessary. Downstream roles advance early when their finding queues empty.\n");
+        }
         section
     }
 
@@ -244,6 +252,20 @@ pub fn handoff_definition(id: &str, current: Role) -> Option<Value> {
         .collect();
     if destinations.is_empty() {
         return None;
+    }
+    if is_pipeline_graph(id) && current == Role::AuditTargets {
+        return Some(json!({"type":"function","name":HANDOFF_TOOL,
+            "description":"Queue a ranked batch of audit targets for Discovery. The array order is the priority order; include evidence for each signal. The recipient runs independently.",
+            "parameters":{"type":"object","properties":{"role":{"type":"string","enum":["discovery"]},
+                "task":{"type":"string","minLength":1,"maxLength":1024},
+                "ranked_targets":{"type":"array","minItems":1,"maxItems":8,"items":{
+                    "type":"object","properties":{
+                        "target":{"type":"string","minLength":1,"maxLength":256},
+                        "signals":{"type":"array","minItems":1,"maxItems":6,"items":{"type":"string","enum":["reachability","sink","code_smell","bug_precedent","related_weakness","security_boundary"]}},
+                        "rationale":{"type":"string","minLength":1,"maxLength":512},
+                        "evidence_refs":{"type":"array","minItems":1,"maxItems":4,"items":{"type":"string","minLength":1,"maxLength":256}}
+                    },"required":["target","signals","rationale","evidence_refs"],"additionalProperties":false}}},
+                "required":["role","task","ranked_targets"],"additionalProperties":false}}));
     }
     Some(json!({"type":"function","name":HANDOFF_TOOL,
         "description":"Queue a task for a peer top-level agent. Include concrete instructions and evidence references. The recipient runs independently; your own work can continue.",
@@ -276,6 +298,81 @@ pub fn handoff_target(
     }) {
         return Err("handoff is not allowed by this graph");
     }
+    if is_pipeline_graph(id) && current == Role::AuditTargets {
+        if role != Role::Discovery || task.len() > 1024 {
+            return Err("invalid audit target handoff");
+        }
+        let targets = arguments
+            .get("ranked_targets")
+            .and_then(Value::as_array)
+            .filter(|targets| !targets.is_empty() && targets.len() <= 8)
+            .ok_or("ranked audit targets are required")?;
+        for target in targets {
+            let object = target.as_object().ok_or("invalid ranked audit target")?;
+            if object.len() != 4
+                || !object.keys().all(|key| {
+                    matches!(
+                        key.as_str(),
+                        "target" | "signals" | "rationale" | "evidence_refs"
+                    )
+                })
+            {
+                return Err("invalid ranked audit target");
+            }
+            for (key, limit) in [("target", 256), ("rationale", 512)] {
+                let value = target
+                    .get(key)
+                    .and_then(Value::as_str)
+                    .ok_or("invalid ranked audit target")?;
+                if value.trim().is_empty() || value.len() > limit {
+                    return Err("invalid ranked audit target");
+                }
+            }
+            let signals = target
+                .get("signals")
+                .and_then(Value::as_array)
+                .ok_or("invalid ranking signals")?;
+            if signals.is_empty()
+                || signals.len() > 6
+                || !signals.iter().all(|signal| {
+                    matches!(
+                        signal.as_str(),
+                        Some(
+                            "reachability"
+                                | "sink"
+                                | "code_smell"
+                                | "bug_precedent"
+                                | "related_weakness"
+                                | "security_boundary"
+                        )
+                    )
+                })
+            {
+                return Err("invalid ranking signals");
+            }
+            let evidence = target
+                .get("evidence_refs")
+                .and_then(Value::as_array)
+                .ok_or("invalid ranking evidence")?;
+            if evidence.is_empty()
+                || evidence.len() > 4
+                || !evidence.iter().all(|item| {
+                    item.as_str()
+                        .is_some_and(|value| !value.trim().is_empty() && value.len() <= 256)
+                })
+            {
+                return Err("invalid ranking evidence");
+            }
+        }
+        let queued = format!(
+            "{task}\n\nRanked audit targets (highest first): {}",
+            serde_json::to_string(targets).map_err(|_| "invalid ranked audit targets")?
+        );
+        if queued.len() > 4096 {
+            return Err("ranked audit target handoff is too long");
+        }
+        return Ok((role, queued));
+    }
     Ok((role, task.to_owned()))
 }
 
@@ -287,9 +384,35 @@ pub fn entry_role(id: &str) -> Option<Role> {
         .find(|role| role.is_top_level())
 }
 
+/// Earlier Research Pipeline sessions started in Discovery and have no Audit Targets model.
+pub fn entry_role_for_config(id: &str, config: &SessionGraphConfig) -> Option<Role> {
+    if id == OPENAI_ID
+        && !config
+            .models
+            .iter()
+            .any(|model| model.node_id == Role::AuditTargets.id())
+        && config
+            .models
+            .iter()
+            .any(|model| model.node_id == Role::Discovery.id())
+    {
+        return Some(Role::Discovery);
+    }
+    entry_role(id)
+}
+
 pub const SIMPLE_ID: &str = "simple";
 pub const CLOUDFLARE_ID: &str = "cloudflare_harness";
 pub const OPENAI_ID: &str = "openai_pipeline";
+pub const SEQUENTIAL_ID: &str = "sequential_pipeline";
+
+pub fn is_pipeline_graph(id: &str) -> bool {
+    matches!(id, OPENAI_ID | SEQUENTIAL_ID)
+}
+
+pub fn is_peer_graph(id: &str) -> bool {
+    matches!(id, CLOUDFLARE_ID | OPENAI_ID | SEQUENTIAL_ID)
+}
 pub const SIMPLE_NAME: &str = "Simple Orchestra";
 pub const SIMPLE_DESCRIPTION: &str =
     "One main agent with a single layer of Scout, Reviewer, and Prover subagents.";
@@ -306,6 +429,7 @@ pub enum Role {
     Validation,
     Reporter,
     PatchGeneration,
+    AuditTargets,
 }
 
 impl Role {
@@ -321,6 +445,7 @@ impl Role {
             Self::Validation => "validation",
             Self::Reporter => "reporter",
             Self::PatchGeneration => "patch_generation",
+            Self::AuditTargets => "audit_targets",
         }
     }
 
@@ -336,6 +461,7 @@ impl Role {
             Self::Validation => "Dynamic Validation",
             Self::Reporter => "Reporter",
             Self::PatchGeneration => "Patch Generation",
+            Self::AuditTargets => "Audit Targets",
         }
     }
 
@@ -357,8 +483,11 @@ impl Role {
             Self::ValidationSystem => {
                 "Independently validate and deduplicate handed-off candidates. Report evidence and uncertainty; hand unresolved gaps back to the Discovery Harness."
             }
+            Self::AuditTargets => {
+                "Scout the authorized codebase broadly before vulnerability research. Partition large repositories into bounded directory and subsystem batches, delegate independent scouting tasks, and reconcile overlap and coverage. Map diverse in-scope audit targets at useful scopes such as subsystem, package, module, file, and entry point; use Surfaces when enabled to record their locators, boundaries, relationships, mapping evidence, and coverage gaps. Rank targets using supported indicators: reachable entry points and trust boundaries, dangerous sinks, code smells, historical bug precedent, security-sensitive behavior, and related weaknesses. Separate observed evidence from inferred risk, explain uncertainty and exclusions, and avoid treating a rank as a vulnerability finding. Hand an ordered, bounded batch of target IDs or locators with ranking rationale and evidence references to Discovery. Revisit coverage and rankings as new information arrives. Do not create Candidate findings or perform validation."
+            }
             Self::Discovery => {
-                "Discover candidate vulnerabilities within the authorized scope. Start with the in-scope Surfaces inventory when enabled; update a surface's definition or mapping as its boundaries become known, and mark a mapping reviewed only after its evidence supports review. Create or revise Candidate findings for concrete hypotheses and hand off the finding ID, observations, and evidence references to Dynamic Validation. Stop at a testable hypothesis: do not build or run a PoC, complete validation, screen, or report. If no candidate is ready, continue discovery and record coverage in Surfaces."
+                "Research the ranked audit targets handed off by Audit Targets, starting with the highest supported priorities while preserving diversity of scopes. Read the target code, entry paths, trust boundaries, sinks, and relevant history; form a concrete threat model and investigate plausible weaknesses. Use Surfaces when enabled to refine boundaries and record coverage. Create or revise Candidate findings only for testable hypotheses with observations and evidence references, then hand the finding ID to Dynamic Validation. Return mapping or ranking gaps to Audit Targets. Stop before PoC execution, validation, screening, or reporting."
             }
             Self::Validation => {
                 "Dynamically validate handed-off Candidates with reproducible evidence; build or run a focused PoC here when authorized and useful. Distinguish failed checks from confirmed behavior. Complete Validated only when supported, then hand off the finding ID and evidence to Reporter. Hand unresolved gaps back to Discovery. Do not screen or report."
@@ -384,6 +513,7 @@ impl Role {
             Self::Validation => 7,
             Self::Reporter => 8,
             Self::PatchGeneration => 9,
+            Self::AuditTargets => 10,
         }
     }
 
@@ -395,7 +525,8 @@ impl Role {
             | Self::Discovery
             | Self::Validation
             | Self::Reporter
-            | Self::PatchGeneration => Some(1),
+            | Self::PatchGeneration
+            | Self::AuditTargets => Some(1),
             Self::Scout | Self::Reviewer | Self::Prover => None,
         }
     }
@@ -408,7 +539,8 @@ impl Role {
             | Self::Discovery
             | Self::Validation
             | Self::Reporter
-            | Self::PatchGeneration => 1,
+            | Self::PatchGeneration
+            | Self::AuditTargets => 1,
             Self::Scout | Self::Reviewer | Self::Prover => 16,
         }
     }
@@ -425,6 +557,7 @@ impl Role {
             "validation" => Some(Self::Validation),
             "reporter" => Some(Self::Reporter),
             "patch_generation" => Some(Self::PatchGeneration),
+            "audit_targets" => Some(Self::AuditTargets),
             _ => None,
         }
     }
@@ -587,7 +720,8 @@ pub const CLOUDFLARE_GRAPH: GraphDefinition = GraphDefinition {
     layout: &CLOUDFLARE_LAYOUT,
 };
 
-pub const OPENAI_NODES: [Role; 7] = [
+pub const OPENAI_NODES: [Role; 8] = [
+    Role::AuditTargets,
     Role::Discovery,
     Role::Validation,
     Role::Reporter,
@@ -596,7 +730,27 @@ pub const OPENAI_NODES: [Role; 7] = [
     Role::Reviewer,
     Role::Prover,
 ];
-pub const OPENAI_EDGES: [Edge; 15] = [
+pub const OPENAI_EDGES: [Edge; 19] = [
+    Edge {
+        from: Role::AuditTargets,
+        to: Role::Discovery,
+        bidirectional: true,
+    },
+    Edge {
+        from: Role::AuditTargets,
+        to: Role::Scout,
+        bidirectional: true,
+    },
+    Edge {
+        from: Role::AuditTargets,
+        to: Role::Reviewer,
+        bidirectional: true,
+    },
+    Edge {
+        from: Role::AuditTargets,
+        to: Role::Prover,
+        bidirectional: true,
+    },
     Edge {
         from: Role::Discovery,
         to: Role::Validation,
@@ -673,20 +827,25 @@ pub const OPENAI_EDGES: [Edge; 15] = [
         bidirectional: true,
     },
 ];
-pub const OPENAI_LAYOUT: [NodeLayout; 7] = [
+pub const OPENAI_LAYOUT: [NodeLayout; 8] = [
     NodeLayout {
-        role: Role::Discovery,
+        role: Role::AuditTargets,
         x: 15.0,
         y: 15.0,
     },
     NodeLayout {
+        role: Role::Discovery,
+        x: 135.0,
+        y: 15.0,
+    },
+    NodeLayout {
         role: Role::Validation,
-        x: 175.0,
+        x: 255.0,
         y: 15.0,
     },
     NodeLayout {
         role: Role::Reporter,
-        x: 335.0,
+        x: 375.0,
         y: 15.0,
     },
     NodeLayout {
@@ -712,10 +871,33 @@ pub const OPENAI_LAYOUT: [NodeLayout; 7] = [
 ];
 pub const OPENAI_GRAPH: GraphDefinition = GraphDefinition {
     id: OPENAI_ID,
-    name: "Research Pipeline",
-    description: "Discovery, dynamic validation, reporting, and patch generation as peer agents with subagents.",
+    name: "Concurrent Research Pipeline",
+    description: "Audit target scouting and ranking, vulnerability discovery, dynamic validation, reporting, and patch generation as peer agents with subagents.",
     nodes: &OPENAI_NODES,
     edges: &OPENAI_EDGES,
+    layout: &OPENAI_LAYOUT,
+};
+
+pub const SEQUENTIAL_EDGES: [Edge; 20] = {
+    let mut edges = [Edge {
+        from: Role::PatchGeneration,
+        to: Role::AuditTargets,
+        bidirectional: false,
+    }; 20];
+    let mut index = 0;
+    while index < OPENAI_EDGES.len() {
+        edges[index] = OPENAI_EDGES[index];
+        index += 1;
+    }
+    edges
+};
+
+pub const SEQUENTIAL_GRAPH: GraphDefinition = GraphDefinition {
+    id: SEQUENTIAL_ID,
+    name: "Sequential Research Pipeline",
+    description: "One research stage at a time, with timed turns, durable finding queues, and a cycle back to audit target scouting.",
+    nodes: &OPENAI_NODES,
+    edges: &SEQUENTIAL_EDGES,
     layout: &OPENAI_LAYOUT,
 };
 
@@ -724,6 +906,7 @@ pub fn graph_definition(id: &str) -> Option<&'static GraphDefinition> {
         SIMPLE_ID => Some(&SIMPLE_GRAPH),
         CLOUDFLARE_ID => Some(&CLOUDFLARE_GRAPH),
         OPENAI_ID => Some(&OPENAI_GRAPH),
+        SEQUENTIAL_ID => Some(&SEQUENTIAL_GRAPH),
         _ => None,
     }
 }
@@ -781,6 +964,7 @@ mod tests {
                 },
             ],
             concurrency: Vec::new(),
+            stage_duration_minutes: 0,
         };
         let engine = runtime(SIMPLE_ID).unwrap();
         assert_eq!(engine.id(), SIMPLE_ID);
@@ -811,9 +995,15 @@ mod tests {
         assert!(runtime("").is_none());
     }
 
+    fn example_ranked_targets() -> Value {
+        json!([{"target":"S1","signals":["reachability","sink"],
+            "rationale":"Example entry reaches a parser sink.",
+            "evidence_refs":["tool-example-001"]}])
+    }
+
     #[test]
     fn flow_graphs_have_peer_handoffs_and_subagents() {
-        for graph in [&CLOUDFLARE_GRAPH, &OPENAI_GRAPH] {
+        for graph in [&CLOUDFLARE_GRAPH, &OPENAI_GRAPH, &SEQUENTIAL_GRAPH] {
             assert_eq!(entry_role(graph.id), Some(graph.nodes[0]));
             assert_eq!(graph.layout.len(), graph.nodes.len());
             assert!(
@@ -854,14 +1044,20 @@ mod tests {
                 .iter()
                 .filter(|edge| edge.from.is_top_level() && edge.to.is_top_level())
             {
-                let handoff = json!({"role":edge.to.id(),"task":"Review example evidence"});
+                let mut handoff = json!({"role":edge.to.id(),"task":"Review example evidence"});
+                if edge.from == Role::AuditTargets {
+                    handoff["ranked_targets"] = example_ranked_targets();
+                }
                 assert_eq!(
                     handoff_target(graph.id, edge.from, &handoff).unwrap().0,
                     edge.to
                 );
                 assert!(handoff_definition(graph.id, edge.from).is_some());
                 if edge.bidirectional {
-                    let reverse = json!({"role":edge.from.id(),"task":"Recheck example claim"});
+                    let mut reverse = json!({"role":edge.from.id(),"task":"Recheck example claim"});
+                    if edge.to == Role::AuditTargets {
+                        reverse["ranked_targets"] = example_ranked_targets();
+                    }
                     assert_eq!(
                         handoff_target(graph.id, edge.to, &reverse).unwrap().0,
                         edge.from
@@ -869,6 +1065,76 @@ mod tests {
                 }
             }
         }
+        assert_eq!(entry_role(OPENAI_ID), Some(Role::AuditTargets));
+        assert_eq!(entry_role(SEQUENTIAL_ID), Some(Role::AuditTargets));
+        assert!(
+            handoff_target(
+                SEQUENTIAL_ID,
+                Role::PatchGeneration,
+                &json!({"role":"audit_targets","task":"Start the next scouting cycle"})
+            )
+            .is_ok()
+        );
+        assert!(
+            handoff_target(
+                OPENAI_ID,
+                Role::PatchGeneration,
+                &json!({"role":"audit_targets","task":"Skip stages"})
+            )
+            .is_err()
+        );
+        assert_eq!(
+            entry_role_for_config(
+                OPENAI_ID,
+                &SessionGraphConfig {
+                    models: vec![GraphNodeModel {
+                        node_id: "discovery".to_owned(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }
+            ),
+            Some(Role::Discovery)
+        );
+        assert!(
+            handoff_target(
+                OPENAI_ID,
+                Role::AuditTargets,
+                &json!({"role":"discovery","task":"Review ranked example targets","ranked_targets":example_ranked_targets()})
+            )
+            .is_ok()
+        );
+        let (recipient, queued) = handoff_target(OPENAI_ID, Role::AuditTargets,
+            &json!({"role":"discovery","task":"Review example targets","ranked_targets":example_ranked_targets()})).unwrap();
+        assert_eq!(recipient, Role::Discovery);
+        assert!(queued.contains("Ranked audit targets (highest first)"));
+        assert!(queued.contains("tool-example-001"));
+        for invalid in [
+            json!({"role":"discovery","task":"Missing ranking"}),
+            json!({"role":"discovery","task":"Empty ranking","ranked_targets":[]}),
+            json!({"role":"discovery","task":"Unsupported signal","ranked_targets":[{"target":"S1","signals":["unknown"],"rationale":"Example","evidence_refs":["tool-example-001"]}]}),
+        ] {
+            assert!(handoff_target(OPENAI_ID, Role::AuditTargets, &invalid).is_err());
+        }
+        assert!(
+            handoff_target(
+                OPENAI_ID,
+                Role::AuditTargets,
+                &json!({"role":"validation","task":"Skip analysis"})
+            )
+            .is_err()
+        );
+        assert!(
+            Role::AuditTargets
+                .instruction()
+                .contains("historical bug precedent")
+        );
+        assert!(Role::AuditTargets.instruction().contains("dangerous sinks"));
+        assert!(
+            Role::Discovery
+                .instruction()
+                .contains("ranked audit targets")
+        );
         assert!(
             handoff_target(
                 OPENAI_ID,

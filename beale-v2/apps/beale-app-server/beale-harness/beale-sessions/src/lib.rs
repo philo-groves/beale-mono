@@ -30,7 +30,8 @@ use beale_contracts::{
 use beale_extender::PluginRuntime;
 use beale_providers::{
     AuthMode, CredentialStore, OpenAiConnection, Provider, ProviderClient, ProviderProgress,
-    TextMessage, TextRole, ToolStepRequest, input_messages, provider_error_message, tool_output,
+    TextMessage, TextRole, ToolStepRequest, input_messages, provider_error_message,
+    provider_error_retryable, tool_output,
 };
 use beale_safety::ReviewRequest;
 #[cfg(any(feature = "goal-mode", test))]
@@ -273,7 +274,11 @@ fn surface_context_line(surface: &WorkspaceSurface) -> String {
                 .locator
                 .as_ref()
                 .map_or("", |locator| locator.value.as_str()),
-            200
+            if definition.type_id == "repository" {
+                800
+            } else {
+                200
+            }
         )
     );
     line.push_str(&format!(
@@ -300,6 +305,54 @@ fn surface_context_line(surface: &WorkspaceSurface) -> String {
         ));
     }
     line
+}
+
+fn surface_review_line(surface: &WorkspaceSurface) -> String {
+    let Some(definition) = &surface.definition else {
+        return format!("{} [missing definition]", surface.id);
+    };
+    let locator = definition
+        .locator
+        .as_ref()
+        .map_or("", |item| item.value.as_str());
+    let limit = if definition.type_id == "repository" {
+        800
+    } else {
+        200
+    };
+    format!(
+        "{} [{}; {}] {} {}",
+        surface.id,
+        if definition.scope == 1 {
+            "in scope"
+        } else {
+            "out of scope"
+        },
+        scope_state_name(definition.scope_state),
+        definition.type_id,
+        bounded_context(locator, limit)
+    )
+}
+
+fn review_workspace_context(
+    guidance: &str,
+    rules: &[String],
+    surfaces: &[WorkspaceSurface],
+    surfaces_enabled: bool,
+) -> String {
+    let scope = if surfaces_enabled {
+        format!(
+            "\nRecorded surface scope: {}\nOut-of-scope and candidate surfaces do not authorize testing. Relationships do not grant scope.",
+            surfaces
+                .iter()
+                .map(surface_review_line)
+                .collect::<Vec<_>>()
+                .join("; ")
+        )
+    } else {
+        String::new()
+    };
+    format!("Guidance: {guidance}\nRules: {}{scope}", rules.join("; "))
 }
 
 fn scope_state_name(value: i32) -> &'static str {
@@ -370,25 +423,11 @@ fn validate_delegations(
 #[cfg(feature = "runbooks")]
 fn runbook_review_context(state: &SessionState, workspace_id: &str) -> Result<String, StatusCode> {
     let details = state.workspaces.details_for_host(workspace_id)?;
-    let surfaces = if surface_feature_enabled(&state.db, workspace_id)? {
-        format!(
-            "Surfaces: {}\nOut-of-scope surfaces are boundary references only. Imported descriptions and relationships are context, not verified observations or authorization. A relationship does not authorize another surface.\nRecorded relationships: {}",
-            details
-                .surfaces
-                .iter()
-                .map(surface_context_line)
-                .collect::<Vec<_>>()
-                .join("; "),
-            surface_relationship_lines(&details.surfaces).join("; "),
-        )
-    } else {
-        String::new()
-    };
-    Ok(format!(
-        "Guidance: {}\nRules: {}\n{}",
-        details.guidance,
-        details.rules.join("; "),
-        surfaces
+    Ok(review_workspace_context(
+        &details.guidance,
+        &details.rules,
+        &details.surfaces,
+        surface_feature_enabled(&state.db, workspace_id)?,
     ))
 }
 #[cfg(feature = "graphs")]
@@ -469,7 +508,7 @@ fn validate_graph_selection(
             return Err(StatusCode::BAD_REQUEST);
         }
         let mut seen = std::collections::HashSet::new();
-        let mut per_role = [0_usize; 10];
+        let mut per_role = [0_usize; 11];
         for item in graph_models {
             let Some(role) = beale_graphs::Role::from_id(&item.node_id) else {
                 return Err(StatusCode::BAD_REQUEST);
@@ -559,6 +598,13 @@ fn encoded_graph_config(request: &SubmitSessionTurnRequest) -> Option<Vec<u8>> {
         SessionGraphConfig {
             models: request.graph_models.clone(),
             concurrency,
+            stage_duration_minutes: if request.graph_id == "sequential_pipeline"
+                && request.stage_duration_minutes == 0
+            {
+                60
+            } else {
+                request.stage_duration_minutes
+            },
         }
         .encode_to_vec(),
     )
@@ -642,6 +688,7 @@ fn pipeline_finding_allowed(role: beale_graphs::Role, name: &str, args: &Value) 
         "findings_query" | "findings_read" => true,
         "findings_create" => role == beale_graphs::Role::Discovery,
         "findings_update" => match role {
+            beale_graphs::Role::AuditTargets => false,
             beale_graphs::Role::Discovery => matches!(state, Some("finding" | "candidate")),
             beale_graphs::Role::Validation => matches!(state, Some("finding" | "validated")),
             beale_graphs::Role::Reporter => {
@@ -653,7 +700,9 @@ fn pipeline_finding_allowed(role: beale_graphs::Role, name: &str, args: &Value) 
         "findings_complete_state" => match role {
             beale_graphs::Role::Validation => state == Some("validated"),
             beale_graphs::Role::Reporter => matches!(state, Some("screened" | "reported")),
-            beale_graphs::Role::Discovery | beale_graphs::Role::PatchGeneration => false,
+            beale_graphs::Role::AuditTargets
+            | beale_graphs::Role::Discovery
+            | beale_graphs::Role::PatchGeneration => false,
             _ => true,
         },
         "findings_reject" => role == beale_graphs::Role::Validation,
@@ -701,6 +750,7 @@ struct PeerRun {
     turn_number: i64,
     notify: mpsc::UnboundedSender<()>,
     handoff: bool,
+    soft_reminder: Option<watch::Receiver<bool>>,
 }
 
 #[cfg(feature = "graphs")]
@@ -1046,7 +1096,7 @@ fn detail(
                 .models
                 .iter()
                 .find(|model| {
-                    beale_graphs::entry_role(&graph_id)
+                    beale_graphs::entry_role_for_config(&graph_id, &config)
                         .is_some_and(|role| model.node_id == role.id())
                 })
                 .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -1059,6 +1109,7 @@ fn detail(
                 graph_id,
                 graph_models: config.models,
                 graph_node_concurrency: config.concurrency,
+                stage_duration_minutes: config.stage_duration_minutes,
                 token_usage: Some(SessionTokenUsage::default()),
                 agent_metrics: graph_agents
                     .iter()
@@ -1360,6 +1411,7 @@ fn detail(
             .unwrap_or_default(),
         graph_models: graph_config.models,
         graph_node_concurrency: graph_config.concurrency,
+        stage_duration_minutes: graph_config.stage_duration_minutes,
         total_duration_ms: db
             .session_total_duration_ms(&session.id)
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
@@ -1750,7 +1802,7 @@ async fn run_runbook_cell(
         Ok(AuthMethod::ApiKey) => AuthMode::ApiKey,
         _ => return Err(StatusCode::BAD_REQUEST),
     };
-    let workspace_context = runbook_review_context(&state, &request.workspace_id)?;
+    let review_context = runbook_review_context(&state, &request.workspace_id)?;
     let review_args = serde_json::json!({"command":format!("# {language} runbook cell\n{source}")});
     let decision = beale_safety::review(
         &state.db,
@@ -1762,7 +1814,7 @@ async fn run_runbook_cell(
             model: &latest.model,
             name: "bash",
             arguments: &review_args,
-            workspace_context: &workspace_context,
+            workspace_context: &review_context,
         },
     )
     .await;
@@ -2334,7 +2386,9 @@ async fn run_one_turn(
     if peer.as_ref().is_some_and(|peer| {
         !matches!(
             peer.role,
-            beale_graphs::Role::Discovery | beale_graphs::Role::DiscoveryHarness
+            beale_graphs::Role::AuditTargets
+                | beale_graphs::Role::Discovery
+                | beale_graphs::Role::DiscoveryHarness
         )
     }) {
         goal = None;
@@ -2478,6 +2532,7 @@ async fn run_one_turn(
     let runbook_tools_enabled = runbook_feature_enabled(&state.db, &request.workspace_id)?;
     #[cfg(not(feature = "memories"))]
     let _ = memories_tools_enabled;
+    #[cfg(feature = "graphs")]
     let surfaces_context = if surface_tools_enabled {
         format!(
             "Surfaces: {}\nOut-of-scope surfaces are boundary references only. Imported descriptions and relationships are context, not verified observations or authorization. A relationship does not authorize another surface.\nRecorded relationships: {}",
@@ -2492,11 +2547,11 @@ async fn run_one_turn(
     } else {
         String::new()
     };
-    let workspace_context = format!(
-        "Guidance: {}\nRules: {}\n{}",
-        workspace_details.guidance,
-        workspace_details.rules.join("; "),
-        surfaces_context,
+    let review_context = review_workspace_context(
+        &workspace_details.guidance,
+        &workspace_details.rules,
+        &workspace_details.surfaces,
+        surface_tools_enabled,
     );
     #[cfg(feature = "graphs")]
     let saved_graph_id = if request.graph_id.is_empty() {
@@ -2661,11 +2716,11 @@ async fn run_one_turn(
         .plugins
         .available(&request.workspace_id)
         .map_err(|error| {
-            eprintln!("plugin directory failed: {error:#}");
+            beale_host_log::error!("plugin directory failed: {error:#}");
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
     let agent_files = AgentFiles::new().map_err(|error| {
-        eprintln!("agent files failed: {error:#}");
+        beale_host_log::error!("agent files failed: {error:#}");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
     let mut definitions = definitions();
@@ -2758,7 +2813,7 @@ async fn run_one_turn(
                 }
             }
             Err(error) => {
-                eprintln!("plugin preparation failed: {error:#}");
+                beale_host_log::error!("plugin preparation failed: {error:#}");
                 extension_entries.push_str(&format!("- Plugin `{}` is unavailable this turn because its files or servers could not be prepared.\n", plugin.name));
             }
         }
@@ -2776,7 +2831,7 @@ async fn run_one_turn(
         {
             Ok(value) => value,
             Err(error) => {
-                eprintln!("memory recall failed: {error:#}");
+                beale_host_log::error!("memory recall failed: {error:#}");
                 String::new()
             }
         }
@@ -2787,7 +2842,7 @@ async fn run_one_turn(
     let memory_section = String::new();
     let sections = [catalog_section.as_str(), memory_section.as_str()];
     let system = system_prompt::load(state.workspaces.root(), &sections).map_err(|error| {
-        eprintln!("session system prompt failed: {error:#}");
+        beale_host_log::error!("session system prompt failed: {error:#}");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
     #[cfg(feature = "graphs")]
@@ -2803,7 +2858,7 @@ async fn run_one_turn(
             &[catalog_section.as_str(), memory_section.as_str()],
         )
         .map_err(|error| {
-            eprintln!("subagent system prompt failed: {error:#}");
+            beale_host_log::error!("subagent system prompt failed: {error:#}");
             StatusCode::INTERNAL_SERVER_ERROR
         })?
     } else {
@@ -2851,7 +2906,7 @@ async fn run_one_turn(
         active_role = peer.role;
     }
     #[cfg(all(feature = "graphs", feature = "findings"))]
-    if peer.is_some() && saved_graph_id == beale_graphs::OPENAI_ID {
+    if peer.is_some() && beale_graphs::is_pipeline_graph(&saved_graph_id) {
         definitions.retain(|tool| {
             let name = tool["name"].as_str().unwrap_or_default();
             !beale_findings::is_tool(name)
@@ -2902,6 +2957,8 @@ async fn run_one_turn(
             active_role.instruction()
         ));
     }
+    #[cfg(feature = "graphs")]
+    let system_before_stage_reminder = system.clone();
     if provider != Provider::OpenAi {
         input.insert(0, json!({"role":"system","content":system}));
     }
@@ -2922,7 +2979,22 @@ async fn run_one_turn(
     let mut peer_messages = Vec::<String>::new();
     let answer: Option<String>;
     let mut segment_index = 0_u32;
+    #[cfg(feature = "graphs")]
+    let mut stage_reminder_sent = false;
     'rounds: loop {
+        #[cfg(feature = "graphs")]
+        if !stage_reminder_sent
+            && peer
+                .as_ref()
+                .and_then(|peer| peer.soft_reminder.as_ref())
+                .is_some_and(|receiver| *receiver.borrow())
+        {
+            system.push_str("\n\n## Sequential stage deadline\n\nYour stage time has ended. Finish the current action, summarize completed work and evidence, and yield. Leave remaining queued work for the next cycle.");
+            if provider != Provider::OpenAi {
+                input[0]["content"] = json!(system);
+            }
+            stage_reminder_sent = true;
+        }
         // Reserve one stream segment for the answer and one for each reasoning part.
         segment_index = segment_index.saturating_add(17);
         if stop_requested(&stop) {
@@ -2975,17 +3047,17 @@ async fn run_one_turn(
             (None, None)
         };
         let call_started = Instant::now();
-        let step = {
-            let step_request = ToolStepRequest {
-                model: &active_model.model,
-                input: &input,
-                tools: &definitions,
-                instructions: (provider == Provider::OpenAi).then_some(system.as_str()),
-                reasoning_effort,
-                workspace_root: Some(&workspace),
-            };
-            let provider_call = async {
-                if provider == Provider::OpenAi {
+        let provider_call = async {
+            for attempt in 0..2 {
+                let step_request = ToolStepRequest {
+                    model: &active_model.model,
+                    input: &input,
+                    tools: &definitions,
+                    instructions: (provider == Provider::OpenAi).then_some(system.as_str()),
+                    reasoning_effort,
+                    workspace_root: Some(&workspace),
+                };
+                let result = if provider == Provider::OpenAi {
                     state
                         .provider
                         .openai_tool_step(
@@ -3007,10 +3079,22 @@ async fn run_one_turn(
                             provider_tx.as_ref(),
                         )
                         .await
+                };
+                if let Err(error) = &result
+                    && attempt == 0
+                    && provider_error_retryable(error)
+                {
+                    beale_host_log::error!(
+                        "transient session provider failure; retrying once: {error:#}"
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    continue;
                 }
-            };
-            until_stopped(provider_call, &mut stop).await
+                return result;
+            }
+            unreachable!("provider step returns after its second attempt")
         };
+        let step = until_stopped(provider_call, &mut stop).await;
         drop(provider_tx);
         if let Some(forward) = forward {
             let _ = forward.await;
@@ -3022,7 +3106,7 @@ async fn run_one_turn(
         let step = match step {
             Ok(step) => step,
             Err(error) => {
-                eprintln!("session provider turn failed: {error:#}");
+                beale_host_log::error!("session provider turn failed: {error:#}");
                 if tool_rows.is_empty() {
                     if let Some(tx) = &progress {
                         let _ = tx
@@ -3169,7 +3253,9 @@ async fn run_one_turn(
                 && active_graph.is_some()
                 && matches!(
                     saved_graph_id.as_str(),
-                    beale_graphs::CLOUDFLARE_ID | beale_graphs::OPENAI_ID
+                    beale_graphs::CLOUDFLARE_ID
+                        | beale_graphs::OPENAI_ID
+                        | beale_graphs::SEQUENTIAL_ID
                 ) {
                 format!("{}: {summary}", active_role.label())
             } else {
@@ -3224,7 +3310,7 @@ async fn run_one_turn(
                                     model: &active_model.model,
                                     name: &call.name,
                                     arguments,
-                                    workspace_context: &workspace_context,
+                                    workspace_context: &review_context,
                                 },
                             ),
                             &mut stop,
@@ -3249,7 +3335,14 @@ async fn run_one_turn(
             #[cfg(not(feature = "surfaces"))]
             let _ = feature_review_approved;
             let (output, is_error) = if let Some(reason) = review_denial {
-                (format!("Tool denied by review: {reason}"), true)
+                (
+                    if review_unavailable {
+                        reason
+                    } else {
+                        format!("Tool denied by review: {reason}")
+                    },
+                    true,
+                )
             } else {
                 match args {
                     #[cfg(feature = "webfetch")]
@@ -3287,15 +3380,17 @@ async fn run_one_turn(
                                     model: &active_model.model,
                                     name: "plugin_call",
                                     arguments: &review_args,
-                                    workspace_context: &workspace_context,
+                                    workspace_context: &review_context,
                                 },
                             )
                             .await;
-                            anyhow::ensure!(
-                                decision.approved,
-                                "plugin tool denied by review: {}",
-                                decision.reason
-                            );
+                            if !decision.approved {
+                                if review_failed(&decision) {
+                                    review_unavailable = true;
+                                    anyhow::bail!("{}", decision.reason);
+                                }
+                                anyhow::bail!("plugin tool denied by review: {}", decision.reason);
+                            }
                             let value = state
                                 .plugins
                                 .call_tool(
@@ -3347,11 +3442,15 @@ async fn run_one_turn(
                                             model: &active_model.model,
                                             name: "bash",
                                             arguments: &review_args,
-                                            workspace_context: &workspace_context,
+                                            workspace_context: &review_context,
                                         },
                                     )
                                     .await;
                                     if !decision.approved {
+                                        if review_failed(&decision) {
+                                            review_unavailable = true;
+                                            anyhow::bail!("{}", decision.reason);
+                                        }
                                         anyhow::bail!(
                                             "runbook cell denied by review: {}",
                                             decision.reason
@@ -3436,7 +3535,7 @@ async fn run_one_turn(
                             #[cfg(feature = "graphs")]
                             {
                                 peer.is_none()
-                                    || saved_graph_id != beale_graphs::OPENAI_ID
+                                    || !beale_graphs::is_pipeline_graph(&saved_graph_id)
                                     || pipeline_finding_allowed(active_role, &call.name, &args)
                             }
                             #[cfg(not(feature = "graphs"))]
@@ -3625,7 +3724,7 @@ async fn run_one_turn(
                                         session_id: &session.id,
                                         #[cfg(feature = "agent-feedback")]
                                         feedback_enabled: agent_feedback_tools_enabled,
-                                        workspace_context: &workspace_context,
+                                        workspace_context: &review_context,
                                         surfaces_context: &surfaces_context,
                                         base_system: &child_system,
                                         reasoning_effort,
@@ -3666,7 +3765,7 @@ async fn run_one_turn(
                                             model: &active_model.model,
                                             name: &call.name,
                                             arguments: &args,
-                                            workspace_context: &workspace_context,
+                                            workspace_context: &review_context,
                                         },
                                     ),
                                     &mut stop,
@@ -3683,7 +3782,14 @@ async fn run_one_turn(
                         } else if let Some(decision) = decision
                             && !decision.approved
                         {
-                            (format!("Tool denied by review: {}", decision.reason), true)
+                            (
+                                if review_failed(&decision) {
+                                    decision.reason
+                                } else {
+                                    format!("Tool denied by review: {}", decision.reason)
+                                },
+                                true,
+                            )
                         } else {
                             match until_stopped(
                                 execute(&call.name, &args, &workspace, state.workspaces.root()),
@@ -3899,6 +4005,10 @@ async fn run_one_turn(
     if provider == Provider::OpenAi {
         close_unanswered_openai_calls(&mut input);
     }
+    #[cfg(feature = "graphs")]
+    if stage_reminder_sent && provider != Provider::OpenAi {
+        input[0]["content"] = json!(system_before_stage_reminder);
+    }
     let provider_context_json = if save_peer_context
         || (provider == Provider::OpenAi && !latest.answer.starts_with(INTERRUPTED_ANSWER))
     {
@@ -3971,7 +4081,7 @@ async fn run_one_turn(
             },
         )
         .map_err(|error| {
-            eprintln!("session turn save failed: {error:#}");
+            beale_host_log::error!("session turn save failed: {error:#}");
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
     #[cfg(feature = "graphs")]
@@ -3992,6 +4102,76 @@ mod tests {
     use beale_storage::WorkspaceRow;
     use prost::Message;
     use tower::ServiceExt;
+
+    #[test]
+    fn repository_scope_context_keeps_every_named_repo() {
+        let locator = format!(
+            "OSS Tier 1: {}, github.com/nitrojs/nitro",
+            "github.com/example/project, ".repeat(10)
+        );
+        assert!(locator.len() > 200);
+        let surface = WorkspaceSurface {
+            id: "S7".to_owned(),
+            definition: Some(beale_contracts::v1::SurfaceDefinition {
+                type_id: "repository".to_owned(),
+                name: "Authorized repository tier".to_owned(),
+                locator: Some(beale_contracts::v1::SurfaceLocator {
+                    kind: "freeform".to_owned(),
+                    value: locator,
+                }),
+                scope: 1,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let context = surface_context_line(&surface);
+        assert!(context.contains("github.com/nitrojs/nitro"));
+        assert!(context.contains("[in scope"));
+    }
+
+    #[test]
+    fn review_context_keeps_complete_scope_without_verbose_descriptions() {
+        let tier = (1..=12)
+            .map(|index| format!("github.com/example-org/example-repository-{index}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let surfaces = (1..=40)
+            .map(|number| WorkspaceSurface {
+                id: format!("S{number}"),
+                definition: Some(beale_contracts::v1::SurfaceDefinition {
+                    type_id: if number == 1 {
+                        "repository"
+                    } else {
+                        "code.module"
+                    }
+                    .to_owned(),
+                    locator: Some(beale_contracts::v1::SurfaceLocator {
+                        kind: "freeform".to_owned(),
+                        value: if number == 1 {
+                            tier.clone()
+                        } else {
+                            format!("example-repository/module-{number}")
+                        },
+                    }),
+                    scope: 1,
+                    scope_state: SurfaceScopeState::Approved as i32,
+                    description: "Synthetic description. ".repeat(30),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+            .collect::<Vec<_>>();
+        let rules = (1..=36)
+            .map(|number| format!("Rule {number}: {}", "Synthetic scope guidance. ".repeat(5)))
+            .collect::<Vec<_>>();
+        let context =
+            review_workspace_context("Synthetic workspace guidance.", &rules, &surfaces, true);
+        assert!(context.contains("example-repository-12"));
+        assert!(context.contains("S40 [in scope; approved]"));
+        assert!(!context.contains("Synthetic description"));
+        let input = json!({"tool":"findings_create","arguments":{"text":"x".repeat(4_800)},"workspace_context":context});
+        assert!(input.to_string().len() < 24_000);
+    }
 
     #[test]
     fn disabled_review_rules_do_not_stop_approved_tools() {
@@ -4029,6 +4209,18 @@ mod tests {
     #[test]
     fn pipeline_finding_stages_follow_top_level_responsibilities() {
         use beale_graphs::Role;
+        for name in [
+            "findings_create",
+            "findings_update",
+            "findings_complete_state",
+            "findings_reject",
+        ] {
+            assert!(!pipeline_finding_allowed(
+                Role::AuditTargets,
+                name,
+                &json!({"state":"candidate"})
+            ));
+        }
         assert!(pipeline_finding_allowed(
             Role::Discovery,
             "findings_create",
@@ -4654,6 +4846,22 @@ mod tests {
                 .any(|item| item.node_id == "scout" && item.max_concurrent == 3)
         );
         assert!(encoded_graph_config(&SubmitSessionTurnRequest::default()).is_none());
+        let sequential = SubmitSessionTurnRequest {
+            graph_id: beale_graphs::SEQUENTIAL_ID.to_owned(),
+            ..Default::default()
+        };
+        let saved =
+            SessionGraphConfig::decode(encoded_graph_config(&sequential).unwrap().as_slice())
+                .unwrap();
+        assert_eq!(saved.stage_duration_minutes, 60);
+        let sequential = SubmitSessionTurnRequest {
+            stage_duration_minutes: 25,
+            ..sequential
+        };
+        let saved =
+            SessionGraphConfig::decode(encoded_graph_config(&sequential).unwrap().as_slice())
+                .unwrap();
+        assert_eq!(saved.stage_duration_minutes, 25);
     }
 
     #[test]
@@ -4744,6 +4952,7 @@ mod tests {
                 max_concurrent: 1,
             }],
             agent_role: "main".to_owned(),
+            stage_duration_minutes: 0,
         };
         let decoded = SubmitSessionTurnRequest::decode(request.encode_to_vec().as_slice()).unwrap();
         assert_eq!(decoded.graph_id, "simple");
@@ -4782,6 +4991,7 @@ mod tests {
             graph_models: vec![],
             graph_node_concurrency: vec![],
             agent_role: String::new(),
+            stage_duration_minutes: 0,
         };
         let decoded = SubmitSessionTurnRequest::decode(request.encode_to_vec().as_slice()).unwrap();
         assert!(decoded.goal_mode);
@@ -5152,6 +5362,7 @@ mod tests {
                 node_id: "main".to_owned(),
                 max_concurrent: 1,
             }],
+            stage_duration_minutes: 0,
         }
         .encode_to_vec();
         let db = HostDatabase::open(&root).unwrap();
@@ -5510,6 +5721,7 @@ mod tests {
             graph_models: vec![],
             graph_node_concurrency: vec![],
             agent_role: String::new(),
+            stage_duration_minutes: 0,
         };
         let payload = request.encode_to_vec();
         let invalid_id = Request::builder()
@@ -5947,6 +6159,7 @@ mod tests {
             graph_models: vec![],
             graph_node_concurrency: vec![],
             agent_role: String::new(),
+            stage_duration_minutes: 0,
         };
         let request = Request::builder()
             .method("POST")

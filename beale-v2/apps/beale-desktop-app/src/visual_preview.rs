@@ -54,9 +54,8 @@ pub(crate) fn fixture(variant: &str) -> State {
         "typography-compact" => "typography",
         "anthropic" | "openrouter" | "xai" | "zai" | "api-key" => "providers",
         "custom-editor" => "custom",
-        "graph-editor" | "model-menu" | "goal-menu" | "graph-cloudflare" | "graph-openai" => {
-            "research"
-        }
+        "graph-editor" | "model-menu" | "goal-menu" | "graph-cloudflare" | "graph-openai"
+        | "graph-sequential" => "research",
         "graph-session" | "session-activity" | "subagent-canvas" | "subagent-popup" => "session",
         "surface-add" | "surface-delete" | "relationship" => "surface-manage",
         "workspace-name" => "workspace",
@@ -519,6 +518,9 @@ pub(crate) fn fixture(variant: &str) -> State {
             }
             if variant == "graph-openai" {
                 s.new_research_graph_id = beale_graphs::OPENAI_ID.to_owned();
+            }
+            if variant == "graph-sequential" {
+                s.new_research_graph_id = beale_graphs::SEQUENTIAL_ID.to_owned();
             }
             if name != "research" {
                 s.active_session = Some(SessionDetail {

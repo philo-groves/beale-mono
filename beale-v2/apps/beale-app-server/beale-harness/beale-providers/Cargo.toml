@@ -8,10 +8,8 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true
-base64.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 futures-util.workspace = true
-jsonwebtoken.workspace = true
 reqwest.workspace = true
 beale-storage = { path = "../beale-storage" }
 serde.workspace = true

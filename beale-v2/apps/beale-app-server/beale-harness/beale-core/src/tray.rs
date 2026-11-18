@@ -49,7 +49,9 @@ impl TrayHandle {
                                 let _ = exit.send(());
                             }
                             Ok(false) => {}
-                            Err(error) => eprintln!("Beale app-server tray failed: {error:#}"),
+                            Err(error) => {
+                                beale_host_log::error!("Beale app-server tray failed: {error:#}")
+                            }
                         }
                     }
                 }

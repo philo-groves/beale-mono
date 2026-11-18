@@ -22,15 +22,19 @@ mod tray;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let path = beale_host_log::init("app-server")?;
+    beale_host_log::info!("app-server starting; log file: {}", path.display());
+    let result = run().await;
+    if let Err(error) = &result {
+        beale_host_log::error!("app-server exited with an error: {error:#}");
+    }
+    result
+}
+
+async fn run() -> Result<()> {
     let mut args = std::env::args().skip(1);
     match args.next().as_deref() {
         None | Some("serve") => serve().await,
-        Some("login-openai") => {
-            let client = ProviderClient::new()?;
-            beale_providers::login_openai(client.http(), &CredentialStore::new()?).await?;
-            println!("OpenAI sign-in saved on this host.");
-            Ok(())
-        }
         Some("login-xai") => {
             let client = ProviderClient::new()?;
             beale_providers::login_xai(client.http(), &CredentialStore::new()?).await?;
@@ -77,7 +81,7 @@ async fn main() -> Result<()> {
             Ok(())
         }
         _ => bail!(
-            "usage: beale-core [serve | login-openai | login-xai | infer <openai|xai> <api-key|subscription> <model>]"
+            "usage: beale-core [serve | login-xai | infer <openai|xai> <api-key|subscription> <model>] (use codex login for OpenAI subscription)"
         ),
     }
 }
@@ -100,6 +104,7 @@ async fn serve() -> Result<()> {
         "Beale app-server listening on http://{}",
         listener.local_addr()?
     );
+    beale_host_log::info!("app-server listening on {}", listener.local_addr()?);
     let store = CredentialStore::new()?;
     let token = store.control_token()?;
     let workspaces = beale_workspaces::WorkspaceStore::new()?;
@@ -158,6 +163,7 @@ async fn serve() -> Result<()> {
     #[cfg(feature = "memories")]
     memory_worker.abort();
     result?;
+    beale_host_log::info!("app-server stopped");
     Ok(())
 }
 

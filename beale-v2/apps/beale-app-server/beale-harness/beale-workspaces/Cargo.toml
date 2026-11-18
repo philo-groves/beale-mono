@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+beale-host-log = { path = "../beale-host-log" }
 anyhow.workspace = true
 axum.workspace = true
 beale-contracts = { path = "../beale-contracts" }

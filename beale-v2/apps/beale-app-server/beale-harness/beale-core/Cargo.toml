@@ -25,6 +25,7 @@ axum.workspace = true
 beale-contracts = { path = "../beale-contracts" }
 beale-agent-feedback = { path = "../../../../extensions/features/beale-agent-feedback", optional = true }
 beale-extender = { path = "../beale-extender" }
+beale-host-log = { path = "../beale-host-log" }
 beale-fleet = { path = "../../../../extensions/features/beale-fleet", optional = true }
 beale-findings = { path = "../../../../extensions/features/beale-findings", optional = true }
 beale-memories = { path = "../../../../extensions/features/beale-memories", optional = true }

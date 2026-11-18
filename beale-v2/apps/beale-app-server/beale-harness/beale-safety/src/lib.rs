@@ -18,13 +18,13 @@ use beale_contracts::{
 };
 use beale_providers::{
     AuthMode, CredentialStore, InferenceRequest, Provider, ProviderClient, TextMessage, TextRole,
-    mode_name, provider_name,
+    mode_name, provider_error_message, provider_error_retryable, provider_name,
 };
 use beale_storage::{CustomPermissionRuleRow, HostDatabase};
 use prost::Message;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::time::Duration;
+use std::{future::Future, time::Duration};
 use uuid::Uuid;
 
 struct RuleSpec {
@@ -337,17 +337,49 @@ pub async fn review(
     credentials: &CredentialStore,
     request: ReviewRequest<'_>,
 ) -> ReviewDecision {
+    let provider = request.provider;
+    let mode = request.mode;
     match review_inner(db, client, credentials, request).await {
         Ok(decision) => decision,
         Err(error) => {
-            eprintln!("permission review failed: {error:#}");
+            beale_host_log::error!("permission review failed: {error:#}");
             ReviewDecision {
                 approved: false,
                 reviewed: false,
-                reason: "Review unavailable; the tool was not run.".to_owned(),
+                reason: review_failure_reason(provider, mode, &error),
             }
         }
     }
+}
+
+fn review_failure_category(provider: Provider, mode: AuthMode, error: &anyhow::Error) -> String {
+    if error
+        .chain()
+        .any(|cause| cause.to_string() == "review timed out")
+    {
+        "The reviewer timed out after a retry.".to_owned()
+    } else if error
+        .chain()
+        .any(|cause| cause.to_string() == "review input is too large")
+    {
+        "The review request exceeded its context limit; shorten the tool call or workspace scope summary.".to_owned()
+    } else if error.chain().any(|cause| {
+        matches!(
+            cause.to_string().as_str(),
+            "invalid review response" | "invalid review decision"
+        )
+    }) {
+        "The reviewer returned an invalid decision after a retry.".to_owned()
+    } else {
+        provider_error_message(provider, mode, error)
+    }
+}
+
+fn review_failure_reason(provider: Provider, mode: AuthMode, error: &anyhow::Error) -> String {
+    format!(
+        "Review unavailable: {} The tool was not run.",
+        review_failure_category(provider, mode, error)
+    )
 }
 
 async fn review_inner(
@@ -411,7 +443,7 @@ async fn review_inner(
     if guardian.is_empty() {
         return Ok(auto);
     }
-    let guardian_result = ask(
+    match ask(
         client,
         credentials,
         &request,
@@ -420,8 +452,36 @@ async fn review_inner(
         &input,
         Some(&auto.reason),
     )
-    .await?;
-    Ok(guardian_result)
+    .await
+    {
+        Ok(decision) => Ok(decision),
+        Err(error) => {
+            beale_host_log::error!("guardian review failed after Auto-Review denial: {error:#}");
+            Ok(guardian_failure_decision(
+                auto,
+                request.provider,
+                request.mode,
+                &error,
+            ))
+        }
+    }
+}
+
+fn guardian_failure_decision(
+    auto: ReviewDecision,
+    provider: Provider,
+    mode: AuthMode,
+    error: &anyhow::Error,
+) -> ReviewDecision {
+    ReviewDecision {
+        approved: false,
+        reviewed: true,
+        reason: format!(
+            "{} (Guardian unavailable: {} Auto-Review denial stands.)",
+            auto.reason,
+            review_failure_category(provider, mode, error)
+        ),
+    }
 }
 
 async fn ask(
@@ -451,30 +511,53 @@ async fn ask(
         Return exactly one JSON object: {{\"decision\":\"approved\"|\"denied\",\"reason\":\"concise concrete reason\"}}.\n{rules_text}"
     );
     let user = json!({"request": input, "auto_review_denial": prior_denial}).to_string();
-    let result = tokio::time::timeout(
-        Duration::from_secs(30),
-        client.infer(
-            request.provider,
-            request.mode,
-            &InferenceRequest {
-                model: model.to_owned(),
-                messages: vec![
-                    TextMessage {
-                        role: TextRole::System,
-                        text: system,
-                    },
-                    TextMessage {
-                        role: TextRole::User,
-                        text: user,
-                    },
-                ],
+    let inference = InferenceRequest {
+        model: model.to_owned(),
+        messages: vec![
+            TextMessage {
+                role: TextRole::System,
+                text: system,
             },
-            credentials,
-        ),
-    )
-    .await
-    .context("review timed out")??;
-    parse_review(&result)
+            TextMessage {
+                role: TextRole::User,
+                text: user,
+            },
+        ],
+    };
+    retry_review_inference(|| client.infer(request.provider, request.mode, &inference, credentials))
+        .await
+}
+
+async fn retry_review_inference<F, Fut>(mut infer: F) -> Result<ReviewDecision>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<String>>,
+{
+    for attempt in 0..2 {
+        match tokio::time::timeout(Duration::from_secs(45), infer()).await {
+            Ok(Ok(result)) => match parse_review(&result) {
+                Ok(decision) => return Ok(decision),
+                Err(error) if attempt == 0 => {
+                    beale_host_log::error!(
+                        "reviewer returned an invalid decision; retrying once: {error:#}"
+                    );
+                }
+                Err(error) => return Err(error),
+            },
+            Ok(Err(error)) if attempt == 0 && provider_error_retryable(&error) => {
+                beale_host_log::error!(
+                    "transient reviewer provider failure; retrying once: {error:#}"
+                );
+            }
+            Ok(Err(error)) => return Err(error),
+            Err(_) if attempt == 0 => {
+                beale_host_log::error!("review timed out; retrying once");
+            }
+            Err(error) => return Err(error).context("review timed out"),
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    unreachable!("review loop returns on its second attempt")
 }
 
 #[cfg(test)]
@@ -503,6 +586,69 @@ mod tests {
                 .starts_with("beale-safety-")
         );
         std::fs::remove_dir_all(resolved).unwrap();
+    }
+
+    #[tokio::test]
+    async fn invalid_review_response_is_retried_once() {
+        let attempts = std::sync::atomic::AtomicUsize::new(0);
+        let decision = retry_review_inference(|| {
+            let attempt = attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            async move {
+                Ok(if attempt == 0 {
+                    "not JSON".to_owned()
+                } else {
+                    r#"{"decision":"approved","reason":"bounded read"}"#.to_owned()
+                })
+            }
+        })
+        .await
+        .unwrap();
+        assert!(decision.approved);
+        assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn permanent_review_error_is_not_retried() {
+        let attempts = std::sync::atomic::AtomicUsize::new(0);
+        let result = retry_review_inference(|| {
+            attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            async { Err(anyhow::anyhow!("permanent reviewer failure")) }
+        })
+        .await;
+        assert!(result.is_err());
+        assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn guardian_failure_preserves_auto_review_denial() {
+        let auto = ReviewDecision {
+            approved: false,
+            reviewed: true,
+            reason: "Out of scope".to_owned(),
+        };
+        let decision = guardian_failure_decision(
+            auto,
+            Provider::OpenAi,
+            AuthMode::Subscription,
+            &anyhow::anyhow!("invalid review response"),
+        );
+        assert!(!decision.approved);
+        assert!(decision.reviewed);
+        assert!(decision.reason.contains("Out of scope"));
+        assert!(decision.reason.contains("Guardian unavailable"));
+    }
+
+    #[test]
+    fn review_failure_reason_is_actionable_without_leaking_provider_details() {
+        let oversized = anyhow::anyhow!("review input is too large");
+        let reason = review_failure_reason(Provider::OpenAi, AuthMode::Subscription, &oversized);
+        assert!(reason.contains("context limit"));
+        assert!(reason.contains("tool was not run"));
+        let invalid = anyhow::anyhow!("invalid review response");
+        assert!(
+            review_failure_reason(Provider::OpenAi, AuthMode::Subscription, &invalid)
+                .contains("invalid decision")
+        );
     }
 
     #[test]

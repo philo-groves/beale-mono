@@ -20,16 +20,20 @@ pub fn definition() -> Value {
 }
 
 pub fn summary(args: &Value) -> String {
-    format!(
-        "Web {}",
-        args.get("query")
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-            .or_else(|| args.get("url").and_then(Value::as_str))
-            .unwrap_or("")
-            .chars()
-            .take(120)
-            .collect::<String>()
+    let input = args
+        .get("query")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(|value| ("search", value))
+        .or_else(|| {
+            args.get("url")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .map(|value| ("view", value))
+        });
+    input.map_or_else(
+        || "Web request".to_owned(),
+        |(mode, value)| format!("Web {mode} {}", value.chars().take(120).collect::<String>()),
     )
 }
 
@@ -451,11 +455,16 @@ mod tests {
     }
 
     #[test]
-    fn page_summary_uses_url_when_query_is_empty() {
+    fn summary_identifies_search_and_page_inputs() {
+        assert_eq!(
+            summary(&json!({"query":"example research"})),
+            "Web search example research"
+        );
         assert_eq!(
             summary(&json!({"query":"","url":"https://example.test/a"})),
-            "Web https://example.test/a"
+            "Web view https://example.test/a"
         );
+        assert_eq!(summary(&json!({})), "Web request");
     }
 
     #[test]

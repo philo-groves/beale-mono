@@ -89,7 +89,7 @@ impl Tracking {
         if let (Some(path), Some(saved)) = (&self.path, self.last)
             && let Err(error) = saved.write(path)
         {
-            eprintln!("Beale window placement could not be saved: {error}");
+            beale_host_log::error!("Beale window placement could not be saved: {error}");
         }
     }
 }

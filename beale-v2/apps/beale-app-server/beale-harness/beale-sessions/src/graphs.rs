@@ -278,7 +278,11 @@ async fn run_child_inner(
         let step = match step {
             Ok(step) => step,
             Err(error) => {
-                eprintln!("graph subagent provider failed: {error:#}");
+                beale_host_log::error!(
+                    "graph subagent provider failed for {} ({provider:?}, {}): {error:#}",
+                    assignment.role.id(),
+                    assignment.model.model
+                );
                 return ChildOutcome {
                     result: provider_error_message(provider, mode, &error),
                     is_error: true,
@@ -455,7 +459,14 @@ async fn run_child_inner(
                     .await;
                     review_unavailable = super::review_failed(&decision);
                     if !decision.approved {
-                        (format!("Tool denied by review: {}", decision.reason), true)
+                        (
+                            if review_unavailable {
+                                decision.reason
+                            } else {
+                                format!("Tool denied by review: {}", decision.reason)
+                            },
+                            true,
+                        )
                     } else {
                         let _guard = if matches!(call.name.as_str(), "read" | "webfetch") {
                             None
@@ -773,6 +784,7 @@ mod tests {
                 node_id: "scout".to_owned(),
                 max_concurrent: 1,
             }],
+            stage_duration_minutes: 0,
         };
         let active = Arc::new([AtomicUsize::new(0), AtomicUsize::new(0)]);
         let peak = Arc::new([AtomicUsize::new(0), AtomicUsize::new(0)]);

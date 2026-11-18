@@ -209,19 +209,6 @@ impl CredentialStore {
         )
     }
 
-    pub fn host_id(&self) -> Result<String> {
-        if let Some(id) = self.db()?.setting("host-id")? {
-            let id = id.trim();
-            if id.starts_with("urn:uuid:") && uuid::Uuid::parse_str(&id[9..]).is_ok() {
-                return Ok(id.to_owned());
-            }
-            bail!("invalid persisted host identifier");
-        }
-        let id = format!("urn:uuid:{}", uuid::Uuid::new_v4());
-        self.db()?.save_setting("host-id", Some(&id))?;
-        Ok(id)
-    }
-
     pub fn load(&self, provider: &str) -> Result<Option<OAuthCredential>> {
         let path = self.credential_path(provider)?;
         match std::fs::read(&path) {

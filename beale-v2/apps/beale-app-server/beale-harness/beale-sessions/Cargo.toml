@@ -17,6 +17,7 @@ memories = ["dep:beale-memories"]
 runbooks = ["dep:beale-runbooks"]
 
 [dependencies]
+beale-host-log = { path = "../beale-host-log" }
 beale-webfetch = { path = "../../../../extensions/features/beale-webfetch", optional = true }
 anyhow.workspace = true
 axum.workspace = true

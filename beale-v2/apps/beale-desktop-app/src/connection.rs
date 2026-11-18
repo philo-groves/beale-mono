@@ -107,18 +107,20 @@ pub(crate) async fn probe(client: &Client, addr: SocketAddr) -> ConnectionStatus
 
 pub(crate) fn check_cli() -> ExitCode {
     let Ok(addr) = configured_addr() else {
-        eprintln!("Invalid BEALE_V2_APP_SERVER_ADDR; use a loopback IP and nonzero port.");
+        beale_host_log::error!(
+            "Invalid BEALE_V2_APP_SERVER_ADDR; use a loopback IP and nonzero port."
+        );
         return ExitCode::FAILURE;
     };
     let Ok(client) = http_client() else {
-        eprintln!("Could not initialize the local app-server connection.");
+        beale_host_log::error!("Could not initialize the local app-server connection.");
         return ExitCode::FAILURE;
     };
     let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
     else {
-        eprintln!("Could not initialize the local app-server connection.");
+        beale_host_log::error!("Could not initialize the local app-server connection.");
         return ExitCode::FAILURE;
     };
     let status = runtime.block_on(probe(&client, addr));
@@ -128,7 +130,7 @@ pub(crate) fn check_cli() -> ExitCode {
             ExitCode::SUCCESS
         }
         other => {
-            eprintln!("Beale app-server connection: {}.", other.label());
+            beale_host_log::error!("Beale app-server connection: {}.", other.label());
             ExitCode::FAILURE
         }
     }

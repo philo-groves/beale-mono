@@ -25,7 +25,7 @@ use beale_contracts::{
 use beale_providers::usage;
 use beale_providers::{
     AuthMode, CredentialStore, CustomProvider, ModelCatalog, ModelDefaults, Provider,
-    ProviderClient, login_openai_with_prompt, login_xai_with_prompt, mode_name, provider_name,
+    ProviderClient, codex_configured, login_xai_with_prompt, mode_name, provider_name,
 };
 use beale_storage::{HostDatabase, SubscriptionUsageRow};
 use prost::Message;
@@ -43,6 +43,7 @@ struct AuthState {
     login: Arc<Mutex<[LoginState; 5]>>,
     lead_lock: Arc<Mutex<()>>,
     usage_cache: Arc<Mutex<Option<(Instant, ProviderUsageResponse)>>>,
+    codex_status: fn() -> bool,
 }
 
 #[derive(Clone, Default)]
@@ -52,6 +53,15 @@ struct LoginState {
 }
 
 pub(super) fn router(token: String, store: CredentialStore, db: HostDatabase) -> Router {
+    router_with_codex(token, store, db, codex_configured)
+}
+
+fn router_with_codex(
+    token: String,
+    store: CredentialStore,
+    db: HostDatabase,
+    codex_status: fn() -> bool,
+) -> Router {
     Router::new()
         .route(AUTH_PROVE_PATH, post(prove))
         .route(AUTH_STATUS_PATH, get(status))
@@ -83,6 +93,7 @@ pub(super) fn router(token: String, store: CredentialStore, db: HostDatabase) ->
             login: Arc::new(Mutex::new(Default::default())),
             lead_lock: Arc::new(Mutex::new(())),
             usage_cache: Arc::new(Mutex::new(None)),
+            codex_status,
         })
 }
 
@@ -137,7 +148,11 @@ fn model_method(value: i32) -> Result<AuthMode, StatusCode> {
     }
 }
 
-fn provider_configured(store: &CredentialStore, name: &str) -> Result<bool, StatusCode> {
+fn provider_configured(
+    store: &CredentialStore,
+    name: &str,
+    codex_status: fn() -> bool,
+) -> Result<bool, StatusCode> {
     if beale_providers::valid_custom_id(name) {
         return Ok(store
             .custom_provider(name)
@@ -150,7 +165,8 @@ fn provider_configured(store: &CredentialStore, name: &str) -> Result<bool, Stat
         _ => false,
     };
     Ok(external
-        || (matches!(name, "openai" | "xai")
+        || (name == "openai" && codex_status())
+        || (name == "xai"
             && store
                 .load(name)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
@@ -160,12 +176,15 @@ fn provider_configured(store: &CredentialStore, name: &str) -> Result<bool, Stat
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?)
 }
 
-fn reconcile_lead(store: &CredentialStore) -> Result<ProviderId, StatusCode> {
+fn reconcile_lead(
+    store: &CredentialStore,
+    codex_status: fn() -> bool,
+) -> Result<ProviderId, StatusCode> {
     let saved = store
         .load_lead_provider()
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     if let Some(name) = saved.as_deref()
-        && provider_configured(store, name)?
+        && provider_configured(store, name, codex_status)?
     {
         return Ok(match name {
             "openai" => ProviderId::Openai,
@@ -184,7 +203,7 @@ fn reconcile_lead(store: &CredentialStore) -> Result<ProviderId, StatusCode> {
         ("zai", ProviderId::Zai),
         ("openrouter", ProviderId::Openrouter),
     ] {
-        if provider_configured(store, name)? {
+        if provider_configured(store, name, codex_status)? {
             store
                 .save_lead_provider(name)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -195,7 +214,7 @@ fn reconcile_lead(store: &CredentialStore) -> Result<ProviderId, StatusCode> {
         .custom_providers()
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
     {
-        if provider_configured(store, &custom.id)? {
+        if provider_configured(store, &custom.id, codex_status)? {
             store
                 .save_lead_provider(&custom.id)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -269,7 +288,7 @@ async fn status(
     }
     let store = &state.store;
     let _lead_guard = state.lead_lock.lock().await;
-    let lead_provider = reconcile_lead(store)?;
+    let lead_provider = reconcile_lead(store, state.codex_status)?;
     let login = state.login.lock().await;
     let mut providers = Vec::new();
     for (id, name, index) in [
@@ -281,11 +300,13 @@ async fn status(
     ] {
         providers.push(ProviderAuthStatus {
             provider: id as i32,
-            subscription_configured: if name == "anthropic" {
+            subscription_configured: if name == "openai" {
+                (state.codex_status)()
+            } else if name == "anthropic" {
                 beale_providers::subscription::configured(Provider::Anthropic)
             } else if name == "zai" {
                 beale_providers::subscription::configured(Provider::Zai)
-            } else if matches!(name, "openai" | "xai") {
+            } else if name == "xai" {
                 store
                     .load(name)
                     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
@@ -391,7 +412,7 @@ async fn provider_usage(
         })
         .collect::<Vec<_>>();
     if let Err(error) = state.db.record_subscription_usage(&points) {
-        eprintln!("could not record subscription usage history: {error:#}");
+        beale_host_log::error!("could not record subscription usage history: {error:#}");
     }
     *cache = Some((Instant::now(), value.clone()));
     Ok(response(value))
@@ -437,7 +458,7 @@ async fn remove_api_key(
         .store
         .remove_api_key(provider)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    reconcile_lead(&state.store)?;
+    reconcile_lead(&state.store, state.codex_status)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -451,7 +472,7 @@ async fn forget_subscription(
     }
     let request: ProviderRequest = checked_body(&headers, &body)?;
     let (provider, index) = checked_provider(request.provider)?;
-    if !matches!(provider, "openai" | "xai" | "anthropic" | "zai") {
+    if !matches!(provider, "xai" | "anthropic" | "zai") {
         return Err(StatusCode::BAD_REQUEST);
     }
     if state.login.lock().await[index].in_progress {
@@ -471,7 +492,7 @@ async fn forget_subscription(
             .remove_oauth(provider)
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     }
-    reconcile_lead(&state.store)?;
+    reconcile_lead(&state.store, state.codex_status)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -493,7 +514,7 @@ async fn set_lead_provider(
         checked_provider(request.provider)?.0
     };
     let _lead_guard = state.lead_lock.lock().await;
-    if !provider_configured(&state.store, provider)? {
+    if !provider_configured(&state.store, provider, state.codex_status)? {
         return Err(StatusCode::CONFLICT);
     }
     state
@@ -516,7 +537,7 @@ async fn start_subscription(
     if !matches!(provider, "openai" | "xai" | "anthropic" | "zai") {
         return Err(StatusCode::BAD_REQUEST);
     }
-    if matches!(provider, "anthropic" | "zai") {
+    if matches!(provider, "openai" | "anthropic" | "zai") {
         return Ok(response(StartSubscriptionResponse {
             verification_url: String::new(),
             user_code: String::new(),
@@ -543,11 +564,7 @@ async fn start_subscription(
             let prompt = move |url, code| {
                 let _ = prompt_tx.send((url, code));
             };
-            if provider == "openai" {
-                login_openai_with_prompt(client.http(), &store, prompt).await
-            } else {
-                login_xai_with_prompt(client.http(), &store, prompt).await
-            }
+            login_xai_with_prompt(client.http(), &store, prompt).await
         }
         .await;
         let result = if result.is_ok() {
@@ -580,23 +597,6 @@ async fn start_subscription(
     }
 }
 
-fn model_list_error_status(
-    provider: Provider,
-    mode: AuthMode,
-    error: &anyhow::Error,
-) -> StatusCode {
-    if provider == Provider::OpenAi
-        && mode == AuthMode::Subscription
-        && error
-            .downcast_ref::<beale_providers::OAuthRefreshError>()
-            .is_some_and(|refresh| refresh.requires_reconnect() || refresh.status == 400)
-    {
-        StatusCode::UNAUTHORIZED
-    } else {
-        StatusCode::BAD_GATEWAY
-    }
-}
-
 async fn list_models(
     State(state): State<AuthState>,
     headers: HeaderMap,
@@ -625,8 +625,8 @@ async fn list_models(
         client.list_models(provider, mode, &state.store).await
     }
     .map_err(|error| {
-        eprintln!("provider model list failed: {error:#}");
-        model_list_error_status(provider, mode, &error)
+        beale_host_log::error!("provider model list failed: {error:#}");
+        StatusCode::BAD_GATEWAY
     })?;
     Ok(response(ModelCatalogResponse {
         provider: request.provider,
@@ -676,7 +676,7 @@ async fn set_model_defaults(
     } else {
         client.list_models(provider, mode, &state.store).await
     }
-    .map_err(|error| model_list_error_status(provider, mode, &error))?;
+    .map_err(|_| StatusCode::BAD_GATEWAY)?;
     if !valid_selection(&catalog, &request.lead_model, &request.small_model) {
         return Err(StatusCode::BAD_REQUEST);
     }
@@ -708,7 +708,9 @@ async fn set_source_priority(
     if !matches!(provider, "openai" | "xai" | "anthropic" | "zai") {
         return Err(StatusCode::BAD_REQUEST);
     }
-    let subscription = if provider == "anthropic" {
+    let subscription = if provider == "openai" {
+        (state.codex_status)()
+    } else if provider == "anthropic" {
         beale_providers::subscription::configured(Provider::Anthropic)
     } else if provider == "zai" {
         beale_providers::subscription::configured(Provider::Zai)
@@ -918,7 +920,7 @@ async fn remove_custom_provider(
         .store
         .remove_custom_provider(&request.id)
         .map_err(|_| StatusCode::BAD_REQUEST)?;
-    reconcile_lead(&state.store)?;
+    reconcile_lead(&state.store, state.codex_status)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -970,7 +972,7 @@ async fn remove_custom_api_key(
         .store
         .remove_api_key(&request.id)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    reconcile_lead(&state.store)?;
+    reconcile_lead(&state.store, state.codex_status)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -983,27 +985,93 @@ mod tests {
     };
     use tower::ServiceExt;
 
-    #[test]
-    fn expired_openai_refresh_requests_reconnection_without_masking_other_failures() {
-        let refresh: anyhow::Error = beale_providers::OAuthRefreshError {
-            status: 400,
-            code: Some("invalid_grant".to_owned()),
-        }
-        .into();
-        assert_eq!(
-            model_list_error_status(Provider::OpenAi, AuthMode::Subscription, &refresh),
-            StatusCode::UNAUTHORIZED
-        );
-        assert_eq!(
-            model_list_error_status(Provider::Xai, AuthMode::Subscription, &refresh),
-            StatusCode::BAD_GATEWAY
-        );
-    }
-
     fn test_router(token: String, store: CredentialStore) -> Router {
         let root =
             std::env::temp_dir().join(format!("beale-auth-db-example-{}", uuid::Uuid::new_v4()));
-        router(token, store, HostDatabase::open(&root).unwrap())
+        router_with_codex(token, store, HostDatabase::open(&root).unwrap(), || false)
+    }
+
+    #[tokio::test]
+    async fn openai_subscription_uses_codex_sign_in_contract() {
+        let root =
+            std::env::temp_dir().join(format!("beale-codex-auth-example-{}", uuid::Uuid::new_v4()));
+        let token = "ab".repeat(32);
+        let app = test_router(token.clone(), CredentialStore::at(root.clone()));
+        let body = ProviderRequest {
+            provider: ProviderId::Openai as i32,
+            custom_provider_id: String::new(),
+        }
+        .encode_to_vec();
+        let request = Request::builder()
+            .method("POST")
+            .uri(AUTH_SUBSCRIPTION_START_PATH)
+            .header(header::CONTENT_TYPE, PROTOBUF_CONTENT_TYPE)
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .body(Body::from(body.clone()))
+            .unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), 4096).await.unwrap();
+        let sign_in = StartSubscriptionResponse::decode(bytes.as_ref()).unwrap();
+        assert!(sign_in.launch_official_app);
+        assert!(sign_in.verification_url.is_empty());
+
+        let request = Request::builder()
+            .method("POST")
+            .uri(AUTH_SUBSCRIPTION_FORGET_PATH)
+            .header(header::CONTENT_TYPE, PROTOBUF_CONTENT_TYPE)
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .body(Body::from(body))
+            .unwrap();
+        assert_eq!(
+            app.clone().oneshot(request).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
+
+        let request = Request::builder()
+            .method("POST")
+            .uri(MODELS_LIST_PATH)
+            .header(header::CONTENT_TYPE, PROTOBUF_CONTENT_TYPE)
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .body(Body::from(
+                ListModelsRequest {
+                    provider: ProviderId::Openai as i32,
+                    method: AuthMethod::Subscription as i32,
+                }
+                .encode_to_vec(),
+            ))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), 65536).await.unwrap();
+        let catalog = ModelCatalogResponse::decode(bytes.as_ref()).unwrap();
+        assert!(catalog.models.iter().any(|model| model.id == "gpt-5.6-sol"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn codex_sign_in_is_reported_without_a_beale_oauth_record() {
+        let root = std::env::temp_dir().join(format!(
+            "beale-codex-status-example-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let token = "ab".repeat(32);
+        let db = HostDatabase::open(&root).unwrap();
+        let app = router_with_codex(token.clone(), CredentialStore::at(root.clone()), db, || {
+            true
+        });
+        let request = Request::builder()
+            .uri(AUTH_STATUS_PATH)
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .body(Body::empty())
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), 4096).await.unwrap();
+        let status = ProviderAuthStatusResponse::decode(bytes.as_ref()).unwrap();
+        assert!(status.providers[0].subscription_configured);
+        assert_eq!(status.lead_provider, ProviderId::Openai as i32);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]
@@ -1044,7 +1112,10 @@ mod tests {
             app.clone().oneshot(request).await.unwrap().status(),
             StatusCode::NO_CONTENT
         );
-        assert_eq!(reconcile_lead(&store).unwrap(), ProviderId::Custom);
+        assert_eq!(
+            reconcile_lead(&store, || false).unwrap(),
+            ProviderId::Custom
+        );
         let request = Request::builder()
             .method("POST")
             .uri(CUSTOM_PROVIDER_API_KEY_PATH)
@@ -1077,7 +1148,10 @@ mod tests {
         let list = ListCustomProvidersResponse::decode(bytes).unwrap();
         assert_eq!(list.providers.len(), 1);
         assert!(list.providers[0].api_key_configured);
-        assert_eq!(reconcile_lead(&store).unwrap(), ProviderId::Custom);
+        assert_eq!(
+            reconcile_lead(&store, || false).unwrap(),
+            ProviderId::Custom
+        );
         assert_eq!(
             saved_discovery_key(&store, "custom-example", "https://api.example.test/v1")
                 .unwrap()
@@ -1131,7 +1205,10 @@ mod tests {
             app.oneshot(request).await.unwrap().status(),
             StatusCode::NO_CONTENT
         );
-        assert_eq!(reconcile_lead(&store).unwrap(), ProviderId::Unspecified);
+        assert_eq!(
+            reconcile_lead(&store, || false).unwrap(),
+            ProviderId::Unspecified
+        );
         assert!(!store.api_key_configured("custom-example").unwrap());
         drop(store);
         std::fs::remove_dir_all(root).unwrap();
@@ -1310,18 +1387,27 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("beale-lead-example-{}", uuid::Uuid::new_v4()));
         let store = CredentialStore::at(root.clone());
-        assert_eq!(reconcile_lead(&store).unwrap(), ProviderId::Unspecified);
+        assert_eq!(
+            reconcile_lead(&store, || false).unwrap(),
+            ProviderId::Unspecified
+        );
         store.save_api_key("xai", "sk-example-xai").unwrap();
         initialize_lead(&store, "xai").unwrap();
         store.save_api_key("openai", "sk-example-openai").unwrap();
         initialize_lead(&store, "openai").unwrap();
-        assert_eq!(reconcile_lead(&store).unwrap(), ProviderId::Xai);
+        assert_eq!(reconcile_lead(&store, || false).unwrap(), ProviderId::Xai);
         store.save_lead_provider("openai").unwrap();
-        assert_eq!(reconcile_lead(&store).unwrap(), ProviderId::Openai);
+        assert_eq!(
+            reconcile_lead(&store, || false).unwrap(),
+            ProviderId::Openai
+        );
         store.remove_api_key("openai").unwrap();
-        assert_eq!(reconcile_lead(&store).unwrap(), ProviderId::Xai);
+        assert_eq!(reconcile_lead(&store, || false).unwrap(), ProviderId::Xai);
         store.remove_api_key("xai").unwrap();
-        assert_eq!(reconcile_lead(&store).unwrap(), ProviderId::Unspecified);
+        assert_eq!(
+            reconcile_lead(&store, || false).unwrap(),
+            ProviderId::Unspecified
+        );
         assert!(store.load_lead_provider().unwrap().is_none());
         drop(store);
         std::fs::remove_dir_all(root).unwrap();
@@ -1388,7 +1474,12 @@ mod tests {
             std::env::temp_dir().join(format!("beale-priority-route-{}", uuid::Uuid::new_v4()));
         let token = "ab".repeat(32);
         let store = CredentialStore::at(root.clone());
-        let app = test_router(token.clone(), CredentialStore::at(root.clone()));
+        let app = router_with_codex(
+            token.clone(),
+            CredentialStore::at(root.clone()),
+            HostDatabase::open(&root).unwrap(),
+            || true,
+        );
         let body = SetSourcePriorityRequest {
             provider: ProviderId::Openai as i32,
             method: AuthMethod::ApiKey as i32,
@@ -1404,9 +1495,6 @@ mod tests {
             app.clone().oneshot(request).await.unwrap().status(),
             StatusCode::UNAUTHORIZED
         );
-        store
-            .save_api_key("openai", "sk-example-synthetic")
-            .unwrap();
         let request = Request::builder()
             .method("POST")
             .uri(SOURCE_PRIORITY_PATH)
@@ -1419,18 +1507,7 @@ mod tests {
             StatusCode::CONFLICT
         );
         store
-            .save(
-                "openai",
-                &beale_providers::OAuthCredential {
-                    access_token: "synthetic-access".to_owned(),
-                    refresh_token: "synthetic-refresh".to_owned(),
-                    expires_at: 1,
-                    client_id: "synthetic-client".to_owned(),
-                    id_token: None,
-                    subject: None,
-                    scopes: Vec::new(),
-                },
-            )
+            .save_api_key("openai", "sk-example-synthetic")
             .unwrap();
         let request = Request::builder()
             .method("POST")

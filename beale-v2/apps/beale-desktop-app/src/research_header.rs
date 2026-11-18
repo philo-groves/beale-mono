@@ -165,7 +165,7 @@ pub(crate) fn tabs(state: &State, theme: ThemeStyle<'_>, window_width: f32) -> O
     let peer_graph = started
         && matches!(
             graph_id,
-            beale_graphs::CLOUDFLARE_ID | beale_graphs::OPENAI_ID
+            beale_graphs::CLOUDFLARE_ID | beale_graphs::OPENAI_ID | beale_graphs::SEQUENTIAL_ID
         );
     let session_label = if started {
         "Main Agent"
@@ -482,6 +482,7 @@ mod tests {
         }
         let mut runtime = Runtime::new(state, view, (1100.0, 720.0), Env::new(true, 1.0));
         runtime.frame(0.0);
+        click(&mut runtime, "header-agent-tab-discovery");
         assert!(runtime.find("session-tool-discovery-example").is_some());
         assert!(runtime.find("session-tool-validation-example").is_none());
         click(&mut runtime, "header-agent-tab-validation");

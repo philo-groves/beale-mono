@@ -1,4 +1,4 @@
-use crate::{AuthMode, CredentialStore, Provider, ProviderClient, credentials::ModelDefaults};
+use crate::{AuthMode, CredentialStore, Provider, ProviderClient};
 use anyhow::{Context, Result, bail, ensure};
 use futures_util::StreamExt;
 use serde_json::Value;
@@ -27,22 +27,15 @@ impl ProviderClient {
         mode: AuthMode,
         store: &CredentialStore,
     ) -> Result<ModelCatalog> {
+        if provider == Provider::OpenAi && mode == AuthMode::Subscription {
+            return codex_catalog(store);
+        }
         if mode == AuthMode::Subscription && matches!(provider, Provider::Anthropic | Provider::Zai)
         {
             return crate::subscription::catalog(provider, store);
         }
         let token = self.token(provider, mode, store).await?;
-        let result = self.list_live_models(provider, mode, store, &token).await;
-        if result.is_err()
-            && provider == Provider::OpenAi
-            && mode == AuthMode::Subscription
-            && let Ok(Some(defaults)) = store.load_model_defaults("openai", "subscription")
-            && let Ok(daybreak_mode) = store.daybreak_mode()
-            && let Some(catalog) = saved_openai_catalog(defaults, daybreak_mode)
-        {
-            return Ok(catalog);
-        }
-        result
+        self.list_live_models(provider, mode, store, &token).await
     }
 
     async fn list_live_models(
@@ -126,21 +119,40 @@ impl ProviderClient {
     }
 }
 
-fn saved_openai_catalog(defaults: ModelDefaults, daybreak_mode: &str) -> Option<ModelCatalog> {
-    let ids = [&defaults.lead, &defaults.small];
-    if ids.iter().any(|id| {
-        !valid_id(id) || (daybreak_mode == "blue" && crate::wire::openai_requires_daybreak_red(id))
-    }) {
-        return None;
-    }
-    let mut models = Vec::new();
-    for id in ids {
-        push_model(&mut models, id, &id.replace('-', " "));
-    }
-    Some(ModelCatalog {
+fn codex_catalog(store: &CredentialStore) -> Result<ModelCatalog> {
+    // Match the v1 Codex catalog. A model lookup never depends on the OAuth
+    // refresh endpoint or the public OpenAI API model list.
+    let mut models = [
+        ("gpt-5.3-codex-spark", "GPT-5.3 Codex Spark"),
+        ("gpt-5.4", "GPT-5.4"),
+        ("gpt-5.4-mini", "GPT-5.4 mini"),
+        ("gpt-5.5", "GPT-5.5"),
+        ("gpt-5.6-luna", "GPT-5.6 Luna"),
+        ("gpt-5.6-sol", "GPT-5.6 Sol"),
+        ("gpt-5.6-terra", "GPT-5.6 Terra"),
+        ("gpt-6-sol", "GPT-6 Sol"),
+        ("gpt-6-luna", "GPT-6 Luna"),
+        ("gpt-6-astra", "GPT-6 Astra"),
+        ("gpt-daybreak-blue-latest", "Daybreak Blue"),
+        ("gpt-daybreak-red-latest", "Daybreak Red"),
+    ]
+    .into_iter()
+    .map(|(id, name)| ModelEntry {
+        id: id.to_owned(),
+        name: name.to_owned(),
+    })
+    .collect::<Vec<_>>();
+    models = filter_for_daybreak(models, Provider::OpenAi, Some(store.daybreak_mode()?));
+    let saved = store.load_model_defaults("openai", "subscription")?;
+    let selected = |id: Option<&str>, small| {
+        id.filter(|id| models.iter().any(|model| model.id == *id))
+            .map(str::to_owned)
+            .unwrap_or_else(|| recommended(Provider::OpenAi, small, &models))
+    };
+    Ok(ModelCatalog {
+        lead_model: selected(saved.as_ref().map(|value| value.lead.as_str()), false),
+        small_model: selected(saved.as_ref().map(|value| value.small.as_str()), true),
         models,
-        lead_model: defaults.lead,
-        small_model: defaults.small,
     })
 }
 
@@ -179,7 +191,6 @@ pub fn mode_name(mode: AuthMode) -> &'static str {
 
 fn parse_models(provider: Provider, mode: AuthMode, value: &Value) -> Result<Vec<ModelEntry>> {
     let items = match (provider, mode) {
-        (Provider::OpenAi, AuthMode::Subscription) => value.get("models").and_then(Value::as_array),
         (Provider::Xai, _) => value
             .get("models")
             .or_else(|| value.get("data"))
@@ -189,19 +200,7 @@ fn parse_models(provider: Provider, mode: AuthMode, value: &Value) -> Result<Vec
     .context("provider model list has no models")?;
     let mut models = Vec::new();
     for item in items {
-        if provider == Provider::OpenAi
-            && mode == AuthMode::Subscription
-            && item.get("visibility").and_then(Value::as_str) != Some("list")
-        {
-            continue;
-        }
-        let id = if provider == Provider::OpenAi && mode == AuthMode::Subscription {
-            item.get("slug")
-        } else {
-            item.get("id")
-        }
-        .and_then(Value::as_str)
-        .unwrap_or("");
+        let id = item.get("id").and_then(Value::as_str).unwrap_or("");
         if !valid_id(id) {
             continue;
         }
@@ -363,55 +362,36 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn openai_subscription_uses_visible_slugs_and_available_defaults() {
-        let value = json!({"models": [
-            {"slug":"gpt-5.6-sol","display_name":"GPT-5.6-Sol","visibility":"list"},
-            {"slug":"gpt-6.1-sol","display_name":"GPT-6.1-Sol","visibility":"list"},
-            {"slug":"gpt-6-luna","display_name":"Luna","visibility":"list"},
-            {"slug":"hidden","visibility":"hidden"}
-        ]});
-        let models = parse_models(Provider::OpenAi, AuthMode::Subscription, &value).unwrap();
-        assert_eq!(models.len(), 3);
-        assert_eq!(models[0].name, "GPT 5.6 Sol");
-        assert_eq!(models[0].id, "gpt-5.6-sol");
-        assert_eq!(recommended(Provider::OpenAi, false, &models), "gpt-5.6-sol");
-        assert_eq!(recommended(Provider::OpenAi, true, &models), "gpt-6-luna");
-        let blue = filter_for_daybreak(models.clone(), Provider::OpenAi, Some("blue"));
-        assert_eq!(blue.len(), 2);
-        assert!(blue.iter().all(|model| model.id != "gpt-6.1-sol"));
-        assert_eq!(
-            filter_for_daybreak(models.clone(), Provider::OpenAi, Some("red")),
-            models
-        );
-    }
-
-    #[test]
-    fn saved_openai_defaults_are_usable_only_in_allowed_daybreak_mode() {
-        let defaults = ModelDefaults {
-            lead: "gpt-5.6-sol".to_owned(),
-            small: "gpt-6-luna".to_owned(),
-        };
-        let catalog = saved_openai_catalog(defaults.clone(), "blue").unwrap();
-        assert_eq!(catalog.lead_model, defaults.lead);
-        assert_eq!(catalog.small_model, defaults.small);
-        assert_eq!(catalog.models.len(), 2);
-
-        let red_only = ModelDefaults {
-            lead: "gpt-6.1-sol".to_owned(),
-            small: "gpt-6-luna".to_owned(),
-        };
-        assert!(saved_openai_catalog(red_only.clone(), "blue").is_none());
-        assert!(saved_openai_catalog(red_only, "red").is_some());
+    fn codex_catalog_is_local_and_respects_daybreak_mode() {
+        let root = std::env::temp_dir().join(format!(
+            "beale-codex-model-example-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let store = CredentialStore::at(root.clone());
+        let blue = codex_catalog(&store).unwrap();
+        assert_eq!(blue.lead_model, "gpt-5.6-sol");
+        assert_eq!(blue.small_model, "gpt-6-luna");
         assert!(
-            saved_openai_catalog(
-                ModelDefaults {
-                    lead: "bad model".to_owned(),
-                    small: "gpt-6-luna".to_owned(),
-                },
-                "blue",
-            )
-            .is_none()
+            blue.models
+                .iter()
+                .any(|model| model.id == "gpt-daybreak-blue-latest")
         );
+        assert!(
+            !blue
+                .models
+                .iter()
+                .any(|model| model.id == "gpt-daybreak-red-latest")
+        );
+        store.save_daybreak_mode("red").unwrap();
+        let red = codex_catalog(&store).unwrap();
+        assert!(
+            red.models
+                .iter()
+                .any(|model| model.id == "gpt-daybreak-red-latest")
+        );
+        assert!(red.models.iter().any(|model| model.id == "gpt-6-astra"));
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

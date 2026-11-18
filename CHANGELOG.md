@@ -6,8 +6,8 @@
 
 #### Fixed
 
-- V2 OpenAI OAuth refresh failures now retain a bounded error code and direct expired grants to Reconnect in Providers. Configured subscriptions can reauthorize without first being forgotten; temporary refresh failures remain retryable.
-- V2 OpenAI subscription inference, permission reviews, and model lookup now use Beale's own OAuth grant on the public Responses API. Codex sign-in no longer overrides that grant or sends Beale traffic to Codex's private endpoint.
+- V2 desktop now writes private, rotating diagnostics with connection transitions and session load and turn failures while retaining console output.
+- V2 Providers now opens the official Codex sign-in for OpenAI subscriptions and reports Codex host sign-in state; the Beale OpenAI Reconnect and Forget controls are removed.
 - V2 sessions close unreviewed parallel tool calls before saving OpenAI context and repair earlier incomplete context when resumed. OpenAI input rejections now show a specific session error instead of a generic provider failure.
 - Long v2 graph turns can save more than 512 model calls and large subagent transcripts without rolling back the agent's entire turn. Long non-OpenAI provider conversations no longer fail solely because they contain more than 192 input items. OpenAI WebSocket 403 responses now surface as account or model access denials. Disabled review rules no longer stop otherwise approved tools.
 - V2 session token totals and Insights now advance after each completed provider call, including subagents, while a graph turn is still running. Research Pipeline roles stay within their finding stages, and successful read or bash results expose the evidence reference needed to validate a finding. An unavailable permission review ends the affected turn with a specific error instead of retrying tools indefinitely.
@@ -19,6 +19,11 @@
 
 #### Changed
 
+- V2 session transcripts combine adjacent base and Webfetch calls between commentary or reasoning entries, with counts by tool type and expandable call details. Standalone calls retain their path, command, query, or URL.
+- V2 Auto-Review now labels unavailable decisions by safe failure category, retries one transient provider failure or malformed reply with a 45-second attempt limit, and preserves a valid Auto-Review denial if Guardian cannot complete. Unreviewed tools remain blocked, and a review outage stops the affected turn, including plugin and runbook calls, without retry loops.
+- V2 Auto-Review now receives the full bounded locator for repository surfaces, so a long authorized repo tier does not hide later entries from its scope check. Reviewer rules remain unchanged.
+- V2 Graphs now offers separate Concurrent and Sequential Research Pipelines. Sequential runs rotate one top-level agent at a time through the five stages and back to Audit Targets, using a configurable stage duration (60 minutes by default), a soft deadline reminder, a hard cutoff ten minutes later, and early advancement when downstream finding queues empty. Interrupted handoffs return to the queue. Protocol 2.23 adds the saved stage duration to requests and session details.
+- V2 Research Pipeline starts with an Audit Targets peer that maps and ranks diverse authorized codebase scopes using reachability, sinks, code smells, historical precedent, and related weakness indicators. Discovery researches ranked targets before handing candidate findings to validation; earlier sessions without the new role still resume in Discovery.
 - V2 session transcripts now mute reasoning summaries and tool rows while keeping commentary prominent. Multiple reasoning parts in one provider response appear as separate entries during streaming and after reload.
 - V2 session sidebars and Insights now scope usage to the selected top-level agent and its subagents. A Subagents popover shows per-agent active counts and opens saved or live child transcripts in Canvas using the shared session components. Protocol 2.22 adds role metrics, child summaries, lifecycle events, and an authenticated child-detail route; rebuild and restart the host and desktop together.
 
@@ -295,9 +300,11 @@
 
 #### Fixed
 
+- V2 app-server now writes private, rotating host diagnostics with startup and failure details while retaining console output.
+- Surface tools now identify unsupported type and locator combinations, and threat model edits can save a scenario while marking its map reviewed. Permission reviews use a concise, complete surface scope inventory so growing descriptions do not exhaust the review input. Transient provider body interruptions retry once before a session turn fails.
+- V2 OpenAI subscription inference and permission reviews use the host Codex sign-in and Codex Responses backend. Model choices come from a local catalog, as in v1, so lookup no longer depends on OAuth refresh. API keys continue to use the public OpenAI API; existing Beale OAuth records are ignored and preserved.
 - Graph subagents report missing scope details to their parent in their result; their prompt no longer asks them to use an unavailable parent-message tool. A failed turn save now logs the underlying storage error for diagnosis.
 - Research Pipeline discovery instructions prioritize surface inventory and Candidate findings, while validation owns focused PoCs. Findings tools reject stage changes from the wrong top-level role.
-- OpenAI subscription model listing uses the same matched Codex credential as inference when available. A failed remote catalog request falls back to saved lead and small defaults, subject to the selected Daybreak mode; the host logs the underlying lookup error when no fallback applies.
 - Excess provider reasoning summary parts no longer abort a research step. OpenAI subscription permission reviews use the active research model to avoid separate model access failures, and interrupted turns show the sanitized provider cause. Daybreak selection errors report the requested and selected programs.
 
 #### Changed
@@ -324,11 +331,10 @@
 - Protocol v1.57 adds cumulative session usage snapshots at five-minute active-work intervals. SQLite schema 34 stores per-call work offsets; older calls are placed at their completed-turn boundary.
 - Protocol v1.56 adds all-session model token and measured cache totals to session detail. SQLite schema 33 preserves nullable cache-read counts per call; existing calls retain unknown cache telemetry.
 - Protocol v1.55 adds a session's cumulative completed-turn duration and campaign-activity flag to session detail, plus a stream event when graph subagents are scheduled. The aggregates include older turns outside the recent transcript window.
-- OpenAI inference and session tool turns now use the Responses WebSocket with `store: false`; same-connection tool rounds use response IDs and a failed send or missing response ID triggers host-held context replay. Requests enable server-side compaction and group tools in a namespace for subscription use.
+- OpenAI API-key inference and session tool turns use the public Responses WebSocket with `store: false`; same-connection tool rounds use response IDs and a failed send or missing response ID triggers host-held context replay. Requests enable server-side compaction and group public API tools in a namespace.
 
 #### Fixed
 
-- OpenAI subscription turns now explain when Codex and Beale are signed into different accounts, with actions to align the sign-ins or choose API Key. The cross-account credential guard remains enforced.
 - Fixed 403 errors when opening saved v2 session runbooks after Runbooks was disabled or removed from the workspace's feature scope. Authenticated document and result reads remain available; agent tools, edits, and execution still require the feature.
 - OpenAI subscription turns now use a current Codex ChatGPT sign-in when available, so the Codex Responses endpoint honors the requested Daybreak program. The host verifies the provider-selected program and fails a turn on a downgrade instead of silently treating Standard as Daybreak.
 - Reassembled streamed OpenAI output items by their output index and retained completed tool calls when the terminal response carried an empty output array, preventing reasoning-only turns caused by dropped tool items.
