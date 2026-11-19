@@ -1,11 +1,13 @@
 #[path = "findings_plot.rs"]
 mod plot;
 
+use crate::design::FadeText;
+use crate::icons::{EVIDENCE, WORKSPACE_SURFACES};
 use beale_contracts::findings::{
     self, Finding, GetRequest, GetResponse, QueryPage, QueryRequest, Status, Summary,
 };
 use reqwest::{Client, StatusCode};
-use rune::{El, ScrollSpec, col, el, row, text};
+use rune::{Color, El, ScrollSpec, col, el, icon, row, text};
 use std::net::SocketAddr;
 
 use crate::{State, ThemeStyle, form_button, ui_font};
@@ -285,13 +287,85 @@ fn date_label(ms: u64) -> String {
         .unwrap_or_else(|| "Unknown date".to_owned())
 }
 
+/// Impact bands for the recorded screening score. Colour follows the score the record holds;
+/// unscored records stay neutral rather than implying a severity.
+fn impact_color(score: Option<u8>, theme: ThemeStyle<'_>) -> Color {
+    match score {
+        Some(score) if score >= HIGH_IMPACT => theme.color("#e07676"),
+        Some(score) if score >= MEDIUM_IMPACT => theme.color("#dca15f"),
+        _ => theme.color("#a4a4a4"),
+    }
+}
+
+const HIGH_IMPACT: u8 = 70;
+const MEDIUM_IMPACT: u8 = 40;
+
+fn impact_chip(record: &Summary, theme: ThemeStyle<'_>) -> El {
+    let color = impact_color(record.impact_score, theme);
+    let label = record
+        .impact_score
+        .map_or("Unscored".to_owned(), |score| format!("Impact {score}"));
+    row()
+        .key(format!("finding-card-{}-impact", record.id))
+        .h(20.0)
+        .px(7.0)
+        .gap(5.0)
+        .center_y()
+        .radius(6.0)
+        .continuous_corners()
+        .fill(color.alpha(0.12))
+        .child(el().size(6.0, 6.0).radius(3.0).fill(color))
+        .child(text(label).font(ui_font(11.0, 600.0)).color(color))
+}
+
+fn card_meta(glyph: &'static rune::Icon, label: String, color: Color) -> El {
+    row()
+        .gap(4.0)
+        .center_y()
+        .child(icon(glyph, 12.0).color(color))
+        .child(text(label).font(ui_font(11.0, 500.0)).color(color))
+}
+
 fn card(record: &Summary, theme: ThemeStyle<'_>) -> El {
     let id = record.id.clone();
     let surface_count = record.surface_ids.len();
+    let muted = theme.color("#858585");
+    let mut header = row()
+        .w_full()
+        .gap(8.0)
+        .center_y()
+        .child(impact_chip(record, theme));
+    if let Some(reachability) = record.reachability_score {
+        header = header.child(
+            text(format!("Reach {reachability}"))
+                .font(ui_font(11.0, 500.0))
+                .color(theme.color("#999999")),
+        );
+    }
+    header = header.child(el().grow(1.0)).child(
+        text(record.id.clone())
+            .font(ui_font(11.0, 600.0))
+            .color(theme.color("#c0c0c0")),
+    );
+    // Past Candidate, a record without evidence is a gap worth seeing on the board.
+    let evidence_gap = record.evidence_count == 0 && record.status != Status::Candidate;
+    let evidence_label = match record.evidence_count {
+        0 => "No evidence".to_owned(),
+        1 => "1 evidence ref".to_owned(),
+        count => format!("{count} evidence refs"),
+    };
     col()
         .key(format!("finding-card-{}", record.id))
         .role("button")
-        .label(format!("Open {}: {}", record.id, record.title))
+        .label(format!(
+            "Open {}: {}, {}, {}",
+            record.id,
+            record.title,
+            record
+                .impact_score
+                .map_or("unscored".to_owned(), |score| format!("impact {score}")),
+            evidence_label.to_lowercase()
+        ))
         .w_full()
         .padding(13.0)
         .gap(8.0)
@@ -300,6 +374,7 @@ fn card(record: &Summary, theme: ThemeStyle<'_>) -> El {
         .fill(theme.color("#242424"))
         .hover(theme.color("#2d2d2d"))
         .border(1.0, theme.color("#353535"))
+        .child(header)
         .child(
             text(record.title.clone())
                 .w_full()
@@ -314,48 +389,44 @@ fn card(record: &Summary, theme: ThemeStyle<'_>) -> El {
                 .font(ui_font(12.0, 400.0))
                 .color(theme.color("#a4a4a4")),
         )
+        .child(el().w_full().h(1.0).fill(theme.color("#303030")))
         .child(
             row()
                 .w_full()
-                .gap(8.0)
+                .gap(12.0)
+                .center_y()
                 .child(
-                    text(record.id.clone())
-                        .font(ui_font(11.0, 550.0))
-                        .color(theme.color("#c0c0c0")),
-                )
-                .child(
-                    text(format!(
+                    card_meta(&WORKSPACE_SURFACES, surface_count.to_string(), muted).help(format!(
                         "{surface_count} {}",
                         if surface_count == 1 {
                             "surface"
                         } else {
                             "surfaces"
                         }
-                    ))
-                    .font(ui_font(11.0, 400.0))
-                    .color(theme.color("#858585")),
+                    )),
+                )
+                .child(
+                    card_meta(
+                        &EVIDENCE,
+                        if record.evidence_count == 0 {
+                            "None".to_owned()
+                        } else {
+                            record.evidence_count.to_string()
+                        },
+                        if evidence_gap {
+                            theme.color("#dca15f")
+                        } else {
+                            muted
+                        },
+                    )
+                    .help(evidence_label),
                 )
                 .child(el().grow(1.0))
                 .child(
                     text(date_label(record.updated_at_ms))
                         .font(ui_font(11.0, 400.0))
-                        .color(theme.color("#858585")),
+                        .color(muted),
                 ),
-        )
-        .child(
-            text(format!(
-                "Impact {} · Reachability {}",
-                record
-                    .impact_score
-                    .map_or("—".to_owned(), |score| score.to_string()),
-                record
-                    .reachability_score
-                    .map_or("—".to_owned(), |score| score.to_string())
-            ))
-            .w_full()
-            .wrap()
-            .font(ui_font(11.0, 500.0))
-            .color(theme.color("#999999")),
         )
         .on_press(move |state: &mut State| open_record(state, id.clone()))
 }
@@ -439,7 +510,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> E
                 .child(
                     text("Findings")
                         .min_w(0.0)
-                        .truncate()
+                        .fade_truncate()
                         .font(ui_font(21.0, 600.0))
                         .color(theme.color("#ededed")),
                 )
@@ -449,7 +520,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> E
                     } else {
                         format!("{active} active")
                     })
-                    .truncate()
+                    .fade_truncate()
                     .min_w(0.0)
                     .font(ui_font(12.0, 400.0))
                     .color(theme.color("#969696")),
@@ -808,6 +879,7 @@ mod tests {
                 status,
                 updated_at_ms: 1_700_000_000_000,
                 revision: 1,
+                evidence_count: 0,
             });
         }
         let mut runtime = Runtime::new(state, crate::view, (1800.0, 900.0), Env::new(true, 1.0));

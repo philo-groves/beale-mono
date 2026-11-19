@@ -1,4 +1,5 @@
 //! Workspace and session destinations share a persistent pair of header tabs.
+use crate::design::FadeText;
 use crate::{
     PrimaryView, State, ThemeStyle, ViewLocation, icons, ui_font, workspace_view::WorkspaceTab,
 };
@@ -36,6 +37,8 @@ pub(crate) fn workspace(state: &State) -> Option<(uuid::Uuid, WorkspaceTab)> {
         });
     Some((id, tab))
 }
+
+const WORKSPACE_TAB_MAX_WIDTH: f32 = 360.0;
 
 struct TabSeparators {
     left: bool,
@@ -227,13 +230,17 @@ pub(crate) fn tabs(state: &State, theme: ThemeStyle<'_>, window_width: f32) -> O
         },
         theme,
     )
+    // The workspace tab carries a name and a section, so it may stretch further than agent
+    // tabs before the name fades.
+    .max_w(WORKSPACE_TAB_MAX_WIDTH)
     .min_w(0.0);
     if !compact {
         workspace_tab = workspace_tab.child(
             text(name)
                 .min_w(0.0)
                 .shrink()
-                .truncate_fade()
+                .fade_truncate()
+                .help_when_truncated(name.to_owned())
                 .font(ui_font(13.0, 500.0))
                 .color(theme.color("#e2e2e2")),
         );
@@ -314,7 +321,7 @@ pub(crate) fn tabs(state: &State, theme: ThemeStyle<'_>, window_width: f32) -> O
                         text(tab_label)
                             .min_w(0.0)
                             .shrink()
-                            .truncate_fade()
+                            .fade_truncate()
                             .font(ui_font(13.0, 500.0))
                             .color(theme.color("#e2e2e2")),
                     )

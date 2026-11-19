@@ -1,3 +1,4 @@
+use crate::design::FadeText;
 use rune::{Align, Color, El, ScrollSpec, Side, Tx, col, el, icon, row, text};
 use std::rc::Rc;
 
@@ -54,14 +55,14 @@ pub(crate) fn panel<S: 'static>(
         let help = spec.item_help.map(|describe| describe(&value));
         let mut labels = col().grow(1.0).min_w(0.0).child(
             text(label.clone())
-                .truncate()
+                .fade_truncate()
                 .font(ui_font(14.0, if item.selected { 550.0 } else { 400.0 }))
                 .color(color("#eeeeee")),
         );
         if let Some(detail) = item.detail {
             labels = labels.child(
                 text(detail)
-                    .truncate()
+                    .fade_truncate()
                     .font(ui_font(12.5, 400.0))
                     .color(color("#969696")),
             );

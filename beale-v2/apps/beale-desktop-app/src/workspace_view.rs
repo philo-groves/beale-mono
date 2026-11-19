@@ -1,6 +1,7 @@
 #[path = "surface_graph.rs"]
 mod surface_graph;
 
+use crate::design::FadeText;
 use beale_contracts::v1::{
     SurfaceDefinition, SurfaceKind, SurfaceLocator, SurfaceRelationship, SurfaceScope,
     SurfaceScopeState, WorkspaceDetails, WorkspaceSurface,
@@ -59,30 +60,58 @@ impl WorkspaceTab {
     }
 }
 
-fn tab_button(tab: WorkspaceTab, selected: bool, id: uuid::Uuid, theme: ThemeStyle<'_>) -> El {
-    let color = |value| theme.color(value);
-    let tab_icon = match tab {
+fn tab_icon(tab: WorkspaceTab) -> &'static Icon {
+    match tab {
         WorkspaceTab::Surfaces => &WORKSPACE_SURFACES,
         WorkspaceTab::Findings => &FINDINGS,
         WorkspaceTab::Campaign => &TARGET,
         WorkspaceTab::Foundation => &SETTINGS,
         WorkspaceTab::Rules => &SAFETY,
+    }
+}
+
+/// Width the labeled workspace view tabs need.
+fn labeled_tabs_width(tabs: &[WorkspaceTab]) -> f32 {
+    let widths: Vec<f32> = tabs
+        .iter()
+        .map(|tab| crate::design::segmented_tab_width(tab.label(), true))
+        .collect();
+    crate::design::segmented_group_width(&widths)
+}
+
+/// Narrowest workspace title kept beside labeled tabs before the tabs drop their labels.
+const TITLE_MIN_WIDTH_BESIDE_LABELS: f32 = 280.0;
+
+fn tab_button(
+    tab: WorkspaceTab,
+    selected: bool,
+    labeled: bool,
+    id: uuid::Uuid,
+    theme: ThemeStyle<'_>,
+) -> El {
+    let button = if labeled {
+        crate::design::segmented_tab(tab.label(), Some(tab_icon(tab)), selected, true, theme)
+    } else {
+        // Icon-only fallback for narrow pages keeps the same control and names itself on hover.
+        crate::design::segmented_tab("", None, selected, true, theme)
+            .label(format!(
+                "{}{}",
+                tab.label(),
+                if selected { ", selected" } else { "" }
+            ))
+            .w(crate::design::CONTROL_HEIGHT)
+            .px(0.0)
+            .help(tab.label())
+            .child(
+                icon(tab_icon(tab), crate::design::TAB_ICON_SIZE).color(if selected {
+                    theme.accent()
+                } else {
+                    theme.color("#969696")
+                }),
+            )
     };
-    el().key(tab.key())
-        .role("tab")
-        .label(tab.label())
-        .help(tab.label())
-        .size(32.0, 32.0)
-        .center()
-        .radius(10.0)
-        .continuous_corners()
-        .fill(if selected {
-            theme.subtle_accent()
-        } else {
-            Color::TRANSPARENT
-        })
-        .hover(color("#303030"))
-        .child(icon(tab_icon, 17.0).color(color("#e2e2e2")))
+    button
+        .key(tab.key())
         .on_press_tx(move |state: &mut State, tx| {
             state.workspace_surface_management_open = false;
             state.navigate_to(ViewLocation::Workspace(id, tab));
@@ -103,7 +132,7 @@ fn read_only_value(value: String, width: f32, theme: ThemeStyle<'_>) -> El {
         .child(
             text(value)
                 .min_w(0.0)
-                .truncate()
+                .fade_truncate()
                 .font(ui_font(14.0, 400.0))
                 .color(theme.color("#e2e2e2")),
         )
@@ -519,7 +548,7 @@ fn surface_network_details(state: &State, theme: ThemeStyle<'_>) -> El {
                     )
                     .grow(1.0)
                     .min_w(0.0)
-                    .truncate()
+                    .fade_truncate()
                     .font(ui_font(15.0, 600.0))
                     .color(theme.color("#e4e4e4")),
                 )
@@ -689,7 +718,7 @@ fn surface_network_details(state: &State, theme: ThemeStyle<'_>) -> El {
                     ))
                     .grow(1.0)
                     .min_w(0.0)
-                    .truncate()
+                    .fade_truncate()
                     .font(ui_font(12.0, 400.0))
                     .color(theme.color("#b8b8b8")),
                 )
@@ -1496,7 +1525,7 @@ pub(crate) fn surface_delete_dialog(state: &State, theme: ThemeStyle<'_>) -> [El
         .child(
             text(identity)
                 .w_full()
-                .truncate()
+                .fade_truncate()
                 .font(ui_font(14.0, 500.0))
                 .color(theme.color("#e2e2e2")),
         )
@@ -1551,29 +1580,41 @@ pub(crate) fn render(
         .iter()
         .find(|workspace| workspace.id == id.to_string())
         .map_or("Workspace", |workspace| workspace.name.as_str());
-    let mut tabs = row()
+    let visible_tabs: Vec<WorkspaceTab> = WorkspaceTab::ALL
+        .into_iter()
+        .filter(|tab| match tab {
+            WorkspaceTab::Surfaces => {
+                crate::extensions_view::surfaces_enabled(state, &id.to_string())
+            }
+            WorkspaceTab::Findings => {
+                crate::extensions_view::findings_enabled(state, &id.to_string())
+            }
+            _ => true,
+        })
+        .collect();
+    let labeled_width = labeled_tabs_width(&visible_tabs);
+    let labeled = page_width - labeled_width - 12.0 >= TITLE_MIN_WIDTH_BESIDE_LABELS;
+    let tabs_width = if labeled {
+        labeled_width
+    } else {
+        crate::design::segmented_group_width(&vec![
+            crate::design::CONTROL_HEIGHT;
+            visible_tabs.len()
+        ])
+    };
+    // The title yields space first; the tab group keeps one line at its full width.
+    let mut tabs = crate::design::segmented_control(theme)
         .key("workspace-view-tabs")
-        .role("tablist")
         .label("Workspace views")
-        .h(42.0)
-        .px(5.0)
-        .gap(3.0)
-        .center_y()
-        .radius(14.0)
-        .continuous_corners()
-        .fill(theme.color("#0d0d0d"));
-    for tab in WorkspaceTab::ALL {
-        if tab == WorkspaceTab::Surfaces
-            && !crate::extensions_view::surfaces_enabled(state, &id.to_string())
-        {
-            continue;
-        }
-        if tab == WorkspaceTab::Findings
-            && !crate::extensions_view::findings_enabled(state, &id.to_string())
-        {
-            continue;
-        }
-        tabs = tabs.child(tab_button(tab, state.workspace_tab == tab, id, theme));
+        .min_w(tabs_width);
+    for tab in visible_tabs {
+        tabs = tabs.child(tab_button(
+            tab,
+            state.workspace_tab == tab,
+            labeled,
+            id,
+            theme,
+        ));
     }
     let header = row()
         .key("workspace-view-header")
@@ -1598,7 +1639,7 @@ pub(crate) fn render(
                     text(name)
                         .key("workspace-view-title")
                         .min_w(0.0)
-                        .truncate()
+                        .fade_truncate()
                         .font(view_title_font())
                         .color(theme.color("#f2f2f2")),
                 ),

@@ -31,17 +31,22 @@ pub(crate) fn toggle_button(
     let key = key.into();
     let status = if checked { "on" } else { "off" };
     let label = label.into();
+    // Dark themes use neutral accents, so "off" recedes (muted thumb on a dim track) and the
+    // lit accent track is the only bright state.
+    let dark = theme.is_dark();
     let track = if checked {
         theme.accent()
     } else {
-        theme.color("#414141")
+        theme.color(if dark { "#2b2b2b" } else { "#414141" })
     };
     let thumb = if checked {
         "#0d0d0d"
-    } else if available {
-        "#f2f2f2"
+    } else if !available {
+        if dark { "#5c5c5c" } else { "#969696" }
+    } else if dark {
+        "#8c8c8c"
     } else {
-        "#969696"
+        "#f2f2f2"
     };
     let mut toggle = row()
         .key(key.clone())
@@ -61,7 +66,7 @@ pub(crate) fn toggle_button(
             if checked {
                 theme.accent()
             } else {
-                theme.color("#555555")
+                theme.color(if dark { "#474747" } else { "#555555" })
             },
         )
         .child(
@@ -76,7 +81,13 @@ pub(crate) fn toggle_button(
                 }),
         );
     if available {
-        toggle = toggle.hover(theme.color(if checked { "#eeeeee" } else { "#4a4a4a" }));
+        toggle = toggle.hover(theme.color(if checked {
+            "#eeeeee"
+        } else if dark {
+            "#363636"
+        } else {
+            "#4a4a4a"
+        }));
     }
     toggle
 }

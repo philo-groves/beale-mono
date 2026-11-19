@@ -21,6 +21,13 @@
 
 #### Changed
 
+- V2 Home now lists the most recently active sessions under Continue research and shows workspace cards with directory, session count, and last activity. The count cards and Research Desk badge are removed.
+- V2 sidenav collapses when the window narrows below 1000px and returns when it widens, unless toggled in between. Workspace form controls wrap below their labels when both cannot share a line.
+- V2 overflowing text now fades at its trailing edge everywhere instead of ending with an ellipsis; multi-line card descriptions fade at the bottom only when cut. Truncated session, workspace, and card text shows in full on hover.
+- V2 workspace pages switch views with labeled Surfaces, Findings, Rules, and Settings tabs, falling back to icons on narrow pages. Surfaces uses a network icon, and the header workspace tab widens so names fit.
+- V2 Findings cards lead with an impact chip colored from the recorded screening score, show reachability, surface and evidence counts, and flag records past Candidate that cite no evidence. Finding summaries gain `evidence_count` (distinct supporting references, counter-evidence excluded); payloads without it read as 0.
+- V2 Surfaces relationship labels sit on their own edge and avoid other edges where possible. Out-of-scope edges use an even dash pattern with a solid run into the arrowhead.
+- V2 Dark and Midnight toggles dim their off state so enabled controls stand out.
 - V2 Fleet now shows only App Servers and Virtual Machines, without repeated page breadcrumbs and descriptions.
 - V2 provider usage circles in the icon rail now open the matching provider settings tab.
 - V2 per-view sidenav navigation and list rows are 34px high, reduced from 36px.

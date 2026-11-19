@@ -1,3 +1,4 @@
+use crate::design::FadeText;
 use beale_contracts::v1::{
     AuthMethod, GoalStatus, ReasoningEffort, SessionRole, SessionStreamKind, SessionToolSummary,
 };
@@ -527,7 +528,7 @@ fn section_row(
             text(value)
                 .grow(1.0)
                 .min_w(0.0)
-                .truncate()
+                .fade_truncate()
                 .font(ui_font(13.5, 450.0))
                 .color(theme.color("#eeeeee")),
         )
@@ -601,7 +602,7 @@ pub(crate) fn model_menu(state: &State, theme: ThemeStyle<'_>) -> El {
                     text(option.label)
                         .grow(1.0)
                         .min_w(0.0)
-                        .truncate()
+                        .fade_truncate()
                         .font(ui_font(13.5, if option.selected { 550.0 } else { 400.0 }))
                         .color(theme.color("#eeeeee")),
                 )
@@ -829,7 +830,7 @@ fn graph_node(state: &State, placement: GraphNodePlacement, theme: ThemeStyle<'_
             .key(format!("new-research-graph-model-label-{}", role.id()))
             .min_w(0.0)
             .grow(1.0)
-            .truncate()
+            .fade_truncate()
             .font(ui_font(12.0, 400.0))
             .color(theme.color("#999999")),
     );
@@ -1308,7 +1309,7 @@ pub(crate) fn graph_editor_model_menu(state: &State, theme: ThemeStyle<'_>) -> E
                 .child(
                     text(choice.name)
                         .grow(1.0)
-                        .truncate()
+                        .fade_truncate()
                         .font(ui_font(14.0, 400.0))
                         .color(theme.color("#eeeeee")),
                 )
@@ -1369,7 +1370,7 @@ fn new_research_setup(state: &State, theme: ThemeStyle<'_>, available_width: f32
             .child(
                 text(name)
                     .min_w(0.0)
-                    .truncate_fade()
+                    .fade_truncate()
                     .font(crate::view_title_font())
                     .color(theme.color("#eeeeee"))
                     .group_color(theme.color("#aaaaaa")),
@@ -1386,7 +1387,7 @@ fn new_research_setup(state: &State, theme: ThemeStyle<'_>, available_width: f32
             "Home",
             text("New Research")
                 .role("heading")
-                .truncate_fade()
+                .fade_truncate()
                 .font(crate::view_title_font())
                 .color(theme.color("#eeeeee")),
             theme,
@@ -2044,7 +2045,7 @@ pub(crate) fn transcript_tool_series(
                         } else {
                             "#969696"
                         }))
-                        .truncate(),
+                        .fade_truncate(),
                 )
                 .child(
                     icon(
@@ -2107,7 +2108,7 @@ fn transcript_tool_view(
                     text(label.to_owned())
                         .font(ui_font(13.0, 400.0))
                         .color(theme.color(if tool.is_error { "#e07676" } else { "#969696" }))
-                        .truncate(),
+                        .fade_truncate(),
                 )
                 .child(
                     icon(
@@ -2591,7 +2592,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
         .child(
             text(model_label)
                 .min_w(0.0)
-                .truncate()
+                .fade_truncate()
                 .font(ui_font(13.0, 450.0))
                 .color(theme.color(if selected.is_some() {
                     "#b8b8b8"
@@ -2778,7 +2779,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
         .child(
             text(workspace_name)
                 .min_w(0.0)
-                .truncate()
+                .fade_truncate()
                 .font(ui_font(13.0, 500.0))
                 .color(theme.color(if state.workspaces.is_empty() {
                     "#888888"

@@ -1,3 +1,4 @@
+use crate::design::FadeText;
 use beale_contracts::{
     PROTOBUF_CONTENT_TYPE, QUICK_CHAT_TURNS_PATH,
     v1::{QuickChatDetail, QuickChatTurnRequest, SessionRole},
@@ -384,7 +385,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, cx: &mut Cx<State>) -
             .key("quick-chat-title")
             .font(ui_font(13.0, 550.0))
             .color(rune::color::hex(palette.text).unwrap_or(rune::Color::BLACK))
-            .truncate()
+            .fade_truncate()
             .min_w(0.0)
     } else {
         row()
@@ -416,7 +417,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, cx: &mut Cx<State>) -
                 text(workspace_name)
                     .font(ui_font(13.0, 500.0))
                     .color(rune::color::hex(palette.text).unwrap_or(rune::Color::BLACK))
-                    .truncate()
+                    .fade_truncate()
                     .min_w(0.0),
             )
             .child(

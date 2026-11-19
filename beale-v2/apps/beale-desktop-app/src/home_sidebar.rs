@@ -1,3 +1,4 @@
+use crate::design::FadeText;
 use rune::{Align, Color, El, Icon, ScrollSpec, Side, col, el, icon, row, text};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -151,7 +152,8 @@ fn session_row(key: String, label: &str, italic: bool, active: bool, theme: Them
         .font(if italic { font.italic() } else { font })
         .color(color(if active { "#f2f2f2" } else { "#b8b8b8" }))
         .min_w(0.0)
-        .truncate_fade();
+        .fade_truncate()
+        .help_when_truncated(label.to_owned());
     row()
         .key(key)
         .role("button")
@@ -287,7 +289,7 @@ pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
                         .min_w(0.0)
                         .font(ui_font(14.0, if selected { 550.0 } else { 400.0 }))
                         .color(color("#dddddd"))
-                        .truncate_fade(),
+                        .fade_truncate(),
                 );
             if let Some(id) = id {
                 opener = opener.on_press(move |state: &mut State| state.open_workspace(id));
@@ -681,7 +683,7 @@ pub(crate) fn workspace_tooltip(state: &State, theme: ThemeStyle<'_>) -> Option<
                             .key("home-workspace-tooltip-directory")
                             .grow(1.0)
                             .min_w(0.0)
-                            .truncate_fade()
+                            .fade_truncate()
                             .font(ui_font(12.0, 400.0))
                             .color(theme.color("#b8b8b8")),
                     ),
@@ -719,7 +721,7 @@ pub(crate) fn archive_dialog(state: &State, theme: ThemeStyle<'_>) -> [El; 2] {
         .child(
             text(title.to_owned())
                 .w_full()
-                .truncate_fade()
+                .fade_truncate()
                 .font(ui_font(14.0, 500.0))
                 .color(theme.color("#e2e2e2")),
         )

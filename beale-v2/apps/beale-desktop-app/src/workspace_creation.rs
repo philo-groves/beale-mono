@@ -1,3 +1,4 @@
+use crate::design::FadeText;
 use rune::{El, FileDialogOptions, ScrollSpec, TextEdit, Tx, col, el, icon, row, text, text_input};
 
 use crate::{
@@ -23,6 +24,9 @@ struct TabSpec {
     key: &'static str,
     label: &'static str,
 }
+
+/// Narrowest label column beside a form control before the control wraps below it.
+const ROW_LABEL_MIN_WIDTH: f32 = 200.0;
 
 const TABS: [TabSpec; 4] = [
     TabSpec {
@@ -130,19 +134,20 @@ pub(crate) fn value_with_actions(
     theme: ThemeStyle<'_>,
 ) -> El {
     let empty = value.trim().is_empty();
+    // Hug the value up to `width`: it sits at the row's end beside its label and at the start
+    // of its own line when the row wraps.
     let mut control = row()
         .key(key)
-        .w(width)
+        .max_w(width)
         .min_w(0.0)
         .h(32.0)
         .center_y()
         .gap(6.0)
-        .child(el().grow(1.0))
         .child(
             text(if empty { "Required".to_owned() } else { value })
                 .key(format!("{key}-value"))
                 .min_w(0.0)
-                .truncate()
+                .fade_truncate()
                 .font(ui_font(14.0, 400.0))
                 .color(theme.color(if empty { "#dca15f" } else { "#e2e2e2" })),
         );
@@ -762,16 +767,19 @@ pub(crate) fn row_with_control(
     theme: ThemeStyle<'_>,
 ) -> El {
     let color = |value| theme.color(value);
+    // When the label and control cannot share a line, the control wraps below the label
+    // instead of squeezing the description into a narrow column.
     row()
         .w_full()
         .min_h(62.0)
         .py(10.0)
         .center_y()
+        .flex_wrap()
         .gap(12.0)
         .child(
             col()
                 .grow(1.0)
-                .min_w(0.0)
+                .min_w(ROW_LABEL_MIN_WIDTH)
                 .gap(4.0)
                 .child(text(label).font(form_label_font()).color(color("#e2e2e2")))
                 .child(
@@ -1389,7 +1397,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
             text("New Workspace")
                 .key("workspace-creation-title")
                 .role("heading")
-                .truncate_fade()
+                .fade_truncate()
                 .font(view_title_font())
                 .color(color("#f2f2f2")),
             theme,

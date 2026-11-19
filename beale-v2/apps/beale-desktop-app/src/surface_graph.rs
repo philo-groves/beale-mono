@@ -1,5 +1,6 @@
 //! Surface overview: recorded properties and relationships, with no inferred risk scores.
 use super::*;
+use crate::design::FadeText;
 use crate::workspace_surface_layout::{self as atlas, Focus, NODE_HEIGHT, NODE_MAX_WIDTH};
 use rune::{Drag, LineCap, Phase, Shape, Tx, canvas};
 
@@ -186,7 +187,7 @@ fn node(
                     .key(format!("workspace-surface-visible-name-{index}"))
                     .w_full()
                     .min_w(0.0)
-                    .truncate()
+                    .fade_truncate()
                     .font(ui_font(11.5 * text_scale, 600.0))
                     .color(theme.color("#eeeeee")),
             )
@@ -228,7 +229,7 @@ fn node(
                     text(type_id.to_owned())
                         .grow(1.0)
                         .min_w(0.0)
-                        .truncate()
+                        .fade_truncate()
                         .font(ui_font(10.5 * zoom, 500.0))
                         .color(theme.color("#999999")),
                 )
@@ -243,7 +244,7 @@ fn node(
                 .key(format!("workspace-surface-visible-name-{index}"))
                 .w_full()
                 .min_w(0.0)
-                .truncate()
+                .fade_truncate()
                 .font(ui_font(14.5 * zoom.max(0.84), 600.0))
                 .color(theme.color("#eeeeee")),
         )
@@ -259,7 +260,7 @@ fn node(
                 .to_owned(),
             )
             .w_full()
-            .truncate()
+            .fade_truncate()
             .font(ui_font(10.5 * zoom, 400.0))
             .color(theme.color("#999999"))
         })
@@ -449,7 +450,7 @@ fn overview(state: &State, theme: ThemeStyle<'_>, width: f32) -> El {
                         )
                         .child(
                             text(caption)
-                                .truncate()
+                                .fade_truncate()
                                 .font(ui_font(9.5, 400.0))
                                 .color(theme.color("#888888")),
                         ),
@@ -519,37 +520,102 @@ fn overlaps(a: [f32; 4], b: [f32; 4]) -> bool {
         && a[1] + a[3] + 3.0 > b[1]
 }
 
+/// Whether any sampled point of `path` (vertices and segment midpoints) falls inside `rect`
+/// grown by a small margin.
+fn path_crosses(rect: [f32; 4], path: &[[f32; 2]]) -> bool {
+    let inside = |[x, y]: [f32; 2]| {
+        x > rect[0] - 3.0
+            && x < rect[0] + rect[2] + 3.0
+            && y > rect[1] - 3.0
+            && y < rect[1] + rect[3] + 3.0
+    };
+    path.iter().copied().any(inside)
+        || path.windows(2).any(|pair| {
+            inside([
+                (pair[0][0] + pair[1][0]) / 2.0,
+                (pair[0][1] + pair[1][1]) / 2.0,
+            ])
+        })
+}
+
+/// A label rect for the edge `points`: centred on the edge where possible, so the caption reads
+/// as part of its own line, otherwise beside it. Spots must stay in the viewport and clear of
+/// cards and labels; one clear of other edges is preferred, but a caption is never dropped
+/// only because another edge passes nearby.
 fn label_position(
     points: &[[f32; 2]],
     width: f32,
     height: f32,
     cards: &[[f32; 4]],
     labels: &[[f32; 4]],
+    other_edges: &[&[[f32; 2]]],
     viewport: [f32; 4],
 ) -> Option<[f32; 4]> {
-    for sample in [16, 12, 20, 8, 24] {
+    let candidates = || label_candidates(points, width, height);
+    let open = |rect: &[f32; 4]| {
+        rect[0] >= viewport[0]
+            && rect[1] >= viewport[1]
+            && rect[0] + rect[2] <= viewport[0] + viewport[2]
+            && rect[1] + rect[3] <= viewport[1] + viewport[3]
+            && !cards
+                .iter()
+                .chain(labels)
+                .any(|other| overlaps(*rect, *other))
+    };
+    candidates()
+        .find(|rect| open(rect) && !other_edges.iter().any(|path| path_crosses(*rect, path)))
+        .or_else(|| candidates().find(open))
+}
+
+fn label_candidates(
+    points: &[[f32; 2]],
+    width: f32,
+    height: f32,
+) -> impl Iterator<Item = [f32; 4]> + '_ {
+    let centred = [16, 12, 20, 10, 22, 8, 24].into_iter().map(move |sample| {
         let [x, y] = points[sample];
-        for [dx, dy] in [
-            [-width / 2.0, -36.0],
-            [8.0, -16.0],
-            [-width / 2.0, 8.0],
-            [-width - 8.0, -16.0],
-        ] {
-            let rect = [x + dx, y + dy, width, height];
-            if rect[0] >= viewport[0]
-                && rect[1] >= viewport[1]
-                && rect[0] + rect[2] <= viewport[0] + viewport[2]
-                && rect[1] + rect[3] <= viewport[1] + viewport[3]
-                && !cards
-                    .iter()
-                    .chain(labels)
-                    .any(|other| overlaps(rect, *other))
-            {
-                return Some(rect);
-            }
-        }
+        [x - width / 2.0, y - height / 2.0, width, height]
+    });
+    let beside = [16, 12, 20, 8, 24].into_iter().flat_map(move |sample| {
+        let [x, y] = points[sample];
+        [
+            [-width / 2.0, -height - 6.0],
+            [8.0, -height / 2.0],
+            [-width / 2.0, 6.0],
+            [-width - 8.0, -height / 2.0],
+        ]
+        .map(|[dx, dy]| [x + dx, y + dy, width, height])
+    });
+    centred.chain(beside)
+}
+
+/// Dash pattern for edges that cross the recorded scope boundary, measured along the curve.
+const BOUNDARY_DASH: f32 = 6.0;
+const BOUNDARY_GAP: f32 = 4.5;
+/// The last stretch of a dashed edge is solid so the arrowhead always meets its line.
+const BOUNDARY_SOLID_TAIL: f32 = 12.0;
+const ARROW_LENGTH: f32 = 7.0;
+
+fn lerp(a: [f32; 2], b: [f32; 2], t: f32) -> [f32; 2] {
+    [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
+}
+
+/// The drawn `[start, end]` runs of a boundary edge, as distances along it: even dashes,
+/// then one solid run into the arrowhead.
+fn dash_runs(total: f32) -> Vec<[f32; 2]> {
+    let solid_from = (total - BOUNDARY_SOLID_TAIL).max(0.0);
+    let mut runs = Vec::new();
+    let mut at = 0.0;
+    while at < solid_from {
+        runs.push([at, (at + BOUNDARY_DASH).min(solid_from)]);
+        at += BOUNDARY_DASH + BOUNDARY_GAP;
     }
-    None
+    match runs.last_mut() {
+        // A dash that reaches the tail joins it rather than leaving a sliver of gap.
+        Some(last) if last[1] >= solid_from => last[1] = total,
+        _ => runs.push([solid_from, total]),
+    }
+    runs
 }
 
 fn arrow(
@@ -559,15 +625,44 @@ fn arrow(
     active: bool,
     boundary: bool,
 ) -> Shape {
-    for (index, pair) in points.windows(2).enumerate() {
-        if !boundary || index % 4 < 2 {
-            shape = shape.line(
-                pair[0],
-                pair[1],
-                if active { 2.0 } else { 1.35 },
-                LineCap::Round,
-                color,
-            );
+    let width = if active { 2.0 } else { 1.35 };
+    if boundary {
+        let lengths: Vec<f32> = points
+            .windows(2)
+            .map(|pair| (pair[1][0] - pair[0][0]).hypot(pair[1][1] - pair[0][1]))
+            .collect();
+        let total: f32 = lengths.iter().sum();
+        // Point at distance `d` along the polyline.
+        let at = |d: f32| {
+            let mut walked = 0.0;
+            for (pair, length) in points.windows(2).zip(&lengths) {
+                if d <= walked + length || *length <= f32::EPSILON {
+                    return lerp(
+                        pair[0],
+                        pair[1],
+                        ((d - walked) / length.max(f32::EPSILON)).clamp(0.0, 1.0),
+                    );
+                }
+                walked += length;
+            }
+            *points.last().unwrap_or(&[0.0, 0.0])
+        };
+        for [start, end] in dash_runs(total) {
+            // Follow the curve through any vertices inside the run.
+            let mut previous = at(start);
+            let mut walked = 0.0;
+            for (pair, length) in points.windows(2).zip(&lengths) {
+                walked += length;
+                if walked > start && walked < end {
+                    shape = shape.line(previous, pair[1], width, LineCap::Round, color);
+                    previous = pair[1];
+                }
+            }
+            shape = shape.line(previous, at(end), width, LineCap::Round, color);
+        }
+    } else {
+        for pair in points.windows(2) {
+            shape = shape.line(pair[0], pair[1], width, LineCap::Round, color);
         }
     }
     if let [.., before, end] = points {
@@ -575,11 +670,18 @@ fn arrow(
         let dy = end[1] - before[1];
         let distance = (dx * dx + dy * dy).sqrt().max(0.01);
         let [x, y] = [dx / distance, dy / distance];
+        let half = ARROW_LENGTH / 2.0;
         shape = shape.fill(
             vec![
                 *end,
-                [end[0] - x * 7.0 + y * 3.5, end[1] - y * 7.0 - x * 3.5],
-                [end[0] - x * 7.0 - y * 3.5, end[1] - y * 7.0 + x * 3.5],
+                [
+                    end[0] - x * ARROW_LENGTH + y * half,
+                    end[1] - y * ARROW_LENGTH - x * half,
+                ],
+                [
+                    end[0] - x * ARROW_LENGTH - y * half,
+                    end[1] - y * ARROW_LENGTH + x * half,
+                ],
             ],
             color,
         );
@@ -657,9 +759,18 @@ pub(super) fn render(
             )
         })
         .collect();
+    struct Edge {
+        source: usize,
+        target: usize,
+        index: usize,
+        points: Vec<[f32; 2]>,
+        active: bool,
+        boundary: bool,
+    }
     let mut relationship_count = 0;
+    let mut edges = Vec::new();
     for (source, surface) in surfaces.iter().enumerate() {
-        for (edge, link) in surface.relationships.iter().enumerate() {
+        for (index, link) in surface.relationships.iter().enumerate() {
             let Some(target) = surfaces
                 .iter()
                 .position(|candidate| candidate.id == link.target_id)
@@ -678,83 +789,124 @@ pub(super) fn render(
             .any(|index| *index == Some(source) || *index == Some(target));
             let boundary = surface_scope(surface) == SurfaceScope::OutOfScope as i32
                 || surface_scope(&surfaces[target]) == SurfaceScope::OutOfScope as i32;
-            let color = if active {
-                theme.accent()
-            } else if boundary {
-                theme.color("#e07676").alpha(0.6)
-            } else {
-                theme.color("#888888").alpha(0.6)
-            };
-            let color = color.alpha(if matches[source] || matches[target] {
-                if active { 1.0 } else { 0.6 }
-            } else {
-                0.18
+            edges.push(Edge {
+                source,
+                target,
+                index,
+                points: curve(position(source), position(target), zoom),
+                active,
+                boundary,
             });
-            let points = curve(position(source), position(target), zoom);
-            shape = arrow(shape, &points, color, active, boundary);
-            if zoom >= 0.65 && (surfaces.len() <= 24 || active) {
-                let label_width = (atlas::COLUMN_GAP * zoom - 12.0).clamp(74.0, 126.0);
-                let Some(label_rect) = label_position(
-                    &points,
-                    label_width,
-                    10.0 + 23.0 * state.appearance.text_size.factor(),
-                    &card_rects,
-                    &label_rects,
-                    [8.0, graph_top, map_width - 16.0, map_height],
-                ) else {
-                    continue;
-                };
-                label_rects.push(label_rect);
-                let caption = if link.label.is_empty() {
-                    &link.type_id
-                } else {
-                    &link.label
-                };
-                let mut label = col()
-                    .key(format!(
-                        "workspace-surface-relationship-{source}-{target}-{edge}"
-                    ))
-                    .label(format!(
-                        "{} → {}: {} [{}]; {} evidence references",
-                        surface.id,
-                        surfaces[target].id,
-                        link.label,
-                        link.type_id,
-                        link.evidence_refs.len()
-                    ))
-                    .absolute(label_rect[0], label_rect[1])
-                    .w(label_width)
-                    .px(5.0)
-                    .py(4.0)
-                    .gap(2.0)
-                    .radius(5.0)
-                    .fill(theme.color("#111111"))
-                    .opacity(if matches[source] || matches[target] {
-                        1.0
+        }
+    }
+    for edge in &edges {
+        let color = if edge.active {
+            theme.accent()
+        } else if edge.boundary {
+            theme.color("#e07676").alpha(0.6)
+        } else {
+            theme.color("#888888").alpha(0.6)
+        };
+        let color = color.alpha(if matches[edge.source] || matches[edge.target] {
+            if edge.active { 1.0 } else { 0.6 }
+        } else {
+            0.18
+        });
+        shape = arrow(shape, &edge.points, color, edge.active, edge.boundary);
+    }
+    // Labels are placed once every edge is known so none covers another edge; active edges
+    // claim space first so a hovered relationship keeps its caption.
+    let mut label_order: Vec<usize> = (0..edges.len()).collect();
+    label_order.sort_by_key(|index| !edges[*index].active);
+    for edge_index in label_order {
+        let Edge {
+            source,
+            target,
+            index: edge,
+            ref points,
+            active,
+            boundary,
+        } = edges[edge_index];
+        let surface = &surfaces[source];
+        let link = &surface.relationships[edge];
+        if zoom >= 0.65 && (surfaces.len() <= 24 || active) {
+            let label_width = (atlas::COLUMN_GAP * zoom - 12.0).clamp(74.0, 126.0);
+            let other_edges: Vec<&[[f32; 2]]> = edges
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| *index != edge_index)
+                .map(|(_, other)| other.points.as_slice())
+                .collect();
+            let Some(label_rect) = label_position(
+                points,
+                label_width,
+                10.0 + 23.0 * state.appearance.text_size.factor(),
+                &card_rects,
+                &label_rects,
+                &other_edges,
+                [8.0, graph_top, map_width - 16.0, map_height],
+            ) else {
+                continue;
+            };
+            label_rects.push(label_rect);
+            let caption = if link.label.is_empty() {
+                &link.type_id
+            } else {
+                &link.label
+            };
+            let mut label = col()
+                .key(format!(
+                    "workspace-surface-relationship-{source}-{target}-{edge}"
+                ))
+                .label(format!(
+                    "{} → {}: {} [{}]; {} evidence references",
+                    surface.id,
+                    surfaces[target].id,
+                    link.label,
+                    link.type_id,
+                    link.evidence_refs.len()
+                ))
+                .absolute(label_rect[0], label_rect[1])
+                .w(label_width)
+                .px(6.0)
+                .py(4.0)
+                .gap(2.0)
+                .radius(6.0)
+                .continuous_corners()
+                .fill(theme.color("#111111"))
+                .border(
+                    1.0,
+                    if boundary {
+                        theme.color("#e07676").alpha(0.35)
                     } else {
-                        0.25
-                    });
-                if !link.type_id.is_empty() && link.type_id != link.label {
-                    label = label.child(
-                        text(link.type_id.to_uppercase())
-                            .truncate()
-                            .font(ui_font(8.0, 600.0))
-                            .color(if boundary {
-                                theme.color("#e07676")
-                            } else {
-                                theme.color("#888888")
-                            }),
-                    );
-                }
-                labels.push(
-                    label.child(
-                        text(caption.clone())
-                            .truncate()
-                            .font(ui_font(10.0, 500.0))
-                            .color(theme.color("#b8b8b8")),
-                    ),
+                        theme.color("#2e2e2e")
+                    },
+                )
+                .opacity(if matches[source] || matches[target] {
+                    1.0
+                } else {
+                    0.25
+                });
+            if !link.type_id.is_empty() && link.type_id != link.label {
+                label = label.child(
+                    text(link.type_id.to_uppercase())
+                        .fade_truncate()
+                        .font(ui_font(8.0, 600.0))
+                        .color(if boundary {
+                            theme.color("#e07676")
+                        } else {
+                            theme.color("#888888")
+                        }),
                 );
             }
+            labels.push(
+                label.child(
+                    text(caption.clone())
+                        .fade_truncate()
+                        .font(ui_font(10.0, 500.0))
+                        .color(theme.color("#b8b8b8")),
+                ),
+            );
         }
     }
     let mut stage = el()
@@ -856,7 +1008,7 @@ pub(super) fn render(
             })
             .key("workspace-surface-match-count")
             .min_w(0.0)
-            .truncate()
+            .fade_truncate()
             .font(ui_font(12.0, 550.0))
             .color(theme.color("#b8b8b8")),
         )
@@ -986,7 +1138,7 @@ pub(super) fn render(
                     text("No surfaces match")
                         .grow(1.0)
                         .min_w(0.0)
-                        .truncate()
+                        .fade_truncate()
                         .font(ui_font(12.0, 500.0))
                         .color(theme.color("#b8b8b8")),
                 )
@@ -1032,4 +1184,37 @@ pub(super) fn render(
         );
     }
     page
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn boundary_dashes_are_even_and_end_solid_at_the_arrow() {
+        for total in [5.0, 40.0, 137.5, 600.0] {
+            let runs = dash_runs(total);
+            let last = runs.last().copied().unwrap();
+            assert_eq!(last[1], total, "the arrowhead meets a drawn run");
+            assert!(last[1] - last[0] >= BOUNDARY_SOLID_TAIL.min(total) - 0.01);
+            for pair in runs.windows(2) {
+                assert!(pair[0][1] < pair[1][0], "runs are separated by gaps");
+            }
+            for run in &runs[..runs.len() - 1] {
+                assert!(run[1] - run[0] <= BOUNDARY_DASH + 0.01);
+            }
+        }
+    }
+
+    #[test]
+    fn edge_labels_avoid_other_edges() {
+        let points: Vec<[f32; 2]> = (0..=32).map(|step| [step as f32 * 10.0, 100.0]).collect();
+        let crossing: Vec<[f32; 2]> = (0..=32).map(|step| [160.0, step as f32 * 10.0]).collect();
+        let viewport = [0.0, 0.0, 400.0, 400.0];
+        let alone = label_position(&points, 80.0, 30.0, &[], &[], &[], viewport).unwrap();
+        assert_eq!(alone, [120.0, 85.0, 80.0, 30.0], "centred on its own edge");
+        let shifted =
+            label_position(&points, 80.0, 30.0, &[], &[], &[&crossing], viewport).unwrap();
+        assert!(!path_crosses(shifted, &crossing));
+    }
 }

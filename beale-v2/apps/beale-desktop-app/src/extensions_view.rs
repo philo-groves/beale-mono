@@ -1,3 +1,4 @@
+use crate::design::FadeText;
 use beale_contracts::{
     FEATURE_DETAILS_PATH, FEATURE_SCOPE_PATH, FEATURE_SET_ENABLED_PATH, FEATURES_PATH,
     PLUGIN_INSTALL_PATH, PLUGIN_MANIFEST_PATH, PLUGIN_SCOPE_PATH, PLUGIN_UNINSTALL_PATH,
@@ -1498,7 +1499,7 @@ pub(crate) fn workspace_scope_button(
         .child(
             text(label)
                 .min_w(0.0)
-                .truncate()
+                .fade_truncate()
                 .font(ui_font(13.0, 400.0))
                 .color(color("#b8b8b8")),
         )
@@ -1594,7 +1595,13 @@ fn feature_mark(id: &str, theme: ThemeStyle<'_>) -> El {
         .child(icon(glyph, 21.0).color(theme.accent()))
 }
 
-fn plugin_card(index: usize, plugin: &PluginEntry, state: &State, theme: ThemeStyle<'_>) -> El {
+fn plugin_card(
+    index: usize,
+    plugin: &PluginEntry,
+    state: &State,
+    text_width: f32,
+    theme: ThemeStyle<'_>,
+) -> El {
     let stats = stat_block(
         [
             stat_row("Skills", plugin.skills, theme).key(format!("plugin-skills-{}", plugin.name)),
@@ -1659,22 +1666,27 @@ fn plugin_card(index: usize, plugin: &PluginEntry, state: &State, theme: ThemeSt
                 .center_y()
                 .child(plugin_mark(&plugin.name, theme).key(format!("plugin-logo-{}", plugin.name)))
                 .child(
-                    text(plugin.display_name())
-                        .grow(1.0)
-                        .min_w(0.0)
-                        .font(ui_font(16.0, 600.0))
-                        .color(theme.color("#f2f2f2"))
-                        .max_lines(2),
+                    crate::design::faded_lines(
+                        plugin.display_name(),
+                        ui_font(16.0, 600.0),
+                        theme.color("#f2f2f2"),
+                        2,
+                        text_width - CARD_MARK_WIDTH,
+                    )
+                    .grow(1.0)
+                    .min_w(0.0),
                 ),
         )
         .child(
-            text(plugin.description.clone())
-                .key(format!("plugin-description-{}", plugin.name))
-                .w_full()
-                .mt(10.0)
-                .font(ui_font(13.0, 400.0))
-                .color(theme.color("#969696"))
-                .max_lines(3),
+            crate::design::faded_lines(
+                plugin.description.clone(),
+                ui_font(13.0, 400.0),
+                theme.color("#969696"),
+                3,
+                text_width,
+            )
+            .key(format!("plugin-description-{}", plugin.name))
+            .mt(10.0),
         )
         .child(el().grow(1.0))
         .child(stats)
@@ -1717,6 +1729,20 @@ fn plugin_card(index: usize, plugin: &PluginEntry, state: &State, theme: ThemeSt
                         .child(icon(&INFO, 17.0).color(theme.color("#bdbdbd"))),
                 ),
         )
+}
+
+/// Card mark (40) plus its gap (10) beside a card title.
+const CARD_MARK_WIDTH: f32 = 50.0;
+const CARD_GAP: f32 = 16.0;
+const CARD_PADDING: f32 = 12.0;
+
+fn card_text_width(page_width: f32) -> f32 {
+    crate::design::grid_card_text_width(
+        page_width,
+        plugin_columns(page_width),
+        CARD_GAP,
+        CARD_PADDING,
+    )
 }
 
 fn plugin_columns(page_width: f32) -> usize {
@@ -1764,7 +1790,13 @@ fn plugins(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> Vec<El> {
     let mut count = 0;
     for (index, plugin) in plugin_rows(state) {
         count += 1;
-        list = list.child(plugin_card(index, plugin, state, theme));
+        list = list.child(plugin_card(
+            index,
+            plugin,
+            state,
+            card_text_width(page_width),
+            theme,
+        ));
     }
     if count == 0 {
         list = list.child(
@@ -1790,7 +1822,13 @@ fn plugins(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> Vec<El> {
     content
 }
 
-fn feature_card(index: usize, feature: &FeatureEntry, state: &State, theme: ThemeStyle<'_>) -> El {
+fn feature_card(
+    index: usize,
+    feature: &FeatureEntry,
+    state: &State,
+    text_width: f32,
+    theme: ThemeStyle<'_>,
+) -> El {
     let stats = stat_block(
         [
             row()
@@ -1865,21 +1903,26 @@ fn feature_card(index: usize, feature: &FeatureEntry, state: &State, theme: Them
                 .center_y()
                 .child(feature_mark(&feature.id, theme).key(format!("feature-logo-{}", feature.id)))
                 .child(
-                    text(feature.name.clone())
-                        .grow(1.0)
-                        .min_w(0.0)
-                        .font(ui_font(16.0, 600.0))
-                        .color(theme.color("#f2f2f2"))
-                        .max_lines(2),
+                    crate::design::faded_lines(
+                        feature.name.clone(),
+                        ui_font(16.0, 600.0),
+                        theme.color("#f2f2f2"),
+                        2,
+                        text_width - CARD_MARK_WIDTH,
+                    )
+                    .grow(1.0)
+                    .min_w(0.0),
                 ),
         )
         .child(
-            text(feature.description.clone())
-                .w_full()
-                .mt(10.0)
-                .font(ui_font(13.0, 400.0))
-                .color(theme.color("#969696"))
-                .max_lines(3),
+            crate::design::faded_lines(
+                feature.description.clone(),
+                ui_font(13.0, 400.0),
+                theme.color("#969696"),
+                3,
+                text_width,
+            )
+            .mt(10.0),
         )
         .child(el().grow(1.0))
         .child(stats)
@@ -1946,7 +1989,13 @@ fn features(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> Vec<El> {
     let mut count = 0;
     for (index, feature) in feature_rows(state) {
         count += 1;
-        cards = cards.child(feature_card(index, feature, state, theme));
+        cards = cards.child(feature_card(
+            index,
+            feature,
+            state,
+            card_text_width(page_width),
+            theme,
+        ));
     }
     if count == 0 {
         cards = cards.child(

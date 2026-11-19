@@ -1,5 +1,6 @@
 //! Shared visual language for the research workbench.
 use crate::{ThemeStyle, ui_font};
+use rune::tok::TextStyle;
 use rune::{Color, El, Icon, col, el, icon, row, text};
 
 pub(crate) const CONTROL_HEIGHT: f32 = 32.0;
@@ -8,6 +9,57 @@ pub(crate) const CARD_RADIUS: f32 = 12.0;
 pub(crate) const PAGE_GAP: f32 = 24.0;
 pub(crate) const TAB_ICON_SIZE: f32 = 15.0;
 pub(crate) const TAB_ICON_GAP: f32 = 6.0;
+/// Trailing fade width, in ems, for single-line text that overflows its box.
+pub(crate) const TRUNCATE_FADE_EM: f32 = 2.5;
+
+/// The one overflow treatment for single-line text: clip with a trailing fade, never "…".
+pub(crate) trait FadeText {
+    fn fade_truncate(self) -> Self;
+}
+
+impl FadeText for El {
+    fn fade_truncate(self) -> Self {
+        self.truncate_fade_width(TRUNCATE_FADE_EM)
+    }
+}
+
+/// Wrapped text cut to `lines` lines with a bottom fade, the multi-line counterpart of
+/// [`FadeText::fade_truncate`]. `width` is the width the text wraps at; the clip and fade
+/// apply only when the text needs more lines, and the full text shows on hover.
+pub(crate) fn faded_lines(
+    content: impl Into<String>,
+    font: TextStyle,
+    color: Color,
+    lines: usize,
+    width: f32,
+) -> El {
+    let content = content.into();
+    let line = font.line_px();
+    let max_height = line * lines as f32;
+    let (_, height) = rune::text::measure(&content, &[], font, Some(width.max(1.0)));
+    let body = text(content.clone())
+        .w_full()
+        .wrap()
+        .font(font)
+        .color(color);
+    if height <= max_height + 0.5 {
+        return body;
+    }
+    col()
+        .w_full()
+        .min_w(0.0)
+        .h(max_height)
+        .clip_fade(0.0, 0.0, 0.0, line)
+        .help(content)
+        .child(body)
+}
+
+/// Inner text width of a card in an `equal_columns` grid with `gap` between `columns` cards,
+/// `padding` on each side, and a 1 point border.
+pub(crate) fn grid_card_text_width(page_width: f32, columns: usize, gap: f32, padding: f32) -> f32 {
+    let columns = columns.max(1) as f32;
+    ((page_width - gap * (columns - 1.0)) / columns - padding * 2.0 - 2.0).max(1.0)
+}
 const TAB_ICON_PADDING: f32 = 10.0;
 const TAB_TEXT_PADDING: f32 = 13.0;
 const TAB_GROUP_PADDING: f32 = 4.0;

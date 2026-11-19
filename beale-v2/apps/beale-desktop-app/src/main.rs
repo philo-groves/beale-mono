@@ -1,3 +1,4 @@
+use crate::design::FadeText;
 use rune::tok::TextStyle;
 use rune::{
     Align, AppSpec, Color, Cursor, Cx, Drag, El, Icon, Key, KeyEvent, Phase, ScrollSpec, Side,
@@ -516,6 +517,8 @@ const NAVIGATION_DIVIDER_COLOR: &str = "#555555";
 const SIDENAV_DEFAULT_WIDTH: f32 = 264.0;
 const SIDENAV_MIN_WIDTH: f32 = 240.0;
 const SIDENAV_MAX_WIDTH: f32 = 420.0;
+/// Below this window width the sidenav yields its space to content until the window widens.
+const SIDENAV_AUTO_COLLAPSE_WIDTH: f32 = 1000.0;
 const CANVAS_MIN_CONTENT_WIDTH: f32 = 320.0;
 const CONTENT_SURFACE_COLOR: &str = "#0d0d0d";
 const HEADER_COLLAPSED_PREFIX_WIDTH: f32 = if cfg!(target_os = "macos") {
@@ -811,6 +814,10 @@ struct State {
     rail_tooltip: Option<(&'static str, &'static str)>,
     rail_usage_tooltip: Option<Provider>,
     sidenav_visible: bool,
+    /// The sidenav was hidden because the window narrowed, not by the operator.
+    sidenav_auto_collapsed: bool,
+    /// Whether the last observed window width was below `SIDENAV_AUTO_COLLAPSE_WIDTH`.
+    window_narrow: bool,
     sidenav_width: f32,
     canvas_open: bool,
     canvas_runbook: runbook_canvas::CanvasRunbookState,
@@ -1068,6 +1075,8 @@ impl Default for State {
             rail_tooltip: None,
             rail_usage_tooltip: None,
             sidenav_visible: true,
+            sidenav_auto_collapsed: false,
+            window_narrow: false,
             sidenav_width: SIDENAV_DEFAULT_WIDTH,
             canvas_open: false,
             canvas_runbook: runbook_canvas::CanvasRunbookState::default(),
@@ -1080,6 +1089,24 @@ impl Default for State {
 }
 
 impl State {
+    /// Collapses the sidenav when the window crosses below the auto-collapse width and restores
+    /// it on crossing back, unless the operator toggled it in between. Only crossings act, so
+    /// the operator can still open the sidenav in a narrow window.
+    fn observe_window_width(&mut self, width: f32) {
+        let narrow = width < SIDENAV_AUTO_COLLAPSE_WIDTH;
+        if narrow == self.window_narrow {
+            return;
+        }
+        self.window_narrow = narrow;
+        if narrow && self.sidenav_visible {
+            self.sidenav_visible = false;
+            self.sidenav_auto_collapsed = true;
+        } else if !narrow && self.sidenav_auto_collapsed {
+            self.sidenav_visible = true;
+            self.sidenav_auto_collapsed = false;
+        }
+    }
+
     fn open_quick_chat(&mut self) {
         if !self.quick_chat_workspace_initialized {
             let selected = match self.primary_view {
@@ -4101,6 +4128,7 @@ fn header(state: &State, prefix_width: f32, window_width: f32) -> El {
         )
         .on_press(|s: &mut State| {
             s.sidenav_visible = !s.sidenav_visible;
+            s.sidenav_auto_collapsed = false;
         }),
     );
     if state.sidenav_visible {
@@ -4119,7 +4147,7 @@ fn header(state: &State, prefix_width: f32, window_width: f32) -> El {
                     .key("header-sidenav-title")
                     .min_w(0.0)
                     .shrink()
-                    .truncate_fade()
+                    .fade_truncate()
                     .font(ui_font(16.0, 600.0))
                     .color(color("#aaaaaa")),
             )
@@ -4210,7 +4238,7 @@ fn header(state: &State, prefix_width: f32, window_width: f32) -> El {
                 text("Token Tracking")
                     .min_w(0.0)
                     .shrink()
-                    .truncate_fade()
+                    .fade_truncate()
                     .font(ui_font(13.0, 400.0))
                     .color(color("#aaaaaa")),
             );
@@ -4250,7 +4278,7 @@ fn header(state: &State, prefix_width: f32, window_width: f32) -> El {
             .child(
                 text(name)
                     .min_w(0.0)
-                    .truncate()
+                    .fade_truncate()
                     .font(ui_font(13.0, 500.0))
                     .color(color("#e2e2e2")),
             )
@@ -4798,7 +4826,7 @@ fn form_button(label: impl Into<String>, theme: ThemeStyle<'_>) -> El {
             text(label.into())
                 .font(ui_font(13.0, 550.0))
                 .min_w(0.0)
-                .truncate()
+                .fade_truncate()
                 .color(color("#eeeeee")),
         )
 }
@@ -6161,7 +6189,10 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
         }
         main_content = main_content.child(new_research::render(state, theme, graph_width).shrink());
     } else if state.primary_view == PrimaryView::Home {
-        main_content = main_content.child(home_view::render(state, theme));
+        let page_width = cx
+            .layout_size("content-surface")
+            .map_or(1040.0, |size| size[0]);
+        main_content = main_content.child(home_view::render(state, theme, page_width));
     } else if workspace_view::graph_open(state) {
         let [width, height] = cx.layout_size("content-surface").unwrap_or([840.0, 600.0]);
         main_content = main_content
@@ -6324,6 +6355,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
     let lower_right_radius = ((background_width * 0.88).hypot(background_height * 0.92)) * 0.48;
     let mut surface = col()
         .key("app-surface")
+        .on_layout(|s: &mut State, [_, _, width, _]| s.observe_window_width(width))
         .w_full()
         .grow(1.0)
         .fill(rune::color::hex(palette.chrome).unwrap_or(rune::Color::BLACK))
@@ -8169,6 +8201,8 @@ mod tests {
                 text_size: TextSize::ExtraLarge,
                 ..AppearancePreferences::default()
             },
+            // The operator kept the sidenav open after the window narrowed.
+            window_narrow: true,
             ..State::default()
         };
         let mut runtime = Runtime::new(state, view, (840.0, 600.0), Env::new(true, 1.0));
@@ -8868,6 +8902,8 @@ mod tests {
                 title: "A complete example session title".to_owned(),
                 last_message_at_ms,
             }],
+            // The operator kept the sidenav open after the window narrowed.
+            window_narrow: true,
             ..State::default()
         };
         let mut runtime = Runtime::new(state, view, (840.0, 600.0), Env::new(true, 1.0));
@@ -9003,6 +9039,8 @@ mod tests {
                 title: "An example research session with a long title".to_owned(),
                 last_message_at_ms: 1,
             }],
+            // The operator kept the sidenav open after the window narrowed.
+            window_narrow: true,
             ..State::default()
         };
         let mut runtime = Runtime::new(state, view, (840.0, 600.0), Env::new(true, 1.0));
@@ -9640,6 +9678,8 @@ mod tests {
                 directory: "example-directory".to_owned(),
             }],
             new_research_workspace_id: Some(workspace_id.to_owned()),
+            // The operator kept the sidenav open after the window narrowed.
+            window_narrow: true,
             ..State::default()
         };
         state.connection = ConnectionStatus::Connected {
@@ -10039,6 +10079,8 @@ mod tests {
                     directory: "example-directory".to_owned(),
                 })
                 .collect(),
+            // The operator kept the sidenav open after the window narrowed.
+            window_narrow: true,
             ..State::default()
         };
         state.start_new_research();
@@ -11225,7 +11267,8 @@ active_runbook_count: 0,
         ] {
             assert!(runtime.find(key).is_some(), "{key}");
             let (button, _) = runtime.presented(key).unwrap();
-            assert_eq!([button[2], button[3]], [32.0, 32.0]);
+            assert_eq!(button[3], 32.0, "{key} keeps the control height");
+            assert!(button[2] > 32.0, "{key} shows its label on a wide page");
         }
         let tab_positions = [
             "workspace-tab-surfaces",
@@ -13358,6 +13401,8 @@ active_runbook_count: 0,
         let mut narrow = Runtime::new(
             State {
                 canvas_open: true,
+                // The operator kept the sidenav open after the window narrowed.
+                window_narrow: true,
                 ..State::default()
             },
             view,
@@ -14584,5 +14629,54 @@ active_runbook_count: 0,
         assert!(state.session_role_live_ms() >= 2_000);
         state.session_agent_started_at.remove("discovery");
         assert_eq!(state.session_role_live_ms(), 0);
+    }
+
+    #[test]
+    fn sidenav_collapses_when_the_window_narrows_and_returns_when_it_widens() {
+        let mut state = State::default();
+        state.observe_window_width(1200.0);
+        assert!(state.sidenav_visible);
+        state.observe_window_width(840.0);
+        assert!(!state.sidenav_visible);
+        state.observe_window_width(900.0);
+        assert!(!state.sidenav_visible, "only crossings act");
+        state.observe_window_width(1200.0);
+        assert!(state.sidenav_visible);
+
+        // An operator who reopens the sidenav in a narrow window keeps it.
+        state.observe_window_width(840.0);
+        state.sidenav_visible = true;
+        state.sidenav_auto_collapsed = false;
+        state.observe_window_width(860.0);
+        assert!(state.sidenav_visible);
+
+        // A sidenav the operator hid stays hidden when the window widens.
+        state.sidenav_visible = false;
+        state.observe_window_width(1200.0);
+        assert!(!state.sidenav_visible);
+    }
+
+    #[test]
+    fn narrow_window_opens_with_content_instead_of_the_sidenav() {
+        let mut runtime = Runtime::new(
+            visual_preview::fixture("home"),
+            view,
+            (840.0, 600.0),
+            Env::new(true, 1.0),
+        );
+        runtime.frame(0.0);
+        for _ in 0..30 {
+            runtime.frame(1.0 / 60.0);
+        }
+        assert!(!runtime.state.sidenav_visible);
+        assert!(runtime.presented("home-sidenav").is_none());
+        let (toggle_x, toggle_y) = runtime.find("header-sidebar-toggle").unwrap();
+        runtime.pointer_down(toggle_x, toggle_y);
+        runtime.pointer_up(toggle_x, toggle_y);
+        for _ in 0..30 {
+            runtime.frame(1.0 / 60.0);
+        }
+        assert!(runtime.state.sidenav_visible, "the operator can reopen it");
+        assert!(runtime.presented("home-sidenav").is_some());
     }
 }

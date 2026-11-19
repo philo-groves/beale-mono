@@ -1,3 +1,4 @@
+use crate::design::FadeText;
 use beale_contracts::{
     AUTOMATIONS_CANCEL_PATH, AUTOMATIONS_PATH, PROTOBUF_CONTENT_TYPE,
     v1::{
@@ -272,7 +273,7 @@ fn list_row(job: &AutomationJob, future: bool, selected: bool, theme: ThemeStyle
             text(label)
                 .grow(1.0)
                 .min_w(0.0)
-                .truncate_fade()
+                .fade_truncate()
                 .font(ui_font(14.0, if selected { 550.0 } else { 400.0 }))
                 .color(theme.color("#b8b8b8")),
         );
@@ -327,7 +328,7 @@ fn run_row(run: &AutomationRun, active: bool, selected: bool, theme: ThemeStyle<
             text(run.title.clone())
                 .grow(1.0)
                 .min_w(0.0)
-                .truncate_fade()
+                .fade_truncate()
                 .font(ui_font(14.0, if selected { 550.0 } else { 400.0 }))
                 .color(theme.color("#b8b8b8")),
         )

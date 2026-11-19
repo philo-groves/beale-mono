@@ -284,6 +284,49 @@ pub struct Summary {
     pub status: Status,
     pub updated_at_ms: u64,
     pub revision: u64,
+    /// Distinct supporting evidence references across the record; counter-evidence excluded.
+    #[serde(default)]
+    pub evidence_count: u32,
+}
+
+impl Finding {
+    /// Distinct supporting evidence references (by kind and reference) cited by any stage,
+    /// the root cause, or the attack path. Counter-evidence is not counted.
+    pub fn evidence_count(&self) -> u32 {
+        let state = &self.state;
+        let stages = [
+            state.candidate.evidence_refs.as_deref(),
+            state
+                .validated
+                .as_ref()
+                .and_then(|stage| stage.evidence_refs.as_deref()),
+            state
+                .screened
+                .as_ref()
+                .and_then(|stage| stage.evidence_refs.as_deref()),
+            state
+                .reported
+                .as_ref()
+                .and_then(|stage| stage.evidence_refs.as_deref()),
+            state
+                .rejected
+                .as_ref()
+                .and_then(|stage| stage.evidence_refs.as_deref()),
+            self.root_cause
+                .as_ref()
+                .map(|cause| cause.evidence_refs.as_slice()),
+            self.attack_path
+                .as_ref()
+                .map(|path| path.evidence_refs.as_slice()),
+        ];
+        let distinct: std::collections::BTreeSet<(String, &str)> = stages
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|item| (format!("{:?}", item.kind), item.reference.as_str()))
+            .collect();
+        u32::try_from(distinct.len()).unwrap_or(u32::MAX)
+    }
 }
 
 impl From<&Finding> for Summary {
@@ -306,6 +349,7 @@ impl From<&Finding> for Summary {
             status: value.status(),
             updated_at_ms: value.updated_at_ms,
             revision: value.revision,
+            evidence_count: value.evidence_count(),
         }
     }
 }

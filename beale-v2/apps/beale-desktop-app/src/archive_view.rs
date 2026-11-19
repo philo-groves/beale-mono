@@ -1,3 +1,4 @@
+use crate::design::FadeText;
 use beale_contracts::{
     ARCHIVE_PATH, PROTOBUF_CONTENT_TYPE, QUICK_CHAT_DETAIL_PATH, SESSION_RESTORE_PATH,
     v1::{ArchiveEntry, ListArchiveResponse, QuickChatDetail},
@@ -243,14 +244,14 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
                                     .font(ui_font(14.0, 550.0))
                                     .color(theme.color("#e5e5e5"))
                                     .min_w(0.0)
-                                    .truncate_fade(),
+                                    .fade_truncate(),
                             )
                             .child(
                                 text(item_stats(state, entry))
                                     .font(ui_font(13.0, 400.0))
                                     .color(theme.color("#969696"))
                                     .min_w(0.0)
-                                    .truncate_fade(),
+                                    .fade_truncate(),
                             ),
                     )
                     .child(button),

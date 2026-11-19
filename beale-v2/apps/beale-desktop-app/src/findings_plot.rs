@@ -1,5 +1,6 @@
 //! Exact screening coordinates: missing ratings never become zero-valued observations.
 use super::*;
+use crate::design::FadeText;
 use rune::{LineCap, Shape, canvas};
 use std::collections::BTreeMap;
 
@@ -487,7 +488,7 @@ pub(super) fn render(state: &State, theme: ThemeStyle<'_>, width: f32) -> El {
                     text("Missing one or both scores")
                         .grow(1.0)
                         .min_w(0.0)
-                        .truncate()
+                        .fade_truncate()
                         .font(ui_font(11.0, 400.0))
                         .color(theme.color("#888888")),
                 )

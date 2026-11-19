@@ -148,9 +148,15 @@ pub(crate) static TARGET: Icon = Icon {
 };
 
 pub(crate) static WORKSPACE_SURFACES: Icon = Icon {
-    name: "beale-workspace-surfaces",
+    name: "lucide-network",
     view: 24.0,
-    body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M5 6h14M5 6l7 12M19 6l-7 12"/><circle cx="5" cy="6" r="2.5" fill="currentColor"/><circle cx="19" cy="6" r="2.5" fill="currentColor"/><circle cx="12" cy="18" r="2.5" fill="currentColor"/>"#,
+    body: r#"<rect fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" x="16" y="16" width="6" height="6" rx="1"/><rect fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" x="2" y="16" width="6" height="6" rx="1"/><rect fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" x="9" y="2" width="6" height="6" rx="1"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3M12 12V8"/>"#,
+};
+
+pub(crate) static EVIDENCE: Icon = Icon {
+    name: "lucide-paperclip",
+    view: 24.0,
+    body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m16 6-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551"/>"#,
 };
 
 pub(crate) static FLEET: Icon = Icon {

@@ -1,4 +1,5 @@
 //! Shared token visualizations for host Tracking and single-session Insights.
+use crate::design::FadeText;
 use crate::{
     State, ThemeStyle, design,
     tracking_data::{AgentFilter, ModelTotal, Totals},
@@ -641,7 +642,7 @@ pub(crate) fn model_breakdown(
                             .child(
                                 copy(&model.model, 14.0, 550.0, theme)
                                     .min_w(0.0)
-                                    .truncate_fade()
+                                    .fade_truncate()
                                     .help(&model.model),
                             )
                             .child(muted(

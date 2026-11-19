@@ -1,3 +1,4 @@
+use crate::design::FadeText;
 use beale_contracts::{
     runbooks::{
         self, Cell, CellChange, CellEditRequest, CellEditResponse, CellResult, CellRunRequest,
@@ -730,7 +731,7 @@ fn cell_status(
                 .child(
                     text(cell_date_label(result.updated_at_ms))
                         .min_w(0.0)
-                        .truncate()
+                        .fade_truncate()
                         .font(ui_font(11.0, 400.0))
                         .color(theme.color("#a9b9ad")),
                 );
@@ -742,7 +743,7 @@ fn cell_status(
                 .child(
                     text(cell_date_label(result.updated_at_ms))
                         .min_w(0.0)
-                        .truncate()
+                        .fade_truncate()
                         .font(ui_font(11.0, 400.0))
                         .color(theme.color("#c4a0a0")),
                 );
@@ -1103,7 +1104,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, height: f32) -> El {
                                 cell.name().to_owned()
                             })
                             .key(format!("canvas-runbook-cell-{id}-number"))
-                            .truncate()
+                            .fade_truncate()
                             .font(ui_font(11.0, 400.0))
                             .color(theme.color("#929292")),
                         ),
@@ -1141,7 +1142,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, height: f32) -> El {
                                 .child(
                                     text(language.to_owned())
                                         .min_w(0.0)
-                                        .truncate()
+                                        .fade_truncate()
                                         .font(ui_font(11.0, 400.0))
                                         .color(theme.color("#bdbdbd")),
                                 )

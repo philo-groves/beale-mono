@@ -29,6 +29,8 @@ def main():
     parser.add_argument('--themes', nargs='+', default=['light', 'dark', 'cream', 'midnight'])
     parser.add_argument('--views', nargs='+', default=VIEWS)
     parser.add_argument('--size', default='1440x960')
+    parser.add_argument('--at', default='1',
+                        help='virtual seconds before the snapshot, so width-driven layout settles')
     args = parser.parse_args()
     output = Path(args.out)
     output.mkdir(parents=True, exist_ok=True)
@@ -38,7 +40,8 @@ def main():
                        BEALE_V2_HOME=str(output.resolve() / 'isolated-home'),
                        BEALE_V2_APP_SERVER_ADDR='127.0.0.1:9')
             result = subprocess.run([args.binary, '--snap', str(output / f'{view}-{theme}.png'),
-                                     '--scale', '1', '--size', args.size], env=env,
+                                     '--scale', '1', '--size', args.size,
+                                     '--at', args.at], env=env,
                                     capture_output=True, text=True, timeout=30)
             if result.returncode:
                 raise SystemExit(result.stderr)

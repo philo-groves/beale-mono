@@ -1,3 +1,4 @@
+use crate::design::FadeText;
 use qrcodegen::{QrCode, QrCodeEcc};
 use rune::{Color, El, Icon, Pixels, ScrollSpec, TextEdit, col, el, icon, row, text, text_input};
 
@@ -664,7 +665,16 @@ fn server_mark(server: &FleetServer, theme: ThemeStyle<'_>) -> El {
         .child(icon(glyph, size).color(theme.color(foreground)))
 }
 
-fn server_card(server: &FleetServer, state: &State, theme: ThemeStyle<'_>) -> El {
+/// Card mark (40) plus its gap (10) beside a card title.
+const CARD_MARK_WIDTH: f32 = 50.0;
+
+fn fleet_columns(page_width: f32) -> usize {
+    ((page_width + 16.0) / (220.0 + 16.0))
+        .floor()
+        .clamp(1.0, 4.0) as usize
+}
+
+fn server_card(server: &FleetServer, state: &State, text_width: f32, theme: ThemeStyle<'_>) -> El {
     let is_local = server.id == "local";
     let available = !state.fleet.busy && !is_local;
     let id = server.id.clone();
@@ -717,12 +727,15 @@ fn server_card(server: &FleetServer, state: &State, theme: ThemeStyle<'_>) -> El
                 .center_y()
                 .child(server_mark(server, theme))
                 .child(
-                    text(server_name(server).to_owned())
-                        .grow(1.0)
-                        .min_w(0.0)
-                        .max_lines(2)
-                        .font(ui_font(16.0, 600.0))
-                        .color(theme.color("#f2f2f2")),
+                    crate::design::faded_lines(
+                        server_name(server).to_owned(),
+                        ui_font(16.0, 600.0),
+                        theme.color("#f2f2f2"),
+                        2,
+                        text_width - CARD_MARK_WIDTH,
+                    )
+                    .grow(1.0)
+                    .min_w(0.0),
                 ),
         )
         .child(stat_block(
@@ -856,6 +869,7 @@ fn virtual_machine_card(
     index: usize,
     item: &VirtualMachineItem,
     state: &State,
+    text_width: f32,
     theme: ThemeStyle<'_>,
 ) -> El {
     let enabled = item.machine.enabled;
@@ -948,12 +962,15 @@ fn virtual_machine_card(
                         ),
                 )
                 .child(
-                    text(item.machine.name.clone())
-                        .grow(1.0)
-                        .min_w(0.0)
-                        .max_lines(2)
-                        .font(ui_font(16.0, 600.0))
-                        .color(theme.color("#f2f2f2")),
+                    crate::design::faded_lines(
+                        item.machine.name.clone(),
+                        ui_font(16.0, 600.0),
+                        theme.color("#f2f2f2"),
+                        2,
+                        text_width - CARD_MARK_WIDTH,
+                    )
+                    .grow(1.0)
+                    .min_w(0.0),
                 ),
         )
         .child(stat_block(
@@ -1024,11 +1041,9 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> V
         .w_full()
         .mt(6.0)
         .gaps(16.0, 16.0)
-        .equal_columns(
-            ((page_width + 16.0) / (220.0 + 16.0))
-                .floor()
-                .clamp(1.0, 4.0) as usize,
-        );
+        .equal_columns(fleet_columns(page_width));
+    let text_width =
+        crate::design::grid_card_text_width(page_width, fleet_columns(page_width), 16.0, 12.0);
     let mut count = 0;
     if section == FleetSection::AppServers {
         if state.fleet.tab != FleetTab::Available {
@@ -1039,7 +1054,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> V
                 "Offline".to_owned()
             };
             count += 1;
-            cards = cards.child(server_card(&local, state, theme));
+            cards = cards.child(server_card(&local, state, text_width, theme));
         }
         for server in state
             .fleet
@@ -1052,7 +1067,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> V
             })
         {
             count += 1;
-            cards = cards.child(server_card(server, state, theme));
+            cards = cards.child(server_card(server, state, text_width, theme));
         }
     }
     if section == FleetSection::VirtualMachines {
@@ -1071,7 +1086,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> V
             })
         {
             count += 1;
-            cards = cards.child(virtual_machine_card(index, item, state, theme));
+            cards = cards.child(virtual_machine_card(index, item, state, text_width, theme));
         }
     }
     if count == 0 {
@@ -1264,14 +1279,14 @@ pub(crate) fn import_dialog(state: &State, theme: ThemeStyle<'_>) -> [El; 2] {
             let dns_name = device.dns_name.clone();
             let mut details = col().grow(1.0).min_w(0.0).gap(3.0).child(
                 text(device.host_name.clone())
-                    .truncate()
+                    .fade_truncate()
                     .font(ui_font(14.0, 550.0))
                     .color(theme.color("#f2f2f2")),
             );
             details = details
                 .child(
                     text(device.dns_name.clone())
-                        .truncate()
+                        .fade_truncate()
                         .font(ui_font(12.0, 400.0))
                         .color(theme.color("#969696")),
                 )
@@ -1655,6 +1670,7 @@ mod tests {
                     0,
                     &state.fleet.virtual_machines[0],
                     state,
+                    300.0,
                     state.appearance.style(),
                 )
             },

@@ -1,3 +1,4 @@
+use crate::design::FadeText;
 use beale_contracts::v1::{
     SessionDetail, SessionRunbook, SessionStreamEvent, SessionStreamKind, SessionSubagentSummary,
     SessionTokenUsage, SessionUsageSnapshot,
@@ -815,7 +816,7 @@ fn subagent_popup(
                             .w_full()
                             .font(ui_font(11.0, 400.0))
                             .color(theme.color("#929292"))
-                            .truncate(),
+                            .fade_truncate(),
                     ),
             );
         }

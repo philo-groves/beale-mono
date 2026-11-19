@@ -2,6 +2,12 @@
 use crate::*;
 use beale_contracts::v1::*;
 
+fn preview_now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_millis() as u64)
+}
+
 pub(crate) fn enabled() -> bool {
     std::env::var_os("BEALE_UI_PREVIEW").is_some() && std::env::args().any(|arg| arg == "--snap")
 }
@@ -149,7 +155,7 @@ pub(crate) fn fixture(variant: &str) -> State {
             id: format!("10000000-0000-4000-8000-{:012}", index + 1),
             workspace_id: workspace.id.clone(),
             title: title.to_string(),
-            ..Default::default()
+            last_message_at_ms: preview_now_ms().saturating_sub((index as u64 * 5 + 2) * 3_600_000),
         });
     }
     for (index, (title, instruction)) in [
@@ -434,6 +440,7 @@ pub(crate) fn fixture(variant: &str) -> State {
             summary: "Synthetic finding for layout review. Evidence and verification remain attached to the record.".into(),
             surface_ids: vec!["S1".into()], status, impact_score: impact, reachability_score: reachability,
             updated_at_ms: 1_800_000_000_000, revision: 2,
+            evidence_count: (i as u32 * 2) % 5,
         });
     }
     let now = std::time::SystemTime::now()
