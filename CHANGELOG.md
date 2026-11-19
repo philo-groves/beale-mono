@@ -6,6 +6,7 @@
 
 #### Fixed
 
+- V2 research header separators stay mounted and change visibility immediately, preventing neighboring tab text from sliding when a tab is hovered or selected.
 - V2 session sidenav now uses the main content background behind its card instead of exposing the window gradient.
 - Collapsing completed v2 session work now hides reasoning summaries and commentary alongside tool activity while keeping the agent's final message visible.
 - V2 desktop now writes private, rotating diagnostics with connection transitions and session load and turn failures while retaining console output.

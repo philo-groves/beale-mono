@@ -3,7 +3,7 @@ use crate::design::FadeText;
 use crate::{
     PrimaryView, State, ThemeStyle, ViewLocation, icons, ui_font, workspace_view::WorkspaceTab,
 };
-use rune::{El, Icon, el, icon, row, text};
+use rune::{El, Icon, Spring, Transition, el, icon, row, text};
 
 pub(crate) fn workspace(state: &State) -> Option<(uuid::Uuid, WorkspaceTab)> {
     let id = state
@@ -86,40 +86,45 @@ fn tab(
         item = item
             .fill(theme.color("#303030"))
             .border(1.0, theme.color("#3a3a3a"));
-    } else if !hovered {
-        if separators.left {
-            item = item.child(
-                el().key(format!("{key}-left-separator"))
-                    .pin(
-                        Some(0.0),
-                        Some(TAB_SEPARATOR_INSET),
-                        None,
-                        Some(TAB_SEPARATOR_INSET),
-                    )
-                    .w(1.0)
-                    .fill(theme.color("#3a3a3a"))
-                    .inert(),
-            );
-        }
-        if separators.right
-            && separators
-                .next_key
-                .is_none_or(|next| separators.hovered_key != Some(next))
-        {
-            item = item.child(
-                el().key(format!("{key}-right-separator"))
-                    .pin(
-                        None,
-                        Some(TAB_SEPARATOR_INSET),
-                        Some(0.0),
-                        Some(TAB_SEPARATOR_INSET),
-                    )
-                    .w(1.0)
-                    .fill(theme.color("#3a3a3a"))
-                    .inert(),
-            );
-        }
     }
+    if separators.left {
+        item = item.child(
+            el().key(format!("{key}-left-separator"))
+                .pin(
+                    Some(0.0),
+                    Some(TAB_SEPARATOR_INSET),
+                    None,
+                    Some(TAB_SEPARATOR_INSET),
+                )
+                .w(1.0)
+                .fill(theme.color("#3a3a3a"))
+                .opacity(if active || hovered { 0.0 } else { 1.0 })
+                .opacity_motion(Spring::NONE)
+                .transition(Transition::none())
+                .inert(),
+        );
+    }
+    let show_right = !active
+        && !hovered
+        && separators.right
+        && separators
+            .next_key
+            .is_none_or(|next| separators.hovered_key != Some(next));
+    item = item.child(
+        el().key(format!("{key}-right-separator"))
+            .pin(
+                None,
+                Some(TAB_SEPARATOR_INSET),
+                Some(0.0),
+                Some(TAB_SEPARATOR_INSET),
+            )
+            .w(1.0)
+            .fill(theme.color("#3a3a3a"))
+            .opacity(if show_right { 1.0 } else { 0.0 })
+            .opacity_motion(Spring::NONE)
+            .transition(Transition::none())
+            .inert(),
+    );
     if let Some(glyph) = glyph {
         item = item.child(
             icon(glyph, if dense { 14.0 } else { 16.0 }).color(theme.color(if active {
@@ -427,6 +432,17 @@ mod tests {
         runtime.frame(0.0);
     }
 
+    fn agent_tab_texts(runtime: &Runtime<State>) -> Vec<(String, String, [f32; 4])> {
+        runtime
+            .elements()
+            .into_iter()
+            .filter(|item| {
+                item.path.contains("header-agent-tab-") && item.text.is_some() && !item.exiting
+            })
+            .map(|item| (item.text.unwrap(), item.path, item.rect))
+            .collect()
+    }
+
     #[test]
     fn workspace_and_session_tabs_preserve_origin_draft_and_running_state() {
         for section in [
@@ -678,20 +694,28 @@ mod tests {
             Env::new(true, 1.0),
         );
         runtime.frame(0.0);
-        assert!(
+        runtime.frame(0.3);
+        let before_texts = agent_tab_texts(&runtime);
+        assert_eq!(
             runtime
-                .find("header-agent-tab-validation-right-separator")
-                .is_some()
+                .presented("header-agent-tab-validation-right-separator")
+                .unwrap()
+                .1,
+            1.0
         );
-        assert!(
+        assert_eq!(
             runtime
-                .find("header-agent-tab-reporter-right-separator")
-                .is_some()
+                .presented("header-agent-tab-reporter-right-separator")
+                .unwrap()
+                .1,
+            1.0
         );
         let (x, y) = runtime.find("header-agent-tab-reporter").unwrap();
         runtime.pointer_move(x, y);
         runtime.frame(0.0);
+        assert_eq!(agent_tab_texts(&runtime), before_texts);
         runtime.frame(0.2);
+        assert_eq!(agent_tab_texts(&runtime), before_texts);
         let elements = runtime.elements();
         let active = elements
             .iter()
@@ -703,32 +727,89 @@ mod tests {
             .unwrap();
         assert!(hovered.hover > 0.0);
         assert_eq!(hovered.radius, active.radius);
-        assert!(
+        assert_eq!(
             runtime
-                .find("header-agent-tab-validation-right-separator")
-                .is_none()
+                .presented("header-agent-tab-validation-right-separator")
+                .unwrap()
+                .1,
+            0.0
         );
-        assert!(
+        assert_eq!(
             runtime
-                .find("header-agent-tab-reporter-right-separator")
-                .is_none()
+                .presented("header-agent-tab-reporter-right-separator")
+                .unwrap()
+                .1,
+            0.0
         );
-        assert!(
+        assert_eq!(
             runtime
-                .find("header-agent-tab-patch_generation-right-separator")
-                .is_some()
+                .presented("header-agent-tab-patch_generation-right-separator")
+                .unwrap()
+                .1,
+            1.0
         );
         runtime.pointer_move(0.0, 0.0);
         runtime.frame(0.0);
-        assert!(
+        assert_eq!(agent_tab_texts(&runtime), before_texts);
+        assert_eq!(
             runtime
-                .find("header-agent-tab-validation-right-separator")
-                .is_some()
+                .presented("header-agent-tab-validation-right-separator")
+                .unwrap()
+                .1,
+            1.0
         );
-        assert!(
+        assert_eq!(
             runtime
-                .find("header-agent-tab-reporter-right-separator")
-                .is_some()
+                .presented("header-agent-tab-reporter-right-separator")
+                .unwrap()
+                .1,
+            1.0
+        );
+    }
+
+    #[test]
+    fn switching_session_tabs_keeps_positions_and_separators_still() {
+        let mut runtime = Runtime::new(
+            visual_preview::fixture("graph-session"),
+            view,
+            (1100.0, 720.0),
+            Env::new(true, 1.0),
+        );
+        runtime.frame(0.0);
+        runtime.frame(0.3);
+        let keys = [
+            "header-view-tab",
+            "header-agent-tab-discovery",
+            "header-agent-tab-validation",
+            "header-agent-tab-reporter",
+            "header-agent-tab-patch_generation",
+        ];
+        let before: Vec<_> = keys
+            .iter()
+            .map(|key| runtime.presented(key).unwrap().0)
+            .collect();
+        let before_texts = agent_tab_texts(&runtime);
+        click(&mut runtime, "header-agent-tab-reporter");
+        let after: Vec<_> = keys
+            .iter()
+            .map(|key| runtime.presented(key).unwrap().0)
+            .collect();
+        assert_eq!(before, after, "tab positions changed after selection");
+        assert_eq!(agent_tab_texts(&runtime), before_texts);
+        let animated_separators: Vec<_> = runtime
+            .elements()
+            .into_iter()
+            .filter(|item| {
+                item.key
+                    .as_deref()
+                    .is_some_and(|key| key.starts_with("header-") && key.ends_with("-separator"))
+                    && (item.exiting || (item.opacity > 0.01 && item.opacity < 0.99))
+            })
+            .map(|item| item.key.unwrap())
+            .collect();
+        assert!(
+            animated_separators.is_empty(),
+            "separators animate after tab selection: {animated_separators:?}"
         );
     }
 

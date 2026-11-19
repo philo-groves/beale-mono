@@ -2581,9 +2581,13 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
         .px(8.0)
         .center_y()
         .gap(7.0)
-        .radius(8.0)
+        .radius(16.0)
         .continuous_corners()
-        .fill(Color::TRANSPARENT)
+        .fill(if state.composer_menu_open {
+            theme.color("#303030")
+        } else {
+            Color::TRANSPARENT
+        })
         .child(if let Some(choice) = selected {
             icon(choice.selection.provider.logo(), 15.0).color(theme.color("#b8b8b8"))
         } else {
@@ -2768,7 +2772,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
         .px(8.0)
         .center_y()
         .gap(7.0)
-        .radius(8.0)
+        .radius(14.0)
         .continuous_corners()
         .fill(if workspace_menu_active {
             theme.color("#303030")
