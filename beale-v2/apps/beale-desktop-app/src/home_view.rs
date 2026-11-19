@@ -287,7 +287,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> E
             "Create a workspace to keep authorized scope, sessions, surfaces, and findings together. Start with a directory and a scope rule.",
             theme,
         ));
-        return scroll(page);
+        return scroll(page, state, theme);
     }
 
     let recent = recent_sessions(&state.session_summaries);
@@ -367,19 +367,32 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> E
             ))
             .child(grid),
     );
-    scroll(page)
+    scroll(page, state, theme)
 }
 
-fn scroll(page: El) -> El {
+fn scroll(page: El, state: &State, theme: ThemeStyle<'_>) -> El {
+    let scroll_watch = state.home_scroll.clone();
+    let scroll_bar = scroll_watch.clone();
     col()
-        .key("home-overview")
+        .key("home-overview-shell")
         .w_full()
         .h_full()
         .min_h(0.0)
-        .scroll(ScrollSpec {
-            stick_bottom: false,
-        })
-        .child(page)
+        .child(
+            col()
+                .key("home-overview")
+                .w_full()
+                .grow(1.0)
+                .min_h(0.0)
+                .scroll(ScrollSpec {
+                    stick_bottom: false,
+                })
+                .scroll_edge_fade(16.0)
+                .on_scroll_offset(move |position| scroll_watch.watch_scroll(position))
+                .on_wheel(|state: &mut State, event, tx| state.home_scroll.wheel(event, tx))
+                .child(page),
+        )
+        .child(scroll_bar.bar(theme))
 }
 
 #[cfg(test)]

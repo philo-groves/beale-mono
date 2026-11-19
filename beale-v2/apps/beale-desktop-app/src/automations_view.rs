@@ -378,6 +378,8 @@ fn section_toggle(
 }
 
 pub(crate) fn sidenav(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
+    let scroll_watch = state.sidenav_scrolls.automations.clone();
+    let scroll_bar = scroll_watch.clone();
     let mut list = col().w_full().gap(2.0);
     let future: Vec<_> = state
         .automations
@@ -475,14 +477,14 @@ pub(crate) fn sidenav(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
         .label("Automations sidebar")
         .w(width)
         .h_full()
-        .px(12.0)
+        .pl(12.0)
         .pt(10.0)
         .child(
             row()
                 .key("automations-schedule-job")
                 .role("button")
                 .label("Schedule a Job")
-                .w_full()
+                .w(width - 24.0)
                 .h(crate::design::SIDENAV_ROW_HEIGHT)
                 .px(4.0)
                 .center_y()
@@ -500,7 +502,7 @@ pub(crate) fn sidenav(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
         .child(
             row()
                 .key("automations-runs-row")
-                .w_full()
+                .w(width - 24.0)
                 .h(28.0)
                 .mt(12.0)
                 .center_y()
@@ -528,10 +530,23 @@ pub(crate) fn sidenav(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
                 .w_full()
                 .grow(1.0)
                 .min_h(0.0)
-                .scroll(ScrollSpec {
-                    stick_bottom: false,
-                })
-                .child(list),
+                .child(
+                    col()
+                        .key(scroll_watch.key())
+                        .w_full()
+                        .grow(1.0)
+                        .min_h(0.0)
+                        .pr(12.0)
+                        .scroll(ScrollSpec {
+                            stick_bottom: false,
+                        })
+                        .on_scroll_offset(move |position| scroll_watch.watch_scroll(position))
+                        .on_wheel(|state: &mut State, event, tx| {
+                            state.sidenav_scrolls.automations.wheel(event, tx)
+                        })
+                        .child(list),
+                )
+                .child(scroll_bar.bar(theme)),
         )
 }
 

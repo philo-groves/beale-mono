@@ -53,6 +53,14 @@ impl SettingsScroll {
             drag_start_offset: Rc::new(Cell::new(0.0)),
         }
     }
+
+    pub(crate) fn key(&self) -> &'static str {
+        self.scroll_key
+    }
+
+    pub(crate) fn overflow_opacity(&self) -> &Live<f32> {
+        &self.opacity
+    }
 }
 
 impl SettingsScroll {

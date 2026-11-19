@@ -21,6 +21,10 @@
 
 #### Changed
 
+- V2 per-view sidenavs show the shared scrollbar at the right edge when their navigation lists overflow. Home keeps its Workspaces/Tasks selector above the scrolling list, marks its lower edge with a full-width divider when the list overflows, and mutes the selector; Automations keeps its primary action above its list.
+- V2 Home shows the shared content scrollbar when its main page overflows the window.
+- V2 workspace header tabs use the standard width for short names and expand only when their labels need more room.
+- Hovered v2 research header tabs now hide the vertical separators on both sides.
 - V2 Home now lists the most recently active sessions under Continue research and shows workspace cards with directory, session count, and last activity. The count cards and Research Desk badge are removed.
 - V2 sidenav collapses when the window narrows below 1000px and returns when it widens, unless toggled in between. Workspace form controls wrap below their labels when both cannot share a line.
 - V2 overflowing text now fades at its trailing edge everywhere instead of ending with an ellipsis; multi-line card descriptions fade at the bottom only when cut. Truncated session, workspace, and card text shows in full on hover.

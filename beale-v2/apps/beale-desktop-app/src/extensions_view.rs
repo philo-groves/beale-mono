@@ -1317,7 +1317,6 @@ pub(crate) fn sidenav(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
         .role("navigation")
         .label("Extensions sections")
         .w(width)
-        .h_full()
         .px(8.0)
         .pt(10.0)
         .child(items)

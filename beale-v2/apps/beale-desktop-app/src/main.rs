@@ -636,6 +636,7 @@ struct State {
     session_live_events: Vec<SessionStreamEvent>,
     session_agent_role: String,
     session_agent_tab_manual: bool,
+    hovered_header_tab: Option<String>,
     session_elapsed_ms: u64,
     session_turn_started: Option<Instant>,
     session_agent_started_at: std::collections::HashMap<String, Instant>,
@@ -823,8 +824,45 @@ struct State {
     canvas_runbook: runbook_canvas::CanvasRunbookState,
     canvas_subagent: Option<subagent_canvas::SubagentCanvas>,
     canvas_scroll: SettingsScroll,
+    home_scroll: SettingsScroll,
+    sidenav_scrolls: SidenavScrolls,
     settings_scroll: SettingsScroll,
     workspace_scroll: SettingsScroll,
+}
+
+struct SidenavScrolls {
+    home: SettingsScroll,
+    settings: SettingsScroll,
+    extensions: SettingsScroll,
+    fleet: SettingsScroll,
+    automations: SettingsScroll,
+    tracking: SettingsScroll,
+}
+
+impl Default for SidenavScrolls {
+    fn default() -> Self {
+        Self {
+            home: SettingsScroll::for_key("home-collection"),
+            settings: SettingsScroll::for_key("settings-sidenav-scroll"),
+            extensions: SettingsScroll::for_key("extensions-sidenav-scroll"),
+            fleet: SettingsScroll::for_key("fleet-sidenav-scroll"),
+            automations: SettingsScroll::for_key("automations-runs-scroll"),
+            tracking: SettingsScroll::for_key("tracking-sidenav-scroll"),
+        }
+    }
+}
+
+impl SidenavScrolls {
+    fn current(&self, view: PrimaryView) -> &SettingsScroll {
+        match view {
+            PrimaryView::Settings => &self.settings,
+            PrimaryView::Extensions => &self.extensions,
+            PrimaryView::Fleet => &self.fleet,
+            PrimaryView::Automations => &self.automations,
+            PrimaryView::Tracking => &self.tracking,
+            _ => &self.home,
+        }
+    }
 }
 
 impl Default for State {
@@ -890,6 +928,7 @@ impl Default for State {
             session_live_events: Vec::new(),
             session_agent_role: "main".to_owned(),
             session_agent_tab_manual: false,
+            hovered_header_tab: None,
             session_elapsed_ms: 0,
             session_turn_started: None,
             session_agent_started_at: std::collections::HashMap::new(),
@@ -1082,6 +1121,8 @@ impl Default for State {
             canvas_runbook: runbook_canvas::CanvasRunbookState::default(),
             canvas_subagent: None,
             canvas_scroll: SettingsScroll::for_key("canvas-runbook-scroll"),
+            home_scroll: SettingsScroll::for_key("home-overview"),
+            sidenav_scrolls: SidenavScrolls::default(),
             settings_scroll: SettingsScroll::default(),
             workspace_scroll: SettingsScroll::for_key("workspace-scroll"),
         }
@@ -6141,6 +6182,41 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
             PrimaryView::Tracking => tracking_view::sidenav(state, state.sidenav_width, theme),
             _ => home_sidebar::render(state, state.sidenav_width, theme),
         };
+        let sidenav = if matches!(
+            state.primary_view,
+            PrimaryView::Settings
+                | PrimaryView::Extensions
+                | PrimaryView::Fleet
+                | PrimaryView::Tracking
+        ) {
+            let scroll_watch = state.sidenav_scrolls.current(state.primary_view).clone();
+            let scroll_bar = scroll_watch.clone();
+            col()
+                .w_full()
+                .h_full()
+                .min_h(0.0)
+                .child(
+                    col()
+                        .key(scroll_watch.key())
+                        .w_full()
+                        .grow(1.0)
+                        .min_h(0.0)
+                        .scroll(ScrollSpec {
+                            stick_bottom: false,
+                        })
+                        .on_scroll_offset(move |position| scroll_watch.watch_scroll(position))
+                        .on_wheel(|state: &mut State, event, tx| {
+                            state
+                                .sidenav_scrolls
+                                .current(state.primary_view)
+                                .wheel(event, tx)
+                        })
+                        .child(sidenav),
+                )
+                .child(scroll_bar.bar(theme))
+        } else {
+            sidenav
+        };
         settings_surface = settings_surface.child(
             col()
                 .w(state.sidenav_width)
@@ -8601,6 +8677,138 @@ mod tests {
         runtime.frame(0.0);
         assert!(runtime.find("home-overview").is_some());
         assert!(runtime.find("settings-sidenav").is_none());
+    }
+
+    #[test]
+    fn home_scrollbar_appears_for_overflow_and_scrolls_the_main_content() {
+        let mut state = visual_preview::fixture("home");
+        for index in 0..12 {
+            state.workspaces.push(WorkspaceSummary {
+                id: format!("00000000-0000-4000-8000-{:012}", index + 10),
+                name: format!("Example workspace {index}"),
+                directory: format!("/example/research/workspace-{index}"),
+            });
+        }
+        let mut runtime = Runtime::new(state, view, (840.0, 600.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        runtime.frame(1.0 / 60.0);
+        assert!(runtime.state.home_scroll.position().max[1] > 0.0);
+        assert!(runtime.state.home_scroll.metrics().1 > 0.0);
+        let (bar, _) = runtime.presented("home-overviewbar").unwrap();
+        let (surface, _) = runtime.presented("content-surface").unwrap();
+        assert_eq!(bar[0] + bar[2], surface[0] + surface[2]);
+        assert_eq!(bar[1], surface[1]);
+        assert_eq!(bar[1] + bar[3], surface[1] + surface[3]);
+        let (viewport, _) = runtime.presented("home-overview").unwrap();
+        runtime.wheel_event(WheelEvent::new(0.0, -120.0).at(
+            viewport[0] + viewport[2] / 2.0,
+            viewport[1] + viewport[3] / 2.0,
+        ));
+        runtime.frame(1.0 / 60.0);
+        assert!(runtime.state.home_scroll.position().offset[1] > 0.0);
+
+        let mut empty = Runtime::new(
+            State {
+                primary_view: PrimaryView::Home,
+                ..State::default()
+            },
+            view,
+            (1040.0, 720.0),
+            Env::new(true, 1.0),
+        );
+        empty.frame(0.0);
+        empty.frame(1.0 / 60.0);
+        assert_eq!(empty.state.home_scroll.metrics().1, 0.0);
+    }
+
+    #[test]
+    fn home_collection_scrollbar_tracks_long_workspace_lists() {
+        let mut state = visual_preview::fixture("home");
+        for index in 0..12 {
+            state.workspaces.push(WorkspaceSummary {
+                id: format!("00000000-0000-4000-8000-{:012}", index + 20),
+                name: format!("Example workspace {index}"),
+                directory: format!("/example/research/workspace-{index}"),
+            });
+        }
+        let mut runtime = Runtime::new(state, view, (1040.0, 600.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        runtime.frame(1.0 / 60.0);
+        assert!(runtime.state.sidenav_scrolls.home.position().max[1] > 0.0);
+        assert!(runtime.state.sidenav_scrolls.home.metrics().1 > 0.0);
+        let (bar, _) = runtime.presented("home-collectionbar").unwrap();
+        let (collection, _) = runtime.presented("home-collection").unwrap();
+        let (sidebar, _) = runtime.presented("home-sidenav").unwrap();
+        let (bottom_divider, bottom_opacity) =
+            runtime.presented("home-collection-bottom-divider").unwrap();
+        let (header, _) = runtime.presented("home-collection-header").unwrap();
+        assert_eq!(bar[1], collection[1]);
+        assert_eq!(bar[1] + bar[3], collection[1] + collection[3]);
+        assert_eq!(bar[0] + bar[2], sidebar[0] + sidebar[2]);
+        assert!(bottom_opacity > 0.0);
+        assert_eq!(bottom_divider[0], sidebar[0]);
+        assert_eq!(bottom_divider[2], sidebar[2]);
+        assert!((header[1] + header[3] - bottom_divider[1]).abs() < 1.0);
+        assert!((bottom_divider[1] + bottom_divider[3] - bar[1]).abs() < 1.0);
+        let (down, _) = runtime.presented("home-collection-down").unwrap();
+        runtime.pointer_down(down[0] + down[2] / 2.0, down[1] + down[3] / 2.0);
+        runtime.pointer_up(down[0] + down[2] / 2.0, down[1] + down[3] / 2.0);
+        runtime.frame(1.0 / 60.0);
+        assert!(runtime.state.sidenav_scrolls.home.position().offset[1] > 0.0);
+        assert_eq!(
+            runtime.presented("home-collection-header").unwrap().0,
+            header
+        );
+
+        let mut empty = Runtime::new(
+            State {
+                primary_view: PrimaryView::Home,
+                ..State::default()
+            },
+            view,
+            (1040.0, 720.0),
+            Env::new(true, 1.0),
+        );
+        empty.frame(0.0);
+        empty.frame(1.0 / 60.0);
+        assert_eq!(empty.state.sidenav_scrolls.home.metrics().1, 0.0);
+        assert_eq!(
+            empty.presented("home-collection-bottom-divider").unwrap().1,
+            0.0
+        );
+    }
+
+    #[test]
+    fn automations_sidenav_scrollbar_tracks_expanded_jobs() {
+        let mut state = visual_preview::fixture("automations");
+        let example = state.automations.jobs[0].clone();
+        for index in 0..16 {
+            let mut job = example.clone();
+            job.id = format!("example-job-{index}");
+            job.title = format!("Example scheduled review {index}");
+            state.automations.jobs.push(job);
+        }
+        let mut runtime = Runtime::new(state, view, (1040.0, 600.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        let (x, y) = runtime.find("automations-future-toggle").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+        runtime.frame(1.0 / 60.0);
+        let scroll = &runtime.state.sidenav_scrolls.automations;
+        assert!(scroll.position().max[1] > 0.0);
+        assert!(scroll.metrics().1 > 0.0);
+        let (bar, _) = runtime.presented("automations-runs-scrollbar").unwrap();
+        let (slot, _) = runtime.presented("automations-runs-scroll").unwrap();
+        let (sidebar, _) = runtime.presented("automations-sidenav").unwrap();
+        assert_eq!(bar[1], slot[1]);
+        assert_eq!(bar[1] + bar[3], slot[1] + slot[3]);
+        assert_eq!(bar[0] + bar[2], sidebar[0] + sidebar[2]);
+        let (down, _) = runtime.presented("automations-runs-scroll-down").unwrap();
+        runtime.pointer_down(down[0] + down[2] / 2.0, down[1] + down[3] / 2.0);
+        runtime.pointer_up(down[0] + down[2] / 2.0, down[1] + down[3] / 2.0);
+        runtime.frame(1.0 / 60.0);
+        assert!(runtime.state.sidenav_scrolls.automations.position().offset[1] > 0.0);
     }
 
     #[test]

@@ -177,7 +177,7 @@ fn session_row(key: String, label: &str, italic: bool, active: bool, theme: Them
 
 pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
     let color = |value| theme.color(value);
-    let mut primary = col().w_full().mb(12.0).gap(2.0);
+    let mut primary = col().w_full().mb(5.0).gap(2.0);
     for spec in &PRIMARY_ACTIONS {
         primary = primary.child(primary_action(spec, state, theme));
     }
@@ -204,7 +204,7 @@ pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
         .child(
             text(state.home_collection.label())
                 .font(ui_font(13.0, 400.0))
-                .color(color("#b8b8b8")),
+                .color(color("#969696")),
         )
         .child(
             icon(
@@ -215,14 +215,13 @@ pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
                 },
                 13.0,
             )
-            .color(color("#b8b8b8")),
+            .color(color("#969696")),
         )
         .on_press(|state| toggle_selection_menu(state, SelectionMenu::HomeCollection));
     let mut header = row()
         .key("home-collection-header")
         .w_full()
         .h(28.0)
-        .mb(6.0)
         .center_y()
         .child(collection_control)
         .child(el().grow(1.0));
@@ -237,11 +236,12 @@ pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
         .w_full()
         .grow(1.0)
         .min_h(0.0)
+        .pr(12.0)
+        .pt(6.0)
         .scroll(ScrollSpec {
             stick_bottom: false,
         })
-        .gap(6.0)
-        .child(header);
+        .gap(6.0);
     if state.home_collection == HomeCollection::Workspaces && state.workspaces.is_empty() {
         let label = if !state.workspace_list_error.is_empty() {
             "Workspaces unavailable"
@@ -515,16 +515,40 @@ pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
                 .wrap(),
         );
     }
+    let scroll_watch = state.sidenav_scrolls.home.clone();
+    let scroll_bar = scroll_watch.clone();
     col()
         .key("home-sidenav")
         .role("navigation")
         .label("Home sidebar")
         .w(width)
         .h_full()
-        .px(12.0)
         .pt(10.0)
-        .child(primary)
-        .child(collection)
+        .child(primary.pl(12.0).pr(12.0))
+        .child(header.pl(12.0).pr(12.0))
+        .child(
+            el().key("home-collection-bottom-divider")
+                .w_full()
+                .h(1.0)
+                .fill(color("#3a3a3a"))
+                .live_opacity(scroll_watch.overflow_opacity()),
+        )
+        .child(
+            col()
+                .key("home-collection-shell")
+                .w_full()
+                .grow(1.0)
+                .min_h(0.0)
+                .pl(12.0)
+                .child(
+                    collection
+                        .on_scroll_offset(move |position| scroll_watch.watch_scroll(position))
+                        .on_wheel(|state: &mut State, event, tx| {
+                            state.sidenav_scrolls.home.wheel(event, tx)
+                        }),
+                )
+                .child(scroll_bar.bar(theme)),
+        )
 }
 
 fn time_since_last_message(last_message_at_ms: u64) -> String {

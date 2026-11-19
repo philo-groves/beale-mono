@@ -38,11 +38,15 @@ pub(crate) fn workspace(state: &State) -> Option<(uuid::Uuid, WorkspaceTab)> {
     Some((id, tab))
 }
 
+const DEFAULT_TAB_MAX_WIDTH: f32 = 240.0;
 const WORKSPACE_TAB_MAX_WIDTH: f32 = 360.0;
+const TAB_SEPARATOR_INSET: f32 = 3.0;
 
-struct TabSeparators {
+struct TabSeparators<'a> {
     left: bool,
     right: bool,
+    hovered_key: Option<&'a str>,
+    next_key: Option<&'a str>,
 }
 
 fn tab(
@@ -51,42 +55,65 @@ fn tab(
     glyph: Option<&'static Icon>,
     active: bool,
     dense: bool,
-    separators: TabSeparators,
+    separators: TabSeparators<'_>,
     theme: ThemeStyle<'_>,
 ) -> El {
     let key = key.into();
+    let hover_key = key.clone();
+    let hovered = separators.hovered_key == Some(key.as_str());
     let mut item = row()
         .key(key.clone())
         .role("tab")
         .label(format!("{label}{}", if active { ", selected" } else { "" }))
         .h(34.0)
         .grow(1.0)
-        .max_w(240.0)
+        .max_w(DEFAULT_TAB_MAX_WIDTH)
         .shrink()
         .px(if dense { 7.0 } else { 12.0 })
         .gap(if dense { 5.0 } else { 8.0 })
         .center_y()
         .radius(11.0)
         .continuous_corners()
-        .hover(theme.color("#303030"));
+        .hover(theme.color("#303030"))
+        .on_hover_change(move |state: &mut State, inside, _| {
+            if inside {
+                state.hovered_header_tab = Some(hover_key.clone());
+            } else if state.hovered_header_tab.as_deref() == Some(hover_key.as_str()) {
+                state.hovered_header_tab = None;
+            }
+        });
     if active {
         item = item
             .fill(theme.color("#303030"))
             .border(1.0, theme.color("#3a3a3a"));
-    } else {
+    } else if !hovered {
         if separators.left {
             item = item.child(
                 el().key(format!("{key}-left-separator"))
-                    .pin(Some(0.0), Some(0.0), None, Some(0.0))
+                    .pin(
+                        Some(0.0),
+                        Some(TAB_SEPARATOR_INSET),
+                        None,
+                        Some(TAB_SEPARATOR_INSET),
+                    )
                     .w(1.0)
                     .fill(theme.color("#3a3a3a"))
                     .inert(),
             );
         }
-        if separators.right {
+        if separators.right
+            && separators
+                .next_key
+                .is_none_or(|next| separators.hovered_key != Some(next))
+        {
             item = item.child(
                 el().key(format!("{key}-right-separator"))
-                    .pin(None, Some(0.0), Some(0.0), Some(0.0))
+                    .pin(
+                        None,
+                        Some(TAB_SEPARATOR_INSET),
+                        Some(0.0),
+                        Some(TAB_SEPARATOR_INSET),
+                    )
                     .w(1.0)
                     .fill(theme.color("#3a3a3a"))
                     .inert(),
@@ -218,6 +245,20 @@ pub(crate) fn tabs(state: &State, theme: ThemeStyle<'_>, window_width: f32) -> O
         } else {
             true
         };
+    let next_tab_key = if peer_graph {
+        beale_graphs::graph_definition(graph_id)
+            .and_then(|graph| graph.nodes.iter().find(|role| role.is_top_level()))
+            .map(|role| format!("header-agent-tab-{}", role.id()))
+    } else {
+        Some("header-session-tab".to_owned())
+    };
+    let workspace_tab_max_width = if compact {
+        DEFAULT_TAB_MAX_WIDTH
+    } else {
+        let name_width = rune::text::measure(name, &[], ui_font(13.0, 500.0), None).0;
+        let section_width = rune::text::measure(section.label(), &[], ui_font(13.0, 400.0), None).0;
+        (name_width + section_width + 72.0).clamp(DEFAULT_TAB_MAX_WIDTH, WORKSPACE_TAB_MAX_WIDTH)
+    };
     let mut workspace_tab = tab(
         "header-view-tab".to_owned(),
         &format!("{name}, {}", section.label()),
@@ -227,12 +268,13 @@ pub(crate) fn tabs(state: &State, theme: ThemeStyle<'_>, window_width: f32) -> O
         TabSeparators {
             left: false,
             right: !next_tab_active,
+            hovered_key: state.hovered_header_tab.as_deref(),
+            next_key: next_tab_key.as_deref(),
         },
         theme,
     )
-    // The workspace tab carries a name and a section, so it may stretch further than agent
-    // tabs before the name fades.
-    .max_w(WORKSPACE_TAB_MAX_WIDTH)
+    // Longer workspace labels can use extra room before the name fades.
+    .max_w(workspace_tab_max_width)
     .min_w(0.0);
     if !compact {
         workspace_tab = workspace_tab.child(
@@ -277,6 +319,9 @@ pub(crate) fn tabs(state: &State, theme: ThemeStyle<'_>, window_width: f32) -> O
                 .collect();
             for (index, role) in roles.iter().copied().enumerate() {
                 let role_id = role.id().to_owned();
+                let next_key = roles
+                    .get(index + 1)
+                    .map(|next| format!("header-agent-tab-{}", next.id()));
                 let next_active = !in_workspace
                     && roles
                         .get(index + 1)
@@ -309,6 +354,8 @@ pub(crate) fn tabs(state: &State, theme: ThemeStyle<'_>, window_width: f32) -> O
                         TabSeparators {
                             left: false,
                             right: !next_active,
+                            hovered_key: state.hovered_header_tab.as_deref(),
+                            next_key: next_key.as_deref(),
                         },
                         theme,
                     )
@@ -350,6 +397,8 @@ pub(crate) fn tabs(state: &State, theme: ThemeStyle<'_>, window_width: f32) -> O
                 TabSeparators {
                     left: false,
                     right: true,
+                    hovered_key: state.hovered_header_tab.as_deref(),
+                    next_key: None,
                 },
                 theme,
             )
@@ -597,7 +646,31 @@ mod tests {
     }
 
     #[test]
-    fn hovered_inactive_tab_has_the_active_tab_shape() {
+    fn workspace_tab_only_expands_for_long_names() {
+        let mut short = visual_preview::fixture("session");
+        for workspace in &mut short.workspaces {
+            workspace.name = "Example".to_owned();
+        }
+        let mut short = Runtime::new(short, view, (1100.0, 720.0), Env::new(true, 1.0));
+        short.frame(0.0);
+        let (short_tab, _) = short.presented("header-view-tab").unwrap();
+        assert!(short_tab[2] <= DEFAULT_TAB_MAX_WIDTH + 1.0);
+
+        let mut long = visual_preview::fixture("session");
+        for workspace in &mut long.workspaces {
+            workspace.name = "Example research workspace with a long name".to_owned();
+        }
+        let mut long = Runtime::new(long, view, (1100.0, 720.0), Env::new(true, 1.0));
+        long.frame(0.0);
+        let (long_tab, _) = long.presented("header-view-tab").unwrap();
+        let (session_tab, _) = long.presented("header-session-tab").unwrap();
+        assert!(long_tab[2] > short_tab[2]);
+        assert!(long_tab[2] <= WORKSPACE_TAB_MAX_WIDTH + 1.0);
+        assert!(long_tab[0] + long_tab[2] <= session_tab[0]);
+    }
+
+    #[test]
+    fn hovered_inactive_tab_hides_adjacent_separators() {
         let mut runtime = Runtime::new(
             visual_preview::fixture("graph-session"),
             view,
@@ -605,7 +678,17 @@ mod tests {
             Env::new(true, 1.0),
         );
         runtime.frame(0.0);
-        let (x, y) = runtime.find("header-agent-tab-validation").unwrap();
+        assert!(
+            runtime
+                .find("header-agent-tab-validation-right-separator")
+                .is_some()
+        );
+        assert!(
+            runtime
+                .find("header-agent-tab-reporter-right-separator")
+                .is_some()
+        );
+        let (x, y) = runtime.find("header-agent-tab-reporter").unwrap();
         runtime.pointer_move(x, y);
         runtime.frame(0.0);
         runtime.frame(0.2);
@@ -616,20 +699,37 @@ mod tests {
             .unwrap();
         let hovered = elements
             .iter()
-            .find(|item| item.key.as_deref() == Some("header-agent-tab-validation"))
+            .find(|item| item.key.as_deref() == Some("header-agent-tab-reporter"))
             .unwrap();
         assert!(hovered.hover > 0.0);
         assert_eq!(hovered.radius, active.radius);
-        let separator = elements
-            .iter()
-            .find(|item| item.key.as_deref() == Some("header-agent-tab-validation-right-separator"))
-            .unwrap();
-        assert_eq!(separator.radius, 0.0);
-        assert_eq!(separator.rect[2], 1.0);
-        assert_eq!(separator.rect[3], hovered.rect[3]);
-        assert!(elements.iter().all(|item| {
-            item.key.as_deref() != Some("header-agent-tab-reporter-left-separator")
-        }));
+        assert!(
+            runtime
+                .find("header-agent-tab-validation-right-separator")
+                .is_none()
+        );
+        assert!(
+            runtime
+                .find("header-agent-tab-reporter-right-separator")
+                .is_none()
+        );
+        assert!(
+            runtime
+                .find("header-agent-tab-patch_generation-right-separator")
+                .is_some()
+        );
+        runtime.pointer_move(0.0, 0.0);
+        runtime.frame(0.0);
+        assert!(
+            runtime
+                .find("header-agent-tab-validation-right-separator")
+                .is_some()
+        );
+        assert!(
+            runtime
+                .find("header-agent-tab-reporter-right-separator")
+                .is_some()
+        );
     }
 
     #[test]
