@@ -82,6 +82,39 @@ impl CredentialStore {
         Ok(token)
     }
 
+    /// Credential values this host stores or reads: the control token, saved API
+    /// keys, OAuth tokens, and the Codex sign-in. Used for exact-match redaction
+    /// of model-visible output. A source that cannot be read is skipped.
+    pub fn host_secret_values(&self) -> Vec<String> {
+        let mut values = Vec::new();
+        let token_path = self.root.join("app-server-control-token");
+        if let Ok(token) = std::fs::read_to_string(token_path) {
+            values.push(token.trim().to_owned());
+        }
+        let mut key_names: Vec<String> = ["openai", "xai", "anthropic", "zai", "openrouter"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        if let Ok(custom) = self.custom_providers() {
+            key_names.extend(custom.into_iter().map(|provider| provider.id));
+        }
+        for name in &key_names {
+            if let Ok(Some(key)) = self.load_api_key(name) {
+                values.push(key);
+            }
+        }
+        for provider in ["openai", "xai", "anthropic", "zai"] {
+            if let Ok(Some(credential)) = self.load(provider) {
+                values.push(credential.access_token);
+                values.push(credential.refresh_token);
+                values.extend(credential.id_token);
+            }
+        }
+        values.extend(crate::codex::secret_values());
+        values.retain(|value| !value.is_empty());
+        values
+    }
+
     pub fn api_key_configured(&self, provider: &str) -> Result<bool> {
         Ok(self.api_key_path(provider)?.exists())
     }
@@ -445,6 +478,41 @@ mod tests {
     fn rejects_unknown_credential_name() {
         let store = CredentialStore::at(std::env::temp_dir());
         assert!(store.load("../outside").is_err());
+    }
+
+    #[test]
+    fn host_secret_values_include_saved_credentials() {
+        let root = std::env::temp_dir().join(format!("beale-secret-test-{}", uuid::Uuid::new_v4()));
+        let store = CredentialStore::at(root.clone());
+        let token = store.control_token().unwrap();
+        store
+            .save_api_key("openrouter", "example-openrouter-key")
+            .unwrap();
+        store
+            .save(
+                "xai",
+                &OAuthCredential {
+                    access_token: "example-access-token".to_owned(),
+                    refresh_token: "example-refresh-token".to_owned(),
+                    expires_at: 0,
+                    client_id: "example-client".to_owned(),
+                    id_token: None,
+                    subject: None,
+                    scopes: Vec::new(),
+                },
+            )
+            .unwrap();
+        let values = store.host_secret_values();
+        for expected in [
+            token.as_str(),
+            "example-openrouter-key",
+            "example-access-token",
+            "example-refresh-token",
+        ] {
+            assert!(values.iter().any(|value| value == expected), "{expected}");
+        }
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

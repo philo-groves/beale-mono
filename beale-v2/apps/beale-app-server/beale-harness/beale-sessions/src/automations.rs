@@ -16,7 +16,7 @@ use std::{
 use tokio::sync::Semaphore;
 
 use super::{
-    SessionState,
+    SessionState, TurnError,
     http::{authorized, checked_body, response},
     parse_id, run_turn,
 };
@@ -57,15 +57,11 @@ pub(super) async fn run_worker(state: SessionState) {
 }
 
 async fn execute_claim(state: SessionState, claim: AutomationClaim) {
-    let graph_id = state
-        .db
-        .session_graph_id(&claim.job_id)
+    let graph_id = super::graph_records::graph_id(&state.db, &claim.job_id)
         .ok()
         .flatten()
         .unwrap_or_default();
-    let graph_config = state
-        .db
-        .session_graph_config(&claim.job_id)
+    let graph_config = super::graph_records::graph_config(&state.db, &claim.job_id)
         .ok()
         .flatten()
         .and_then(|bytes| SessionGraphConfig::decode(bytes.as_slice()).ok())
@@ -146,10 +142,10 @@ async fn execute_claim(state: SessionState, claim: AutomationClaim) {
             Some(summary) => (Some(summary.id), 2, ""),
             None => (None, 3, "The run completed without a saved session."),
         },
-        Err(StatusCode::NOT_FOUND) => (None, 3, "The workspace is unavailable."),
-        Err(StatusCode::CONFLICT) => (None, 3, "The saved model or feature is unavailable."),
-        Err(StatusCode::BAD_REQUEST) => (None, 3, "The saved job configuration is invalid."),
-        Err(StatusCode::BAD_GATEWAY) => (None, 3, "The provider could not complete this run."),
+        Err(TurnError::NotFound) => (None, 3, "The workspace is unavailable."),
+        Err(TurnError::Conflict) => (None, 3, "The saved model or feature is unavailable."),
+        Err(TurnError::Invalid) => (None, 3, "The saved job configuration is invalid."),
+        Err(TurnError::Provider) => (None, 3, "The provider could not complete this run."),
         Err(_) => (None, 3, "The run could not complete."),
     };
     if state

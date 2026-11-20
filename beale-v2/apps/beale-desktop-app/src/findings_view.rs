@@ -3,6 +3,7 @@ mod plot;
 
 use crate::design::FadeText;
 use crate::icons::{EVIDENCE, WORKSPACE_SURFACES};
+use crate::settings_scroll::SettingsScroll;
 use beale_contracts::findings::{
     self, Finding, GetRequest, GetResponse, QueryPage, QueryRequest, Status, Summary,
 };
@@ -11,6 +12,21 @@ use rune::{Color, El, ScrollSpec, col, el, icon, row, text};
 use std::net::SocketAddr;
 
 use crate::{State, ThemeStyle, form_button, ui_font};
+
+static FINDING_DIAMOND: rune::Icon = rune::Icon {
+    name: "finding-diamond",
+    view: 24.0,
+    body: r#"<path d="M12 1 23 12 12 23 1 12Z" fill="currentColor"/>"#,
+};
+
+pub(crate) fn lane_scrolls() -> [SettingsScroll; 4] {
+    [
+        SettingsScroll::for_key("findings-lane-candidate-scroll"),
+        SettingsScroll::for_key("findings-lane-validated-scroll"),
+        SettingsScroll::for_key("findings-lane-screened-scroll"),
+        SettingsScroll::for_key("findings-lane-reported-scroll"),
+    ]
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum FindingsMode {
@@ -306,7 +322,7 @@ fn impact_chip(record: &Summary, theme: ThemeStyle<'_>) -> El {
         .impact_score
         .map_or("Unscored".to_owned(), |score| format!("Impact {score}"));
     row()
-        .key(format!("finding-card-{}-impact", record.id))
+        .key(format!("finding-row-{}-impact", record.id))
         .h(20.0)
         .px(7.0)
         .gap(5.0)
@@ -318,7 +334,7 @@ fn impact_chip(record: &Summary, theme: ThemeStyle<'_>) -> El {
         .child(text(label).font(ui_font(11.0, 600.0)).color(color))
 }
 
-fn card_meta(glyph: &'static rune::Icon, label: String, color: Color) -> El {
+fn finding_meta(glyph: &'static rune::Icon, label: String, color: Color) -> El {
     row()
         .gap(4.0)
         .center_y()
@@ -326,7 +342,7 @@ fn card_meta(glyph: &'static rune::Icon, label: String, color: Color) -> El {
         .child(text(label).font(ui_font(11.0, 500.0)).color(color))
 }
 
-fn card(record: &Summary, theme: ThemeStyle<'_>) -> El {
+fn finding_row(record: &Summary, theme: ThemeStyle<'_>) -> El {
     let id = record.id.clone();
     let surface_count = record.surface_ids.len();
     let muted = theme.color("#858585");
@@ -355,7 +371,7 @@ fn card(record: &Summary, theme: ThemeStyle<'_>) -> El {
         count => format!("{count} evidence refs"),
     };
     col()
-        .key(format!("finding-card-{}", record.id))
+        .key(format!("finding-row-{}", record.id))
         .role("button")
         .label(format!(
             "Open {}: {}, {}, {}",
@@ -367,13 +383,9 @@ fn card(record: &Summary, theme: ThemeStyle<'_>) -> El {
             evidence_label.to_lowercase()
         ))
         .w_full()
-        .padding(13.0)
-        .gap(8.0)
-        .radius(12.0)
-        .continuous_corners()
-        .fill(theme.color("#242424"))
-        .hover(theme.color("#2d2d2d"))
-        .border(1.0, theme.color("#353535"))
+        .padding(12.0)
+        .gap(7.0)
+        .hover(theme.color("#242424"))
         .child(header)
         .child(
             text(record.title.clone())
@@ -389,24 +401,25 @@ fn card(record: &Summary, theme: ThemeStyle<'_>) -> El {
                 .font(ui_font(12.0, 400.0))
                 .color(theme.color("#a4a4a4")),
         )
-        .child(el().w_full().h(1.0).fill(theme.color("#303030")))
         .child(
             row()
                 .w_full()
                 .gap(12.0)
                 .center_y()
                 .child(
-                    card_meta(&WORKSPACE_SURFACES, surface_count.to_string(), muted).help(format!(
-                        "{surface_count} {}",
-                        if surface_count == 1 {
-                            "surface"
-                        } else {
-                            "surfaces"
-                        }
-                    )),
+                    finding_meta(&WORKSPACE_SURFACES, surface_count.to_string(), muted).help(
+                        format!(
+                            "{surface_count} {}",
+                            if surface_count == 1 {
+                                "surface"
+                            } else {
+                                "surfaces"
+                            }
+                        ),
+                    ),
                 )
                 .child(
-                    card_meta(
+                    finding_meta(
                         &EVIDENCE,
                         if record.evidence_count == 0 {
                             "None".to_owned()
@@ -431,34 +444,63 @@ fn card(record: &Summary, theme: ThemeStyle<'_>) -> El {
         .on_press(move |state: &mut State| open_record(state, id.clone()))
 }
 
+fn finding_separator(before: &str, theme: ThemeStyle<'_>) -> El {
+    el().key(format!("finding-separator-before-{before}"))
+        .w_full()
+        .h(1.0)
+        .fill(theme.color("#303030"))
+}
+
 fn lane(
-    status: Status,
-    label: &str,
-    accent: &str,
+    state: &State,
+    lane_index: usize,
+    stage: (Status, &str, &str),
     records: &[Summary],
-    width: f32,
+    size: [f32; 2],
     theme: ThemeStyle<'_>,
 ) -> El {
+    let (status, label, accent) = stage;
+    let [width, height] = size;
     let items: Vec<_> = records
         .iter()
         .filter(|item| item.status == status)
         .collect();
-    let mut content = col()
+    let count = items.len();
+    let scroll_watch = state.findings_lane_scrolls[lane_index].clone();
+    let scroll_bar = scroll_watch.clone();
+    let mut list = col().w_full();
+    if items.is_empty() {
+        list = list.child(
+            text("No findings in this stage")
+                .padding(12.0)
+                .font(ui_font(12.0, 400.0))
+                .color(theme.color("#777777")),
+        );
+    }
+    for (index, item) in items.into_iter().enumerate() {
+        if index > 0 {
+            list = list.child(finding_separator(&item.id, theme));
+        }
+        list = list.child(finding_row(item, theme));
+    }
+    col()
         .key(format!("findings-lane-{}", label.to_lowercase()))
         .w(width)
-        .min_h(330.0)
-        .padding(12.0)
-        .gap(11.0)
-        .radius(16.0)
-        .continuous_corners()
-        .fill(theme.color("#171717"))
-        .border(1.0, theme.color("#2b2b2b"))
+        .h(height)
+        .min_h(0.0)
         .child(
             row()
+                .key(format!("findings-lane-{}-header", label.to_lowercase()))
                 .w_full()
+                .h(42.0)
+                .px(12.0)
                 .center_y()
                 .gap(8.0)
-                .child(el().size(7.0, 7.0).radius(3.5).fill(theme.color(accent)))
+                .child(
+                    icon(&FINDING_DIAMOND, 9.0)
+                        .key(format!("findings-lane-{}-diamond", label.to_lowercase()))
+                        .color(theme.color(accent)),
+                )
                 .child(
                     text(label)
                         .font(ui_font(14.0, 600.0))
@@ -466,26 +508,43 @@ fn lane(
                 )
                 .child(el().grow(1.0))
                 .child(
-                    text(items.len().to_string())
+                    text(count.to_string())
                         .font(ui_font(12.0, 500.0))
                         .color(theme.color("#999999")),
                 ),
         )
-        .child(el().w_full().h(1.0).fill(theme.color("#303030")));
-    if items.is_empty() {
-        content = content.child(
-            text("No findings in this stage")
-                .font(ui_font(12.0, 400.0))
-                .color(theme.color("#777777")),
-        );
-    }
-    for item in items {
-        content = content.child(card(item, theme));
-    }
-    content
+        .child(el().w_full().h(1.0).fill(theme.color("#303030")))
+        .child(
+            row()
+                .w_full()
+                .grow(1.0)
+                .min_h(0.0)
+                .child(
+                    col()
+                        .key(scroll_watch.key())
+                        .grow(1.0)
+                        .min_w(0.0)
+                        .min_h(0.0)
+                        .scroll(ScrollSpec {
+                            stick_bottom: false,
+                        })
+                        .scroll_edge_fade(16.0)
+                        .on_scroll_offset(move |position| scroll_watch.watch_scroll(position))
+                        .on_wheel(move |state: &mut State, event, tx| {
+                            state.findings_lane_scrolls[lane_index].wheel(event, tx)
+                        })
+                        .child(list),
+                )
+                .child(scroll_bar.bar(theme)),
+        )
 }
 
-pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> El {
+pub(crate) fn render(
+    state: &State,
+    theme: ThemeStyle<'_>,
+    page_width: f32,
+    page_height: f32,
+) -> El {
     let board = &state.workspace_findings;
     let active = board
         .records
@@ -590,12 +649,40 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> E
         } else {
             1
         };
-        let width = ((page_width - 12.0 * (columns - 1) as f32) / columns as f32).max(180.0);
-        let mut lanes = col().key("findings-lanes").w_full().gap(12.0);
-        for group in LANES.chunks(columns) {
-            let mut line = row().w_full().gap(12.0);
-            for &(status, label, accent) in group {
-                line = line.child(lane(status, label, accent, &board.records, width, theme));
+        let width = ((page_width - (columns - 1) as f32) / columns as f32).max(180.0);
+        let reserved =
+            25.0 + 24.0 + 56.0 + 14.0 + 42.0 + 15.0 + if rejected.is_empty() { 0.0 } else { 53.0 };
+        let available = (page_height - reserved).max(280.0);
+        let rows = 4 / columns;
+        let lane_height = ((available - (rows - 1) as f32) / rows as f32).max(280.0);
+        let mut lanes = col().key("findings-lanes").w_full();
+        for (group_index, group) in LANES.chunks(columns).enumerate() {
+            if group_index > 0 {
+                lanes = lanes.child(
+                    el().key(format!("findings-row-divider-{group_index}"))
+                        .w_full()
+                        .h(1.0)
+                        .fill(theme.color("#303030")),
+                );
+            }
+            let mut line = row().w_full();
+            for (index, &(status, label, accent)) in group.iter().enumerate() {
+                if index > 0 {
+                    line = line.child(
+                        el().key(format!("findings-lane-divider-{group_index}-{index}"))
+                            .w(1.0)
+                            .h(lane_height)
+                            .fill(theme.color("#303030")),
+                    );
+                }
+                line = line.child(lane(
+                    state,
+                    group_index * columns + index,
+                    (status, label, accent),
+                    &board.records,
+                    [width, lane_height],
+                    theme,
+                ));
             }
             lanes = lanes.child(line);
         }
@@ -642,13 +729,12 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> E
                 }),
         );
         if board.rejected_expanded {
-            let mut list = col()
-                .key("findings-rejected-list")
-                .w_full()
-                .max_w(600.0)
-                .gap(8.0);
-            for item in rejected {
-                list = list.child(card(item, theme));
+            let mut list = col().key("findings-rejected-list").w_full();
+            for (index, item) in rejected.into_iter().enumerate() {
+                if index > 0 {
+                    list = list.child(finding_separator(&item.id, theme));
+                }
+                list = list.child(finding_row(item, theme));
             }
             page = page.child(list);
         }
@@ -880,6 +966,7 @@ mod tests {
                 updated_at_ms: 1_700_000_000_000,
                 revision: 1,
                 evidence_count: 0,
+                verified: false,
             });
         }
         let mut runtime = Runtime::new(state, crate::view, (1800.0, 900.0), Env::new(true, 1.0));
@@ -893,14 +980,97 @@ mod tests {
         assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
         for lane in ["candidate", "validated", "screened", "reported"] {
             assert!(runtime.find(&format!("findings-lane-{lane}")).is_some());
+            assert!(
+                runtime
+                    .find(&format!("findings-lane-{lane}-diamond"))
+                    .is_some()
+            );
+            assert!(
+                runtime
+                    .find(&format!("findings-lane-{lane}-scroll"))
+                    .is_some()
+            );
         }
+        assert!(runtime.find("findings-lane-divider-0-1").is_some());
         assert!(runtime.find("findings-lane-rejected").is_none());
-        assert!(runtime.find("finding-card-F5").is_none());
+        assert!(runtime.find("finding-row-F5").is_none());
         let (x, y) = runtime.find("findings-rejected-toggle").unwrap();
         runtime.pointer_down(x, y);
         runtime.pointer_up(x, y);
         runtime.frame(1.0 / 60.0);
-        assert!(runtime.find("finding-card-F5").is_some());
+        assert!(runtime.find("finding-row-F5").is_some());
+    }
+
+    #[test]
+    fn ledger_lanes_scroll_independently() {
+        let mut state = crate::visual_preview::fixture("findings");
+        let example = state
+            .workspace_findings
+            .records
+            .iter()
+            .find(|record| record.status == Status::Candidate)
+            .unwrap()
+            .clone();
+        for index in 0..18 {
+            state.workspace_findings.records.push(Summary {
+                id: format!("F-example-{index}"),
+                title: format!("Example candidate {index}"),
+                ..example.clone()
+            });
+        }
+        let mut runtime = Runtime::new(state, crate::view, (1440.0, 900.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        runtime.frame(0.0);
+        assert!(runtime.state.findings_lane_scrolls[0].position().max[1] > 0.0);
+        assert!(
+            runtime
+                .find("finding-separator-before-F-example-0")
+                .is_some()
+        );
+        assert!(runtime.find("finding-separator-before-F6").is_none());
+        let (viewport, _) = runtime.presented("findings-lane-candidate-scroll").unwrap();
+        runtime.wheel_event(rune::WheelEvent::new(0.0, -120.0).at(
+            viewport[0] + viewport[2] / 2.0,
+            viewport[1] + viewport[3] / 2.0,
+        ));
+        runtime.frame(1.0 / 60.0);
+        assert!(runtime.state.findings_lane_scrolls[0].position().offset[1] > 0.0);
+        assert_eq!(
+            runtime.state.findings_lane_scrolls[1].position().offset[1],
+            0.0
+        );
+
+        let mut narrow = Runtime::new(
+            crate::visual_preview::fixture("findings"),
+            crate::view,
+            (840.0, 800.0),
+            Env::new(true, 1.0),
+        );
+        narrow.frame(0.0);
+        assert!(narrow.find("findings-row-divider-1").is_some());
+        assert!(narrow.find("findings-lane-divider-0-1").is_some());
+    }
+
+    #[test]
+    fn ledger_lanes_reach_the_window_bottom() {
+        for height in [800.0, 1200.0] {
+            let mut state = crate::visual_preview::fixture("findings");
+            state
+                .workspace_findings
+                .records
+                .retain(|record| record.status != Status::Rejected);
+            let mut runtime =
+                Runtime::new(state, crate::view, (1440.0, height), Env::new(true, 1.0));
+            runtime.frame(0.0);
+            runtime.frame(1.0);
+            let (content, _) = runtime.presented("content-surface").unwrap();
+            let (lanes, _) = runtime.presented("findings-lanes").unwrap();
+            let gap = content[1] + content[3] - lanes[1] - lanes[3];
+            assert!(
+                (0.0..=45.0).contains(&gap),
+                "height {height}: bottom gap {gap}"
+            );
+        }
     }
     fn click(runtime: &mut Runtime<State>, key: &str) {
         runtime.update(|_, tx| {
@@ -929,12 +1099,18 @@ mod tests {
             .elements()
             .into_iter()
             .filter(|el| {
-                el.key
-                    .as_deref()
-                    .is_some_and(|key| key.starts_with("finding-point-"))
+                el.key.as_deref().is_some_and(|key| {
+                    key.starts_with("finding-point-") && !key.ends_with("-diamond")
+                })
             })
             .count();
         assert_eq!(points, 7);
+        assert!(runtime.find("finding-point-88-86-diamond").is_some());
+        assert!(
+            runtime
+                .find("findings-plot-stage-candidate-diamond")
+                .is_some()
+        );
         assert!(runtime.find("finding-point-0-0").is_some());
         assert!(runtime.find("finding-point-100-100").is_some());
         assert!(runtime.find("finding-point-90-90").is_none());
@@ -950,9 +1126,10 @@ mod tests {
             runtime.state.workspace_findings.plot_selection,
             Some((88, 86))
         );
-        assert!(runtime.find("finding-card-F1").is_some());
-        assert!(runtime.find("finding-card-F8").is_some());
-        click(&mut runtime, "finding-card-F1");
+        assert!(runtime.find("finding-row-F1").is_some());
+        assert!(runtime.find("finding-row-F8").is_some());
+        assert!(runtime.find("finding-separator-before-F8").is_some());
+        click(&mut runtime, "finding-row-F1");
         assert_eq!(
             runtime.state.workspace_findings.selected_id.as_deref(),
             Some("F1")
@@ -962,10 +1139,10 @@ mod tests {
         runtime.frame(1.0);
         click(&mut runtime, "findings-plot-selection-close");
         click(&mut runtime, "findings-unrated-toggle");
-        assert!(runtime.find("finding-card-F6").is_some());
-        assert!(runtime.find("finding-card-F7").is_some());
+        assert!(runtime.find("finding-row-F6").is_some());
+        assert!(runtime.find("finding-row-F7").is_some());
         click(&mut runtime, "findings-rejected-toggle");
-        assert!(runtime.find("finding-card-F11").is_some());
+        assert!(runtime.find("finding-row-F11").is_some());
         click(&mut runtime, "findings-mode-ledger");
         assert_eq!(runtime.state.workspace_findings.mode, FindingsMode::Ledger);
         assert!(runtime.find("findings-lanes").is_some());
@@ -1062,8 +1239,8 @@ mod tests {
         assert!(runtime.find("finding-point-45-10").is_none());
         assert_eq!(rated_count(&runtime), "8 rated");
         click(&mut runtime, "findings-unrated-toggle");
-        assert!(runtime.find("finding-card-F6").is_none());
-        assert!(runtime.find("finding-card-F7").is_some());
+        assert!(runtime.find("finding-row-F6").is_none());
+        assert!(runtime.find("finding-row-F7").is_some());
         click(&mut runtime, "findings-plot-stage-validated");
         assert!(runtime.find("finding-point-70-32").is_none());
         assert!(runtime.find("finding-point-0-0").is_none());
@@ -1123,7 +1300,7 @@ mod tests {
         runtime.frame(0.0);
         assert!(runtime.find("finding-point-88-86").is_none());
         click(&mut runtime, "findings-mode-ledger");
-        assert!(runtime.find("finding-card-F1").is_some());
+        assert!(runtime.find("finding-row-F1").is_some());
         click(&mut runtime, "findings-mode-plot");
         assert!(
             !runtime

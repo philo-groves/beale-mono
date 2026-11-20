@@ -12,7 +12,7 @@ VIEWS = [
     'home', 'empty', 'research', 'session', 'canvas', 'chat',
     'workspace', 'rules', 'surfaces', 'surface-detail', 'surface-manage', 'findings',
     'import', 'create-general', 'create-surfaces', 'create-rules',
-    'features', 'plugins', 'kits', 'fleet', 'vms',
+    'features', 'plugins', 'kits', 'fleet', 'vms', 'research-tools',
     'automations', 'tracking', 'providers', 'custom', 'safety', 'guardian',
     'appearance', 'typography', 'archive', 'archive-chats', 'dialog', 'menu', 'picker',
     'anthropic', 'openrouter', 'xai', 'zai', 'api-key', 'custom-editor',

@@ -1,13 +1,86 @@
-use super::HostDatabase;
+//! Findings persistence in the shared host database.
+//!
+//! The Findings feature owns these tables and applies [`MIGRATIONS`] under its
+//! feature ID; builds without Findings never create them. Evidence checks read
+//! the host's saved tool calls.
+
 use anyhow::{Context, Result, ensure};
 use beale_contracts::findings::{
-    EvidenceRef, Finding, GetResponse, QueryPage, QueryRequest, Revision, Status, Summary,
+    EvidenceDigest, EvidenceRef, Finding, GetResponse, QueryPage, QueryRequest, Revision, Status,
+    Summary,
 };
-use rusqlite::{Connection, OptionalExtension, params};
-use serde_json::{Value, json};
+use beale_storage::{
+    HostDatabase,
+    rusqlite::{Connection, OptionalExtension, params},
+};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Ordered Findings schema versions.
+pub const MIGRATIONS: &[&str] = &[V1];
+
+const V1: &str = "
+CREATE TABLE finding_counters (
+    workspace_id TEXT PRIMARY KEY,
+    next_id INTEGER NOT NULL DEFAULT 1
+);
+CREATE TABLE findings (
+    workspace_id TEXT NOT NULL,
+    id TEXT NOT NULL,
+    updated_at_ms INTEGER NOT NULL,
+    revision INTEGER NOT NULL,
+    record_json TEXT NOT NULL,
+    PRIMARY KEY(workspace_id, id)
+);
+CREATE INDEX findings_workspace_updated ON findings(workspace_id, updated_at_ms DESC, id);
+CREATE TABLE finding_revisions (
+    workspace_id TEXT NOT NULL,
+    id TEXT NOT NULL,
+    number INTEGER NOT NULL,
+    at_ms INTEGER NOT NULL,
+    session_id TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    before_json TEXT NOT NULL,
+    after_json TEXT NOT NULL,
+    PRIMARY KEY(workspace_id, id, number)
+);
+CREATE TABLE finding_tool_sources (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    output_sha256 TEXT NOT NULL,
+    created_at_ms INTEGER NOT NULL,
+    agent_role TEXT NOT NULL DEFAULT '',
+    tool_created_at_ms INTEGER NOT NULL DEFAULT 0
+);
+";
+
+/// Creates or upgrades the Findings tables.
+pub fn migrate(db: &HostDatabase) -> Result<()> {
+    db.migrate_schema(crate::FEATURE_ID, MIGRATIONS)
+}
+
+/// Tool names whose successful results can support a validation.
+pub const EVIDENCE_TOOLS: [&str; 3] = ["read", "bash", "findings_verify"];
+
+/// A tool result from the current, not yet committed turn.
+pub struct EvidenceSource<'a> {
+    pub id: &'a str,
+    pub name: &'a str,
+    pub output: &'a str,
+    pub is_error: bool,
+    pub agent_role: &'a str,
+    pub created_at_ms: i64,
+}
+
+/// Constraints tying validation evidence to the finding it supports.
+pub struct EvidenceBinding<'a> {
+    /// Evidence must have been produced at or after this time.
+    pub not_before_ms: i64,
+    /// Stored agent role that must have produced the evidence, when required.
+    pub agent_role: Option<&'a str>,
+}
 
 pub fn now_ms() -> Result<u64> {
     Ok(SystemTime::now()
@@ -22,92 +95,6 @@ fn snapshot(finding: &Finding) -> Result<String> {
     Ok(serde_json::to_string(&compact)?)
 }
 
-pub(super) fn migrate_state_structure(connection: &mut Connection) -> Result<()> {
-    let tx = connection.transaction()?;
-    let records = {
-        let mut statement = tx.prepare("SELECT workspace_id,id,record_json FROM findings")?;
-        statement
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?
-    };
-    for (workspace_id, id, raw) in records {
-        let mut value: Value =
-            serde_json::from_str(&raw).context("decode finding migration record")?;
-        let object = value
-            .as_object_mut()
-            .context("invalid finding migration record")?;
-        if object.contains_key("state") {
-            continue;
-        }
-        let old_surface = object
-            .remove("surface_id")
-            .and_then(|value| value.as_str().map(str::to_owned))
-            .unwrap_or_default();
-        object.insert(
-            "surface_ids".to_owned(),
-            json!(if old_surface.is_empty() {
-                Vec::new()
-            } else {
-                vec![old_surface]
-            }),
-        );
-        object.insert("summary".to_owned(), json!(""));
-        let mut states = serde_json::Map::new();
-        for name in ["candidate", "validated", "screened", "reported", "rejected"] {
-            let mut state = object.remove(name).unwrap_or(Value::Null);
-            if let Some(fields) = state.as_object_mut() {
-                let evidence = if name == "validated" {
-                    fields.remove("evidence_tool_call_ids").and_then(|value|value.as_array().cloned())
-                        .map(|ids|ids.into_iter().filter_map(|id|id.as_str().map(|reference|json!({"kind":"tool_call","reference":reference,"note":null}))).collect::<Vec<_>>())
-                } else if name == "screened" {
-                    let mut refs = Vec::new();
-                    let mut seen = HashSet::new();
-                    for check_name in ["validation_review", "known_issue_review", "scope_review"] {
-                        if let Some(check) =
-                            fields.get_mut(check_name).and_then(Value::as_object_mut)
-                            && let Some(old_refs) = check
-                                .remove("evidence_refs")
-                                .and_then(|value| value.as_array().cloned())
-                        {
-                            for reference in old_refs.iter().filter_map(Value::as_str) {
-                                if seen.insert(reference.to_owned()) {
-                                    refs.push(json!({"kind":"other","reference":reference,"note":check_name}));
-                                }
-                            }
-                        }
-                    }
-                    Some(refs)
-                } else {
-                    None
-                };
-                fields.insert(
-                    "evidence_refs".to_owned(),
-                    evidence
-                        .filter(|refs| !refs.is_empty())
-                        .map_or(Value::Null, |refs| json!(refs)),
-                );
-            }
-            states.insert(name.to_owned(), state);
-        }
-        object.insert("state".to_owned(), Value::Object(states));
-        let finding: Finding = serde_json::from_value(value).context("migrate finding state")?;
-        validate(&finding)?;
-        tx.execute(
-            "UPDATE findings SET record_json=?3 WHERE workspace_id=?1 AND id=?2",
-            params![workspace_id, id, serde_json::to_string(&finding)?],
-        )?;
-    }
-    tx.execute_batch("PRAGMA user_version = 42;")?;
-    tx.commit()?;
-    Ok(())
-}
-
 fn insert_revision(
     connection: &Connection,
     workspace_id: &str,
@@ -118,38 +105,6 @@ fn insert_revision(
         "INSERT INTO finding_revisions(workspace_id,id,number,at_ms,session_id,reason,before_json,after_json) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
         params![workspace_id,id,revision.number as i64,revision.at_ms as i64,revision.session_id,revision.reason,revision.before_json,revision.after_json],
     )?;
-    Ok(())
-}
-
-pub(super) fn migrate_revisions(connection: &mut Connection) -> Result<()> {
-    let tx = connection.transaction()?;
-    tx.execute_batch("CREATE TABLE IF NOT EXISTS finding_revisions(workspace_id TEXT NOT NULL, id TEXT NOT NULL, number INTEGER NOT NULL, at_ms INTEGER NOT NULL, session_id TEXT NOT NULL, reason TEXT NOT NULL, before_json TEXT NOT NULL, after_json TEXT NOT NULL, PRIMARY KEY(workspace_id,id,number));")?;
-    let records = {
-        let mut statement = tx.prepare("SELECT workspace_id,id,record_json FROM findings")?;
-        statement
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?
-    };
-    for (workspace_id, id, raw) in records {
-        let mut finding: Finding =
-            serde_json::from_str(&raw).context("decode finding revisions")?;
-        for revision in &finding.history {
-            insert_revision(&tx, &workspace_id, &id, revision)?;
-        }
-        finding.history.clear();
-        tx.execute(
-            "UPDATE findings SET record_json=?3 WHERE workspace_id=?1 AND id=?2",
-            params![workspace_id, id, serde_json::to_string(&finding)?],
-        )?;
-    }
-    tx.execute_batch("PRAGMA user_version = 43;")?;
-    tx.commit()?;
     Ok(())
 }
 
@@ -332,43 +287,79 @@ fn validate(finding: &Finding) -> Result<()> {
     Ok(())
 }
 
-impl HostDatabase {
-    pub fn finding_record_tool_source(
+/// Findings operations on the host database.
+pub trait FindingStore {
+    /// Saves a current-turn tool result offered as validation evidence before
+    /// its turn is committed, keeping its digest, role, and execution time.
+    fn finding_record_tool_source(
         &self,
         workspace_id: &str,
         session_id: &str,
+        source: &EvidenceSource<'_>,
+    ) -> Result<()>;
+    fn finding_get(&self, workspace_id: &str, id: &str) -> Result<Option<Finding>>;
+    fn finding_get_page(
+        &self,
+        workspace_id: &str,
         id: &str,
-        name: &str,
-        output: &str,
-        is_error: bool,
+        history_offset: Option<u32>,
+    ) -> Result<Option<GetResponse>>;
+    fn finding_query(&self, request: &QueryRequest) -> Result<QueryPage>;
+    fn finding_create(&self, finding: Finding, session_id: &str) -> Result<Finding>;
+    fn finding_update(
+        &self,
+        finding: Finding,
+        expected_revision: u64,
+        session_id: &str,
+        reason: &str,
+    ) -> Result<Finding>;
+    /// Checks that each cited tool call is a successful evidence-producing
+    /// result in this workspace, produced after the finding was recorded and,
+    /// when a role is required, by that role. Returns each result's digest.
+    fn finding_validate_tool_evidence(
+        &self,
+        workspace_id: &str,
+        ids: &[String],
+        binding: &EvidenceBinding<'_>,
+    ) -> Result<Vec<EvidenceDigest>>;
+}
+
+impl FindingStore for HostDatabase {
+    fn finding_record_tool_source(
+        &self,
+        workspace_id: &str,
+        session_id: &str,
+        source: &EvidenceSource<'_>,
     ) -> Result<()> {
         ensure!(
-            !is_error
-                && !output.is_empty()
-                && output.len() <= 8_000_000
-                && matches!(name, "read" | "bash"),
-            "only successful read or bash output can validate a finding"
+            !source.is_error
+                && !source.output.is_empty()
+                && source.output.len() <= 8_000_000
+                && EVIDENCE_TOOLS.contains(&source.name),
+            "only successful read, bash, or verified findings_verify output can validate a finding"
         );
         ensure!(
             !workspace_id.is_empty()
                 && !session_id.is_empty()
                 && session_id.len() <= 128
-                && !id.is_empty()
-                && id.len() <= 128,
+                && !source.id.is_empty()
+                && source.id.len() <= 128
+                && source.agent_role.len() <= 64
+                && source.created_at_ms >= 0,
             "invalid finding evidence source"
         );
-        let hash = format!("{:x}", Sha256::digest(output.as_bytes()));
+        let hash = format!("{:x}", Sha256::digest(source.output.as_bytes()));
         self.with_connection(|connection| {
             let session: i64 = connection.query_row("SELECT EXISTS(SELECT 1 FROM sessions WHERE id=?1 AND workspace_id=?2)", params![session_id,workspace_id], |row|row.get(0))?;
             ensure!(session==1,"finding evidence session not found in workspace");
-            connection.execute("INSERT OR IGNORE INTO finding_tool_sources(id,workspace_id,session_id,output_sha256,created_at_ms) VALUES(?1,?2,?3,?4,?5)",params![id,workspace_id,session_id,hash,now_ms()? as i64])?;
-            let saved: String = connection.query_row("SELECT output_sha256 FROM finding_tool_sources WHERE id=?1 AND workspace_id=?2",params![id,workspace_id],|row|row.get(0))?;
+            connection.execute("INSERT OR IGNORE INTO finding_tool_sources(id,workspace_id,session_id,output_sha256,created_at_ms,agent_role,tool_created_at_ms) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![source.id,workspace_id,session_id,hash,now_ms()? as i64,source.agent_role,source.created_at_ms])?;
+            let saved: String = connection.query_row("SELECT output_sha256 FROM finding_tool_sources WHERE id=?1 AND workspace_id=?2",params![source.id,workspace_id],|row|row.get(0))?;
             ensure!(saved==hash,"finding evidence source ID conflict");
             Ok(())
         })
     }
 
-    pub fn finding_get(&self, workspace_id: &str, id: &str) -> Result<Option<Finding>> {
+    fn finding_get(&self, workspace_id: &str, id: &str) -> Result<Option<Finding>> {
         self.with_connection(|connection| {
             connection
                 .query_row(
@@ -382,7 +373,7 @@ impl HostDatabase {
         })
     }
 
-    pub fn finding_get_page(
+    fn finding_get_page(
         &self,
         workspace_id: &str,
         id: &str,
@@ -426,7 +417,7 @@ impl HostDatabase {
         })
     }
 
-    pub fn finding_query(&self, request: &QueryRequest) -> Result<QueryPage> {
+    fn finding_query(&self, request: &QueryRequest) -> Result<QueryPage> {
         ensure!(
             !request.workspace_id.is_empty()
                 && request.text.len() <= 200
@@ -472,7 +463,7 @@ impl HostDatabase {
         })
     }
 
-    pub fn finding_create(&self, mut finding: Finding, session_id: &str) -> Result<Finding> {
+    fn finding_create(&self, mut finding: Finding, session_id: &str) -> Result<Finding> {
         ensure!(
             finding.id.is_empty() && finding.history.is_empty() && session_id.len() <= 128,
             "invalid finding create"
@@ -503,7 +494,7 @@ impl HostDatabase {
         })
     }
 
-    pub fn finding_update(
+    fn finding_update(
         &self,
         mut finding: Finding,
         expected_revision: u64,
@@ -534,110 +525,57 @@ impl HostDatabase {
         })
     }
 
-    pub fn finding_validate_tool_evidence(&self, workspace_id: &str, ids: &[String]) -> Result<()> {
+    fn finding_validate_tool_evidence(
+        &self,
+        workspace_id: &str,
+        ids: &[String],
+        binding: &EvidenceBinding<'_>,
+    ) -> Result<Vec<EvidenceDigest>> {
         ensure!(
             !ids.is_empty() && ids.len() <= 32,
             "validation requires tool evidence"
         );
         self.with_connection(|connection| {
+            let mut digests = Vec::with_capacity(ids.len());
             for id in ids {
                 ensure!(!id.is_empty() && id.len() <= 128, "invalid tool call ID");
-                let valid: i64 = connection.query_row("SELECT EXISTS(SELECT 1 FROM finding_tool_sources WHERE id=?1 AND workspace_id=?2) OR EXISTS(SELECT 1 FROM session_tool_calls call JOIN sessions session ON session.id=call.session_id WHERE call.id=?1 AND session.workspace_id=?2 AND call.name IN ('read','bash') AND call.is_error=0 AND call.output<>'')", params![id, workspace_id], |row| row.get(0))?;
-                ensure!(valid == 1, "validation evidence must cite a durable successful read or bash result in this workspace");
+                let recorded = connection
+                    .query_row(
+                        "SELECT output_sha256, agent_role, tool_created_at_ms FROM finding_tool_sources WHERE id=?1 AND workspace_id=?2",
+                        params![id, workspace_id],
+                        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?)),
+                    )
+                    .optional()?;
+                let (sha256, role, created_at_ms) = match recorded {
+                    Some(source) => source,
+                    None => {
+                        let saved = connection
+                            .query_row(
+                                "SELECT call.output, call.agent_role, call.created_at_ms FROM session_tool_calls call JOIN sessions session ON session.id=call.session_id WHERE call.id=?1 AND session.workspace_id=?2 AND call.name IN ('read','bash','findings_verify') AND call.is_error=0 AND call.output<>''",
+                                params![id, workspace_id],
+                                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?)),
+                            )
+                            .optional()?
+                            .with_context(|| format!("validation evidence {id} must cite a durable successful read, bash, or verified findings_verify result in this workspace"))?;
+                        (format!("{:x}", Sha256::digest(saved.0.as_bytes())), saved.1, saved.2)
+                    }
+                };
+                ensure!(
+                    created_at_ms >= binding.not_before_ms,
+                    "validation evidence {id} predates this finding; gather evidence after recording the Candidate"
+                );
+                if let Some(required) = binding.agent_role {
+                    ensure!(
+                        role == required,
+                        "validation evidence {id} was produced by another agent role"
+                    );
+                }
+                digests.push(EvidenceDigest {
+                    reference: id.clone(),
+                    sha256,
+                });
             }
-            Ok(())
+            Ok(digests)
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn schema_forty_two_migrates_legacy_finding_state_and_evidence() {
-        let root =
-            std::env::temp_dir().join(format!("beale-findings-migration-{}", uuid::Uuid::new_v4()));
-        let db = HostDatabase::open(&root).unwrap();
-        let old = json!({
-            "id":"F1","workspace_id":"workspace-example","title":"Example finding",
-            "surface_id":"S1","created_at_ms":1,"updated_at_ms":2,"revision":2,
-            "history":[{"number":1,"at_ms":1,"session_id":"session-example","reason":"created","before_json":"null","after_json":"{}"}],
-            "candidate":{"hypothesis":"Synthetic boundary hypothesis","revision":1,"completed_at_ms":1},
-            "validated":{"attacker_control":"Example input","violated_invariant":"Example boundary","observed_behavior":"Synthetic response","impact":"Example impact","evidence_tool_call_ids":["tool-example"],"revision":2,"completion":null},
-            "screened":{"validation_review":{"passed":true,"method":"Review","conclusion":"Supported","evidence_refs":["review-example"]},"known_issue_review":{"passed":true,"method":"Review","conclusion":"Unknown","evidence_refs":[]},"scope_review":{"passed":true,"method":"Review","conclusion":"In scope","evidence_refs":["scope-example"]},"revision":2,"completion":null},
-            "reported":null,"rejected":null
-        });
-        db.with_connection(|connection| {
-            connection.execute("INSERT INTO findings(workspace_id,id,updated_at_ms,revision,record_json) VALUES(?1,?2,2,2,?3)", params!["workspace-example","F1",old.to_string()])?;
-            connection.execute_batch("PRAGMA user_version = 41;")?;
-            Ok(())
-        }).unwrap();
-        drop(db);
-
-        let migrated = HostDatabase::open(&root).unwrap();
-        let finding = migrated
-            .finding_get("workspace-example", "F1")
-            .unwrap()
-            .unwrap();
-        assert_eq!(finding.summary, "");
-        assert_eq!(finding.surface_ids, vec!["S1"]);
-        assert!(finding.root_cause.is_none());
-        assert!(finding.attack_path.is_none());
-        assert!(finding.remediation.is_none());
-        assert!(finding.history.is_empty());
-        let page = migrated
-            .finding_get_page("workspace-example", "F1", Some(0))
-            .unwrap()
-            .unwrap();
-        assert_eq!(page.history_total, 1);
-        assert_eq!(page.record.history[0].session_id, "session-example");
-        assert_eq!(
-            finding.state.validated.as_ref().unwrap().validation_method,
-            ""
-        );
-        assert!(
-            finding
-                .state
-                .validated
-                .as_ref()
-                .unwrap()
-                .validation_limitations
-                .is_empty()
-        );
-        assert!(
-            finding
-                .state
-                .validated
-                .as_ref()
-                .unwrap()
-                .counter_evidence
-                .is_empty()
-        );
-        assert_eq!(
-            finding
-                .state
-                .validated
-                .as_ref()
-                .unwrap()
-                .evidence_refs
-                .as_ref()
-                .unwrap()[0]
-                .reference,
-            "tool-example"
-        );
-        let screened = finding.state.screened.unwrap();
-        let references = screened.evidence_refs.unwrap();
-        assert_eq!(references.len(), 2);
-        assert_eq!(references[0].reference, "review-example");
-        assert_eq!(references[0].note.as_deref(), Some("validation_review"));
-        let version: i64 = migrated
-            .with_connection(|connection| {
-                Ok(connection.query_row("PRAGMA user_version", [], |row| row.get(0))?)
-            })
-            .unwrap();
-        assert_eq!(version, 47);
-        drop(migrated);
-        std::fs::remove_dir_all(root).unwrap();
     }
 }

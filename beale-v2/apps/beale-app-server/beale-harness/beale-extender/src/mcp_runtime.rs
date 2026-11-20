@@ -484,6 +484,9 @@ async fn stdio(root: &Path, data_root: &Path, config: &Value) -> Result<Transpor
     };
     let mut process = Command::new(executable);
     process.kill_on_drop(true);
+    // Plugin servers keep toolchain variables but not inherited host credentials;
+    // values a plugin needs must be declared in its own `env` configuration.
+    beale_tools::process::remove_secret_env(&mut process);
     let args = config
         .get("args")
         .and_then(Value::as_array)

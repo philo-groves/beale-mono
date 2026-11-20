@@ -1,12 +1,15 @@
 //! Desktop-owned app-server connections. Tokens never cross the local app-server API.
 
 use beale_contracts::{
-    FLEET_DESCRIPTOR_PATH, FLEET_PAIR_PATH, FLEET_TOTP_PROVISION_PATH,
-    FLEET_VIRTUAL_MACHINE_SETTINGS_PATH, FLEET_VIRTUAL_MACHINES_PATH, PROTOBUF_CONTENT_TYPE,
-    PROTOCOL_MAJOR, PROTOCOL_MINOR, SERVICE_NAME,
+    FLEET_DESCRIPTOR_PATH, FLEET_PAIR_PATH, FLEET_RESEARCH_TOOL_SETTINGS_PATH,
+    FLEET_RESEARCH_TOOLS_PATH, FLEET_TOTP_PROVISION_PATH, FLEET_VIRTUAL_MACHINE_SETTINGS_PATH,
+    FLEET_VIRTUAL_MACHINES_PATH, PROTOBUF_CONTENT_TYPE, PROTOCOL_MAJOR, PROTOCOL_MINOR,
+    SERVICE_NAME,
     v1::{
-        FleetAppServerDescriptor, FleetPairingRequest, FleetPairingResponse,
-        FleetSetVirtualMachineSettingsRequest, FleetTotpProvisioningResponse, FleetVirtualMachine,
+        FleetAllowedResearchTool, FleetAppServerDescriptor, FleetPairingRequest,
+        FleetPairingResponse, FleetResearchTool, FleetResearchToolsResponse,
+        FleetSetResearchToolSettingsRequest, FleetSetVirtualMachineSettingsRequest,
+        FleetSystemResources, FleetTotpProvisioningResponse, FleetVirtualMachine,
         FleetVirtualMachinesResponse,
     },
 };
@@ -41,6 +44,10 @@ pub(crate) struct FleetServer {
     pub(crate) condition: String,
     #[serde(skip)]
     pub(crate) condition_detail: String,
+    #[serde(skip)]
+    pub(crate) resources: Option<FleetSystemResources>,
+    #[serde(skip)]
+    pub(crate) allowed_research_tools: Vec<FleetAllowedResearchTool>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -67,6 +74,26 @@ pub(crate) struct VirtualMachineSnapshot {
     pub(crate) items: Vec<VirtualMachineItem>,
     pub(crate) servers: Vec<FleetServer>,
     pub(crate) error: String,
+}
+
+#[derive(Clone)]
+pub(crate) struct ResearchToolHost {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) tools: Vec<FleetResearchTool>,
+}
+
+pub(crate) struct ResearchToolsSnapshot {
+    pub(crate) hosts: Vec<ResearchToolHost>,
+    pub(crate) error: String,
+}
+
+#[derive(Clone)]
+pub(crate) struct ResearchToolMutation {
+    pub(crate) host_id: String,
+    pub(crate) id: String,
+    pub(crate) allow_locally: bool,
+    pub(crate) allow_in_vms: bool,
 }
 
 #[derive(Clone)]
@@ -604,24 +631,67 @@ async fn probe(server: &mut FleetServer, status: &TailnetStatus) -> Result<(), S
     }
     let descriptor = FleetAppServerDescriptor::decode(read_bounded(response).await?.as_slice())
         .map_err(|_| "Remote app-server descriptor is invalid.".to_owned())?;
-    if descriptor.service != SERVICE_NAME
-        || descriptor.protocol_major != PROTOCOL_MAJOR
-        || descriptor.protocol_minor < PROTOCOL_MINOR
-        || !valid_text(&descriptor.host_name, 100)
-        || !valid_text(&descriptor.os_name, 40)
-        || !valid_text(&descriptor.os_vendor, 40)
-    {
+    if !valid_descriptor(&descriptor) {
         server.condition = "Issue".to_owned();
         return Err("Remote app-server contract is incompatible.".to_owned());
     }
+    apply_descriptor(server, descriptor);
+    Ok(())
+}
+
+fn valid_descriptor(descriptor: &FleetAppServerDescriptor) -> bool {
+    descriptor.service == SERVICE_NAME
+        && descriptor.protocol_major == PROTOCOL_MAJOR
+        && descriptor.protocol_minor >= PROTOCOL_MINOR
+        && valid_text(&descriptor.host_name, 100)
+        && valid_text(&descriptor.os_name, 40)
+        && valid_text(&descriptor.os_vendor, 40)
+        && descriptor.resources.as_ref().is_none_or(valid_resources)
+        && descriptor.allowed_research_tools.len() <= 11
+        && descriptor.allowed_research_tools.iter().all(|tool| {
+            matches!(
+                tool.id.as_str(),
+                "ripgrep"
+                    | "opengrep"
+                    | "git"
+                    | "radare2"
+                    | "ghidra"
+                    | "llvm"
+                    | "jadx"
+                    | "ipsw"
+                    | "python"
+                    | "java"
+                    | "node"
+            ) && valid_text(&tool.name, 80)
+                && (tool.allow_locally || tool.allow_in_vms)
+        })
+        && descriptor
+            .allowed_research_tools
+            .iter()
+            .map(|tool| &tool.id)
+            .collect::<HashSet<_>>()
+            .len()
+            == descriptor.allowed_research_tools.len()
+}
+
+fn apply_descriptor(server: &mut FleetServer, descriptor: FleetAppServerDescriptor) {
     server.host_name = descriptor.host_name;
     server.os_name = descriptor.os_name;
     server.os_vendor = descriptor.os_vendor;
     server.protocol_major = descriptor.protocol_major;
     server.protocol_minor = descriptor.protocol_minor;
+    server.resources = descriptor.resources;
+    server.allowed_research_tools = descriptor.allowed_research_tools;
     server.condition = "Online".to_owned();
     server.condition_detail = "Connected to a compatible app server.".to_owned();
-    Ok(())
+}
+
+fn valid_resources(resources: &FleetSystemResources) -> bool {
+    resources.cpu_logical_cores <= 65_536
+        && resources.memory_total_bytes <= (1_u64 << 60)
+        && resources.memory_available_bytes <= resources.memory_total_bytes
+        && resources.disk_total_bytes <= (1_u64 << 60)
+        && resources.disk_available_bytes <= resources.disk_total_bytes
 }
 
 fn local_os() -> (&'static str, &'static str) {
@@ -656,6 +726,8 @@ pub(crate) fn local_placeholder() -> FleetServer {
         enabled: true,
         condition: "Checking".to_owned(),
         condition_detail: "Local app-server connection.".to_owned(),
+        resources: None,
+        allowed_research_tools: Vec::new(),
     }
 }
 
@@ -697,6 +769,10 @@ pub(crate) async fn load() -> Result<FleetSnapshot, String> {
     if let Ok(status) = &status {
         local.endpoint = local_endpoint(status).unwrap_or_default();
     }
+    if let Err(error) = probe_local(&mut local).await {
+        local.condition = "Offline".to_owned();
+        local.condition_detail = error;
+    }
     let servers = join_all(saved.servers.into_iter().map(|mut server| {
         let status = &status;
         async move {
@@ -721,6 +797,32 @@ pub(crate) async fn load() -> Result<FleetSnapshot, String> {
     }))
     .await;
     Ok(FleetSnapshot { local, servers })
+}
+
+async fn probe_local(server: &mut FleetServer) -> Result<(), String> {
+    let (client, base, token) = local_fleet_client().await?;
+    let response = client
+        .get(format!("{base}{FLEET_DESCRIPTOR_PATH}"))
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|_| "Could not reach the local app server.".to_owned())?;
+    if response.status() != reqwest::StatusCode::OK
+        || response
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            != Some(PROTOBUF_CONTENT_TYPE)
+    {
+        return Err("Local app-server descriptor is unavailable.".to_owned());
+    }
+    let descriptor = FleetAppServerDescriptor::decode(read_bounded(response).await?.as_slice())
+        .map_err(|_| "Local app-server descriptor is invalid.".to_owned())?;
+    if !valid_descriptor(&descriptor) {
+        return Err("Local app-server contract is incompatible.".to_owned());
+    }
+    apply_descriptor(server, descriptor);
+    Ok(())
 }
 
 async fn local_fleet_client() -> Result<(Client, String, String), String> {
@@ -905,6 +1007,122 @@ pub(crate) async fn load_virtual_machines() -> VirtualMachineSnapshot {
     }
 }
 
+async fn fetch_research_tools(
+    client: &Client,
+    base: &str,
+    token: &str,
+) -> Result<Vec<FleetResearchTool>, String> {
+    let response = client
+        .get(format!("{base}{FLEET_RESEARCH_TOOLS_PATH}"))
+        .bearer_auth(token)
+        .timeout(Duration::from_secs(15))
+        .send()
+        .await
+        .map_err(|_| "Could not reach app-server research tools.".to_owned())?;
+    if !response.status().is_success()
+        || response
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            != Some(PROTOBUF_CONTENT_TYPE)
+    {
+        return Err("App-server research tools are unavailable.".to_owned());
+    }
+    let response = FleetResearchToolsResponse::decode(read_bounded(response).await?.as_slice())
+        .map_err(|_| "Invalid app-server research tools.".to_owned())?;
+    if response.tools.len() > 64
+        || response.tools.iter().any(|tool| {
+            !valid_text(&tool.id, 64)
+                || !valid_text(&tool.name, 80)
+                || !valid_text(&tool.category, 40)
+                || !valid_text(&tool.description, 200)
+        })
+        || response
+            .tools
+            .iter()
+            .map(|tool| &tool.id)
+            .collect::<HashSet<_>>()
+            .len()
+            != response.tools.len()
+    {
+        return Err("Invalid app-server research tools.".to_owned());
+    }
+    Ok(response.tools)
+}
+
+pub(crate) async fn load_research_tools() -> ResearchToolsSnapshot {
+    let mut hosts = Vec::new();
+    let mut errors = Vec::new();
+    let mut targets = vec![("local".to_owned(), "Local App Server".to_owned())];
+    match read_saved() {
+        Ok(saved) => {
+            if !saved.local_display_name.is_empty() {
+                targets[0].1 = saved.local_display_name;
+            }
+            targets.extend(
+                saved
+                    .servers
+                    .into_iter()
+                    .filter(|server| server.enabled)
+                    .map(|server| {
+                        let name = if server.display_name.is_empty() {
+                            server.host_name
+                        } else {
+                            server.display_name
+                        };
+                        (server.id, name)
+                    }),
+            );
+        }
+        Err(error) => errors.push(error),
+    }
+    let results = join_all(targets.into_iter().map(|(id, name)| async move {
+        let result = async {
+            let (client, base, token) = fleet_client(&id).await?;
+            fetch_research_tools(&client, &base, &token).await
+        }
+        .await;
+        (id, name, result)
+    }))
+    .await;
+    for (id, name, result) in results {
+        match result {
+            Ok(tools) => hosts.push(ResearchToolHost { id, name, tools }),
+            Err(_) => errors.push(format!("Research tools unavailable on {name}.")),
+        }
+    }
+    ResearchToolsSnapshot {
+        hosts,
+        error: errors.join(" "),
+    }
+}
+
+pub(crate) async fn mutate_research_tool(action: ResearchToolMutation) -> Result<(), String> {
+    let (client, base, token) = fleet_client(&action.host_id).await?;
+    let request = FleetSetResearchToolSettingsRequest {
+        id: action.id,
+        allow_locally: action.allow_locally,
+        allow_in_vms: action.allow_in_vms,
+    };
+    let response = client
+        .post(format!("{base}{FLEET_RESEARCH_TOOL_SETTINGS_PATH}"))
+        .bearer_auth(token)
+        .header(CONTENT_TYPE, PROTOBUF_CONTENT_TYPE)
+        .timeout(Duration::from_secs(15))
+        .body(request.encode_to_vec())
+        .send()
+        .await
+        .map_err(|_| "Could not reach app-server research tool settings.".to_owned())?;
+    match response.status() {
+        reqwest::StatusCode::NO_CONTENT => Ok(()),
+        reqwest::StatusCode::BAD_REQUEST => Err("Research tool is unavailable.".to_owned()),
+        reqwest::StatusCode::FORBIDDEN => {
+            Err("Fleet is disabled on the selected app server.".to_owned())
+        }
+        _ => Err("Could not update research tool settings.".to_owned()),
+    }
+}
+
 pub(crate) async fn mutate_virtual_machine(action: VirtualMachineMutation) -> Result<(), String> {
     let (client, base, token) = fleet_client(&action.host_id).await?;
     let request = FleetSetVirtualMachineSettingsRequest {
@@ -983,6 +1201,8 @@ pub(crate) async fn mutate(action: Mutation) -> Result<MutationResult, String> {
                 enabled: true,
                 condition: "Checking".to_owned(),
                 condition_detail: String::new(),
+                resources: None,
+                allowed_research_tools: Vec::new(),
             };
             probe(&mut server, &status).await?;
             if let Some(existing) = saved.servers.iter_mut().find(|entry| entry.id == server.id) {
@@ -1114,6 +1334,14 @@ mod tests {
             enabled: true,
             condition: "Online".to_owned(),
             condition_detail: "Connected".to_owned(),
+            resources: Some(FleetSystemResources {
+                cpu_logical_cores: 8,
+                memory_total_bytes: 32 * 1024 * 1024 * 1024,
+                memory_available_bytes: 16 * 1024 * 1024 * 1024,
+                disk_total_bytes: 512 * 1024 * 1024 * 1024,
+                disk_available_bytes: 256 * 1024 * 1024 * 1024,
+            }),
+            allowed_research_tools: Vec::new(),
         };
         let mut second = server.clone();
         second.id = uuid::Uuid::new_v4().to_string();
@@ -1131,9 +1359,75 @@ mod tests {
         .unwrap();
         let saved = read_at(&path).unwrap();
         assert_eq!(saved.servers.len(), 2);
+        assert!(saved.servers[0].allowed_research_tools.is_empty());
         assert_eq!(saved.local_display_name, "My desktop");
         assert_eq!(saved.servers[1].display_name, "Lab server");
         assert_eq!(saved.servers[0].condition, "Checking");
+        assert!(saved.servers[0].resources.is_none());
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn resource_bounds_reject_impossible_remote_figures() {
+        let mut resources = FleetSystemResources {
+            cpu_logical_cores: 8,
+            memory_total_bytes: 32 * 1024 * 1024 * 1024,
+            memory_available_bytes: 16 * 1024 * 1024 * 1024,
+            disk_total_bytes: 512 * 1024 * 1024 * 1024,
+            disk_available_bytes: 256 * 1024 * 1024 * 1024,
+        };
+        assert!(valid_resources(&resources));
+        resources.memory_available_bytes = resources.memory_total_bytes + 1;
+        assert!(!valid_resources(&resources));
+        resources.memory_available_bytes = 0;
+        resources.disk_available_bytes = resources.disk_total_bytes + 1;
+        assert!(!valid_resources(&resources));
+    }
+
+    #[test]
+    fn descriptor_rejects_old_protocol_and_invalid_resources() {
+        let mut descriptor = FleetAppServerDescriptor {
+            service: SERVICE_NAME.to_owned(),
+            host_name: "example-server".to_owned(),
+            os_name: "Linux".to_owned(),
+            os_vendor: "Linux".to_owned(),
+            protocol_major: PROTOCOL_MAJOR,
+            protocol_minor: PROTOCOL_MINOR,
+            resources: Some(FleetSystemResources {
+                cpu_logical_cores: 8,
+                memory_total_bytes: 32 * 1024 * 1024 * 1024,
+                memory_available_bytes: 16 * 1024 * 1024 * 1024,
+                disk_total_bytes: 512 * 1024 * 1024 * 1024,
+                disk_available_bytes: 256 * 1024 * 1024 * 1024,
+            }),
+            allowed_research_tools: Vec::new(),
+        };
+        assert!(valid_descriptor(&descriptor));
+        descriptor.protocol_minor -= 1;
+        assert!(!valid_descriptor(&descriptor));
+        descriptor.protocol_minor = PROTOCOL_MINOR;
+        descriptor.resources.as_mut().unwrap().cpu_logical_cores = 65_537;
+        assert!(!valid_descriptor(&descriptor));
+        descriptor.resources.as_mut().unwrap().cpu_logical_cores = 8;
+        descriptor
+            .allowed_research_tools
+            .push(FleetAllowedResearchTool {
+                id: "ripgrep".to_owned(),
+                name: "ripgrep".to_owned(),
+                allow_locally: true,
+                allow_in_vms: false,
+            });
+        assert!(valid_descriptor(&descriptor));
+        descriptor.allowed_research_tools[0].allow_locally = false;
+        assert!(!valid_descriptor(&descriptor));
+        descriptor.allowed_research_tools[0].allow_in_vms = true;
+        assert!(valid_descriptor(&descriptor));
+        descriptor
+            .allowed_research_tools
+            .push(descriptor.allowed_research_tools[0].clone());
+        assert!(!valid_descriptor(&descriptor));
+        descriptor.allowed_research_tools.pop();
+        descriptor.allowed_research_tools[0].id = "unknown".to_owned();
+        assert!(!valid_descriptor(&descriptor));
     }
 }

@@ -6,6 +6,9 @@
 
 #### Fixed
 
+- V2 per-view sidenavs use a consistent, theme-aware text color for selected rows.
+- V2 Findings ledger lanes now fill the available workspace height instead of stopping above the window bottom.
+- V2 Surface Canvas tabs now slide into view when opened from the network.
 - V2 research header separators stay mounted and change visibility immediately, preventing neighboring tab text from sliding when a tab is hovered or selected.
 - V2 session sidenav now uses the main content background behind its card instead of exposing the window gradient.
 - Collapsing completed v2 session work now hides reasoning summaries and commentary alongside tool activity while keeping the agent's final message visible.
@@ -22,6 +25,15 @@
 
 #### Changed
 
+- V2 Edit Graph Node uses the composer's two-tier Provider and Model picker for selecting each node's models.
+- V2 session composers start at one line and grow with the draft. The send button is centered at the right edge, and the bordered ribbon places the model selector beside the workspace selector when Graphs is disabled.
+- V2 top icon rail buttons open their per-view sidenav on hover while it is collapsed. The flyout overlays the current page and its items navigate directly.
+- V2 per-view sidenavs share the main content background and have a muted 1 px outline. Collapsing the sidenav shows a vertical divider between the icon rail and main content.
+- V2 desktop reduces most text by 1–2 px in the Standard preset and shrinks the provider usage and Fleet circles in the icon rail from 38 px to 34 px.
+- V2 Findings ledger lanes are separated by lines, with independent list scrolling and diamond stage markers. Plot points and legend markers also use diamonds. Finding records now appear as flat rows separated by horizontal lines in the ledger and expanded lists.
+- V2 Surfaces now opens a persistent Canvas tab for each selected surface instead of showing details over the network. Tabs can be selected and closed independently. Surface details use runbook-style padding and grouped sections without repeating the tab title.
+- V2 Fleet app-server cards now show CPU, memory, and disk capacity; details also show available memory and disk space.
+- V2 Canvas runbook and subagent tabs use larger text and icons matching research header tabs. Session header tabs show muted role activity as Inactive or an active subagent count in place of status dots.
 - V2 per-view sidenavs show the shared scrollbar at the right edge when their navigation lists overflow. Home keeps its Workspaces/Tasks selector above the scrolling list, marks its lower edge with a full-width divider when the list overflows, and mutes the selector; Automations keeps its primary action above its list.
 - V2 Home shows the shared content scrollbar when its main page overflows the window.
 - V2 workspace header tabs use the standard width for short names and expand only when their labels need more room.
@@ -33,11 +45,11 @@
 - V2 Findings cards lead with an impact chip colored from the recorded screening score, show reachability, surface and evidence counts, and flag records past Candidate that cite no evidence. Finding summaries gain `evidence_count` (distinct supporting references, counter-evidence excluded); payloads without it read as 0.
 - V2 Surfaces relationship labels sit on their own edge and avoid other edges where possible. Out-of-scope edges use an even dash pattern with a solid run into the arrowhead.
 - V2 Dark and Midnight toggles dim their off state so enabled controls stand out.
-- V2 Fleet now shows only App Servers and Virtual Machines, without repeated page breadcrumbs and descriptions.
+- V2 Fleet removed the browser view and repeated page breadcrumbs and descriptions.
 - V2 provider usage circles in the icon rail now open the matching provider settings tab.
-- V2 per-view sidenav navigation and list rows are 34px high, reduced from 36px.
+- V2 per-view sidenav navigation and list rows are 32 px high.
 - V2 Home, Settings, Tracking, Extensions, and Automations content no longer repeats the view hierarchy in a breadcrumb and introductory description below the header and sidenav.
-- V2 desktop chrome now places the icon rail and full header on the main content background, with the distinct per-view sidenav beginning at the content's top edge, four rounded corners, a main-content-colored inverse curve at its upper-right header junction, and a bottom gap. The inverse curve remains when the sidenav collapses, while the main content's left corners become square. Per-view sidenav titles sit in the header above the sidebar content, freeing a row in each view. Header title tabs have a 5px inset. The inner and outer dividers are removed, the collapsed rail is narrower, and history arrows sit at the sidenav's upper right and hide when collapsed.
+- V2 desktop chrome aligns the per-view sidenav with the content's top edge and includes rounded corners, a bottom gap, and an inverse curve at the upper-right header junction. The main content's left corners become square when the sidenav collapses. Per-view sidenav titles sit above the sidebar content, header title tabs have a 5px inset, and history arrows sit at the sidenav's upper right and hide when collapsed.
 - V2 Fleet now opens from a status circle below the provider usage rings in the icon rail, with a divider when provider rings are present; its center icon is slightly larger without changing the circle size. The decorative squircle before the Beale title is removed. Fleet and healthy provider usage rings are green, while Fleet is red when offline and orange for connecting or incompatible configuration and protocol states.
 - V2 research header tabs now expand to a wider default width and shrink together when agent tabs fill the window. Neighboring tabs share one straight vertical separator, with no line before the first tab; hover highlights use the selected tab's rounded shape.
 - V2 Graphs `graph_subagents_spawn` starts children without blocking the parent agent's next step. Each top-level agent can list its own children with activity ages, inspect live or saved transcripts and tool calls, message them, or stop them; children can inspect or message siblings. The host saves child results with the parent turn.
@@ -82,6 +94,7 @@
 
 #### Added
 
+- V2 Fleet has a Research Tools sidenav view listing ripgrep, Opengrep, Git, radare2, Ghidra, LLVM tools, JADX, ipsw, Python 3, Java JDK, and Node.js in divided rows with column headers. Each connected app-server has separate Local and VM approval checkboxes. Allowed tools appear in the app-server details and in applicable research prompts.
 - Added a Findings workspace view with Candidate, Validated, Screened, and Reported lanes, a compact rejected list, paged loading, and read-only finding details.
 - Added optional v2 Agent Feedback with one on-demand model tool for observed harness and agent runtime flaws, quirks, or limitations. Accepted reports append to a private, human-readable `agent-feedback.jsonl` in the app-server data directory; no viewer or protocol route is required.
 - Added optional v2 Memories with four read-only agent tools for session transcript search, memory search, record detail, and bounded graph traversal. The app-server queues completed main and subagent turns, extracts structured memories with the default small model, and commits revisions to a separate `memories.sqlite`. Schema 44 preserves child transcript items and a durable turn-end outbox; protocol 2.12 adds authenticated memory status, retry, and disabled-workspace clear routes.
@@ -320,8 +333,17 @@
 
 ### app-server
 
+#### Security
+
+- V2 `bash`, runbook cells, and Findings verification commands start from an allowlisted environment, so provider API keys, credential-named variables, and `BEALE_*` host settings in the app-server environment are not inherited. Operators can pass extra non-credential variables with `BEALE_V2_TOOL_ENV`. MCP plugin servers keep their environment minus credential-named variables; values a plugin needs belong in its `env` configuration.
+- V2 tool commands run in their own process group (Unix) or job object (Windows). A timeout, oversized output, or user stop now ends background descendants too; processes left running by a command that exits normally are unchanged.
+- V2 redacts exact occurrences of host-held secrets (control token, saved API keys, OAuth tokens, Codex sign-in tokens, and credential-named environment values) from tool output before it is saved, shown, or returned to a model. Encoded or transformed values are not detected.
+
 #### Added
 
+- V2 Findings adds `findings_verify`, which reruns a declared proof command twice in fresh workspace processes and records whether a host-evaluated oracle (exit code, exit nonzero, or stdout/stderr text) held on every run. Oracle text that appears in the command is rejected. The verification, run digests, and requesting role are saved on the finding; a verified call can be cited as validation evidence. Summaries gain `verified`. Verification is recorded but not required to complete validation.
+- Fleet exposes an authenticated Research Tools catalog and saves Local and VM approval choices independently per app-server. Protocol 2.27 adds the filtered allowance list to the authenticated descriptor for peer inspection. Applicable research prompts list allowed tools and locations only when at least one is approved. SQLite schema 48 defaults every approval off; installation uses existing reviewed execution tools.
+- Protocol 2.24 adds CPU, memory, and app-server data-volume capacity and availability to the authenticated Fleet descriptor. Rebuild the host and desktop together; resource figures are not saved with desktop connections.
 - The v2 Windows tray menu can show the local Fleet authenticator QR code in a native window, using the same authenticated provisioning endpoint as Beale Desktop.
 
 #### Fixed
@@ -335,6 +357,11 @@
 
 #### Changed
 
+- V2 Findings validation evidence must now come from a successful `read`, `bash`, or verified `findings_verify` call made after the Candidate was recorded and, in Research Pipelines, by the Validation role or its subagents. Completion records a SHA-256 digest of each cited result, and saved tool calls record their completion time and agent role for the binding.
+- V2 host storage is owner-scoped. `beale-storage` keeps only host tables; Findings, Runbooks, Fleet, Tracking, Goal Mode, Memories (extraction queue), and Graphs own their tables, apply their own migrations at host start, and are absent from builds without the feature. Feature rows saved with a turn commit through turn extensions in the same transaction, and peer graph turns record their role on the host turn. Migration: this is a clean cut with no upgrade path; the app-server refuses a `state.sqlite` from an earlier v2 development build and leaves it unchanged, so move it aside or delete it before starting.
+- V2 native features export one `beale-feature-api` descriptor (identity, guidance, tool names, review policy, and subagent availability). The host feature catalog, session extension catalog, subagent tool lists, and Auto-Review policy read these descriptors instead of restating per-feature details. Existing feature constants remain for clients.
+- V2 session turns run in a separate engine module that reports typed turn errors; routes, automations, and peer graph orchestration map them at their own boundaries. Request validation and extension assembly are separate engine phases. Client-visible messages and status codes are unchanged.
+- V2 main, peer, and subagent tool calls now share one dispatch path for Auto-Review, availability, execution, and redaction. Subagents serialize mutating calls as before; an unavailable tool reports `unavailable to this agent`. Research Pipeline finding tools are listed and enforced from one role table.
 - Protocol 2.21 streams typed per-call usage deltas for live session telemetry. Rebuild the host and desktop together.
 - Protocol 2.20 adds an authenticated streamed-turn Stop route and turn ID header. Stopping interrupts an in-flight provider call, saves the turn, and pauses an active goal; clients must rebuild with the host.
 - SQLite schema 47 persists provider context by peer graph role. OpenAI Responses tools explicitly use non-strict argument schemas so optional fields remain optional; the host still validates tool inputs. Beale's Windows shell enables Git long paths for its child process without changing the user's Git configuration.

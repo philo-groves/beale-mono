@@ -5,14 +5,18 @@ use axum::{
     http::{HeaderMap, StatusCode, header},
     routing::{get, post},
 };
+#[cfg(feature = "goal-mode")]
+use beale_contracts::v1::GoalStatus;
 use beale_contracts::{
     FEATURE_DETAILS_PATH, FEATURE_SCOPE_PATH, FEATURE_SET_ENABLED_PATH, FEATURES_PATH,
     PROTOBUF_CONTENT_TYPE,
     v1::{
-        FeatureDetailsResponse, FeatureSummary, GetFeatureDetailsRequest, GoalStatus,
-        ListFeaturesResponse, SetExtensionWorkspaceScopeRequest, SetFeatureEnabledRequest,
+        FeatureDetailsResponse, FeatureSummary, GetFeatureDetailsRequest, ListFeaturesResponse,
+        SetExtensionWorkspaceScopeRequest, SetFeatureEnabledRequest,
     },
 };
+#[cfg(feature = "goal-mode")]
+use beale_goals::GoalStore;
 use beale_storage::HostDatabase;
 use prost::Message;
 
@@ -26,131 +30,48 @@ struct FeatureSpec {
     tool_names: Vec<String>,
 }
 
-#[cfg(any(
-    feature = "webfetch",
-    feature = "agent-feedback",
-    feature = "surfaces",
-    feature = "findings",
-    feature = "memories",
-    feature = "runbooks"
-))]
-fn definition_names(definitions: Vec<serde_json::Value>) -> Vec<String> {
-    definitions
-        .iter()
-        .filter_map(|definition| definition.get("name")?.as_str().map(str::to_owned))
-        .collect()
-}
+/// Catalog display order; features missing from this build are skipped.
+const CATALOG_ORDER: [&str; 10] = [
+    "webfetch",
+    "beale-agent-feedback",
+    "goal-mode",
+    "fleet",
+    "graphs",
+    "tracking",
+    "surfaces",
+    "beale-findings",
+    "beale-memories",
+    "beale-runbooks",
+];
 
+/// The host catalog, read from each compiled feature's descriptor.
 fn feature_specs() -> Vec<FeatureSpec> {
-    vec![
-        #[cfg(feature = "webfetch")]
-        FeatureSpec {
-            id: beale_webfetch::FEATURE_ID,
-            name: beale_webfetch::FEATURE_NAME,
-            description: beale_webfetch::FEATURE_DESCRIPTION,
-            has_prompt_extension: beale_webfetch::HAS_PROMPT_EXTENSION,
-            tool_count: beale_webfetch::TOOL_COUNT,
-            prompt_extension: beale_webfetch::PROMPT_EXTENSION,
-            tool_names: definition_names(vec![beale_webfetch::definition()]),
-        },
-        #[cfg(feature = "agent-feedback")]
-        FeatureSpec {
-            id: beale_agent_feedback::FEATURE_ID,
-            name: beale_agent_feedback::FEATURE_NAME,
-            description: beale_agent_feedback::FEATURE_DESCRIPTION,
-            has_prompt_extension: beale_agent_feedback::HAS_PROMPT_EXTENSION,
-            tool_count: beale_agent_feedback::TOOL_COUNT,
-            prompt_extension: beale_agent_feedback::PROMPT_EXTENSION,
-            tool_names: definition_names(vec![beale_agent_feedback::definition()]),
-        },
-        #[cfg(feature = "goal-mode")]
-        FeatureSpec {
-            id: beale_goals::FEATURE_ID,
-            name: beale_goals::FEATURE_NAME,
-            description: beale_goals::FEATURE_DESCRIPTION,
-            has_prompt_extension: beale_goals::HAS_PROMPT_EXTENSION,
-            tool_count: beale_goals::TOOL_COUNT,
-            prompt_extension: beale_goals::PROMPT_EXTENSION,
-            tool_names: vec![beale_goals::TOOL_NAME.to_owned()],
-        },
-        #[cfg(feature = "fleet")]
-        FeatureSpec {
-            id: beale_fleet::FEATURE_ID,
-            name: beale_fleet::FEATURE_NAME,
-            description: beale_fleet::FEATURE_DESCRIPTION,
-            has_prompt_extension: beale_fleet::HAS_PROMPT_EXTENSION,
-            tool_count: beale_fleet::TOOL_COUNT,
-            prompt_extension: beale_fleet::PROMPT_EXTENSION,
-            tool_names: Vec::new(),
-        },
-        #[cfg(feature = "graphs")]
-        FeatureSpec {
-            id: beale_graphs::FEATURE_ID,
-            name: beale_graphs::FEATURE_NAME,
-            description: beale_graphs::FEATURE_DESCRIPTION,
-            has_prompt_extension: beale_graphs::HAS_PROMPT_EXTENSION,
-            tool_count: beale_graphs::TOOL_COUNT,
-            prompt_extension: beale_graphs::PROMPT_EXTENSION,
-            tool_names: vec![
-                beale_graphs::SPAWN_TOOL.to_owned(),
-                beale_graphs::LIST_TOOL.to_owned(),
-                beale_graphs::INSPECT_TOOL.to_owned(),
-                beale_graphs::MESSAGE_TOOL.to_owned(),
-                beale_graphs::KILL_TOOL.to_owned(),
-                beale_graphs::HANDOFF_TOOL.to_owned(),
-            ],
-        },
-        #[cfg(feature = "tracking")]
-        FeatureSpec {
-            id: beale_tracking::FEATURE_ID,
-            name: beale_tracking::FEATURE_NAME,
-            description: beale_tracking::FEATURE_DESCRIPTION,
-            has_prompt_extension: beale_tracking::HAS_PROMPT_EXTENSION,
-            tool_count: beale_tracking::TOOL_COUNT,
-            prompt_extension: beale_tracking::PROMPT_EXTENSION,
-            tool_names: Vec::new(),
-        },
-        #[cfg(feature = "surfaces")]
-        FeatureSpec {
-            id: beale_surfaces::FEATURE_ID,
-            name: beale_surfaces::FEATURE_NAME,
-            description: beale_surfaces::FEATURE_DESCRIPTION,
-            has_prompt_extension: beale_surfaces::HAS_PROMPT_EXTENSION,
-            tool_count: beale_surfaces::TOOL_COUNT,
-            prompt_extension: beale_surfaces::PROMPT_EXTENSION,
-            tool_names: definition_names(beale_surfaces::definitions()),
-        },
-        #[cfg(feature = "findings")]
-        FeatureSpec {
-            id: beale_findings::FEATURE_ID,
-            name: beale_findings::FEATURE_NAME,
-            description: beale_findings::FEATURE_DESCRIPTION,
-            has_prompt_extension: beale_findings::HAS_PROMPT_EXTENSION,
-            tool_count: beale_findings::TOOL_COUNT,
-            prompt_extension: beale_findings::PROMPT_EXTENSION,
-            tool_names: definition_names(beale_findings::definitions()),
-        },
-        #[cfg(feature = "memories")]
-        FeatureSpec {
-            id: beale_memories::FEATURE_ID,
-            name: beale_memories::FEATURE_NAME,
-            description: beale_memories::FEATURE_DESCRIPTION,
-            has_prompt_extension: beale_memories::HAS_PROMPT_EXTENSION,
-            tool_count: beale_memories::TOOL_COUNT,
-            prompt_extension: beale_memories::PROMPT_EXTENSION,
-            tool_names: definition_names(beale_memories::definitions()),
-        },
-        #[cfg(feature = "runbooks")]
-        FeatureSpec {
-            id: beale_runbooks::FEATURE_ID,
-            name: beale_runbooks::FEATURE_NAME,
-            description: beale_runbooks::FEATURE_DESCRIPTION,
-            has_prompt_extension: beale_runbooks::HAS_PROMPT_EXTENSION,
-            tool_count: beale_runbooks::TOOL_COUNT,
-            prompt_extension: beale_runbooks::PROMPT_EXTENSION,
-            tool_names: definition_names(beale_runbooks::definitions()),
-        },
-    ]
+    #[allow(unused_mut)]
+    let mut features = beale_sessions::features::native_features();
+    #[cfg(feature = "tracking")]
+    features.push(&beale_tracking::FEATURE);
+    features.sort_by_key(|feature| {
+        CATALOG_ORDER
+            .iter()
+            .position(|id| *id == feature.id)
+            .unwrap_or(CATALOG_ORDER.len())
+    });
+    features
+        .into_iter()
+        .map(|feature| FeatureSpec {
+            id: feature.id,
+            name: feature.name,
+            description: feature.description,
+            has_prompt_extension: feature.has_prompt_extension(),
+            tool_count: feature.tool_count(),
+            prompt_extension: feature.prompt_extension,
+            tool_names: feature
+                .tool_names
+                .iter()
+                .map(|name| (*name).to_owned())
+                .collect(),
+        })
+        .collect()
 }
 
 fn feature_spec(id: &str) -> Option<FeatureSpec> {
@@ -287,6 +208,7 @@ async fn set_enabled(
         .db
         .set_feature_enabled(spec.id, request.enabled)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    #[cfg(feature = "goal-mode")]
     if !request.enabled && spec.id == "goal-mode" {
         state
             .db
@@ -340,6 +262,7 @@ async fn set_scope(
             &request.workspace_ids,
         )
         .map_err(|_| StatusCode::BAD_REQUEST)?;
+    #[cfg(feature = "goal-mode")]
     if !request.all_workspaces && spec.id == "goal-mode" {
         state
             .db
@@ -368,14 +291,52 @@ async fn set_scope(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn descriptors_keep_catalog_order_and_legacy_constants() {
+        let ids: Vec<&str> = feature_specs().iter().map(|spec| spec.id).collect();
+        let expected: Vec<&str> = CATALOG_ORDER
+            .iter()
+            .copied()
+            .filter(|id| ids.contains(id))
+            .collect();
+        assert_eq!(ids, expected);
+        macro_rules! legacy {
+            ($feature:literal, $krate:ident) => {
+                #[cfg(feature = $feature)]
+                {
+                    let descriptor = &$krate::FEATURE;
+                    assert_eq!(descriptor.id, $krate::FEATURE_ID);
+                    assert_eq!(descriptor.tool_count(), $krate::TOOL_COUNT);
+                    assert_eq!(
+                        descriptor.has_prompt_extension(),
+                        $krate::HAS_PROMPT_EXTENSION
+                    );
+                }
+            };
+        }
+        legacy!("webfetch", beale_webfetch);
+        legacy!("agent-feedback", beale_agent_feedback);
+        legacy!("goal-mode", beale_goals);
+        legacy!("fleet", beale_fleet);
+        legacy!("graphs", beale_graphs);
+        legacy!("tracking", beale_tracking);
+        legacy!("surfaces", beale_surfaces);
+        legacy!("findings", beale_findings);
+        legacy!("memories", beale_memories);
+        legacy!("runbooks", beale_runbooks);
+    }
+
     #[cfg(any(feature = "goal-mode", feature = "fleet", feature = "webfetch"))]
     use axum::{body::Body, http::Request};
     #[cfg(feature = "goal-mode")]
     use beale_goals::FEATURE_ID;
+    #[cfg(feature = "goal-mode")]
+    use beale_goals::{GoalCommit, GoalRow};
     #[cfg(any(feature = "goal-mode", feature = "webfetch"))]
     use beale_storage::WorkspaceRow;
     #[cfg(feature = "goal-mode")]
-    use beale_storage::{GoalRow, SessionRow, TurnActivity, TurnRow};
+    use beale_storage::{SessionRow, TurnActivity, TurnMetadata, TurnRow};
     #[cfg(any(feature = "goal-mode", feature = "fleet", feature = "webfetch"))]
     use tower::ServiceExt;
 
@@ -411,6 +372,7 @@ mod tests {
             let root = std::env::temp_dir()
                 .join(format!("beale-feature-example-{}", uuid::Uuid::new_v4()));
             let db = HostDatabase::open(&root).unwrap();
+            beale_sessions::features::migrate(&db).unwrap();
             let app = router("example-token".to_owned(), db.clone());
             let denied = app
                 .clone()
@@ -606,6 +568,7 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("beale-feature-example-{}", uuid::Uuid::new_v4()));
         let db = HostDatabase::open(&root).unwrap();
+        beale_sessions::features::migrate(&db).unwrap();
         db.set_feature_enabled(FEATURE_ID, true).unwrap();
         let session = SessionRow {
             id: uuid::Uuid::new_v4().to_string(),
@@ -634,7 +597,7 @@ mod tests {
             max_duration_minutes: 0,
             active_ms: 1,
         };
-        db.append_turn_with_goal_activity(
+        db.append_turn_with_metadata(
             &session,
             &turn,
             true,
@@ -642,7 +605,11 @@ mod tests {
                 tools: &[],
                 reasoning: &[],
                 commentary: &[],
-                goal: Some(&goal),
+            },
+            None,
+            TurnMetadata {
+                extensions: &[&GoalCommit(&goal)],
+                ..TurnMetadata::default()
             },
         )
         .unwrap();
@@ -681,6 +648,7 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("beale-fleet-example-{}", uuid::Uuid::new_v4()));
         let db = HostDatabase::open(&root).unwrap();
+        beale_sessions::features::migrate(&db).unwrap();
         let app = router("example-token".to_owned(), db.clone());
         let catalog = app
             .clone()
@@ -703,7 +671,7 @@ mod tests {
             .find(|feature| feature.id == beale_fleet::FEATURE_ID)
             .unwrap();
         assert!(!fleet.enabled);
-        assert!(!fleet.has_prompt_extension);
+        assert!(fleet.has_prompt_extension);
         assert_eq!(fleet.tool_count, 0);
         let details = app
             .clone()
@@ -730,7 +698,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(details.id, beale_fleet::FEATURE_ID);
-        assert!(details.prompt_extension.is_empty());
+        assert_eq!(details.prompt_extension, beale_fleet::PROMPT_EXTENSION);
         let response = app
             .oneshot(
                 Request::builder()
@@ -752,6 +720,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         drop(db);
         let reopened = HostDatabase::open(&root).unwrap();
+        beale_sessions::features::migrate(&reopened).unwrap();
         assert!(reopened.feature_enabled(beale_fleet::FEATURE_ID).unwrap());
         drop(reopened);
         std::fs::remove_dir_all(root).unwrap();

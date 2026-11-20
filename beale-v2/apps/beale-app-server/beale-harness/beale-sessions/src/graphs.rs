@@ -1,7 +1,7 @@
 #[cfg(test)]
 use std::future::Future;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::PathBuf,
     sync::{
         Arc,
@@ -18,9 +18,8 @@ use beale_providers::{
     AuthMode, OpenAiConnection, Provider, TextMessage, TextRole, ToolStepRequest, input_messages,
     provider_error_message,
 };
-use beale_safety::ReviewRequest;
 use beale_storage::{ChildTurnRow, HostDatabase, ModelUsageRow, ToolCallRow};
-use beale_tools::{AgentFiles, definitions, execute, page};
+use beale_tools::{AgentFiles, Redactor, definitions, page};
 #[cfg(test)]
 use futures_util::future::join_all;
 use serde_json::{Value, json};
@@ -31,7 +30,9 @@ use tokio::{
 use uuid::Uuid;
 
 use super::{
-    SessionState, append_tool_result, model_tool_preview, tool_summary as summary, usage_update,
+    SessionState, append_tool_result, model_tool_preview,
+    tool_runtime::{ReviewTarget, ToolRuntime, unix_ms},
+    tool_summary as summary, usage_update,
 };
 
 pub(super) struct SubagentOutcome {
@@ -106,6 +107,7 @@ pub(super) async fn received_message(
         output: message.to_owned(),
         is_error: false,
         agent_role: agent_role.id().to_owned(),
+        created_at_ms: unix_ms(),
     }
 }
 
@@ -717,14 +719,11 @@ pub(super) struct ChildContext {
     pub state: SessionState,
     pub workspace: PathBuf,
     pub agent_files: Arc<AgentFiles>,
-    #[cfg(feature = "webfetch")]
-    pub webfetch_enabled: bool,
-    #[cfg(any(feature = "agent-feedback", feature = "webfetch"))]
     pub workspace_id: String,
-    #[cfg(feature = "agent-feedback")]
     pub session_id: String,
-    #[cfg(feature = "agent-feedback")]
-    pub feedback_enabled: bool,
+    pub redactor: Arc<Redactor>,
+    /// Definitions of enabled features whose descriptors allow subagents.
+    pub feature_tools: Arc<Vec<Value>>,
     pub workspace_context: String,
     pub surfaces_context: String,
     pub base_system: String,
@@ -844,37 +843,12 @@ async fn run_child(
     (outcome, transcript)
 }
 
-fn child_tool_definitions(feedback_enabled: bool, webfetch_enabled: bool) -> Vec<Value> {
-    #[cfg(not(feature = "agent-feedback"))]
-    let _ = feedback_enabled;
-    #[cfg(not(feature = "webfetch"))]
-    let _ = webfetch_enabled;
-    #[allow(unused_mut)]
+fn child_tool_definitions(feature_tools: &[Value]) -> Vec<Value> {
     let mut tools = definitions();
     tools.push(beale_graphs::message_definition(true));
     tools.push(beale_graphs::inspect_definition(true));
-    #[cfg(feature = "webfetch")]
-    if webfetch_enabled {
-        tools.push(beale_webfetch::definition());
-    }
-    #[cfg(feature = "agent-feedback")]
-    if feedback_enabled {
-        tools.push(beale_agent_feedback::definition());
-    }
+    tools.extend(feature_tools.iter().cloned());
     tools
-}
-
-pub(super) fn child_supports_feature(id: &str) -> bool {
-    let _ = id;
-    #[cfg(feature = "webfetch")]
-    if id == beale_webfetch::FEATURE_ID {
-        return true;
-    }
-    #[cfg(feature = "agent-feedback")]
-    if id == beale_agent_feedback::FEATURE_ID {
-        return true;
-    }
-    false
 }
 
 async fn run_child_inner(
@@ -913,15 +887,8 @@ async fn run_child_inner(
         input.insert(0, json!({"role":"system","content":system}));
     }
     let mut connection = OpenAiConnection::default();
-    #[cfg(feature = "webfetch")]
-    let webfetch_enabled = context.webfetch_enabled;
-    #[cfg(not(feature = "webfetch"))]
-    let webfetch_enabled = false;
-    #[cfg(feature = "agent-feedback")]
-    let feedback_enabled = context.feedback_enabled;
-    #[cfg(not(feature = "agent-feedback"))]
-    let feedback_enabled = false;
-    let definitions = child_tool_definitions(feedback_enabled, webfetch_enabled);
+    let definitions = child_tool_definitions(&context.feature_tools);
+    let no_plugins = HashSet::new();
     let mut tools = Vec::<ToolCallRow>::new();
     loop {
         let incoming = {
@@ -1237,6 +1204,27 @@ async fn run_child_inner(
                     })
                     .await;
             }
+            let runtime = ToolRuntime {
+                state: &context.state,
+                workspace_id: &context.workspace_id,
+                session_id: &context.session_id,
+                agent_id,
+                agent_role: context.parent_role.id(),
+                workspace: &context.workspace,
+                review: ReviewTarget {
+                    provider,
+                    mode,
+                    model: &assignment.model.model,
+                    context: &context.workspace_context,
+                },
+                definitions: &definitions,
+                callable_plugins: &no_plugins,
+                redactor: &context.redactor,
+                mutation_lock: Some(mutation_lock),
+                progress: context.progress.as_ref(),
+                pipeline_role: None,
+            };
+            let mut no_stop = None;
             let mut review_unavailable = false;
             let (output, is_error) = match arguments {
                 Ok(arguments) if call.name == beale_graphs::INSPECT_TOOL => {
@@ -1270,80 +1258,13 @@ async fn run_child_inner(
                         _ => ("Invalid subagent message.".to_owned(), true),
                     }
                 }
-                #[cfg(feature = "agent-feedback")]
-                Ok(arguments)
-                    if context.feedback_enabled && call.name == beale_agent_feedback::TOOL_NAME =>
-                {
-                    match beale_agent_feedback::execute(
-                        context.state.workspaces.root(),
-                        &context.workspace_id,
-                        &context.session_id,
-                        agent_id,
-                        &arguments,
-                    ) {
-                        Ok(value) => (value, false),
-                        Err(error) => (format!("Agent feedback error: {error}"), true),
-                    }
+                arguments => {
+                    let result = runtime
+                        .dispatch(&id, &call.name, arguments, &tools, &mut no_stop)
+                        .await;
+                    review_unavailable = result.review_unavailable;
+                    (result.output, result.is_error)
                 }
-                Ok(arguments) if definitions.iter().any(|tool| tool["name"] == call.name) => {
-                    let decision = beale_safety::review(
-                        &context.state.db,
-                        &context.state.provider,
-                        &context.state.credentials,
-                        ReviewRequest {
-                            provider,
-                            mode,
-                            model: &assignment.model.model,
-                            name: &call.name,
-                            arguments: &arguments,
-                            workspace_context: &context.workspace_context,
-                        },
-                    )
-                    .await;
-                    review_unavailable = super::review_failed(&decision);
-                    if !decision.approved {
-                        (
-                            if review_unavailable {
-                                decision.reason
-                            } else {
-                                format!("Tool denied by review: {}", decision.reason)
-                            },
-                            true,
-                        )
-                    } else {
-                        let _guard = if matches!(call.name.as_str(), "read" | "webfetch") {
-                            None
-                        } else {
-                            Some(mutation_lock.lock().await)
-                        };
-                        let result = match call.name.as_str() {
-                            #[cfg(feature = "webfetch")]
-                            beale_webfetch::TOOL_NAME => {
-                                super::execute_webfetch(
-                                    &context.state.db,
-                                    &context.workspace_id,
-                                    &arguments,
-                                )
-                                .await
-                            }
-                            _ => {
-                                execute(
-                                    &call.name,
-                                    &arguments,
-                                    &context.workspace,
-                                    context.state.workspaces.root(),
-                                )
-                                .await
-                            }
-                        };
-                        match result {
-                            Ok(value) => (value.output, value.is_error),
-                            Err(error) => (format!("Tool error: {error:#}"), true),
-                        }
-                    }
-                }
-                Ok(_) => ("Tool error: unavailable in a subagent".to_owned(), true),
-                Err(_) => ("Tool error: invalid JSON arguments".to_owned(), true),
             };
             let model_output = {
                 if let Some(tx) = context.progress.as_ref() {
@@ -1392,6 +1313,7 @@ async fn run_child_inner(
                     output: output.clone(),
                     is_error,
                     agent_role: context.parent_role.id().to_owned(),
+                    created_at_ms: unix_ms(),
                 });
                 model_tool_preview(&call.name, &id, &output, is_error, &context.agent_files)
             };
@@ -1573,6 +1495,7 @@ mod tests {
             output: "Example file contents".to_owned(),
             is_error: false,
             agent_role: "main".to_owned(),
+            created_at_ms: 0,
         };
         record_activity(
             &manager.registry,
@@ -1659,7 +1582,7 @@ mod tests {
 
     #[test]
     fn child_catalog_keeps_webfetch_optional() {
-        let base = child_tool_definitions(false, false);
+        let base = child_tool_definitions(&[]);
         assert_eq!(base.len(), 6);
         assert_eq!(base[4]["name"], beale_graphs::MESSAGE_TOOL);
         assert_eq!(base[5]["name"], beale_graphs::INSPECT_TOOL);
@@ -1670,47 +1593,29 @@ mod tests {
                     && tool["name"] != beale_graphs::KILL_TOOL)
         );
         assert!(base.iter().all(|tool| tool["name"] != "webfetch"));
-        let tools = child_tool_definitions(false, true);
         #[cfg(feature = "webfetch")]
         {
+            let tools = child_tool_definitions(&[beale_webfetch::definition()]);
             assert_eq!(tools.len(), 7);
             assert_eq!(tools.last().unwrap(), &beale_webfetch::definition());
         }
-        #[cfg(not(feature = "webfetch"))]
-        assert_eq!(tools, base);
     }
 
     #[test]
-    fn child_feature_catalog_matches_supported_tools() {
-        let tools = child_tool_definitions(true, true);
-        for (id, tool) in [
-            ("webfetch", "webfetch"),
-            ("beale-agent-feedback", "agent_feedback"),
-        ] {
+    fn subagent_features_come_from_descriptors() {
+        for feature in crate::features::native_features() {
             assert_eq!(
-                child_supports_feature(id),
-                tools.iter().any(|item| item["name"] == tool)
+                crate::features::subagents_receive(feature.id),
+                matches!(feature.id, "webfetch" | "beale-agent-feedback" | "fleet"),
+                "{}",
+                feature.id
             );
         }
         for id in ["goal-mode", "graphs", "surfaces", "example-plugin"] {
-            assert!(!child_supports_feature(id));
+            assert!(!crate::features::subagents_receive(id));
         }
     }
 
-    #[cfg(feature = "agent-feedback")]
-    #[test]
-    fn child_catalog_includes_feedback_only_when_enabled() {
-        assert!(
-            child_tool_definitions(false, false)
-                .iter()
-                .all(|tool| tool["name"] != beale_agent_feedback::TOOL_NAME)
-        );
-        assert!(
-            child_tool_definitions(true, false)
-                .iter()
-                .any(|tool| tool["name"] == beale_agent_feedback::TOOL_NAME)
-        );
-    }
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 

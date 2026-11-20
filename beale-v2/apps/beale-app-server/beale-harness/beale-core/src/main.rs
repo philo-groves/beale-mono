@@ -111,6 +111,9 @@ async fn serve() -> Result<()> {
     let tray_token = token.clone();
     let workspaces = beale_workspaces::WorkspaceStore::new()?;
     let db = beale_storage::HostDatabase::open(workspaces.root())?;
+    beale_sessions::features::migrate(&db)?;
+    #[cfg(feature = "tracking")]
+    beale_sessions::features::migrate_features(&db, &[&beale_tracking::FEATURE])?;
     let plugin_data_root = workspaces.root().to_path_buf();
     let plugins = beale_extender::PluginRuntime::new(db.clone(), plugin_data_root)?;
     let app = Router::new()
@@ -135,7 +138,11 @@ async fn serve() -> Result<()> {
     #[cfg(feature = "tracking")]
     let app = app.merge(beale_tracking::router(token.clone(), db.clone()));
     #[cfg(feature = "fleet")]
-    let app = app.merge(beale_fleet::router(token.clone(), db.clone()));
+    let app = app.merge(beale_fleet::router(
+        token.clone(),
+        db.clone(),
+        workspaces.root().to_path_buf(),
+    ));
     let app = app
         .merge(beale_safety::router(token.clone(), db.clone()))
         .merge(beale_extender::router_with_runtime(

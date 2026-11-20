@@ -1,4 +1,6 @@
+use super::engine::{reasoning_effort_name, run_one_turn};
 use super::*;
+use beale_graphs::GraphHandoffRow;
 use tokio::task::JoinSet;
 
 struct Work {
@@ -12,7 +14,7 @@ type WorkResult = (
     beale_graphs::Role,
     Option<String>,
     i64,
-    Result<SessionDetail, StatusCode>,
+    Result<SessionDetail, TurnError>,
 );
 
 struct StartContext<'a> {
@@ -35,7 +37,7 @@ fn is_peer_graph(id: &str) -> bool {
 pub(super) fn applies(
     db: &HostDatabase,
     request: &SubmitSessionTurnRequest,
-) -> Result<bool, StatusCode> {
+) -> Result<bool, TurnError> {
     if request.session_id.is_empty() {
         return Ok(is_peer_graph(&request.graph_id));
     }
@@ -43,7 +45,7 @@ pub(super) fn applies(
         return Ok(false);
     }
     db.is_peer_graph_session(&request.session_id)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+        .map_err(|_| TurnError::Internal)
 }
 
 fn start(
@@ -51,12 +53,12 @@ fn start(
     context: &StartContext<'_>,
     work: Work,
     stop_override: Option<watch::Receiver<bool>>,
-) -> Result<(), StatusCode> {
+) -> Result<(), TurnError> {
     let number = context
         .state
         .db
         .reserve_graph_turn(&context.base.session_id, work.role.id())
-        .map_err(|_| StatusCode::CONFLICT)?;
+        .map_err(|_| TurnError::Conflict)?;
     let fallback = GraphNodeModel {
         node_id: beale_graphs::entry_role(&context.base.graph_id)
             .unwrap_or(beale_graphs::Role::Main)
@@ -106,7 +108,7 @@ pub(super) async fn run(
     progress: Option<mpsc::Sender<SessionStreamEvent>>,
     lock: &Arc<Mutex<()>>,
     stop: Option<watch::Receiver<bool>>,
-) -> Result<SessionDetail, StatusCode> {
+) -> Result<SessionDetail, TurnError> {
     let (graph_id, config, first) = if request.session_id.is_empty() {
         parse_id(&request.workspace_id)?;
         if !state.workspaces.contains(&request.workspace_id)?
@@ -137,7 +139,7 @@ pub(super) async fn run(
                     "minute" | "hour" | "day" | "week" | "month"
                 ))
         {
-            return Err(StatusCode::BAD_REQUEST);
+            return Err(TurnError::Invalid);
         }
         reasoning_effort_name(request.reasoning_effort)?;
         validate_graph_selection(
@@ -149,16 +151,16 @@ pub(super) async fn run(
             &request.workspace_id,
         )?;
         let graph_id = request.graph_id.clone();
-        let entry = beale_graphs::entry_role(&graph_id).ok_or(StatusCode::BAD_REQUEST)?;
+        let entry = beale_graphs::entry_role(&graph_id).ok_or(TurnError::Invalid)?;
         if !request.agent_role.is_empty() && request.agent_role != entry.id() {
-            return Err(StatusCode::BAD_REQUEST);
+            return Err(TurnError::Invalid);
         }
         let mut config = SessionGraphConfig::decode(
             encoded_graph_config(&request)
-                .ok_or(StatusCode::BAD_REQUEST)?
+                .ok_or(TurnError::Invalid)?
                 .as_slice(),
         )
-        .map_err(|_| StatusCode::BAD_REQUEST)?;
+        .map_err(|_| TurnError::Invalid)?;
         if !config
             .models
             .iter()
@@ -173,7 +175,7 @@ pub(super) async fn run(
         }
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .map_err(|_| TurnError::Internal)?
             .as_millis()
             .min(i64::MAX as u128) as i64;
         let id = Uuid::new_v4().to_string();
@@ -196,7 +198,7 @@ pub(super) async fn run(
         state
             .db
             .create_peer_graph_session(&row, &graph_id, &config.encode_to_vec(), repeat)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            .map_err(|_| TurnError::Internal)?;
         request.repeat_preset.clear();
         register_session_lock(state, &id, lock).await;
         request.session_id = id;
@@ -206,48 +208,48 @@ pub(super) async fn run(
         state
             .db
             .recover_graph_session(&request.session_id)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            .map_err(|_| TurnError::Internal)?;
         let (session, _) = load_persisted(&state.db, id)?;
         if session.workspace_id != request.workspace_id {
-            return Err(StatusCode::CONFLICT);
+            return Err(TurnError::Conflict);
         }
         let graph_id = state
             .db
             .session_graph_id(&request.session_id)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-            .ok_or(StatusCode::BAD_REQUEST)?;
+            .map_err(|_| TurnError::Internal)?
+            .ok_or(TurnError::Invalid)?;
         if !is_peer_graph(&graph_id)
             || !state
                 .db
                 .is_peer_graph_session(&request.session_id)
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+                .map_err(|_| TurnError::Internal)?
         {
-            return Err(StatusCode::BAD_REQUEST);
+            return Err(TurnError::Invalid);
         }
         if !state
             .db
             .feature_enabled(beale_graphs::FEATURE_ID)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .map_err(|_| TurnError::Internal)?
             || !state
                 .db
                 .extension_applies_to("feature", beale_graphs::FEATURE_ID, &request.workspace_id)
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+                .map_err(|_| TurnError::Internal)?
         {
-            return Err(StatusCode::CONFLICT);
+            return Err(TurnError::Conflict);
         }
         let bytes = state
             .db
             .session_graph_config(&request.session_id)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-            .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
-        let config = SessionGraphConfig::decode(bytes.as_slice())
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            .map_err(|_| TurnError::Internal)?
+            .ok_or(TurnError::Internal)?;
+        let config =
+            SessionGraphConfig::decode(bytes.as_slice()).map_err(|_| TurnError::Internal)?;
         (graph_id, config, false)
     };
-    let graph = beale_graphs::graph_definition(&graph_id).ok_or(StatusCode::BAD_REQUEST)?;
+    let graph = beale_graphs::graph_definition(&graph_id).ok_or(TurnError::Invalid)?;
     let role = requested_top_level_role(Some(graph), &request.agent_role)?
         .or_else(|| beale_graphs::entry_role_for_config(&graph_id, &config))
-        .ok_or(StatusCode::BAD_REQUEST)?;
+        .ok_or(TurnError::Invalid)?;
     let (notify, mut notified) = mpsc::unbounded_channel();
     let mut tasks = JoinSet::new();
     let mut active = [false; 11];
@@ -264,7 +266,7 @@ pub(super) async fn run(
     if graph_id == beale_graphs::SEQUENTIAL_ID {
         let minutes = config.stage_duration_minutes;
         if !(1..=1_440).contains(&minutes) {
-            return Err(StatusCode::BAD_REQUEST);
+            return Err(TurnError::Invalid);
         }
     }
     if first && let Some(tx) = &progress {
@@ -309,7 +311,7 @@ pub(super) async fn run(
             for item in state
                 .db
                 .pending_graph_handoffs(&request.session_id)
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+                .map_err(|_| TurnError::Internal)?
             {
                 if item.status != "pending" {
                     continue;
@@ -323,7 +325,7 @@ pub(super) async fn run(
                 state
                     .db
                     .set_graph_handoff_status(&item.id, "running")
-                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                    .map_err(|_| TurnError::Internal)?;
                 let prompt = format!("Handoff from {}: {}", item.from_role, item.task);
                 if let Err(error) = start(
                     &mut tasks,
@@ -339,7 +341,7 @@ pub(super) async fn run(
                     state
                         .db
                         .set_graph_handoff_status(&item.id, "pending")
-                        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                        .map_err(|_| TurnError::Internal)?;
                     return Err(error);
                 }
                 active[target.index()] = true;
@@ -364,16 +366,16 @@ pub(super) async fn run(
             Some(_) = notified.recv() => {},
             finished = tasks.join_next() => {
                 let (role, handoff_id, turn_number, result) = finished
-                    .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?
-                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                    .ok_or(TurnError::Internal)?
+                    .map_err(|_| TurnError::Internal)?;
                 active[role.index()] = false;
                 if let Some(id) = handoff_id {
                     state.db.set_graph_handoff_status(&id, if result.is_ok() { "completed" } else { "failed" })
-                        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                        .map_err(|_| TurnError::Internal)?;
                 }
                 if result.is_err() {
                     state.db.finish_graph_turn(&request.session_id, turn_number, false)
-                        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                        .map_err(|_| TurnError::Internal)?;
                 }
                 if let Some(tx) = &progress {
                     let detail = if let Ok(detail) = result {
@@ -393,7 +395,7 @@ pub(super) async fn run(
         }
     }
     let (session, turns) = load_persisted(&state.db, parse_id(&request.session_id)?)?;
-    detail(&state.db, &session, &turns)
+    Ok(detail(&state.db, &session, &turns)?)
 }
 
 fn discovery_stage(role: beale_graphs::Role) -> bool {
@@ -431,10 +433,10 @@ fn queued_for_stage(
     db: &HostDatabase,
     session_id: &str,
     role: beale_graphs::Role,
-) -> Result<Option<beale_storage::GraphHandoffRow>, StatusCode> {
+) -> Result<Option<GraphHandoffRow>, TurnError> {
     Ok(db
         .pending_graph_handoffs(session_id)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .map_err(|_| TurnError::Internal)?
         .into_iter()
         .find(|item| item.to_role == role.id()))
 }
@@ -442,7 +444,7 @@ fn queued_for_stage(
 async fn sequential_started(
     context: &StartContext<'_>,
     role: beale_graphs::Role,
-) -> Result<(), StatusCode> {
+) -> Result<(), TurnError> {
     if let Some(tx) = &context.progress {
         let (session, turns) =
             load_persisted(&context.state.db, parse_id(&context.base.session_id)?)?;
@@ -462,7 +464,7 @@ async fn sequential_finished(
     context: &StartContext<'_>,
     finished: WorkResult,
     requeue: bool,
-) -> Result<(), StatusCode> {
+) -> Result<(), TurnError> {
     let (role, handoff_id, turn_number, result) = finished;
     if let Some(id) = handoff_id {
         context
@@ -478,14 +480,14 @@ async fn sequential_finished(
                     "failed"
                 },
             )
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            .map_err(|_| TurnError::Internal)?;
     }
     if result.is_err() {
         context
             .state
             .db
             .finish_graph_turn(&context.base.session_id, turn_number, false)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            .map_err(|_| TurnError::Internal)?;
     }
     if let Some(tx) = &context.progress {
         let detail = if let Ok(detail) = result {
@@ -512,11 +514,11 @@ async fn run_sequential(
     initial_role: beale_graphs::Role,
     initial_prompt: String,
     notified: &mut mpsc::UnboundedReceiver<()>,
-) -> Result<SessionDetail, StatusCode> {
+) -> Result<SessionDetail, TurnError> {
     let mut stage_index = SEQUENTIAL_STAGES
         .iter()
         .position(|role| *role == initial_role)
-        .ok_or(StatusCode::BAD_REQUEST)?;
+        .ok_or(TurnError::Invalid)?;
     let mut first_prompt = Some(initial_prompt);
     loop {
         let role = SEQUENTIAL_STAGES[stage_index];
@@ -549,7 +551,7 @@ async fn run_sequential(
                         .state
                         .db
                         .recover_graph_session(&context.base.session_id)
-                        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                        .map_err(|_| TurnError::Internal)?;
                 }
                 break;
             }
@@ -577,7 +579,7 @@ async fn run_sequential(
                         .state
                         .db
                         .set_graph_handoff_status(&item.id, "running")
-                        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                        .map_err(|_| TurnError::Internal)?;
                     Work {
                         role,
                         prompt: format!("Handoff from {}: {}", item.from_role, item.task),
@@ -605,7 +607,7 @@ async fn run_sequential(
                             .state
                             .db
                             .set_graph_handoff_status(&id, "pending")
-                            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                            .map_err(|_| TurnError::Internal)?;
                     }
                     return Err(error);
                 }
@@ -615,12 +617,12 @@ async fn run_sequential(
                 _ = tick.tick() => {},
                 _ = notified.recv() => {},
                 finished = tasks.join_next() => {
-                    let finished = finished.ok_or(StatusCode::INTERNAL_SERVER_ERROR)?
-                        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                    let finished = finished.ok_or(TurnError::Internal)?
+                        .map_err(|_| TurnError::Internal)?;
                     let failed = finished.3.is_err();
                     sequential_finished(context, finished, false).await?;
                     if failed {
-                        return Err(StatusCode::BAD_GATEWAY);
+                        return Err(TurnError::Provider);
                     }
                 }
             }
@@ -631,7 +633,7 @@ async fn run_sequential(
         stage_index = (stage_index + 1) % SEQUENTIAL_STAGES.len();
     }
     let (session, turns) = load_persisted(&context.state.db, parse_id(&context.base.session_id)?)?;
-    detail(&context.state.db, &session, &turns)
+    Ok(detail(&context.state.db, &session, &turns)?)
 }
 
 #[cfg(test)]

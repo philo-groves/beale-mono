@@ -47,7 +47,7 @@ fn open_menu(state: &mut State, menu: UsageMenu) {
     }
 }
 
-fn subagent_entries(
+pub(crate) fn subagent_entries(
     detail: Option<&SessionDetail>,
     live_events: &[SessionStreamEvent],
     role: &str,

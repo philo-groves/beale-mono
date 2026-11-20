@@ -441,6 +441,7 @@ pub(crate) fn fixture(variant: &str) -> State {
             surface_ids: vec!["S1".into()], status, impact_score: impact, reachability_score: reachability,
             updated_at_ms: 1_800_000_000_000, revision: 2,
             evidence_count: (i as u32 * 2) % 5,
+            verified: false,
         });
     }
     let now = std::time::SystemTime::now()
@@ -664,10 +665,11 @@ pub(crate) fn fixture(variant: &str) -> State {
                 _ => extensions_view::ExtensionSection::Features,
             };
         }
-        "fleet" | "vms" => {
+        "fleet" | "vms" | "research-tools" => {
             s.primary_view = PrimaryView::Fleet;
             s.fleet_section = match name {
                 "vms" => fleet_view::FleetSection::VirtualMachines,
+                "research-tools" => fleet_view::FleetSection::ResearchTools,
                 _ => fleet_view::FleetSection::AppServers,
             };
         }
@@ -710,7 +712,9 @@ pub(crate) fn fixture(variant: &str) -> State {
             };
             s.workspace_findings.loaded = true;
             s.workspace_surface_management_open = name == "surface-manage";
-            s.workspace_surface_selected = (name == "surface-detail").then_some(0);
+            if name == "surface-detail" {
+                crate::surface_canvas::open(&mut s, 0);
+            }
         }
         "chat" => {
             s.quick_chat_open = true;
@@ -1029,10 +1033,19 @@ pub(crate) fn fixture(variant: &str) -> State {
             s.graph_editor = Some(new_research::GraphEditor {
                 role: beale_graphs::Role::Main,
                 models: vec![],
-                model_menu_open: false,
+                model_menu: None,
             })
         }
-        "model-menu" => s.composer_menu_open = true,
+        "model-menu" => {
+            if let Some(graphs) = s
+                .features
+                .iter_mut()
+                .find(|feature| feature.id == beale_graphs::FEATURE_ID)
+            {
+                graphs.enabled = false;
+            }
+            s.composer_menu_open = true;
+        }
         "goal-menu" => s.selection_menu = Some(SelectionMenu::GoalMode),
         "surface-add" => {
             s.workspace_surface_dialog_scope = Some(workspace_creation::SurfaceScope::InScope)

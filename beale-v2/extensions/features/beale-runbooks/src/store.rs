@@ -1,14 +1,91 @@
-use super::HostDatabase;
+//! Runbook persistence in the shared host database.
+//!
+//! The Runbooks feature owns these tables and applies [`MIGRATIONS`] under its
+//! feature ID; builds without Runbooks never create them.
+
 use anyhow::{Context, Result, ensure};
 use beale_contracts::runbooks::{
     Cell, CellResult, Document, MAX_TITLE_CHARS, QueryRequest, RunExecution, Summary,
 };
-use rusqlite::{OptionalExtension, Transaction, params};
+use beale_storage::{
+    HostDatabase,
+    rusqlite::{self, OptionalExtension, Transaction, params},
+};
 use std::{
     collections::HashSet,
     time::{SystemTime, UNIX_EPOCH},
 };
 use uuid::Uuid;
+
+/// Ordered Runbooks schema versions.
+pub const MIGRATIONS: &[&str] = &[V1];
+
+/// Marks executions that were running when the host stopped as interrupted.
+pub const STARTUP: &[&str] =
+    &["UPDATE runbook_runs SET status='interrupted' WHERE status='running'"];
+
+const V1: &str = "
+CREATE TABLE runbook_counters (
+    workspace_id TEXT PRIMARY KEY,
+    next_id INTEGER NOT NULL DEFAULT 1
+);
+CREATE TABLE runbook_documents (
+    workspace_id TEXT NOT NULL,
+    id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    purpose TEXT NOT NULL,
+    updated_at_ms INTEGER NOT NULL,
+    revision INTEGER NOT NULL,
+    document_json TEXT NOT NULL,
+    PRIMARY KEY(workspace_id, id)
+);
+CREATE INDEX runbook_documents_workspace_updated
+    ON runbook_documents(workspace_id, updated_at_ms DESC, id);
+CREATE TABLE runbook_revisions (
+    workspace_id TEXT NOT NULL,
+    runbook_id TEXT NOT NULL,
+    number INTEGER NOT NULL,
+    at_ms INTEGER NOT NULL,
+    actor TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    document_json TEXT NOT NULL,
+    PRIMARY KEY(workspace_id, runbook_id, number)
+);
+CREATE TABLE runbook_runs (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL,
+    runbook_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    revision INTEGER NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('running','completed','failed','interrupted')),
+    output TEXT NOT NULL DEFAULT '',
+    created_at_ms INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL,
+    current_cell_number INTEGER NOT NULL DEFAULT 0,
+    current_cell_name TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX runbook_runs_session ON runbook_runs(session_id, runbook_id);
+CREATE TABLE runbook_cell_results (
+    workspace_id TEXT NOT NULL,
+    runbook_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    cell_id TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('completed','failed')),
+    updated_at_ms INTEGER NOT NULL,
+    output TEXT NOT NULL DEFAULT '',
+    exit_code INTEGER,
+    stdout TEXT NOT NULL DEFAULT '',
+    stderr TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY(workspace_id, runbook_id, session_id, cell_id)
+);
+";
+
+/// Creates or upgrades the Runbooks tables and recovers interrupted runs.
+pub fn migrate(db: &HostDatabase) -> Result<()> {
+    db.migrate_schema(crate::FEATURE_ID, MIGRATIONS)?;
+    db.run_startup_statements(crate::FEATURE_ID, STARTUP)
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RunbookRunRow {
@@ -166,8 +243,62 @@ fn persist(
     Ok(())
 }
 
-impl HostDatabase {
-    pub fn runbook_run_start(
+/// Runbook operations on the host database.
+pub trait RunbookStore {
+    fn runbook_run_start(
+        &self,
+        workspace_id: &str,
+        session_id: &str,
+        runbook_id: &str,
+        expected_revision: u64,
+    ) -> Result<RunbookRunRow>;
+    fn runbook_run_finish(&self, id: &str, success: bool, output: &str) -> Result<()>;
+    fn runbook_run_cell(&self, id: &str, cell_number: u32, cell_name: &str) -> Result<()>;
+    fn runbook_run_cell_result(
+        &self,
+        run_id: &str,
+        cell_id: &str,
+        success: bool,
+        exit_code: Option<i32>,
+        stdout: &str,
+        stderr: &str,
+    ) -> Result<()>;
+    fn runbook_run_interrupt(&self, id: &str) -> Result<()>;
+    fn runbook_run_status(&self, session_id: &str, id: &str) -> Result<Option<RunbookRunRow>>;
+    fn session_runbook_counts(&self, session_id: &str) -> Result<(u64, u64)>;
+    fn session_runbooks(
+        &self,
+        workspace_id: &str,
+        session_id: &str,
+    ) -> Result<Vec<SessionRunbookRow>>;
+    fn session_runbook_runs(
+        &self,
+        workspace_id: &str,
+        session_id: &str,
+        runbook_id: &str,
+    ) -> Result<Vec<RunExecution>>;
+    fn session_runbook_cell_results(
+        &self,
+        workspace_id: &str,
+        session_id: &str,
+        runbook_id: &str,
+    ) -> Result<Vec<CellResult>>;
+    fn runbook_get(&self, workspace_id: &str, id: &str) -> Result<Option<Document>>;
+    fn runbook_query(&self, request: &QueryRequest) -> Result<Vec<Summary>>;
+    fn runbook_create(&self, document: Document, actor: &str, session_id: &str)
+    -> Result<Document>;
+    fn runbook_edit(
+        &self,
+        document: Document,
+        expected_revision: u64,
+        actor: &str,
+        session_id: &str,
+        reason: &str,
+    ) -> Result<Document>;
+}
+
+impl RunbookStore for HostDatabase {
+    fn runbook_run_start(
         &self,
         workspace_id: &str,
         session_id: &str,
@@ -202,7 +333,7 @@ impl HostDatabase {
         })
     }
 
-    pub fn runbook_run_finish(&self, id: &str, success: bool, output: &str) -> Result<()> {
+    fn runbook_run_finish(&self, id: &str, success: bool, output: &str) -> Result<()> {
         ensure!(output.len() <= 64_000, "runbook output is too large");
         self.with_connection(|connection| {
             let changed = connection.execute(
@@ -214,7 +345,7 @@ impl HostDatabase {
         })
     }
 
-    pub fn runbook_run_cell(&self, id: &str, cell_number: u32, cell_name: &str) -> Result<()> {
+    fn runbook_run_cell(&self, id: &str, cell_number: u32, cell_name: &str) -> Result<()> {
         ensure!(
             cell_number > 0
                 && cell_number <= 64
@@ -232,7 +363,7 @@ impl HostDatabase {
         })
     }
 
-    pub fn runbook_run_cell_result(
+    fn runbook_run_cell_result(
         &self,
         run_id: &str,
         cell_id: &str,
@@ -281,7 +412,7 @@ impl HostDatabase {
         })
     }
 
-    pub fn runbook_run_interrupt(&self, id: &str) -> Result<()> {
+    fn runbook_run_interrupt(&self, id: &str) -> Result<()> {
         self.with_connection(|connection| {
             connection.execute(
                 "UPDATE runbook_runs SET status='interrupted',updated_at_ms=?2 WHERE id=?1 AND status='running'",
@@ -291,7 +422,7 @@ impl HostDatabase {
         })
     }
 
-    pub fn runbook_run_status(&self, session_id: &str, id: &str) -> Result<Option<RunbookRunRow>> {
+    fn runbook_run_status(&self, session_id: &str, id: &str) -> Result<Option<RunbookRunRow>> {
         self.with_connection(|connection| {
             connection.query_row(
                 "SELECT id,runbook_id,revision,status,output FROM runbook_runs WHERE id=?1 AND session_id=?2",
@@ -307,7 +438,7 @@ impl HostDatabase {
         })
     }
 
-    pub fn session_runbook_counts(&self, session_id: &str) -> Result<(u64, u64)> {
+    fn session_runbook_counts(&self, session_id: &str) -> Result<(u64, u64)> {
         self.with_connection(|connection| {
             let touched: i64 = connection.query_row(
                 "SELECT COUNT(DISTINCT runbook_id) FROM (
@@ -325,7 +456,7 @@ impl HostDatabase {
         })
     }
 
-    pub fn session_runbooks(
+    fn session_runbooks(
         &self,
         workspace_id: &str,
         session_id: &str,
@@ -370,7 +501,7 @@ impl HostDatabase {
         })
     }
 
-    pub fn session_runbook_runs(
+    fn session_runbook_runs(
         &self,
         workspace_id: &str,
         session_id: &str,
@@ -400,7 +531,7 @@ impl HostDatabase {
         })
     }
 
-    pub fn session_runbook_cell_results(
+    fn session_runbook_cell_results(
         &self,
         workspace_id: &str,
         session_id: &str,
@@ -428,7 +559,7 @@ impl HostDatabase {
         })
     }
 
-    pub fn runbook_get(&self, workspace_id: &str, id: &str) -> Result<Option<Document>> {
+    fn runbook_get(&self, workspace_id: &str, id: &str) -> Result<Option<Document>> {
         self.with_connection(|connection| {
             let tx = connection.transaction()?;
             let document = read(&tx, workspace_id, id)?;
@@ -437,7 +568,7 @@ impl HostDatabase {
         })
     }
 
-    pub fn runbook_query(&self, request: &QueryRequest) -> Result<Vec<Summary>> {
+    fn runbook_query(&self, request: &QueryRequest) -> Result<Vec<Summary>> {
         ensure!(
             !request.workspace_id.is_empty()
                 && request.text.len() <= 200
@@ -463,7 +594,7 @@ impl HostDatabase {
         })
     }
 
-    pub fn runbook_create(
+    fn runbook_create(
         &self,
         mut document: Document,
         actor: &str,
@@ -496,7 +627,7 @@ impl HostDatabase {
         })
     }
 
-    pub fn runbook_edit(
+    fn runbook_edit(
         &self,
         mut document: Document,
         expected_revision: u64,
@@ -543,7 +674,7 @@ impl HostDatabase {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::WorkspaceRow;
+    use beale_storage::WorkspaceRow;
 
     #[test]
     fn new_titles_are_short_and_existing_long_titles_remain_editable() {
@@ -582,6 +713,7 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("beale-runbook-cell-example-{}", Uuid::new_v4()));
         let db = HostDatabase::open(&root).unwrap();
+        migrate(&db).unwrap();
         db.replace_workspaces(&[WorkspaceRow {
             id: "workspace-example".into(),
             name: "Example".into(),
@@ -688,6 +820,7 @@ mod tests {
         assert_eq!(results[0].cell_id, "L1");
         drop(db);
         let reopened = HostDatabase::open(&root).unwrap();
+        migrate(&reopened).unwrap();
         assert_eq!(
             reopened
                 .session_runbook_cell_results("workspace-example", "session-example", &document.id)
@@ -699,140 +832,13 @@ mod tests {
     }
 
     #[test]
-    fn schema_thirty_six_adds_cell_results_without_changing_existing_runs() {
-        let root = std::env::temp_dir().join(format!(
-            "beale-runbook-cell-migration-example-{}",
-            Uuid::new_v4()
-        ));
-        let db = HostDatabase::open(&root).unwrap();
-        drop(db);
-        let connection = rusqlite::Connection::open(root.join("state.sqlite")).unwrap();
-        connection
-            .execute_batch("DROP TABLE runbook_cell_results; PRAGMA user_version = 36;")
-            .unwrap();
-        drop(connection);
-        let reopened = HostDatabase::open(&root).unwrap();
-        assert!(
-            reopened
-                .session_runbook_cell_results("workspace-example", "session-example", "R1")
-                .unwrap()
-                .is_empty()
-        );
-        drop(reopened);
-        let connection = rusqlite::Connection::open(root.join("state.sqlite")).unwrap();
-        let version: i64 = connection
-            .query_row("PRAGMA user_version", [], |row| row.get(0))
-            .unwrap();
-        assert_eq!(version, 47);
-        drop(connection);
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn schema_thirty_seven_adds_current_cell_name() {
-        let root = std::env::temp_dir().join(format!(
-            "beale-runbook-name-migration-example-{}",
-            Uuid::new_v4()
-        ));
-        let db = HostDatabase::open(&root).unwrap();
-        drop(db);
-        let connection = rusqlite::Connection::open(root.join("state.sqlite")).unwrap();
-        connection
-            .execute_batch(
-                "ALTER TABLE runbook_runs DROP COLUMN current_cell_name; PRAGMA user_version = 37;",
-            )
-            .unwrap();
-        drop(connection);
-        let reopened = HostDatabase::open(&root).unwrap();
-        drop(reopened);
-        let connection = rusqlite::Connection::open(root.join("state.sqlite")).unwrap();
-        let version: i64 = connection
-            .query_row("PRAGMA user_version", [], |row| row.get(0))
-            .unwrap();
-        assert_eq!(version, 47);
-        let name: String = connection
-            .query_row(
-                "SELECT current_cell_name FROM runbook_runs LIMIT 1",
-                [],
-                |row| row.get(0),
-            )
-            .optional()
-            .unwrap()
-            .unwrap_or_default();
-        assert!(name.is_empty());
-        drop(connection);
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn schema_thirty_eight_preserves_cell_results_with_empty_output() {
-        let root = std::env::temp_dir().join(format!(
-            "beale-runbook-output-migration-example-{}",
-            Uuid::new_v4()
-        ));
-        let db = HostDatabase::open(&root).unwrap();
-        drop(db);
-        let connection = rusqlite::Connection::open(root.join("state.sqlite")).unwrap();
-        connection
-            .execute_batch(
-                "ALTER TABLE runbook_cell_results DROP COLUMN output;
-                 INSERT INTO runbook_cell_results(workspace_id,runbook_id,session_id,cell_id,status,updated_at_ms)
-                 VALUES('workspace-example','R1','session-example','L1','completed',123);
-                 PRAGMA user_version = 38;",
-            )
-            .unwrap();
-        drop(connection);
-        let reopened = HostDatabase::open(&root).unwrap();
-        let results = reopened
-            .session_runbook_cell_results("workspace-example", "session-example", "R1")
-            .unwrap();
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].status, "completed");
-        assert!(results[0].output.is_empty());
-        drop(reopened);
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn schema_thirty_nine_preserves_legacy_cell_output() {
-        let root = std::env::temp_dir().join(format!(
-            "beale-runbook-stream-migration-example-{}",
-            Uuid::new_v4()
-        ));
-        let db = HostDatabase::open(&root).unwrap();
-        drop(db);
-        let connection = rusqlite::Connection::open(root.join("state.sqlite")).unwrap();
-        connection
-            .execute_batch(
-                "ALTER TABLE runbook_cell_results DROP COLUMN exit_code;
-                 ALTER TABLE runbook_cell_results DROP COLUMN stdout;
-                 ALTER TABLE runbook_cell_results DROP COLUMN stderr;
-                 INSERT INTO runbook_cell_results(workspace_id,runbook_id,session_id,cell_id,status,updated_at_ms,output)
-                 VALUES('workspace-example','R1','session-example','L1','completed',123,'exit status: exit code: 0\nstdout:\nExample output\nstderr:\n');
-                 PRAGMA user_version = 39;",
-            )
-            .unwrap();
-        drop(connection);
-        let reopened = HostDatabase::open(&root).unwrap();
-        let results = reopened
-            .session_runbook_cell_results("workspace-example", "session-example", "R1")
-            .unwrap();
-        assert_eq!(results.len(), 1);
-        assert!(results[0].output.contains("Example output"));
-        assert!(results[0].stdout.is_empty());
-        assert!(results[0].stderr.is_empty());
-        assert_eq!(results[0].exit_code, None);
-        drop(reopened);
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
     fn revision_snapshots_survive_reopen_and_cell_ids_do_not_reuse() {
         let root = std::env::temp_dir().join(format!(
             "beale-runbook-storage-example-{}",
             uuid::Uuid::new_v4()
         ));
         let db = HostDatabase::open(&root).unwrap();
+        migrate(&db).unwrap();
         db.replace_workspaces(&[WorkspaceRow {
             id: "workspace-example".into(),
             name: "Example".into(),
@@ -880,6 +886,7 @@ mod tests {
         assert_eq!(revisions, 3);
         drop(db);
         let reopened = HostDatabase::open(&root).unwrap();
+        migrate(&reopened).unwrap();
         let saved = reopened
             .runbook_get("workspace-example", "R1")
             .unwrap()
@@ -893,6 +900,7 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("beale-runbook-run-example-{}", Uuid::new_v4()));
         let db = HostDatabase::open(&root).unwrap();
+        migrate(&db).unwrap();
         db.replace_workspaces(&[WorkspaceRow {
             id: "workspace-example".into(),
             name: "Example".into(),
@@ -1033,6 +1041,7 @@ mod tests {
             .unwrap();
         drop(db);
         let reopened = HostDatabase::open(&root).unwrap();
+        migrate(&reopened).unwrap();
         assert_eq!(
             reopened.session_runbook_counts("session-example").unwrap(),
             (2, 0)

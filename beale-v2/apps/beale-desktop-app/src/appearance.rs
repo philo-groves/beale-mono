@@ -269,7 +269,7 @@ impl PaletteColor {
         match self {
             Self::Chrome => "Window chrome and header.",
             Self::Panel => "Main content surface.",
-            Self::Sidebar => "Settings sidebar.",
+            Self::Sidebar => "Inset controls and secondary surfaces.",
             Self::Card => "Grouped form surfaces.",
             Self::Raised => "Elevated surfaces.",
             Self::Text => "Primary interface text.",
@@ -466,7 +466,7 @@ impl TextSize {
         match self {
             Self::ExtraSmall => 0.8,
             Self::Small => 0.9,
-            Self::Standard => 1.0,
+            Self::Standard => 0.92,
             Self::Large => 1.1,
             Self::ExtraLarge => 1.2,
         }

@@ -13,8 +13,10 @@ use beale_contracts::runbooks::{
     MAX_TITLE_CHARS, QueryRequest, QueryResponse, Summary,
 };
 use beale_storage::HostDatabase;
+mod store;
 use serde::Deserialize;
 use serde_json::{Value, json};
+pub use store::{MIGRATIONS, RunbookRunRow, RunbookStore, STARTUP, SessionRunbookRow, migrate};
 mod execution;
 pub use execution::{RunOutput, run_document, run_selected_cell};
 
@@ -24,6 +26,21 @@ pub const FEATURE_DESCRIPTION: &str =
     "Reusable, language-aware workspace procedures with ordered Markdown and code cells.";
 pub const HAS_PROMPT_EXTENSION: bool = true;
 pub const TOOL_COUNT: u32 = 6;
+
+/// Catalog and session descriptor for this feature.
+pub const FEATURE: beale_feature_api::Feature = beale_feature_api::Feature {
+    id: FEATURE_ID,
+    name: FEATURE_NAME,
+    description: FEATURE_DESCRIPTION,
+    prompt_extension: PROMPT_EXTENSION,
+    use_case: "Use to find, create, edit, run, or check reusable runbooks.",
+    tool_names: &[QUERY, GET, CREATE, EDIT, RUN, STATUS],
+    definitions: Some(definitions),
+    review: beale_feature_api::ToolReview::Required,
+    subagents: false,
+    migrations: MIGRATIONS,
+    startup: STARTUP,
+};
 pub const PROMPT_EXTENSION: &str = "## Runbooks\n\nUse runbook_query before creating a reusable procedure. A runbook is an ordered document of Markdown and code cells. Keep titles to 64 characters or fewer. Each cell may have a short name; code cells also declare a language, so one runbook can contain multiple languages. Use runbook_get before editing; supply expected_revision and a reason. When editing cells, send the complete ordered cell list: keep existing cell IDs, omit removed cells, and use an empty ID for a new cell. Use runbook_run to execute supported code cells in order, then runbook_status to inspect the recorded result. Code runs with the current host user's privileges in the workspace; use an external VM or container when isolation is needed. Execution output is a candidate artifact, not a verified finding.";
 
 const QUERY: &str = "runbook_query";
@@ -450,6 +467,7 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("beale-runbooks-example-{}", uuid::Uuid::new_v4()));
         let db = HostDatabase::open(&root).unwrap();
+        migrate(&db).unwrap();
         db.replace_workspaces(&[
             WorkspaceRow {
                 id: "workspace-example-a".into(),

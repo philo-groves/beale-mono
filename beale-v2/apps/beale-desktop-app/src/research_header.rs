@@ -212,6 +212,26 @@ pub(crate) fn sync_model_for_role(state: &mut State, role: &str) {
     }
 }
 
+fn agent_activity_label(state: &State, role: &str, working: bool) -> String {
+    let active_subagents = crate::session_sidenav::subagent_entries(
+        state.active_session.as_ref(),
+        &state.session_live_events,
+        role,
+    )
+    .iter()
+    .filter(|item| item.status == "active")
+    .count();
+    if working || state.session_agent_started_at.contains_key(role) || active_subagents > 0 {
+        if active_subagents == 1 {
+            "1 Subagent".to_owned()
+        } else {
+            format!("{active_subagents} Subagents")
+        }
+    } else {
+        "Inactive".to_owned()
+    }
+}
+
 pub(crate) fn tabs(state: &State, theme: ThemeStyle<'_>, window_width: f32) -> Option<El> {
     let (id, section) = workspace(state)?;
     let name = state
@@ -343,16 +363,11 @@ pub(crate) fn tabs(state: &State, theme: ThemeStyle<'_>, window_width: f32) -> O
                             .find(|agent| agent.role == role_id)
                     })
                     .map_or("idle", |agent| agent.status.as_str());
-                let status_color = match status {
-                    "working" => "#9ac3ed",
-                    "queued" => "#d9a467",
-                    "failed" => "#e07676",
-                    _ => "#737373",
-                };
+                let activity_label = agent_activity_label(state, &role_id, status == "working");
                 tabs = tabs.child(
                     tab(
                         format!("header-agent-tab-{role_id}"),
-                        &format!("{label}, {status}"),
+                        &format!("{label}, {activity_label}"),
                         (!narrow).then_some(&icons::AGENT),
                         !in_workspace && selected_role.as_deref() == Some(role_id.as_str()),
                         true,
@@ -365,17 +380,21 @@ pub(crate) fn tabs(state: &State, theme: ThemeStyle<'_>, window_width: f32) -> O
                         theme,
                     )
                     .child(
-                        el().size(6.0, 6.0)
-                            .radius(3.0)
-                            .fill(theme.color(status_color)),
-                    )
-                    .child(
                         text(tab_label)
                             .min_w(0.0)
                             .shrink()
                             .fade_truncate()
                             .font(ui_font(13.0, 500.0))
                             .color(theme.color("#e2e2e2")),
+                    )
+                    .child(
+                        text(activity_label.clone())
+                            .min_w(0.0)
+                            .shrink()
+                            .fade_truncate()
+                            .help_when_truncated(activity_label)
+                            .font(ui_font(13.0, 400.0))
+                            .color(theme.color("#aaaaaa")),
                     )
                     .on_press(move |state: &mut State| {
                         state.session_agent_role = role_id.clone();
@@ -388,10 +407,16 @@ pub(crate) fn tabs(state: &State, theme: ThemeStyle<'_>, window_width: f32) -> O
             }
         }
     } else {
+        let activity_label =
+            started.then(|| agent_activity_label(state, "main", state.session_busy));
+        let accessible_label = activity_label.as_ref().map_or_else(
+            || session_label.to_owned(),
+            |activity| format!("{session_label}, {activity}"),
+        );
         tabs = tabs.child(
             tab(
                 "header-session-tab".to_owned(),
-                session_label,
+                &accessible_label,
                 Some(if started {
                     &icons::AGENT
                 } else {
@@ -412,6 +437,11 @@ pub(crate) fn tabs(state: &State, theme: ThemeStyle<'_>, window_width: f32) -> O
                     .font(ui_font(13.0, 500.0))
                     .color(theme.color("#e2e2e2")),
             )
+            .children(activity_label.map(|activity| {
+                text(activity)
+                    .font(ui_font(13.0, 400.0))
+                    .color(theme.color("#aaaaaa"))
+            }))
             .on_press(|state: &mut State| state.navigate_to(ViewLocation::NewResearch)),
         );
     }
@@ -422,7 +452,10 @@ pub(crate) fn tabs(state: &State, theme: ThemeStyle<'_>, window_width: f32) -> O
 mod tests {
     use super::*;
     use crate::{AppearanceTheme, TextSize, view, visual_preview};
-    use beale_contracts::v1::{SessionStreamEvent, SessionStreamKind, SessionToolSummary};
+    use beale_contracts::v1::{
+        SessionGraphAgent, SessionStreamEvent, SessionStreamKind, SessionSubagentSummary,
+        SessionToolSummary,
+    };
     use rune::{Env, Runtime, TextEdit};
 
     fn click(runtime: &mut Runtime<State>, key: &str) {
@@ -441,6 +474,58 @@ mod tests {
             })
             .map(|item| (item.text.unwrap(), item.path, item.rect))
             .collect()
+    }
+
+    #[test]
+    fn header_activity_labels_follow_live_role_scoped_subagents() {
+        let mut state = visual_preview::fixture("graph-session");
+        assert_eq!(agent_activity_label(&state, "discovery", false), "Inactive");
+        state.active_session.as_mut().unwrap().graph_agents = vec![SessionGraphAgent {
+            role: "discovery".to_owned(),
+            status: "working".to_owned(),
+        }];
+        assert_eq!(
+            agent_activity_label(&state, "discovery", true),
+            "0 Subagents"
+        );
+        let child = |id: &str, status: &str| SessionSubagentSummary {
+            id: id.to_owned(),
+            parent_role: "discovery".to_owned(),
+            role: "scout".to_owned(),
+            task: "Inspect example boundary".to_owned(),
+            status: status.to_owned(),
+            completed_at_ms: 0,
+        };
+        state.active_session.as_mut().unwrap().subagents = vec![
+            child("child-example-1", "active"),
+            child("child-example-2", "active"),
+        ];
+        assert_eq!(
+            agent_activity_label(&state, "discovery", true),
+            "2 Subagents"
+        );
+        assert_eq!(
+            agent_activity_label(&state, "validation", false),
+            "Inactive"
+        );
+        state.session_live_events.push(SessionStreamEvent {
+            kind: SessionStreamKind::SubagentCompleted as i32,
+            subagent: Some(child("child-example-1", "completed")),
+            ..Default::default()
+        });
+        assert_eq!(
+            agent_activity_label(&state, "discovery", true),
+            "1 Subagent"
+        );
+        let mut runtime = Runtime::new(state, view, (1500.0, 720.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        let labels: Vec<_> = runtime
+            .elements()
+            .into_iter()
+            .filter_map(|item| item.text)
+            .collect();
+        assert!(labels.contains(&"1 Subagent".to_owned()));
+        assert!(labels.contains(&"Inactive".to_owned()));
     }
 
     #[test]
@@ -624,6 +709,19 @@ mod tests {
                     "{theme:?} {role}: {area:?} outside {header:?}"
                 );
             }
+            let activity_text: Vec<_> = runtime
+                .elements()
+                .into_iter()
+                .filter(|item| {
+                    item.path.contains("header-agent-tab-")
+                        && item.text.as_deref() == Some("Inactive")
+                })
+                .collect();
+            assert_eq!(activity_text.len(), 5);
+            assert!(
+                activity_text.iter().all(|item| item.visible[2] > 0.0),
+                "{theme:?}: {activity_text:?}"
+            );
         }
     }
 

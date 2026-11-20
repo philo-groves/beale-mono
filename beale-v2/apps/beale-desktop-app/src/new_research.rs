@@ -4,14 +4,14 @@ use beale_contracts::v1::{
 };
 use rune::{
     Align, Color, El, Key, KeyEvent, LineCap, Path, ScrollSpec, Shape, Side, TextEdit, Transition,
-    Tx, canvas, col, el, icon, row, text, text_input,
+    Tx, auto_grow, canvas, col, el, icon, row, text, text_input,
 };
 use rune_kit::{Markdown, MarkdownStyle};
 
 use crate::{
     Provider, SelectionMenu, State, ThemeStyle, catalog_index, effective_model_method, form_button,
     icons::{
-        AGENT, ARROW_UP, BRAIN, CHECK, CHEVRON_DOWN, CHEVRON_RIGHT, CHEVRON_UP, FOLDER_OPEN,
+        AGENT, ARROW_RIGHT, BRAIN, CHECK, CHEVRON_DOWN, CHEVRON_RIGHT, CHEVRON_UP, FOLDER_OPEN,
         REPEAT, STOP, TARGET, TERMINAL, WRENCH,
     },
     in_place_menu, input_history, load_tool_detail_page, modal_dialog, selection_button,
@@ -29,7 +29,12 @@ pub(crate) struct ModelSelection {
 pub(crate) struct GraphEditor {
     pub(crate) role: beale_graphs::Role,
     pub(crate) models: Vec<ModelSelection>,
-    pub(crate) model_menu_open: bool,
+    pub(crate) model_menu: Option<GraphModelMenu>,
+}
+
+pub(crate) struct GraphModelMenu {
+    provider: Option<ModelSelection>,
+    navigation: ModelMenuNavigation,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -130,6 +135,13 @@ pub(crate) enum MenuSection {
     #[default]
     Model,
     Effort,
+}
+
+#[derive(Default)]
+pub(crate) struct ModelMenuNavigation {
+    pub(crate) section: MenuSection,
+    cursor: usize,
+    reveal_pending: bool,
 }
 
 struct ModelChoice {
@@ -284,97 +296,109 @@ pub(crate) fn selected_model(state: &State) -> Option<ModelSelection> {
     selected(state, &choices).map(|choice| choice.selection.clone())
 }
 
+fn provider_options(
+    state: &State,
+    choices: &[ModelChoice],
+    selected: Option<&ModelSelection>,
+) -> Vec<MenuOption> {
+    let mut options: Vec<_> = Provider::ALL
+        .into_iter()
+        .filter_map(|provider| {
+            let available = choices
+                .iter()
+                .find(|choice| choice.selection.provider == provider && choice.provider_default)
+                .or_else(|| {
+                    choices
+                        .iter()
+                        .find(|choice| choice.selection.provider == provider)
+                })
+                .map(|choice| MenuOption {
+                    label: provider.name().to_owned(),
+                    selected: selected.is_some_and(|selection| selection.provider == provider),
+                    choice: MenuChoice::Model(choice.selection.clone()),
+                });
+            if available.is_some() {
+                return available;
+            }
+            let status = &state.auth_status[provider.index()];
+            let method = effective_model_method(status);
+            let configured = match method {
+                AuthMethod::Subscription => status.subscription,
+                AuthMethod::ApiKey => status.api_key,
+                _ => false,
+            };
+            configured.then(|| {
+                let loading = state.model_loading[catalog_index(provider, method)];
+                MenuOption {
+                    label: format!(
+                        "{} · {}",
+                        provider.name(),
+                        if loading {
+                            "Loading models…"
+                        } else {
+                            "Retry models"
+                        }
+                    ),
+                    selected: false,
+                    choice: if loading {
+                        MenuChoice::LoadingModels
+                    } else {
+                        MenuChoice::RetryModels(provider, method)
+                    },
+                }
+            })
+        })
+        .collect();
+    for provider in state.custom_providers.iter() {
+        if let Some(choice) = choices.iter().find(|choice| {
+            choice.selection.provider == Provider::Custom
+                && custom_provider_id(&choice.selection) == Some(provider.id.as_str())
+                && choice.provider_default
+        }) {
+            options.push(MenuOption {
+                label: provider.name.clone(),
+                selected: selected.is_some_and(|selection| {
+                    custom_provider_id(selection) == Some(provider.id.as_str())
+                }),
+                choice: MenuChoice::Model(choice.selection.clone()),
+            });
+        }
+    }
+    options
+}
+
+fn same_model_provider(first: &ModelSelection, second: &ModelSelection) -> bool {
+    first.provider == second.provider
+        && first.method == second.method
+        && custom_provider_id(first) == custom_provider_id(second)
+}
+
+fn model_options(
+    choices: Vec<ModelChoice>,
+    provider: Option<&ModelSelection>,
+    is_selected: impl Fn(&ModelSelection) -> bool,
+) -> Vec<MenuOption> {
+    choices
+        .into_iter()
+        .filter(|choice| {
+            provider.is_some_and(|model| same_model_provider(&choice.selection, model))
+        })
+        .map(|choice| MenuOption {
+            label: choice.name,
+            selected: is_selected(&choice.selection),
+            choice: MenuChoice::Model(choice.selection),
+        })
+        .collect()
+}
+
 fn options(state: &State, section: MenuSection) -> Vec<MenuOption> {
     let choices = choices(state);
     let selected = selected(state, &choices).map(|choice| choice.selection.clone());
     match section {
-        MenuSection::Provider => {
-            let mut options: Vec<_> = Provider::ALL
-                .into_iter()
-                .filter_map(|provider| {
-                    let available = choices
-                        .iter()
-                        .find(|choice| {
-                            choice.selection.provider == provider && choice.provider_default
-                        })
-                        .or_else(|| {
-                            choices
-                                .iter()
-                                .find(|choice| choice.selection.provider == provider)
-                        })
-                        .map(|choice| MenuOption {
-                            label: provider.name().to_owned(),
-                            selected: selected
-                                .as_ref()
-                                .is_some_and(|selection| selection.provider == provider),
-                            choice: MenuChoice::Model(choice.selection.clone()),
-                        });
-                    if available.is_some() {
-                        return available;
-                    }
-                    let status = &state.auth_status[provider.index()];
-                    let method = effective_model_method(status);
-                    let configured = match method {
-                        AuthMethod::Subscription => status.subscription,
-                        AuthMethod::ApiKey => status.api_key,
-                        _ => false,
-                    };
-                    configured.then(|| {
-                        let loading = state.model_loading[catalog_index(provider, method)];
-                        MenuOption {
-                            label: format!(
-                                "{} · {}",
-                                provider.name(),
-                                if loading {
-                                    "Loading models…"
-                                } else {
-                                    "Retry models"
-                                }
-                            ),
-                            selected: false,
-                            choice: if loading {
-                                MenuChoice::LoadingModels
-                            } else {
-                                MenuChoice::RetryModels(provider, method)
-                            },
-                        }
-                    })
-                })
-                .collect();
-            for provider in state.custom_providers.iter() {
-                if let Some(choice) = choices.iter().find(|choice| {
-                    choice.selection.provider == Provider::Custom
-                        && custom_provider_id(&choice.selection) == Some(provider.id.as_str())
-                        && choice.provider_default
-                }) {
-                    options.push(MenuOption {
-                        label: provider.name.clone(),
-                        selected: selected.as_ref().is_some_and(|selection| {
-                            custom_provider_id(selection) == Some(provider.id.as_str())
-                        }),
-                        choice: MenuChoice::Model(choice.selection.clone()),
-                    });
-                }
-            }
-            options
-        }
-        MenuSection::Model => choices
-            .into_iter()
-            .filter(|choice| {
-                selected.as_ref().is_some_and(|selection| {
-                    choice.selection.provider == selection.provider
-                        && choice.selection.method == selection.method
-                        && (selection.provider != Provider::Custom
-                            || custom_provider_id(&choice.selection)
-                                == custom_provider_id(selection))
-                })
-            })
-            .map(|choice| MenuOption {
-                label: choice.name,
-                selected: selected.as_ref() == Some(&choice.selection),
-                choice: MenuChoice::Model(choice.selection),
-            })
-            .collect(),
+        MenuSection::Provider => provider_options(state, &choices, selected.as_ref()),
+        MenuSection::Model => model_options(choices, selected.as_ref(), |model| {
+            selected.as_ref() == Some(model)
+        }),
         MenuSection::Effort => Effort::ALL
             .into_iter()
             .map(|effort| MenuOption {
@@ -386,46 +410,180 @@ fn options(state: &State, section: MenuSection) -> Vec<MenuOption> {
     }
 }
 
-fn select_option(state: &mut State, index: usize) {
-    if !state.composer_menu_open {
-        return;
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ModelMenuTarget {
+    Composer,
+    Graph,
+}
+
+impl ModelMenuTarget {
+    fn prefix(self) -> &'static str {
+        match self {
+            Self::Composer => "composer",
+            Self::Graph => "graph-editor",
+        }
     }
-    if let Some(option) = options(state, state.composer_menu_section).get(index) {
-        match &option.choice {
+
+    fn navigation(self, state: &State) -> Option<&ModelMenuNavigation> {
+        match self {
+            Self::Composer => state
+                .composer_menu_open
+                .then_some(&state.composer_menu_navigation),
+            Self::Graph => Some(&state.graph_editor.as_ref()?.model_menu.as_ref()?.navigation),
+        }
+    }
+
+    fn navigation_mut(self, state: &mut State) -> Option<&mut ModelMenuNavigation> {
+        match self {
+            Self::Composer => state
+                .composer_menu_open
+                .then_some(&mut state.composer_menu_navigation),
+            Self::Graph => Some(&mut state.graph_editor.as_mut()?.model_menu.as_mut()?.navigation),
+        }
+    }
+
+    fn options(self, state: &State, section: MenuSection) -> Vec<MenuOption> {
+        match self {
+            Self::Composer => options(state, section),
+            Self::Graph => {
+                let editor = state.graph_editor.as_ref().expect("menu requires editor");
+                let provider = editor
+                    .model_menu
+                    .as_ref()
+                    .and_then(|menu| menu.provider.as_ref());
+                let choices = choices(state);
+                match section {
+                    MenuSection::Provider => provider_options(state, &choices, provider),
+                    MenuSection::Model => {
+                        model_options(choices, provider, |model| editor.models.contains(model))
+                    }
+                    MenuSection::Effort => Vec::new(),
+                }
+            }
+        }
+    }
+
+    fn close(self, state: &mut State) {
+        match self {
+            Self::Composer => state.composer_menu_open = false,
+            Self::Graph => {
+                if let Some(editor) = &mut state.graph_editor {
+                    editor.model_menu = None;
+                }
+            }
+        }
+    }
+
+    fn set_cursor(self, state: &mut State, cursor: usize, reveal: bool) {
+        if let Some(menu) = self.navigation_mut(state) {
+            menu.cursor = cursor;
+            menu.reveal_pending |= reveal;
+        }
+    }
+
+    fn reset_cursor(self, state: &mut State, section: MenuSection) {
+        let cursor = self
+            .options(state, section)
+            .iter()
+            .position(|option| option.selected)
+            .unwrap_or(0);
+        self.set_cursor(state, cursor, true);
+    }
+
+    fn set_section(self, state: &mut State, section: MenuSection) {
+        if let Some(menu) = self.navigation_mut(state)
+            && menu.section != section
+        {
+            menu.section = section;
+            self.reset_cursor(state, section);
+        }
+    }
+
+    fn select(self, state: &mut State, index: usize) {
+        let Some(section) = self.navigation(state).map(|menu| menu.section) else {
+            return;
+        };
+        let Some(option) = self.options(state, section).into_iter().nth(index) else {
+            return;
+        };
+        match option.choice {
+            MenuChoice::Model(selection) if self == Self::Graph => {
+                let editor = state.graph_editor.as_mut().expect("menu requires editor");
+                if section == MenuSection::Provider {
+                    editor.model_menu.as_mut().expect("menu is open").provider = Some(selection);
+                    self.set_section(state, MenuSection::Model);
+                } else if editor.role.is_top_level() {
+                    editor.models.clear();
+                    editor.models.push(selection);
+                    self.close(state);
+                } else if let Some(index) = editor.models.iter().position(|item| *item == selection)
+                {
+                    editor.models.remove(index);
+                } else if editor.models.len() < editor.role.max_models() {
+                    editor.models.push(selection);
+                }
+                return;
+            }
             MenuChoice::Model(selection) => {
                 state.new_research_model = Some(selection.clone());
                 if let Some(models) =
                     state.new_research_graph_models[beale_graphs::Role::Main.index()].as_mut()
                 {
-                    models.retain(|item| item != selection);
-                    models.insert(0, selection.clone());
+                    models.retain(|item| *item != selection);
+                    models.insert(0, selection);
                     models.truncate(beale_graphs::Role::Main.max_models());
                 }
             }
-            MenuChoice::Effort(effort) => state.new_research_effort = *effort,
+            MenuChoice::Effort(effort) => state.new_research_effort = effort,
             MenuChoice::RetryModels(provider, method) => {
-                crate::start_model_list(state, *provider, *method);
+                crate::start_model_list(state, provider, method);
+                if self == Self::Graph {
+                    return;
+                }
             }
             MenuChoice::LoadingModels => return,
         }
-        state.composer_menu_open = false;
+        self.close(state);
     }
-}
 
-fn set_section(state: &mut State, section: MenuSection) {
-    if state.composer_menu_open && state.composer_menu_section != section {
-        state.composer_menu_section = section;
-        state.composer_menu_cursor = options(state, section)
-            .iter()
-            .position(|option| option.selected)
-            .unwrap_or(0);
-        state.composer_menu_reveal_pending = true;
+    fn key(self, state: &mut State, event: &KeyEvent) -> bool {
+        let Some(menu) = self.navigation(state) else {
+            return false;
+        };
+        let section = menu.section;
+        let count = self.options(state, section).len();
+        let cursor = menu.cursor.min(count.saturating_sub(1));
+        match event.key {
+            Key::Escape => self.close(state),
+            Key::Left => self.set_section(
+                state,
+                match section {
+                    MenuSection::Provider | MenuSection::Model => MenuSection::Provider,
+                    MenuSection::Effort => MenuSection::Model,
+                },
+            ),
+            Key::Right => self.set_section(
+                state,
+                match section {
+                    MenuSection::Provider => MenuSection::Model,
+                    MenuSection::Model if self == Self::Graph => MenuSection::Model,
+                    MenuSection::Model | MenuSection::Effort => MenuSection::Effort,
+                },
+            ),
+            Key::Down if count > 0 => self.set_cursor(state, (cursor + 1) % count, true),
+            Key::Up if count > 0 => self.set_cursor(state, (cursor + count - 1) % count, true),
+            Key::Home => self.set_cursor(state, 0, true),
+            Key::End if count > 0 => self.set_cursor(state, count - 1, true),
+            Key::Enter if count > 0 => self.select(state, cursor),
+            _ => return false,
+        }
+        true
     }
 }
 
 pub(crate) fn toggle_menu(state: &mut State) {
     if state.composer_menu_open {
-        state.composer_menu_open = false;
+        ModelMenuTarget::Composer.close(state);
         return;
     }
     if choices(state).is_empty() && !has_configured_provider(state) {
@@ -433,63 +591,64 @@ pub(crate) fn toggle_menu(state: &mut State) {
     }
     state.selection_menu = None;
     state.composer_menu_open = true;
-    state.composer_menu_section = if selected_model(state).is_none() {
+    let section = if selected_model(state).is_none() {
         MenuSection::Provider
     } else {
         MenuSection::Model
     };
-    state.composer_menu_cursor = options(state, state.composer_menu_section)
+    state.composer_menu_navigation.section = section;
+    ModelMenuTarget::Composer.reset_cursor(state, section);
+}
+
+fn toggle_graph_model_menu(state: &mut State) {
+    let Some(editor) = state.graph_editor.as_ref() else {
+        return;
+    };
+    if editor.model_menu.is_some() {
+        ModelMenuTarget::Graph.close(state);
+        return;
+    }
+    let available = choices(state);
+    let provider = editor
+        .models
         .iter()
-        .position(|option| option.selected)
-        .unwrap_or(0);
-    state.composer_menu_reveal_pending = true;
+        .find(|model| {
+            available
+                .iter()
+                .any(|choice| same_model_provider(&choice.selection, model))
+        })
+        .cloned()
+        .or_else(|| {
+            selected(state, &available)
+                .or(available.first())
+                .map(|choice| choice.selection.clone())
+        });
+    let section = if provider.is_some() {
+        MenuSection::Model
+    } else {
+        MenuSection::Provider
+    };
+    let editor = state.graph_editor.as_mut().expect("editor is open");
+    editor.model_menu = Some(GraphModelMenu {
+        provider,
+        navigation: ModelMenuNavigation {
+            section,
+            ..Default::default()
+        },
+    });
+    ModelMenuTarget::Graph.reset_cursor(state, section);
 }
 
 pub(crate) fn menu_key(state: &mut State, event: &KeyEvent, _: &mut Tx) -> bool {
-    if !state.composer_menu_open {
-        return false;
-    }
-    let count = options(state, state.composer_menu_section).len();
-    match event.key {
-        Key::Escape => state.composer_menu_open = false,
-        Key::Left => set_section(
-            state,
-            match state.composer_menu_section {
-                MenuSection::Provider => MenuSection::Provider,
-                MenuSection::Model => MenuSection::Provider,
-                MenuSection::Effort => MenuSection::Model,
-            },
-        ),
-        Key::Right => set_section(
-            state,
-            match state.composer_menu_section {
-                MenuSection::Provider => MenuSection::Model,
-                MenuSection::Model | MenuSection::Effort => MenuSection::Effort,
-            },
-        ),
-        Key::Down if count > 0 => {
-            state.composer_menu_cursor = (state.composer_menu_cursor + 1) % count;
-            state.composer_menu_reveal_pending = true;
-        }
-        Key::Up if count > 0 => {
-            state.composer_menu_cursor = (state.composer_menu_cursor + count - 1) % count;
-            state.composer_menu_reveal_pending = true;
-        }
-        Key::Home => {
-            state.composer_menu_cursor = 0;
-            state.composer_menu_reveal_pending = true;
-        }
-        Key::End if count > 0 => {
-            state.composer_menu_cursor = count - 1;
-            state.composer_menu_reveal_pending = true;
-        }
-        Key::Enter if count > 0 => select_option(state, state.composer_menu_cursor),
-        _ => return false,
-    }
-    true
+    ModelMenuTarget::Composer.key(state, event)
+}
+
+pub(crate) fn graph_model_menu_key(state: &mut State, event: &KeyEvent) -> bool {
+    ModelMenuTarget::Graph.key(state, event)
 }
 
 fn section_row(
+    target: ModelMenuTarget,
     section: MenuSection,
     label: &'static str,
     value: String,
@@ -497,11 +656,15 @@ fn section_row(
     theme: ThemeStyle<'_>,
 ) -> El {
     row()
-        .key(match section {
-            MenuSection::Provider => "composer-menu-provider",
-            MenuSection::Model => "composer-menu-model",
-            MenuSection::Effort => "composer-menu-effort",
-        })
+        .key(format!(
+            "{}-menu-{}",
+            target.prefix(),
+            match section {
+                MenuSection::Provider => "provider",
+                MenuSection::Model => "model",
+                MenuSection::Effort => "effort",
+            }
+        ))
         .role("menuitem")
         .label(label)
         .w_full()
@@ -516,8 +679,8 @@ fn section_row(
             Color::TRANSPARENT
         })
         .hover(theme.color("#424242"))
-        .on_hover(move |state: &mut State| set_section(state, section))
-        .on_press(move |state: &mut State| set_section(state, section))
+        .on_hover(move |state: &mut State| target.set_section(state, section))
+        .on_press(move |state: &mut State| target.set_section(state, section))
         .child(
             text(label)
                 .w(68.0)
@@ -536,53 +699,101 @@ fn section_row(
 }
 
 pub(crate) fn model_menu(state: &State, theme: ThemeStyle<'_>) -> El {
+    render_model_menu(state, ModelMenuTarget::Composer, theme)
+}
+
+fn render_model_menu(state: &State, target: ModelMenuTarget, theme: ThemeStyle<'_>) -> El {
+    let prefix = target.prefix();
+    let is_graph = target == ModelMenuTarget::Graph;
+    let navigation = target.navigation(state).expect("menu is open");
     let choices = choices(state);
-    let selected = selected(state, &choices);
-    let provider_name = selected.map_or_else(
-        || state.lead_provider.map_or("None", Provider::name),
-        |choice| provider_label(state, &choice.selection),
-    );
-    let model_name = selected.map_or("None", |choice| choice.name.as_str());
-    let main = in_place_menu::popup_surface(
-        col()
-            .key("composer-model-main")
-            .role("menu")
-            .label("Lead model settings")
-            .w(250.0)
-            .padding(8.0)
-            .gap(2.0)
-            .child(section_row(
-                MenuSection::Provider,
-                "Provider",
-                provider_name.to_owned(),
-                state.composer_menu_section == MenuSection::Provider,
-                theme,
-            ))
-            .child(section_row(
-                MenuSection::Model,
-                "Model",
-                model_name.to_owned(),
-                state.composer_menu_section == MenuSection::Model,
-                theme,
-            ))
-            .child(section_row(
-                MenuSection::Effort,
-                "Effort",
-                state.new_research_effort.label().to_owned(),
-                state.composer_menu_section == MenuSection::Effort,
-                theme,
-            )),
-        theme.color("#242424"),
-    )
-    .self_end();
-    let options = options(state, state.composer_menu_section);
-    let height = (options.len() as f32 * 36.0 + 12.0).min(300.0);
+    let (provider_name, model_name, multiple_models) = if is_graph {
+        let editor = state.graph_editor.as_ref().expect("menu requires editor");
+        let provider_name = editor
+            .model_menu
+            .as_ref()
+            .and_then(|menu| menu.provider.as_ref())
+            .map_or("None", |choice| provider_label(state, choice));
+        (
+            provider_name,
+            graph_editor_model_label(editor, &choices),
+            !editor.role.is_top_level(),
+        )
+    } else {
+        let selected = selected(state, &choices);
+        let provider_name = selected.map_or_else(
+            || state.lead_provider.map_or("None", Provider::name),
+            |choice| provider_label(state, &choice.selection),
+        );
+        let model_name = selected.map_or("None", |choice| choice.name.as_str());
+        (provider_name, model_name.to_owned(), false)
+    };
+    let mut main = col()
+        .key(format!("{prefix}-model-main"))
+        .role("menu")
+        .label(if is_graph {
+            "Graph node model settings"
+        } else {
+            "Lead model settings"
+        })
+        .w(250.0)
+        .padding(8.0)
+        .gap(2.0)
+        .child(section_row(
+            target,
+            MenuSection::Provider,
+            "Provider",
+            provider_name.to_owned(),
+            navigation.section == MenuSection::Provider,
+            theme,
+        ))
+        .child(section_row(
+            target,
+            MenuSection::Model,
+            "Model",
+            model_name,
+            navigation.section == MenuSection::Model,
+            theme,
+        ));
+    if !is_graph {
+        main = main.child(section_row(
+            target,
+            MenuSection::Effort,
+            "Effort",
+            state.new_research_effort.label().to_owned(),
+            navigation.section == MenuSection::Effort,
+            theme,
+        ));
+    }
+    let main = in_place_menu::popup_surface(main, theme.color("#242424"));
+    let options = target.options(state, navigation.section);
+    let menu_height = if is_graph { 236.0 } else { 300.0 };
+    let height = (options.len() as f32 * 36.0 + 12.0).min(menu_height);
     let mut list = col().w_full().gap(2.0);
+    if is_graph && options.is_empty() {
+        list = list.child(
+            text(if navigation.section == MenuSection::Model {
+                "Choose a provider to see its models."
+            } else {
+                "Connect a provider to choose models for this role."
+            })
+            .padding(8.0)
+            .wrap()
+            .font(ui_font(13.0, 400.0))
+            .color(theme.color("#aaaaaa")),
+        );
+    }
+    let role = if multiple_models && navigation.section == MenuSection::Model {
+        "menuitemcheckbox"
+    } else {
+        "menuitemradio"
+    };
     for (index, option) in options.into_iter().enumerate() {
         list = list.child(
             row()
-                .key(format!("composer-menu-option-{index}"))
-                .role("menuitemradio")
+                .key(format!("{prefix}-menu-option-{index}"))
+                .role(role)
+                .checked(option.selected)
                 .label(option.label.clone())
                 .w_full()
                 .h(34.0)
@@ -590,14 +801,14 @@ pub(crate) fn model_menu(state: &State, theme: ThemeStyle<'_>) -> El {
                 .center_y()
                 .gap(6.0)
                 .radius(7.0)
-                .fill(if index == state.composer_menu_cursor {
+                .fill(if index == navigation.cursor {
                     theme.color("#383838")
                 } else {
                     Color::TRANSPARENT
                 })
                 .hover(theme.color("#424242"))
-                .on_hover(move |state: &mut State| state.composer_menu_cursor = index)
-                .on_press(move |state: &mut State| select_option(state, index))
+                .on_hover(move |state: &mut State| target.set_cursor(state, index, false))
+                .on_press(move |state: &mut State| target.select(state, index))
                 .child(
                     text(option.label)
                         .grow(1.0)
@@ -615,20 +826,20 @@ pub(crate) fn model_menu(state: &State, theme: ThemeStyle<'_>) -> El {
     }
     let submenu = in_place_menu::popup_surface(
         col()
-            .key("composer-model-submenu")
+            .key(format!("{prefix}-model-submenu"))
             .role("menu")
-            .label(match state.composer_menu_section {
+            .label(match navigation.section {
                 MenuSection::Provider => "Provider options",
                 MenuSection::Model => "Model options",
                 MenuSection::Effort => "Effort options",
             })
             .w(230.0)
-            .h(height)
+            .h(if is_graph { height.max(66.0) } else { height })
             .min_h(0.0)
             .padding(6.0)
             .child(
                 col()
-                    .key("composer-model-options-scroll")
+                    .key(format!("{prefix}-model-options-scroll"))
                     .w_full()
                     .grow(1.0)
                     .min_h(0.0)
@@ -638,27 +849,39 @@ pub(crate) fn model_menu(state: &State, theme: ThemeStyle<'_>) -> El {
                     .child(list),
             ),
         theme.color("#242424"),
-    )
-    .self_end();
-    row()
-        .key("composer-model-menu")
+    );
+    let (anchor, side, align, gap) = if is_graph {
+        ("graph-editor-model-control", Side::Bottom, Align::End, 4.0)
+    } else {
+        ("new-research-model-control", Side::Top, Align::Start, 6.0)
+    };
+    let menu = row()
+        .key(format!("{prefix}-model-menu"))
         .w(486.0)
-        .h(300.0)
+        .h(if is_graph {
+            height.max(86.0)
+        } else {
+            menu_height
+        })
         .min_h(0.0)
         .gap(6.0)
-        .child(main)
-        .child(submenu)
-        .anchored_fit("new-research-model-control", Side::Top, Align::Start, 6.0)
-        .modal(true, |state: &mut State| state.composer_menu_open = false)
-        .on_layout_tx(|state: &mut State, _, tx| {
-            if state.composer_menu_reveal_pending {
-                state.composer_menu_reveal_pending = false;
+        .anchored_fit(anchor, side, align, gap)
+        .modal(true, move |state: &mut State| target.close(state))
+        .on_layout_tx(move |state: &mut State, _, tx| {
+            if let Some(navigation) = target.navigation_mut(state)
+                && std::mem::take(&mut navigation.reveal_pending)
+            {
                 tx.scroll_into_view_in(
-                    "composer-model-options-scroll",
-                    format!("composer-menu-option-{}", state.composer_menu_cursor),
+                    format!("{prefix}-model-options-scroll"),
+                    format!("{prefix}-menu-option-{}", navigation.cursor),
                 );
             }
-        })
+        });
+    if is_graph {
+        menu.child(main.self_start()).child(submenu.self_start())
+    } else {
+        menu.child(main.self_end()).child(submenu.self_end())
+    }
 }
 
 fn is_web_link(destination: &str) -> bool {
@@ -875,7 +1098,7 @@ fn graph_node(state: &State, placement: GraphNodePlacement, theme: ThemeStyle<'_
             state.graph_editor = Some(GraphEditor {
                 role,
                 models: role_models(state, role),
-                model_menu_open: false,
+                model_menu: None,
             });
             state.graph_editor_max_concurrent = TextEdit::new(
                 state.new_research_graph_concurrency[role.index()]
@@ -1119,25 +1342,23 @@ fn close_graph_editor(state: &mut State) {
     state.graph_editor_max_concurrent.clear();
 }
 
-pub(crate) fn graph_editor_dialog(state: &State, theme: ThemeStyle<'_>) -> [El; 2] {
-    let editor = state.graph_editor.as_ref().expect("dialog requires editor");
-    let model_choices = choices(state);
-    let model_label = match editor.models.as_slice() {
+fn graph_editor_model_label(editor: &GraphEditor, model_choices: &[ModelChoice]) -> String {
+    match editor.models.as_slice() {
         [] => "Choose models".to_owned(),
         [selection] => model_choices
             .iter()
             .find(|choice| choice.selection == *selection)
             .map_or_else(|| "Choose models".to_owned(), |choice| choice.name.clone()),
         models => format!("{} models selected", models.len()),
-    };
+    }
+}
+
+pub(crate) fn graph_editor_dialog(state: &State, theme: ThemeStyle<'_>) -> [El; 2] {
+    let editor = state.graph_editor.as_ref().expect("dialog requires editor");
     let model_control = selection_button(
-        model_label,
-        editor.model_menu_open,
-        |state| {
-            if let Some(editor) = state.graph_editor.as_mut() {
-                editor.model_menu_open = !editor.model_menu_open;
-            }
-        },
+        graph_editor_model_label(editor, &choices(state)),
+        editor.model_menu.is_some(),
+        toggle_graph_model_menu,
         theme,
     )
     .key("graph-editor-model-control");
@@ -1253,101 +1474,7 @@ pub(crate) fn graph_editor_dialog(state: &State, theme: ThemeStyle<'_>) -> [El; 
 }
 
 pub(crate) fn graph_editor_model_menu(state: &State, theme: ThemeStyle<'_>) -> El {
-    let editor = state.graph_editor.as_ref().expect("menu requires editor");
-    let model_choices = choices(state);
-    let height = (model_choices.len() as f32 * 44.0 + 12.0).clamp(58.0, 320.0);
-    let mut list = col().w_full().gap(2.0);
-    if model_choices.is_empty() {
-        list = list.child(
-            text("Connect a provider to choose models for this role.")
-                .padding(10.0)
-                .font(ui_font(13.0, 400.0))
-                .color(theme.color("#aaaaaa")),
-        );
-    }
-    for choice in model_choices {
-        let selection = choice.selection.clone();
-        let checked = editor.models.contains(&selection);
-        let single_model = editor.role.is_top_level();
-        list = list.child(
-            row()
-                .key(format!(
-                    "graph-editor-model-{}-{}",
-                    choice.selection.provider.name(),
-                    choice.selection.id
-                ))
-                .role(if single_model { "radio" } else { "checkbox" })
-                .label(format!(
-                    "{} {} ({})",
-                    choice.selection.provider.name(),
-                    choice.name,
-                    if checked { "selected" } else { "not selected" }
-                ))
-                .w_full()
-                .h(42.0)
-                .px(10.0)
-                .center_y()
-                .gap(8.0)
-                .radius(8.0)
-                .hover(theme.color("#383838"))
-                .on_press(move |state: &mut State| {
-                    if let Some(editor) = state.graph_editor.as_mut() {
-                        if single_model {
-                            editor.models.clear();
-                            editor.models.push(selection.clone());
-                            editor.model_menu_open = false;
-                        } else if let Some(index) =
-                            editor.models.iter().position(|item| item == &selection)
-                        {
-                            editor.models.remove(index);
-                        } else if editor.models.len() < editor.role.max_models() {
-                            editor.models.push(selection.clone());
-                        }
-                    }
-                })
-                .child(icon(choice.selection.provider.logo(), 16.0).color(theme.color("#bbbbbb")))
-                .child(
-                    text(choice.name)
-                        .grow(1.0)
-                        .fade_truncate()
-                        .font(ui_font(14.0, 400.0))
-                        .color(theme.color("#eeeeee")),
-                )
-                .child(if checked {
-                    icon(&CHECK, 15.0).color(theme.color("#eeeeee"))
-                } else {
-                    el().size(15.0, 15.0)
-                }),
-        );
-    }
-    in_place_menu::popup_surface(
-        col()
-            .key("graph-editor-model-menu")
-            .role("menu")
-            .label("Allowed models")
-            .w(280.0)
-            .h(height)
-            .min_h(0.0)
-            .padding(6.0)
-            .child(
-                col()
-                    .key("graph-editor-model-menu-scroll")
-                    .w_full()
-                    .grow(1.0)
-                    .min_h(0.0)
-                    .scroll(ScrollSpec {
-                        stick_bottom: false,
-                    })
-                    .child(list),
-            ),
-        theme.color("#242424"),
-    )
-    .anchored_fit("graph-editor-model-control", Side::Bottom, Align::End, 4.0)
-    .modal(true, |state: &mut State| {
-        if let Some(editor) = state.graph_editor.as_mut() {
-            editor.model_menu_open = false;
-        }
-    })
+    render_model_menu(state, ModelMenuTarget::Graph, theme)
 }
 
 fn new_research_setup(state: &State, theme: ThemeStyle<'_>, available_width: f32) -> El {
@@ -2538,12 +2665,27 @@ fn ribbon_status_dot(key: &'static str, theme: ThemeStyle<'_>) -> El {
         .fill(theme.color("#72b783"))
 }
 
-pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32) -> El {
-    let has_workspaces = !state.workspaces.is_empty();
-    let no_workspaces = state.workspace_list_loaded && !has_workspaces;
+pub(crate) fn show_composer_model_selector(state: &State) -> bool {
+    !crate::extensions_view::graphs_enabled(state)
+        && (!state.auth_loaded || has_configured_provider(state))
+}
+
+fn composer_model_control(state: &State, theme: ThemeStyle<'_>) -> Option<El> {
+    if state.auth_loaded && !has_configured_provider(state) {
+        return Some(
+            text("No provider configured. Add one in Settings to start research.")
+                .key("new-research-provider-warning")
+                .min_w(0.0)
+                .fade_truncate()
+                .font(ui_font(13.0, 500.0))
+                .color(theme.color("#dca15f")),
+        );
+    }
+    if !show_composer_model_selector(state) {
+        return None;
+    }
     let choices = choices(state);
     let selected = selected(state, &choices);
-    let no_provider = state.auth_loaded && !has_configured_provider(state);
     let model_label = selected.map_or_else(
         || {
             if let Some(provider) = state
@@ -2576,7 +2718,8 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
         .key("new-research-model-control")
         .role("button")
         .label(model_accessible_label)
-        .h(31.0)
+        .h(28.0)
+        .min_w(0.0)
         .max_w(250.0)
         .px(8.0)
         .center_y()
@@ -2606,6 +2749,8 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
         )
         .child(
             text(state.new_research_effort.label())
+                .min_w(0.0)
+                .fade_truncate()
                 .font(ui_font(12.0, 400.0))
                 .color(theme.color("#888888")),
         )
@@ -2625,24 +2770,77 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
             .hover(theme.color("#303030"))
             .on_press(toggle_menu);
     }
-    let model_control = if no_provider {
-        text("No provider configured. Add one in Settings to start research.")
-            .key("new-research-provider-warning")
-            .font(ui_font(13.0, 500.0))
-            .color(theme.color("#dca15f"))
-            .pl(8.0)
-    } else {
-        model_button
-    };
+    Some(model_button)
+}
+
+fn composer_action(state: &State, theme: ThemeStyle<'_>, has_workspaces: bool) -> El {
+    let available =
+        has_workspaces && !state.new_research_prompt.text.trim().is_empty() && !state.session_busy;
+    let can_stop = state.session_busy && state.session_stop_id.is_some() && !state.session_stopping;
+    let mut button = el()
+        .key(if state.session_busy {
+            "new-research-stop"
+        } else {
+            "new-research-send"
+        })
+        .role("button")
+        .label(if state.session_busy && state.session_stopping {
+            "Stopping session"
+        } else if state.session_busy {
+            "Stop session"
+        } else {
+            "Send message"
+        })
+        .size(28.0, 28.0)
+        .center()
+        .radius(14.0)
+        .fill(if available || can_stop {
+            theme.accent()
+        } else {
+            theme.color("#303030")
+        })
+        .child(
+            icon(
+                if state.session_busy {
+                    &STOP
+                } else {
+                    &ARROW_RIGHT
+                },
+                16.0,
+            )
+            .color(if available || can_stop {
+                theme.accent_ink()
+            } else {
+                theme.color("#777777")
+            }),
+        );
+    if can_stop {
+        button = button
+            .hover(theme.color("#eeeeee"))
+            .on_press(crate::stop_session_turn);
+    } else if available {
+        button = button
+            .hover(theme.color("#eeeeee"))
+            .on_press(start_session_turn);
+    }
+    button
+}
+
+pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32) -> El {
+    let has_workspaces = !state.workspaces.is_empty();
+    let no_workspaces = state.workspace_list_loaded && !has_workspaces;
+    let show_draft_controls = state.active_session.is_none() && !state.session_busy;
+    let model_control = composer_model_control(state, theme);
+    let show_ribbon = show_draft_controls || model_control.is_some();
+    let input_font = ui_font(15.0, 400.0);
     let composer_input = if has_workspaces {
-        text_input(&state.new_research_prompt, ui_font(13.5, 400.0))
+        let input = text_input(&state.new_research_prompt, input_font)
             .key("new-research-composer-input")
             .role("textbox")
             .label("Research objective")
             .w_full()
-            .grow(1.0)
-            .min_h(0.0)
-            .padding(14.0)
+            .px(7.0)
+            .py(5.0)
             .color(theme.color("#eeeeee"))
             .placeholder(
                 if state.active_session.as_ref().is_some_and(|detail| {
@@ -2663,99 +2861,44 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
             .on_edit(|state: &mut State| &mut state.new_research_prompt)
             .on_input_change(|state: &mut State, _| state.session_input_history.reset())
             .on_input_key(composer_history_key)
-            .on_submit(|state: &mut State, _| state.new_research_prompt.insert("\n"))
+            .on_submit(|state: &mut State, _| state.new_research_prompt.insert("\n"));
+        auto_grow(input, 1, 8).grow(1.0).min_w(0.0)
     } else {
         el().key("new-research-composer-input")
             .role("textbox")
             .label("Research objective unavailable until a workspace is added")
-            .w_full()
             .grow(1.0)
-            .min_h(0.0)
-            .padding(14.0)
+            .min_w(0.0)
+            .px(7.0)
+            .py(5.0)
             .child(
                 text(if state.new_research_prompt.text.is_empty() {
                     "Research with Beale".to_owned()
                 } else {
                     state.new_research_prompt.text.clone()
                 })
-                .font(ui_font(13.5, 400.0))
+                .font(input_font)
                 .color(theme.color("#707070"))
-                .wrap(),
+                .wrap()
+                .max_lines(8),
             )
     };
-    let composer = col()
+    let composer = row()
         .key("new-research-composer")
         .raise()
         .w_full()
-        .h(107.0)
         .min_h(0.0)
+        .px(7.0)
+        .py(14.0)
+        .gap(6.0)
+        .center_y()
         .mt(-8.0)
         .radius(20.0)
         .continuous_corners()
         .fill(theme.color("#191919"))
         .border(1.0, theme.color("#2a2a2a"))
         .child(composer_input)
-        .child(
-            row()
-                .key("new-research-composer-controls")
-                .w_full()
-                .h(38.0)
-                .px(7.0)
-                .center_y()
-                .child(model_control)
-                .child(el().grow(1.0))
-                .child({
-                    let available = has_workspaces
-                        && !state.new_research_prompt.text.trim().is_empty()
-                        && !state.session_busy;
-                    let can_stop = state.session_busy
-                        && state.session_stop_id.is_some()
-                        && !state.session_stopping;
-                    let mut button = row()
-                        .key(if state.session_busy {
-                            "new-research-stop"
-                        } else {
-                            "new-research-send"
-                        })
-                        .role("button")
-                        .label(if state.session_busy {
-                            if state.session_stopping {
-                                "Stopping session"
-                            } else {
-                                "Stop session"
-                            }
-                        } else {
-                            "Send message"
-                        })
-                        .size(28.0, 28.0)
-                        .center()
-                        .radius(14.0)
-                        .fill(if available || can_stop {
-                            theme.accent()
-                        } else {
-                            theme.color("#303030")
-                        })
-                        .child(
-                            icon(if state.session_busy { &STOP } else { &ARROW_UP }, 16.0).color(
-                                if available || can_stop {
-                                    theme.accent_ink()
-                                } else {
-                                    theme.color("#777777")
-                                },
-                            ),
-                        );
-                    if can_stop {
-                        button = button
-                            .hover(theme.color("#eeeeee"))
-                            .on_press(crate::stop_session_turn);
-                    } else if available {
-                        button = button
-                            .hover(theme.color("#eeeeee"))
-                            .on_press(start_session_turn);
-                    }
-                    button
-                }),
-        );
+        .child(composer_action(state, theme, has_workspaces));
     let repeat_active = state.selection_menu == Some(SelectionMenu::Repeat);
     let goal_active = state.selection_menu == Some(SelectionMenu::GoalMode);
     let workspace_menu_active = state.selection_menu == Some(SelectionMenu::ResearchWorkspace);
@@ -2813,6 +2956,8 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
     let workspace_control = if no_workspaces {
         text("No workspaces available. Create one to start research.")
             .key("new-research-workspace-warning")
+            .min_w(0.0)
+            .fade_truncate()
             .font(ui_font(13.0, 500.0))
             .color(theme.color("#dca15f"))
     } else {
@@ -2838,9 +2983,12 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
         .corners([18.0, 18.0, 0.0, 0.0])
         .continuous_corners()
         .fill(theme.color("#1b1b1b"))
-        .child(workspace_control)
+        .border_sides([1.0, 1.0, 0.0, 1.0], theme.color("#2a2a2a"))
+        .children(show_draft_controls.then_some(workspace_control))
+        .children(model_control)
         .child(el().grow(1.0));
-    if crate::extensions_view::goal_mode_enabled(state)
+    if show_draft_controls
+        && crate::extensions_view::goal_mode_enabled(state)
         && state.new_research_graph_id != beale_graphs::SEQUENTIAL_ID
     {
         ribbon = ribbon.child(
@@ -2878,7 +3026,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
                 }),
         );
     }
-    if state.new_research_graph_id != beale_graphs::SEQUENTIAL_ID {
+    if show_draft_controls && state.new_research_graph_id != beale_graphs::SEQUENTIAL_ID {
         ribbon = ribbon.child(
             row()
                 .key("new-research-repeat-control")
@@ -3300,7 +3448,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
         .w_full()
         .max_w(750.0)
         .self_center();
-    if state.active_session.is_none() && !state.session_busy {
+    if show_ribbon {
         composer_stack = composer_stack.child(col().w_full().px(20.0).child(ribbon));
     }
     composer_stack = composer_stack.child(composer);
@@ -4162,7 +4310,10 @@ mod tests {
         assert_eq!(providers[0].label, "OpenAI · Retry models");
         super::toggle_menu(&mut state);
         assert!(state.composer_menu_open);
-        assert_eq!(state.composer_menu_section, MenuSection::Provider);
+        assert_eq!(
+            state.composer_menu_navigation.section,
+            MenuSection::Provider
+        );
 
         state.composer_menu_open = false;
         state.auth_status[Provider::Xai.index()].subscription = true;
@@ -4179,7 +4330,10 @@ mod tests {
         assert!(selected_model(&state).is_none());
         assert_eq!(options(&state, MenuSection::Provider).len(), 2);
         super::toggle_menu(&mut state);
-        assert_eq!(state.composer_menu_section, MenuSection::Provider);
+        assert_eq!(
+            state.composer_menu_navigation.section,
+            MenuSection::Provider
+        );
     }
 
     #[test]

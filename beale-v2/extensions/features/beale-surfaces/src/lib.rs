@@ -16,6 +16,21 @@ pub const FEATURE_NAME: &str = "Surfaces";
 pub const FEATURE_DESCRIPTION: &str = "Map local surface details, track relationships between surfaces, and promote independently researchable elements.";
 pub const HAS_PROMPT_EXTENSION: bool = false;
 pub const TOOL_COUNT: u32 = 6;
+
+/// Catalog and session descriptor for this feature.
+pub const FEATURE: beale_feature_api::Feature = beale_feature_api::Feature {
+    id: FEATURE_ID,
+    name: FEATURE_NAME,
+    description: FEATURE_DESCRIPTION,
+    prompt_extension: PROMPT_EXTENSION,
+    use_case: "Use to inspect or maintain the workspace surface map and relationships.",
+    tool_names: &[QUERY, READ, SAVE, MAPPING_EDIT, PROMOTE, THREAT_MODEL_EDIT],
+    definitions: Some(definitions),
+    review: beale_feature_api::ToolReview::Required,
+    subagents: false,
+    migrations: &[],
+    startup: &[],
+};
 pub const PROMPT_EXTENSION: &str = "";
 
 pub const ADD: &str = "surface_add";

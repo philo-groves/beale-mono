@@ -28,21 +28,26 @@ use beale_contracts::{
     },
 };
 use beale_extender::PluginRuntime;
+#[cfg(feature = "goal-mode")]
+use beale_goals::{GoalRow, GoalStore};
+#[cfg(feature = "graphs")]
+use beale_graphs::GraphStore;
 use beale_providers::{
     AuthMode, CredentialStore, OpenAiConnection, Provider, ProviderClient, ProviderProgress,
     TextMessage, TextRole, ToolStepRequest, input_messages, provider_error_message,
     provider_error_retryable, tool_output,
 };
+#[cfg(feature = "runbooks")]
+use beale_runbooks::RunbookStore;
+#[cfg(feature = "runbooks")]
 use beale_safety::ReviewRequest;
-#[cfg(any(feature = "goal-mode", test))]
-use beale_storage::GoalRow;
 use beale_storage::{
     AutomationOptions, ChildTurnRow, CommentaryRow, HostDatabase, ModelUsageRow,
     ReasoningSummaryRow, SessionChildSummaryRow, SessionRow, ToolCallRow, TurnActivity,
     TurnMetadata, TurnRow,
 };
 use beale_tools::{
-    AgentFiles, PluginCallArgs, definitions, execute, model_preview, page, plugin_call_definition,
+    AgentFiles, definitions, model_preview, page, plugin_call_definition,
     summary as base_tool_summary,
 };
 use futures_util::stream;
@@ -86,20 +91,148 @@ impl Drop for ActiveRunbookRun {
 
 use beale_workspaces::WorkspaceStore;
 mod automations;
+pub mod features;
 #[cfg(feature = "memories")]
 mod memory_worker;
 
+/// Goal Mode state saved for a session; always empty without Goal Mode.
+#[cfg(feature = "goal-mode")]
+fn saved_goal(db: &HostDatabase, session_id: &str) -> anyhow::Result<Option<GoalRow>> {
+    db.goal(session_id)
+}
+
+/// Inert stand-in for Goal Mode state in builds without the feature, so
+/// shared session code can treat an absent goal uniformly.
+#[cfg(not(feature = "goal-mode"))]
+#[derive(Clone)]
+#[allow(dead_code)]
+struct GoalRow {
+    session_id: String,
+    objective: String,
+    status: i32,
+    turns_used: i64,
+    required_state: String,
+    max_turns: i64,
+    max_duration_minutes: i64,
+    active_ms: i64,
+}
+
+#[cfg(not(feature = "goal-mode"))]
+fn saved_goal(_db: &HostDatabase, _session_id: &str) -> anyhow::Result<Option<GoalRow>> {
+    Ok(None)
+}
+
+/// Graph records read by shared session code. Builds without Graphs have no
+/// graph tables, so every session reads as an ordinary session.
+#[cfg(feature = "graphs")]
+mod graph_records {
+    use beale_graphs::GraphStore;
+    use beale_storage::HostDatabase;
+
+    pub(crate) fn graph_id(db: &HostDatabase, session_id: &str) -> anyhow::Result<Option<String>> {
+        db.session_graph_id(session_id)
+    }
+
+    pub(crate) fn graph_config(
+        db: &HostDatabase,
+        session_id: &str,
+    ) -> anyhow::Result<Option<Vec<u8>>> {
+        db.session_graph_config(session_id)
+    }
+
+    pub(crate) fn is_peer_session(db: &HostDatabase, session_id: &str) -> anyhow::Result<bool> {
+        db.is_peer_graph_session(session_id)
+    }
+
+    pub(crate) fn turn_role(
+        db: &HostDatabase,
+        session_id: &str,
+        turn_number: i64,
+    ) -> anyhow::Result<Option<String>> {
+        db.graph_turn_role(session_id, turn_number)
+    }
+
+    pub(crate) fn recover(db: &HostDatabase) -> anyhow::Result<()> {
+        db.recover_abandoned_graph_work()
+    }
+}
+
+#[cfg(not(feature = "graphs"))]
+mod graph_records {
+    use beale_storage::HostDatabase;
+
+    pub(crate) fn graph_id(
+        _db: &HostDatabase,
+        _session_id: &str,
+    ) -> anyhow::Result<Option<String>> {
+        Ok(None)
+    }
+
+    pub(crate) fn graph_config(
+        _db: &HostDatabase,
+        _session_id: &str,
+    ) -> anyhow::Result<Option<Vec<u8>>> {
+        Ok(None)
+    }
+
+    pub(crate) fn is_peer_session(_db: &HostDatabase, _session_id: &str) -> anyhow::Result<bool> {
+        Ok(false)
+    }
+
+    pub(crate) fn turn_role(
+        _db: &HostDatabase,
+        _session_id: &str,
+        _turn_number: i64,
+    ) -> anyhow::Result<Option<String>> {
+        Ok(None)
+    }
+
+    pub(crate) fn recover(_db: &HostDatabase) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
+/// Runbook counts and summaries for session detail; empty without Runbooks.
+#[cfg(feature = "runbooks")]
+fn session_runbook_summary(
+    db: &HostDatabase,
+    session: &StoredSession,
+) -> Result<(u64, u64, Vec<beale_contracts::v1::SessionRunbook>), StatusCode> {
+    let (count, active) = db
+        .session_runbook_counts(&session.id)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let runbooks = db
+        .session_runbooks(&session.workspace_id, &session.id)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .into_iter()
+        .map(|book| beale_contracts::v1::SessionRunbook {
+            id: book.id,
+            title: book.title,
+            status: book.status,
+            updated_at_ms: book.updated_at_ms,
+            completed_at_ms: book.completed_at_ms,
+            current_cell_number: book.current_cell_number,
+            current_cell_name: book.current_cell_name,
+        })
+        .collect();
+    Ok((count, active, runbooks))
+}
+
+#[cfg(not(feature = "runbooks"))]
+fn session_runbook_summary(
+    _db: &HostDatabase,
+    _session: &StoredSession,
+) -> Result<(u64, u64, Vec<beale_contracts::v1::SessionRunbook>), StatusCode> {
+    Ok((0, 0, Vec::new()))
+}
+
+fn feature_applies(db: &HostDatabase, id: &str, workspace_id: &str) -> Result<bool, StatusCode> {
+    features::applies(db, id, workspace_id).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
 #[cfg(feature = "surfaces")]
 fn surface_feature_enabled(db: &HostDatabase, workspace_id: &str) -> Result<bool, StatusCode> {
-    db.feature_enabled(beale_surfaces::FEATURE_ID)
-        .and_then(|enabled| {
-            if enabled {
-                db.extension_applies_to("feature", beale_surfaces::FEATURE_ID, workspace_id)
-            } else {
-                Ok(false)
-            }
-        })
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+    feature_applies(db, beale_surfaces::FEATURE_ID, workspace_id)
 }
 
 #[cfg(not(feature = "surfaces"))]
@@ -109,15 +242,7 @@ fn surface_feature_enabled(_db: &HostDatabase, _workspace_id: &str) -> Result<bo
 
 #[cfg(feature = "memories")]
 fn memories_feature_enabled(db: &HostDatabase, workspace_id: &str) -> Result<bool, StatusCode> {
-    db.feature_enabled(beale_memories::FEATURE_ID)
-        .and_then(|enabled| {
-            if enabled {
-                db.extension_applies_to("feature", beale_memories::FEATURE_ID, workspace_id)
-            } else {
-                Ok(false)
-            }
-        })
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+    feature_applies(db, beale_memories::FEATURE_ID, workspace_id)
 }
 
 #[cfg(not(feature = "memories"))]
@@ -127,15 +252,21 @@ fn memories_feature_enabled(_db: &HostDatabase, _workspace_id: &str) -> Result<b
 
 #[cfg(feature = "webfetch")]
 fn webfetch_feature_enabled(db: &HostDatabase, workspace_id: &str) -> Result<bool, StatusCode> {
-    db.feature_enabled(beale_webfetch::FEATURE_ID)
-        .and_then(|enabled| {
-            if enabled {
-                db.extension_applies_to("feature", beale_webfetch::FEATURE_ID, workspace_id)
-            } else {
-                Ok(false)
-            }
-        })
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+    feature_applies(db, beale_webfetch::FEATURE_ID, workspace_id)
+}
+
+#[cfg(feature = "fleet")]
+fn fleet_feature_enabled(db: &HostDatabase, workspace_id: &str) -> Result<bool, StatusCode> {
+    feature_applies(db, beale_fleet::FEATURE_ID, workspace_id)
+}
+
+#[cfg(feature = "fleet")]
+fn fleet_prompt_note(db: &HostDatabase, workspace_id: &str) -> Result<Option<String>, StatusCode> {
+    if !fleet_feature_enabled(db, workspace_id)? {
+        return Ok(None);
+    }
+    let allowed = beale_fleet::allowed_tools(db).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(beale_fleet::prompt_note(&allowed))
 }
 
 #[cfg(feature = "webfetch")]
@@ -172,46 +303,9 @@ fn goal_status_summary(arguments: &Value) -> String {
     }
 }
 
-#[cfg(feature = "agent-feedback")]
-fn agent_feedback_feature_enabled(
-    db: &HostDatabase,
-    workspace_id: &str,
-) -> Result<bool, StatusCode> {
-    db.feature_enabled(beale_agent_feedback::FEATURE_ID)
-        .and_then(|enabled| {
-            if enabled {
-                db.extension_applies_to("feature", beale_agent_feedback::FEATURE_ID, workspace_id)
-            } else {
-                Ok(false)
-            }
-        })
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
-}
-
-#[cfg(feature = "findings")]
-fn findings_feature_enabled(db: &HostDatabase, workspace_id: &str) -> Result<bool, StatusCode> {
-    db.feature_enabled(beale_findings::FEATURE_ID)
-        .and_then(|enabled| {
-            if enabled {
-                db.extension_applies_to("feature", beale_findings::FEATURE_ID, workspace_id)
-            } else {
-                Ok(false)
-            }
-        })
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
-}
-
 #[cfg(feature = "runbooks")]
 fn runbook_feature_enabled(db: &HostDatabase, workspace_id: &str) -> Result<bool, StatusCode> {
-    db.feature_enabled(beale_runbooks::FEATURE_ID)
-        .and_then(|enabled| {
-            if enabled {
-                db.extension_applies_to("feature", beale_runbooks::FEATURE_ID, workspace_id)
-            } else {
-                Ok(false)
-            }
-        })
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+    feature_applies(db, beale_runbooks::FEATURE_ID, workspace_id)
 }
 
 fn surface_relationship_lines(surfaces: &[WorkspaceSurface]) -> Vec<String> {
@@ -372,35 +466,6 @@ fn scope_state_name(value: i32) -> &'static str {
     }
 }
 
-fn feature_tool_requires_review(name: &str) -> bool {
-    let _ = name;
-    #[cfg(feature = "webfetch")]
-    if name == beale_webfetch::TOOL_NAME {
-        return true;
-    }
-    #[cfg(feature = "surfaces")]
-    if beale_surfaces::is_tool(name) {
-        return true;
-    }
-    #[cfg(feature = "findings")]
-    if beale_findings::is_tool(name) {
-        return true;
-    }
-    #[cfg(feature = "memories")]
-    if beale_memories::is_tool(name) {
-        return true;
-    }
-    #[cfg(feature = "runbooks")]
-    if beale_runbooks::is_tool(name) {
-        return true;
-    }
-    #[cfg(feature = "goal-mode")]
-    if name == beale_goals::TOOL_NAME {
-        return true;
-    }
-    false
-}
-
 #[cfg(feature = "graphs")]
 fn requested_top_level_role(
     graph: Option<&beale_graphs::GraphDefinition>,
@@ -514,6 +579,7 @@ fn runbook_review_context(state: &SessionState, workspace_id: &str) -> Result<St
         surface_feature_enabled(&state.db, workspace_id)?,
     ))
 }
+mod engine;
 #[cfg(feature = "graphs")]
 mod graphs;
 mod http;
@@ -521,6 +587,12 @@ mod http;
 mod peer_graph;
 mod quick_chat;
 mod system_prompt;
+mod tool_runtime;
+#[cfg(all(test, feature = "goal-mode"))]
+use engine::goal_signal_for_answer;
+#[cfg(test)]
+use engine::reasoning_effort_name;
+use engine::{TurnError, run_turn, stop_requested, until_stopped};
 use http::{authorized, checked_body, response};
 
 const RECENT_TURNS: usize = 64;
@@ -720,7 +792,14 @@ fn model_tool_preview(
     files: &AgentFiles,
 ) -> String {
     let preview = model_preview(output, files);
-    if !is_error && matches!(name, "read" | "bash") {
+    #[cfg(feature = "findings")]
+    let evidence = beale_findings::EVIDENCE_TOOLS.contains(&name);
+    #[cfg(not(feature = "findings"))]
+    let evidence = {
+        let _ = name;
+        false
+    };
+    if !is_error && evidence {
         format!(
             "Finding evidence reference: {{\"kind\":\"tool_call\",\"reference\":\"{id}\"}}\n{preview}"
         )
@@ -763,35 +842,6 @@ fn usage_update(item: &ModelUsageRow, agent_role: &str) -> SessionStreamEvent {
 
 fn review_failed(decision: &beale_safety::ReviewDecision) -> bool {
     !decision.approved && !decision.reviewed
-}
-
-#[cfg(all(feature = "graphs", feature = "findings"))]
-fn pipeline_finding_allowed(role: beale_graphs::Role, name: &str, args: &Value) -> bool {
-    let state = args.get("state").and_then(Value::as_str);
-    match name {
-        "findings_query" | "findings_read" => true,
-        "findings_create" => role == beale_graphs::Role::Discovery,
-        "findings_update" => match role {
-            beale_graphs::Role::AuditTargets => false,
-            beale_graphs::Role::Discovery => matches!(state, Some("finding" | "candidate")),
-            beale_graphs::Role::Validation => matches!(state, Some("finding" | "validated")),
-            beale_graphs::Role::Reporter => {
-                matches!(state, Some("finding" | "screened" | "reported"))
-            }
-            beale_graphs::Role::PatchGeneration => state == Some("finding"),
-            _ => true,
-        },
-        "findings_complete_state" => match role {
-            beale_graphs::Role::Validation => state == Some("validated"),
-            beale_graphs::Role::Reporter => matches!(state, Some("screened" | "reported")),
-            beale_graphs::Role::AuditTargets
-            | beale_graphs::Role::Discovery
-            | beale_graphs::Role::PatchGeneration => false,
-            _ => true,
-        },
-        "findings_reject" => role == beale_graphs::Role::Validation,
-        _ => true,
-    }
 }
 
 #[derive(Clone)]
@@ -873,7 +923,7 @@ pub fn router_with_runtime(
     plugins: PluginRuntime,
 ) -> anyhow::Result<Router> {
     let state = build_state_with_runtime(token, workspaces, plugins)?;
-    state.db.recover_abandoned_graph_work()?;
+    graph_records::recover(&state.db)?;
     let router = Router::new()
         .route(SESSIONS_PATH, get(list))
         .route(SESSION_DETAIL_PATH, get(details))
@@ -908,6 +958,7 @@ fn build_state_with_runtime(
     plugins: PluginRuntime,
 ) -> anyhow::Result<SessionState> {
     let db = HostDatabase::open(workspaces.root())?;
+    features::migrate(&db)?;
     system_prompt::ensure_file(workspaces.root())?;
     let credentials = Arc::new(CredentialStore::at(workspaces.root().to_path_buf()));
     Ok(SessionState {
@@ -982,8 +1033,7 @@ fn load_persisted(
         .session(&id.to_string())
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
-    let peer_graph = db
-        .is_peer_graph_session(&id.to_string())
+    let peer_graph = graph_records::is_peer_session(db, &id.to_string())
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let rows = if peer_graph {
         db.graph_recent_turns(&id.to_string())
@@ -1012,9 +1062,9 @@ fn load_persisted(
             if row.duration_ms < 0 || row.number < expected {
                 return Err(StatusCode::INTERNAL_SERVER_ERROR);
             }
-            let agent_role = if let Some(role) = db
-                .graph_turn_role(&id.to_string(), row.number)
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            let agent_role = if let Some(role) =
+                graph_records::turn_role(db, &id.to_string(), row.number)
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
             {
                 role
             } else {
@@ -1077,14 +1127,12 @@ fn graph_state(
 ) -> Result<(Vec<SessionGraphAgent>, Vec<SessionGraphHandoff>), StatusCode> {
     #[cfg(feature = "graphs")]
     {
-        if !db
-            .is_peer_graph_session(session_id)
+        if !graph_records::is_peer_session(db, session_id)
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         {
             return Ok((Vec::new(), Vec::new()));
         }
-        let id = db
-            .session_graph_id(session_id)
+        let id = graph_records::graph_id(db, session_id)
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
             .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
         let graph = beale_graphs::graph_definition(&id).ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -1166,12 +1214,10 @@ fn detail(
         #[cfg(feature = "graphs")]
         {
             let (graph_agents, graph_handoffs) = graph_state(db, &session.id)?;
-            let graph_id = db
-                .session_graph_id(&session.id)
+            let graph_id = graph_records::graph_id(db, &session.id)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
                 .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
-            let graph_config = db
-                .session_graph_config(&session.id)
+            let graph_config = graph_records::graph_config(db, &session.id)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
                 .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
             let config = SessionGraphConfig::decode(graph_config.as_slice())
@@ -1213,8 +1259,7 @@ fn detail(
     }
     // Graph roles keep their own provider history. Bound the combined UI transcript
     // separately so a busy team cannot exceed the detail protocol's tool cap.
-    let peer_graph = db
-        .is_peer_graph_session(&session.id)
+    let peer_graph = graph_records::is_peer_session(db, &session.id)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let turns = if peer_graph {
         recent_peer_turns(turns, |numbers| {
@@ -1329,8 +1374,7 @@ fn detail(
         });
     }
     let latest = turns.last().ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
-    let goal = db
-        .goal(&session.id)
+    let goal = saved_goal(db, &session.id)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .map(|goal| {
             let turns_used =
@@ -1366,8 +1410,7 @@ fn detail(
             })
         })
         .transpose()?;
-    let graph_config = db
-        .session_graph_config(&session.id)
+    let graph_config = graph_records::graph_config(db, &session.id)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .filter(|bytes| !bytes.is_empty())
         .map(|bytes| SessionGraphConfig::decode(bytes.as_slice()))
@@ -1415,12 +1458,7 @@ fn detail(
             })
         })
         .collect::<Result<Vec<_>, StatusCode>>()?;
-    let (runbook_count, active_runbook_count) = db
-        .session_runbook_counts(&session.id)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let runbooks = db
-        .session_runbooks(&session.workspace_id, &session.id)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let (runbook_count, active_runbook_count, runbooks) = session_runbook_summary(db, session)?;
     let mut agent_metrics = Vec::with_capacity(graph_agents.len());
     for agent in &graph_agents {
         let role = agent.role.as_str();
@@ -1489,8 +1527,7 @@ fn detail(
         goal,
         first_turn_number: u64::try_from(first_turn)
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
-        graph_id: db
-            .session_graph_id(&session.id)
+        graph_id: graph_records::graph_id(db, &session.id)
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
             .unwrap_or_default(),
         graph_models: graph_config.models,
@@ -1530,18 +1567,7 @@ fn detail(
             .collect::<Result<_, StatusCode>>()?,
         runbook_count,
         active_runbook_count,
-        runbooks: runbooks
-            .into_iter()
-            .map(|book| beale_contracts::v1::SessionRunbook {
-                id: book.id,
-                title: book.title,
-                status: book.status,
-                updated_at_ms: book.updated_at_ms,
-                completed_at_ms: book.completed_at_ms,
-                current_cell_number: book.current_cell_number,
-                current_cell_name: book.current_cell_name,
-            })
-            .collect(),
+        runbooks,
     })
 }
 
@@ -1942,6 +1968,12 @@ async fn run_runbook_cell(
             (false, error.clone(), None, String::new(), error)
         }
     };
+    let redactor = tool_runtime::host_redactor(&state);
+    let (output, stdout, stderr) = (
+        redactor.redact(&output).into_owned(),
+        redactor.redact(&stdout).into_owned(),
+        redactor.redact(&stderr).into_owned(),
+    );
     state
         .db
         .runbook_run_cell_result(
@@ -2008,7 +2040,11 @@ async fn submit_turn(
         return Err(StatusCode::UNAUTHORIZED);
     }
     let request: SubmitSessionTurnRequest = checked_body(&headers, &body)?;
-    Ok(response(run_turn(state, request, None, None).await?))
+    Ok(response(
+        run_turn(state, request, None, None)
+            .await
+            .map_err(TurnError::status)?,
+    ))
 }
 
 async fn stop_turn(
@@ -2074,14 +2110,7 @@ async fn stream_turn(
             Err(status) => SessionStreamEvent {
                 runbook_progress: None,
                 kind: SessionStreamKind::Failed as i32,
-                text: match status {
-                    StatusCode::NOT_FOUND => "Workspace or session is unavailable.",
-                    StatusCode::CONFLICT => "Session changed or reached its turn limit.",
-                    StatusCode::BAD_REQUEST => "The session request is invalid.",
-                    StatusCode::BAD_GATEWAY => "The provider could not complete this turn.",
-                    _ => "Session request failed.",
-                }
-                .to_owned(),
+                text: status.message().to_owned(),
                 tool: None,
                 detail: None,
                 segment_index: 0,
@@ -2127,2233 +2156,47 @@ async fn stream_turn(
     ))
 }
 
-fn reasoning_effort_name(value: i32) -> Result<Option<&'static str>, StatusCode> {
-    match ReasoningEffort::try_from(value) {
-        Ok(ReasoningEffort::Unspecified) => Ok(None),
-        Ok(ReasoningEffort::None) => Ok(Some("none")),
-        Ok(ReasoningEffort::Minimal) => Ok(Some("minimal")),
-        Ok(ReasoningEffort::Low) => Ok(Some("low")),
-        Ok(ReasoningEffort::Medium) => Ok(Some("medium")),
-        Ok(ReasoningEffort::High) => Ok(Some("high")),
-        Ok(ReasoningEffort::Xhigh) => Ok(Some("xhigh")),
-        Ok(ReasoningEffort::Max) => Ok(Some("max")),
-        Err(_) => Err(StatusCode::BAD_REQUEST),
-    }
-}
-
-fn stop_requested(stop: &Option<watch::Receiver<bool>>) -> bool {
-    stop.as_ref().is_some_and(|receiver| *receiver.borrow())
-}
-
-async fn until_stopped<F: Future>(
-    future: F,
-    stop: &mut Option<watch::Receiver<bool>>,
-) -> Option<F::Output> {
-    tokio::pin!(future);
-    if let Some(receiver) = stop.as_mut() {
-        tokio::select! {
-            result = &mut future => Some(result),
-            changed = receiver.changed() => {
-                if changed.is_ok() && *receiver.borrow() {
-                    None
-                } else {
-                    Some(future.await)
-                }
-            }
-        }
-    } else {
-        Some(future.await)
-    }
-}
-
-#[cfg(feature = "goal-mode")]
-fn goal_signal_for_answer(
-    answer: &str,
-    signal: Option<beale_goals::Signal>,
-) -> Option<beale_goals::Signal> {
-    if answer.starts_with(INTERRUPTED_ANSWER) || answer == STOPPED_ANSWER {
-        None
-    } else {
-        signal.or(Some(beale_goals::Signal::Continue))
-    }
-}
-
-#[cfg(feature = "goal-mode")]
-async fn run_turn(
-    state: SessionState,
-    mut request: SubmitSessionTurnRequest,
-    progress: Option<mpsc::Sender<SessionStreamEvent>>,
-    stop: Option<watch::Receiver<bool>>,
-) -> Result<SessionDetail, StatusCode> {
-    let lock = if request.session_id.is_empty() {
-        Arc::new(Mutex::new(()))
-    } else {
-        session_lock(&state, &request.session_id).await
-    };
-    let _guard = lock.try_lock().map_err(|_| StatusCode::CONFLICT)?;
-    let mut automatic = false;
-    loop {
-        #[cfg(feature = "graphs")]
-        let peer = peer_graph::applies(&state.db, &request)?;
-        #[cfg(not(feature = "graphs"))]
-        let peer = false;
-        let detail = if peer {
-            #[cfg(feature = "graphs")]
-            {
-                peer_graph::run(
-                    &state,
-                    request.clone(),
-                    progress.clone(),
-                    &lock,
-                    stop.clone(),
-                )
-                .await?
-            }
-            #[cfg(not(feature = "graphs"))]
-            {
-                unreachable!()
-            }
-        } else {
-            run_one_turn(
-                &state,
-                request.clone(),
-                progress.clone(),
-                automatic,
-                &lock,
-                stop.clone(),
-                #[cfg(feature = "graphs")]
-                None,
-            )
-            .await?
-        };
-        if let Some(goal) = &detail.goal
-            && goal.status == GoalStatus::Active as i32
-        {
-            if stop_requested(&stop) {
-                let id = &detail
-                    .summary
-                    .as_ref()
-                    .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?
-                    .id;
-                state
-                    .db
-                    .set_goal_status(id, GoalStatus::Paused as i32)
-                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-                let (session, turns) = load_persisted(&state.db, parse_id(id)?)?;
-                return self::detail(&state.db, &session, &turns);
-            }
-            if !state
-                .db
-                .feature_enabled(beale_goals::FEATURE_ID)
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-                || !state
-                    .db
-                    .extension_applies_to(
-                        "feature",
-                        beale_goals::FEATURE_ID,
-                        &detail
-                            .summary
-                            .as_ref()
-                            .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?
-                            .workspace_id,
-                    )
-                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-            {
-                let id = detail
-                    .summary
-                    .as_ref()
-                    .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?
-                    .id
-                    .clone();
-                state
-                    .db
-                    .set_goal_status(&id, GoalStatus::Paused as i32)
-                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-                let (session, turns) = load_persisted(&state.db, parse_id(&id)?)?;
-                return self::detail(&state.db, &session, &turns);
-            }
-            if let Some(tx) = &progress {
-                let _ = tx
-                    .send(SessionStreamEvent {
-                        runbook_progress: None,
-                        kind: SessionStreamKind::TurnCompleted as i32,
-                        text: String::new(),
-                        tool: None,
-                        detail: Some(detail.clone()),
-                        segment_index: 0,
-                        ..Default::default()
-                    })
-                    .await;
-            }
-            request.session_id = detail
-                .summary
-                .as_ref()
-                .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?
-                .id
-                .clone();
-            request.prompt = beale_goals::continuation_prompt(&goal.objective)
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-            request.goal_mode = false;
-            request.goal_max_turns = 0;
-            request.goal_max_duration_minutes = 0;
-            request.repeat_preset.clear();
-            request.graph_id.clear();
-            request.graph_models.clear();
-            request.graph_node_concurrency.clear();
-            automatic = true;
-            continue;
-        }
-        return Ok(detail);
-    }
-}
-
-#[cfg(not(feature = "goal-mode"))]
-async fn run_turn(
-    state: SessionState,
-    request: SubmitSessionTurnRequest,
-    progress: Option<mpsc::Sender<SessionStreamEvent>>,
-    stop: Option<watch::Receiver<bool>>,
-) -> Result<SessionDetail, StatusCode> {
-    if request.goal_mode {
-        return Err(StatusCode::BAD_REQUEST);
-    }
-    let lock = if request.session_id.is_empty() {
-        Arc::new(Mutex::new(()))
-    } else {
-        session_lock(&state, &request.session_id).await
-    };
-    let _guard = lock.try_lock().map_err(|_| StatusCode::CONFLICT)?;
-    #[cfg(feature = "graphs")]
-    if peer_graph::applies(&state.db, &request)? {
-        return peer_graph::run(&state, request, progress, &lock, stop).await;
-    }
-    run_one_turn(
-        &state,
-        request,
-        progress,
-        false,
-        &lock,
-        stop,
-        #[cfg(feature = "graphs")]
-        None,
-    )
-    .await
-}
-
-async fn run_one_turn(
-    state: &SessionState,
-    request: SubmitSessionTurnRequest,
-    progress: Option<mpsc::Sender<SessionStreamEvent>>,
-    automatic: bool,
-    lock: &Arc<Mutex<()>>,
-    mut stop: Option<watch::Receiver<bool>>,
-    #[cfg(feature = "graphs")] peer: Option<PeerRun>,
-) -> Result<SessionDetail, StatusCode> {
-    let started = Instant::now();
-    let _workspace_id = parse_id(&request.workspace_id)?;
-    if !state.workspaces.contains(&request.workspace_id)? {
-        return Err(StatusCode::NOT_FOUND);
-    }
-    if request.prompt.trim().is_empty()
-        || request.prompt.len() > 16_384
-        || request.model.is_empty()
-        || request.model.len() > 200
-        || !request.model.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':' | b'/')
-        })
-    {
-        return Err(StatusCode::BAD_REQUEST);
-    }
-    let provider = match ProviderId::try_from(request.provider) {
-        Ok(ProviderId::Openai) => Provider::OpenAi,
-        Ok(ProviderId::Xai) => Provider::Xai,
-        Ok(ProviderId::Anthropic) => Provider::Anthropic,
-        Ok(ProviderId::Zai) => Provider::Zai,
-        Ok(ProviderId::Openrouter) => Provider::OpenRouter,
-        Ok(ProviderId::Custom) => Provider::Custom,
-        _ => return Err(StatusCode::BAD_REQUEST),
-    };
-    let mode = match AuthMethod::try_from(request.method) {
-        Ok(AuthMethod::Subscription) => AuthMode::Subscription,
-        Ok(AuthMethod::ApiKey) => AuthMode::ApiKey,
-        _ => return Err(StatusCode::BAD_REQUEST),
-    };
-    if provider == Provider::Custom && mode != AuthMode::ApiKey {
-        return Err(StatusCode::BAD_REQUEST);
-    }
-    let reasoning_effort = reasoning_effort_name(request.reasoning_effort)?;
-    if !request.goal_mode && (request.goal_max_turns != 0 || request.goal_max_duration_minutes != 0)
-    {
-        return Err(StatusCode::BAD_REQUEST);
-    }
-    if request.goal_max_turns > i64::MAX as u64
-        || request.goal_max_duration_minutes > i64::MAX as u64 / 60_000
-    {
-        return Err(StatusCode::BAD_REQUEST);
-    }
-    if !request.repeat_preset.is_empty()
-        && (!request.session_id.is_empty()
-            || !matches!(
-                request.repeat_preset.as_str(),
-                "minute" | "hour" | "day" | "week" | "month"
-            ))
-    {
-        return Err(StatusCode::BAD_REQUEST);
-    }
-    validate_graph_selection(
-        &state.db,
-        &request.graph_id,
-        &request.graph_models,
-        &request.graph_node_concurrency,
-        &request.session_id,
-        &request.workspace_id,
-    )?;
-    #[cfg(feature = "graphs")]
-    if !request.graph_id.is_empty()
-        && request.graph_models.iter().any(|model| {
-            Some(model.node_id.as_str())
-                == beale_graphs::entry_role(&request.graph_id).map(|role| role.id())
-                && (model.provider != request.provider
-                    || model.method != request.method
-                    || model.model != request.model)
-        })
-    {
-        return Err(StatusCode::BAD_REQUEST);
-    }
-    let graph_config = encoded_graph_config(&request);
-    #[cfg(not(feature = "goal-mode"))]
-    if request.goal_mode {
-        return Err(StatusCode::BAD_REQUEST);
-    }
-    #[cfg(not(feature = "goal-mode"))]
-    let _ = automatic;
-    let (mut session, mut turns) = if request.session_id.is_empty() {
-        let id = Uuid::new_v4();
-        register_session_lock(state, &id.to_string(), lock).await;
-        let created_at_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-            .as_millis();
-        (
-            StoredSession {
-                id: id.to_string(),
-                workspace_id: request.workspace_id.clone(),
-                title: title(&request.prompt),
-                created_at_ms,
-                last_message_at_ms: u64::try_from(created_at_ms)
-                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
-            },
-            Vec::new(),
-        )
-    } else {
-        let id = parse_id(&request.session_id)?;
-        let (session, turns) = load_persisted(&state.db, id)?;
-        if session.workspace_id != request.workspace_id {
-            return Err(StatusCode::CONFLICT);
-        }
-        (session, turns)
-    };
-    let next_turn_number = turns.last().map_or(Ok(1), |turn| {
-        turn.number.checked_add(1).ok_or(StatusCode::CONFLICT)
-    })?;
-    #[cfg(feature = "graphs")]
-    let next_turn_number = peer
-        .as_ref()
-        .map_or(next_turn_number, |peer| peer.turn_number);
-    let persisted_goal = state
-        .db
-        .goal(&session.id)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    #[cfg(feature = "goal-mode")]
-    let mut goal = persisted_goal;
-    #[cfg(all(feature = "graphs", feature = "goal-mode"))]
-    if peer.as_ref().is_some_and(|peer| {
-        !matches!(
-            peer.role,
-            beale_graphs::Role::AuditTargets
-                | beale_graphs::Role::Discovery
-                | beale_graphs::Role::DiscoveryHarness
-        )
-    }) {
-        goal = None;
-    }
-    #[cfg(not(feature = "goal-mode"))]
-    let goal = persisted_goal;
-    if let Some(saved) = &goal
-        && (saved.turns_used < 0
-            || saved.active_ms < 0
-            || saved.max_turns < 0
-            || saved.max_duration_minutes < 0
-            || !matches!(
-                GoalStatus::try_from(saved.status),
-                Ok(GoalStatus::Active
-                    | GoalStatus::Complete
-                    | GoalStatus::Waiting
-                    | GoalStatus::Paused)
-            ))
-    {
-        return Err(StatusCode::INTERNAL_SERVER_ERROR);
-    }
-    #[cfg(feature = "goal-mode")]
-    {
-        let feature_enabled = state
-            .db
-            .feature_enabled(beale_goals::FEATURE_ID)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-            && state
-                .db
-                .extension_applies_to("feature", beale_goals::FEATURE_ID, &session.workspace_id)
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        if request.goal_mode && !feature_enabled {
-            return Err(StatusCode::CONFLICT);
-        }
-        if automatic && !feature_enabled {
-            state
-                .db
-                .set_goal_status(&session.id, GoalStatus::Paused as i32)
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-            return detail(&state.db, &session, &turns);
-        }
-        if !feature_enabled
-            && let Some(goal) = goal.as_mut()
-            && goal.status == GoalStatus::Active as i32
-        {
-            goal.status = GoalStatus::Paused as i32;
-        }
-        if request.goal_mode && !turns.is_empty() {
-            return Err(StatusCode::BAD_REQUEST);
-        }
-        if request.goal_mode && turns.is_empty() {
-            goal = Some(GoalRow {
-                session_id: session.id.clone(),
-                objective: request.prompt.clone(),
-                status: GoalStatus::Active as i32,
-                turns_used: 0,
-                required_state: String::new(),
-                max_turns: request.goal_max_turns as i64,
-                max_duration_minutes: request.goal_max_duration_minutes as i64,
-                active_ms: 0,
-            });
-        } else if !automatic
-            && feature_enabled
-            && let Some(goal) = goal.as_mut()
-            && matches!(
-                GoalStatus::try_from(goal.status),
-                Ok(GoalStatus::Waiting | GoalStatus::Paused)
-            )
-        {
-            let limits = beale_goals::Limits {
-                max_turns: goal.max_turns as u64,
-                max_duration_minutes: goal.max_duration_minutes as u64,
-            };
-            if !limits.reached(goal.turns_used as u64, goal.active_ms as u64) {
-                goal.status = GoalStatus::Active as i32;
-                goal.required_state.clear();
-            }
-        }
-    }
-    let goal_active = goal
-        .as_ref()
-        .is_some_and(|goal| goal.status == GoalStatus::Active as i32);
-    #[cfg(not(feature = "goal-mode"))]
-    let _ = goal_active;
-    let mut messages = Vec::with_capacity(turns.len() * 2 + 1);
-    for turn in &turns {
-        messages.push(TextMessage {
-            role: TextRole::User,
-            text: turn.prompt.clone(),
-        });
-        messages.push(TextMessage {
-            role: TextRole::Assistant,
-            text: turn.answer.clone(),
-        });
-    }
-    messages.push(TextMessage {
-        role: TextRole::User,
-        text: request.prompt.clone(),
-    });
-    #[cfg(feature = "graphs")]
-    if let Some(peer) = &peer {
-        let mut agent_turns = state
-            .db
-            .graph_agent_turns(&session.id, peer.role.id())
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-            .into_iter()
-            .map(|turn| StoredTurn {
-                number: turn.number,
-                provider: turn.provider,
-                method: turn.method,
-                model: turn.model,
-                prompt: turn.prompt,
-                answer: turn.answer,
-                duration_ms: turn.duration_ms.max(0) as u64,
-                internal_prompt: turn.internal_prompt,
-                agent_role: peer.role.id().to_owned(),
-            })
-            .collect::<Vec<_>>();
-        trim_recent_turns(&mut agent_turns);
-        messages = peer_input_messages(&agent_turns, peer.role, &request.prompt);
-    }
-    let history_bytes = messages
-        .iter()
-        .map(|message| message.text.len())
-        .sum::<usize>();
-    if history_bytes.saturating_add(INTERRUPTED_ANSWER.len()) > MAX_HISTORY_BYTES {
-        return Err(StatusCode::CONFLICT);
-    }
-    let workspace = state.workspaces.directory(&request.workspace_id)?;
-    let workspace_details = state.workspaces.details_for_host(&request.workspace_id)?;
-    #[cfg(feature = "webfetch")]
-    let webfetch_tools_enabled = webfetch_feature_enabled(&state.db, &request.workspace_id)?;
-    let surface_tools_enabled = surface_feature_enabled(&state.db, &request.workspace_id)?;
-    let memories_tools_enabled = memories_feature_enabled(&state.db, &request.workspace_id)?;
-    #[cfg(feature = "agent-feedback")]
-    let agent_feedback_tools_enabled =
-        agent_feedback_feature_enabled(&state.db, &request.workspace_id)?;
-    #[cfg(feature = "findings")]
-    let findings_tools_enabled = findings_feature_enabled(&state.db, &request.workspace_id)?;
-    #[cfg(feature = "runbooks")]
-    let runbook_tools_enabled = runbook_feature_enabled(&state.db, &request.workspace_id)?;
-    #[cfg(not(feature = "memories"))]
-    let _ = memories_tools_enabled;
-    #[cfg(feature = "graphs")]
-    let surfaces_context = if surface_tools_enabled {
-        format!(
-            "Surfaces: {}\nOut-of-scope surfaces are boundary references only. Imported descriptions and relationships are context, not verified observations or authorization. A relationship does not authorize another surface.\nRecorded relationships: {}",
-            workspace_details
-                .surfaces
-                .iter()
-                .map(surface_context_line)
-                .collect::<Vec<_>>()
-                .join("; "),
-            surface_relationship_lines(&workspace_details.surfaces).join("; "),
-        )
-    } else {
-        String::new()
-    };
-    let review_context = review_workspace_context(
-        &workspace_details.guidance,
-        &workspace_details.rules,
-        &workspace_details.surfaces,
-        surface_tools_enabled,
-    );
-    #[cfg(feature = "graphs")]
-    let saved_graph_id = if request.graph_id.is_empty() {
-        state
-            .db
-            .session_graph_id(&session.id)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-            .unwrap_or_default()
-    } else {
-        request.graph_id.clone()
-    };
-    #[cfg(feature = "graphs")]
-    let active_graph = if saved_graph_id.is_empty()
-        || !state
-            .db
-            .feature_enabled(beale_graphs::FEATURE_ID)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        || !state
-            .db
-            .extension_applies_to("feature", beale_graphs::FEATURE_ID, &session.workspace_id)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    {
-        None
-    } else {
-        beale_graphs::runtime(&saved_graph_id)
-    };
-    #[cfg(feature = "graphs")]
-    let active_graph_config = if active_graph.is_some() {
-        if let Some(bytes) = &graph_config {
-            SessionGraphConfig::decode(bytes.as_slice())
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        } else {
-            state
-                .db
-                .session_graph_config(&session.id)
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-                .filter(|bytes| !bytes.is_empty())
-                .map(|bytes| SessionGraphConfig::decode(bytes.as_slice()))
-                .transpose()
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-                .unwrap_or_default()
-        }
-    } else {
-        SessionGraphConfig::default()
-    };
-    #[cfg(feature = "graphs")]
-    let graph_fallback = GraphNodeModel {
-        node_id: beale_graphs::Role::Main.id().to_owned(),
-        provider: request.provider,
-        method: request.method,
-        model: request.model.clone(),
-    };
-    #[cfg(feature = "graphs")]
-    let graph_section =
-        active_graph.map(|runtime| runtime.system_section(&active_graph_config, &graph_fallback));
-    let mut input = input_messages(&messages);
-    let reuse_prior_context = turns.last().is_some_and(|turn| {
-        turn.provider == request.provider
-            && turn.method == request.method
-            && turn.model == request.model
-            && !turn.answer.starts_with(INTERRUPTED_ANSWER)
-    });
-    #[cfg(feature = "graphs")]
-    let reuse_prior_context = peer.is_some() || (active_graph.is_none() && reuse_prior_context);
-    #[cfg(feature = "graphs")]
-    let saved_context = if let Some(peer) = &peer {
-        state.db.graph_provider_context(&session.id, peer.role.id())
-    } else {
-        state.db.provider_context(&session.id)
-    }
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    #[cfg(not(feature = "graphs"))]
-    let saved_context = state
-        .db
-        .provider_context(&session.id)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let reuse_saved_context = provider == Provider::OpenAi && reuse_prior_context;
-    #[cfg(feature = "graphs")]
-    let reuse_saved_context = reuse_saved_context || peer.is_some();
-    if reuse_saved_context && let Some(saved) = saved_context {
-        let mut previous: Vec<Value> =
-            serde_json::from_str(&saved).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        if provider == Provider::OpenAi {
-            close_unanswered_openai_calls(&mut previous);
-        }
-        if provider != Provider::OpenAi {
-            previous.retain(|item| item.get("role").and_then(Value::as_str) != Some("system"));
-        }
-        previous.push(json!({"role":"user","content":request.prompt}));
-        input = previous;
-    }
-    #[cfg(feature = "goal-mode")]
-    let goal_section = goal.as_ref().filter(|_| goal_active).map(|goal| {
-        beale_goals::system_section(
-            beale_goals::Limits {
-                max_turns: goal.max_turns as u64,
-                max_duration_minutes: goal.max_duration_minutes as u64,
-            },
-            goal.turns_used as u64,
-            goal.active_ms as u64,
-        )
-    });
-    #[allow(unused_mut)]
-    let mut available_features: Vec<(&str, &str)> = Vec::new();
-    #[cfg(feature = "webfetch")]
-    if webfetch_tools_enabled {
-        available_features.push((
-            beale_webfetch::FEATURE_ID,
-            "Use to search the web or retrieve readable page text and links.",
-        ));
-    }
-    #[cfg(feature = "surfaces")]
-    if surface_tools_enabled {
-        available_features.push((
-            beale_surfaces::FEATURE_ID,
-            "Use to inspect or maintain the workspace surface map and relationships.",
-        ));
-    }
-    #[cfg(feature = "findings")]
-    if findings_tools_enabled {
-        available_features.push((
-            beale_findings::FEATURE_ID,
-            "Use to track candidate findings through validation, screening, and reporting.",
-        ));
-    }
-    #[cfg(feature = "memories")]
-    if memories_tools_enabled {
-        available_features.push((
-            beale_memories::FEATURE_ID,
-            "Use to search prior items in this session and sourced workspace research memories.",
-        ));
-    }
-    #[cfg(feature = "agent-feedback")]
-    if agent_feedback_tools_enabled {
-        available_features.push((
-            beale_agent_feedback::FEATURE_ID,
-            "Use to record an observed Beale harness or agent runtime issue for development review.",
-        ));
-    }
-    #[cfg(feature = "runbooks")]
-    if runbook_tools_enabled {
-        available_features.push((
-            beale_runbooks::FEATURE_ID,
-            "Use to find, create, edit, run, or check reusable runbooks.",
-        ));
-    }
-    #[cfg(feature = "goal-mode")]
-    if goal_active {
-        available_features.push((
-            beale_goals::FEATURE_ID,
-            "Use for the active multi-turn goal and reporting final goal status.",
-        ));
-    }
-    #[cfg(feature = "graphs")]
-    if active_graph.is_some() {
-        available_features.push((
-            beale_graphs::FEATURE_ID,
-            "Use to delegate bounded research tasks to graph subagents.",
-        ));
-    }
-    let available_plugins = state
-        .plugins
-        .available(&request.workspace_id)
-        .map_err(|error| {
-            beale_host_log::error!("plugin directory failed: {error:#}");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-    let agent_files = Arc::new(AgentFiles::new().map_err(|error| {
-        beale_host_log::error!("agent files failed: {error:#}");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?);
-    let mut definitions = definitions();
-    let mut extension_entries = String::new();
-    #[cfg(feature = "graphs")]
-    let mut child_extension_entries = String::new();
-    for (id, use_case) in &available_features {
-        let (tools, guidance): (Vec<Value>, &str) = match *id {
-            #[cfg(feature = "webfetch")]
-            beale_webfetch::FEATURE_ID => (
-                vec![beale_webfetch::definition()],
-                beale_webfetch::PROMPT_EXTENSION,
-            ),
-            #[cfg(feature = "agent-feedback")]
-            beale_agent_feedback::FEATURE_ID => (
-                vec![beale_agent_feedback::definition()],
-                beale_agent_feedback::PROMPT_EXTENSION,
-            ),
-            #[cfg(feature = "surfaces")]
-            beale_surfaces::FEATURE_ID => (
-                beale_surfaces::definitions(),
-                beale_surfaces::PROMPT_EXTENSION,
-            ),
-            #[cfg(feature = "findings")]
-            beale_findings::FEATURE_ID => (
-                beale_findings::definitions(),
-                beale_findings::PROMPT_EXTENSION,
-            ),
-            #[cfg(feature = "memories")]
-            beale_memories::FEATURE_ID => (
-                beale_memories::definitions(),
-                beale_memories::PROMPT_EXTENSION,
-            ),
-            #[cfg(feature = "runbooks")]
-            beale_runbooks::FEATURE_ID => (
-                beale_runbooks::definitions(),
-                beale_runbooks::PROMPT_EXTENSION,
-            ),
-            #[cfg(feature = "goal-mode")]
-            beale_goals::FEATURE_ID => (
-                vec![beale_goals::definition()],
-                goal_section
-                    .as_deref()
-                    .unwrap_or(beale_goals::PROMPT_EXTENSION),
-            ),
-            #[cfg(feature = "graphs")]
-            beale_graphs::FEATURE_ID => (
-                active_graph
-                    .map(|runtime| {
-                        let mut tools = vec![runtime.tool_definition()];
-                        tools.extend(beale_graphs::subagent_tools());
-                        tools
-                    })
-                    .unwrap_or_default(),
-                graph_section
-                    .as_deref()
-                    .unwrap_or(beale_graphs::PROMPT_EXTENSION),
-            ),
-            _ => (Vec::new(), ""),
-        };
-        if tools.is_empty() && guidance.is_empty() {
-            continue;
-        }
-        let path = agent_files
-            .write(&format!("features/{id}/FEATURE.md"), guidance.as_bytes())
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        let entry = format!(
-            "- Feature `{id}`: {use_case} Read {}.\n",
-            json!(path.to_string_lossy())
-        );
-        extension_entries.push_str(&entry);
-        #[cfg(feature = "graphs")]
-        if graphs::child_supports_feature(id) {
-            child_extension_entries.push_str(&entry);
-        }
-        definitions.extend(tools);
-    }
-    let mut callable_plugins = HashSet::new();
-    for plugin in &available_plugins {
-        match state
-            .plugins
-            .publish(&plugin.name, &request.workspace_id, &agent_files)
-            .await
-        {
-            Ok((path, has_tools)) => {
-                extension_entries.push_str(&format!(
-                    "- Plugin `{}`: {} Read {}.\n",
-                    plugin.name,
-                    plugin.description,
-                    json!(path.to_string_lossy())
-                ));
-                if has_tools {
-                    callable_plugins.insert(plugin.name.clone());
-                }
-            }
-            Err(error) => {
-                beale_host_log::error!("plugin preparation failed: {error:#}");
-                extension_entries.push_str(&format!("- Plugin `{}` is unavailable this turn because its files or servers could not be prepared.\n", plugin.name));
-            }
-        }
-    }
-    if !callable_plugins.is_empty() {
-        definitions.push(plugin_call_definition());
-    }
-    let catalog_section =
-        system_prompt::extension_catalog(&agent_files, "EXTENSIONS.md", &extension_entries)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    #[cfg(feature = "memories")]
-    let memory_section = if memories_tools_enabled {
-        match beale_memories::MemoryStore::open(state.workspaces.root())
-            .and_then(|store| store.recall(&request.workspace_id, &request.prompt))
-        {
-            Ok(value) => value,
-            Err(error) => {
-                beale_host_log::error!("memory recall failed: {error:#}");
-                String::new()
-            }
-        }
-    } else {
-        String::new()
-    };
-    #[cfg(not(feature = "memories"))]
-    let memory_section = String::new();
-    let sections = [catalog_section.as_str(), memory_section.as_str()];
-    let system = system_prompt::load(state.workspaces.root(), &sections).map_err(|error| {
-        beale_host_log::error!("session system prompt failed: {error:#}");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-    #[cfg(feature = "graphs")]
-    let child_system = if active_graph.is_some() {
-        let catalog_section = system_prompt::extension_catalog(
-            &agent_files,
-            "subagents/EXTENSIONS.md",
-            &child_extension_entries,
-        )
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        system_prompt::load(
-            state.workspaces.root(),
-            &[catalog_section.as_str(), memory_section.as_str()],
-        )
-        .map_err(|error| {
-            beale_host_log::error!("subagent system prompt failed: {error:#}");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?
-    } else {
-        String::new()
-    };
-    #[cfg(feature = "graphs")]
-    let requested_role = requested_top_level_role(
-        active_graph.and_then(|_| beale_graphs::graph_definition(&saved_graph_id)),
-        &request.agent_role,
-    )?;
-    #[cfg(not(feature = "graphs"))]
-    if !request.agent_role.is_empty() {
-        return Err(StatusCode::BAD_REQUEST);
-    }
-    #[cfg(feature = "graphs")]
-    let previous_role = if active_graph.is_some() && !turns.is_empty() {
-        state
-            .db
-            .session_last_top_level_role(&session.id)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    } else {
-        None
-    };
-    #[cfg(feature = "graphs")]
-    let mut active_role = if active_graph.is_some() && !turns.is_empty() {
-        requested_role
-            .or_else(|| {
-                previous_role
-                    .as_deref()
-                    .and_then(beale_graphs::Role::from_id)
-                    .filter(|role| {
-                        beale_graphs::graph_definition(&saved_graph_id)
-                            .is_some_and(|graph| graph.nodes.contains(role))
-                    })
-            })
-            .or_else(|| beale_graphs::entry_role(&saved_graph_id))
-            .unwrap_or(beale_graphs::Role::Main)
-    } else {
-        requested_role
-            .or_else(|| active_graph.and_then(|_| beale_graphs::entry_role(&saved_graph_id)))
-            .unwrap_or(beale_graphs::Role::Main)
-    };
-    #[cfg(feature = "graphs")]
-    if let Some(peer) = &peer {
-        active_role = peer.role;
-    }
-    #[cfg(all(feature = "graphs", feature = "findings"))]
-    if peer.is_some() && beale_graphs::is_pipeline_graph(&saved_graph_id) {
-        definitions.retain(|tool| {
-            let name = tool["name"].as_str().unwrap_or_default();
-            !beale_findings::is_tool(name)
-                || !matches!(
-                    name,
-                    "findings_create" | "findings_complete_state" | "findings_reject"
-                )
-                || match name {
-                    "findings_create" => active_role == beale_graphs::Role::Discovery,
-                    "findings_complete_state" => matches!(
-                        active_role,
-                        beale_graphs::Role::Validation | beale_graphs::Role::Reporter
-                    ),
-                    "findings_reject" => active_role == beale_graphs::Role::Validation,
-                    _ => true,
-                }
-        });
-    }
-    #[cfg(feature = "graphs")]
-    let mut active_model = if active_graph.is_some() {
-        beale_graphs::top_level_model(&active_graph_config, active_role, &graph_fallback)
-    } else {
-        graph_fallback.clone()
-    };
-    #[cfg(not(feature = "graphs"))]
-    let active_model = GraphNodeModel {
-        node_id: "main".to_owned(),
-        provider: request.provider,
-        method: request.method,
-        model: request.model.clone(),
-    };
-    #[cfg(feature = "graphs")]
-    let (mut provider, mut mode) =
-        graphs::provider_for(&active_model).ok_or(StatusCode::BAD_REQUEST)?;
-    #[cfg(feature = "graphs")]
-    if let Some(tool) = beale_graphs::handoff_definition(&saved_graph_id, active_role) {
-        definitions.push(tool);
-    }
-    #[cfg(feature = "graphs")]
-    let base_system = system.clone();
-    #[allow(unused_mut)]
-    let mut system = system;
-    #[cfg(feature = "graphs")]
-    if active_graph.is_some() {
-        system.push_str(&format!(
-            "\n\n## Active agent: {}\n\n{}",
-            active_role.label(),
-            active_role.instruction()
-        ));
-    }
-    #[cfg(feature = "graphs")]
-    let system_before_stage_reminder = system.clone();
-    if provider != Provider::OpenAi {
-        input.insert(0, json!({"role":"system","content":system}));
-    }
-    let mut openai_connection = OpenAiConnection::default();
-    #[cfg(feature = "goal-mode")]
-    let mut goal_signal: Option<beale_goals::Signal> = None;
-    let mut tool_rows = Vec::<ToolCallRow>::new();
-    #[cfg(feature = "graphs")]
-    let mut child_turns = Vec::<ChildTurnRow>::new();
-    #[cfg(feature = "graphs")]
-    let child_message_sequence = Arc::new(AtomicU32::new(0x8000_0000));
-    #[cfg(feature = "graphs")]
-    let mut subagents = HashMap::<beale_graphs::Role, graphs::Subagents>::new();
-    #[cfg(feature = "graphs")]
-    let child_usage = Arc::new(Mutex::new(Vec::<ModelUsageRow>::new()));
-    #[cfg(not(feature = "graphs"))]
-    let child_turns = Vec::<ChildTurnRow>::new();
-    let mut reasoning_rows = Vec::<ReasoningSummaryRow>::new();
-    let mut commentary_rows = Vec::<CommentaryRow>::new();
-    let mut model_usage = Vec::<ModelUsageRow>::new();
-    #[cfg(feature = "graphs")]
-    let mut peer_messages = Vec::<String>::new();
-    let answer: Option<String>;
-    let mut segment_index = 0_u32;
-    #[cfg(feature = "graphs")]
-    let mut stage_reminder_sent = false;
-    'rounds: loop {
-        #[cfg(feature = "graphs")]
-        if let Some(manager) = subagents.get(&active_role) {
-            let incoming = manager.parent_messages().await;
-            if !incoming.is_empty() {
-                for (from, message) in &incoming {
-                    if let Some(from_role) = manager.role_of(from).await {
-                        tool_rows.push(
-                            graphs::received_message(
-                                from,
-                                from_role,
-                                message,
-                                graphs::ReceiveContext {
-                                    agent_role: active_role,
-                                    subagent_id: "",
-                                    turn_number: next_turn_number,
-                                    ordinal: tool_rows.len() as i64,
-                                    progress: progress.as_ref(),
-                                },
-                            )
-                            .await,
-                        );
-                    }
-                }
-                input.extend(input_messages(&[TextMessage {
-                    role: TextRole::User,
-                    text: format!(
-                        "Messages from your subagents:\n{}",
-                        incoming
-                            .iter()
-                            .map(|(from, message)| format!("From {from}: {message}"))
-                            .collect::<Vec<_>>()
-                            .join("\n")
-                    ),
-                }]));
-            }
-        }
-        #[cfg(feature = "graphs")]
-        if !stage_reminder_sent
-            && peer
-                .as_ref()
-                .and_then(|peer| peer.soft_reminder.as_ref())
-                .is_some_and(|receiver| *receiver.borrow())
-        {
-            system.push_str("\n\n## Sequential stage deadline\n\nYour stage time has ended. Finish the current action, summarize completed work and evidence, and yield. Leave remaining queued work for the next cycle.");
-            if provider != Provider::OpenAi {
-                input[0]["content"] = json!(system);
-            }
-            stage_reminder_sent = true;
-        }
-        // Reserve one stream segment for the answer and one for each reasoning part.
-        segment_index = segment_index.saturating_add(17);
-        if stop_requested(&stop) {
-            answer = Some(STOPPED_ANSWER.to_owned());
-            break;
-        }
-        let (provider_tx, forward) = if let Some(client_tx) = progress.clone() {
-            let (provider_tx, mut provider_rx) = mpsc::channel::<ProviderProgress>(32);
-            let stream_role = active_model.node_id.clone();
-            let forward = tokio::spawn(async move {
-                let mut reasoning_segments = std::collections::BTreeMap::new();
-                while let Some(update) = provider_rx.recv().await {
-                    let (kind, text, item_segment) = match update {
-                        ProviderProgress::MessageDelta(text) => {
-                            (SessionStreamKind::MessageDelta, text, segment_index)
-                        }
-                        ProviderProgress::ReasoningDelta(text, key) => {
-                            let next = reasoning_segments.len() as u32 + 1;
-                            let part = *reasoning_segments.entry(key).or_insert(next);
-                            (
-                                SessionStreamKind::ReasoningDelta,
-                                text,
-                                segment_index.saturating_add(part),
-                            )
-                        }
-                    };
-                    if client_tx
-                        .send(SessionStreamEvent {
-                            runbook_progress: None,
-                            kind: kind as i32,
-                            text,
-                            tool: None,
-                            detail: None,
-                            segment_index: item_segment,
-                            agent_role: stream_role.clone(),
-                            tool_detail: None,
-                            usage_delta: None,
-                            subagent_id: String::new(),
-                            subagent: None,
-                        })
-                        .await
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-            });
-            (Some(provider_tx), Some(forward))
-        } else {
-            (None, None)
-        };
-        let call_started = Instant::now();
-        let provider_call = async {
-            for attempt in 0..2 {
-                let step_request = ToolStepRequest {
-                    model: &active_model.model,
-                    input: &input,
-                    tools: &definitions,
-                    instructions: (provider == Provider::OpenAi).then_some(system.as_str()),
-                    reasoning_effort,
-                    workspace_root: Some(&workspace),
-                };
-                let result = if provider == Provider::OpenAi {
-                    state
-                        .provider
-                        .openai_tool_step(
-                            mode,
-                            step_request,
-                            &state.credentials,
-                            provider_tx.as_ref(),
-                            &mut openai_connection,
-                        )
-                        .await
-                } else {
-                    state
-                        .provider
-                        .tool_step(
-                            provider,
-                            mode,
-                            step_request,
-                            &state.credentials,
-                            provider_tx.as_ref(),
-                        )
-                        .await
-                };
-                if let Err(error) = &result
-                    && attempt == 0
-                    && provider_error_retryable(error)
-                {
-                    beale_host_log::error!(
-                        "transient session provider failure; retrying once: {error:#}"
-                    );
-                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                    continue;
-                }
-                return result;
-            }
-            unreachable!("provider step returns after its second attempt")
-        };
-        let step = until_stopped(provider_call, &mut stop).await;
-        drop(provider_tx);
-        if let Some(forward) = forward {
-            let _ = forward.await;
-        }
-        let Some(step) = step else {
-            answer = Some(STOPPED_ANSWER.to_owned());
-            break;
-        };
-        let step = match step {
-            Ok(step) => step,
-            Err(error) => {
-                beale_host_log::error!("session provider turn failed: {error:#}");
-                if tool_rows.is_empty() {
-                    if let Some(tx) = &progress {
-                        let _ = tx
-                            .send(SessionStreamEvent {
-                                runbook_progress: None,
-                                kind: SessionStreamKind::Failed as i32,
-                                text: provider_error_message(provider, mode, &error),
-                                tool: None,
-                                detail: None,
-                                segment_index: 0,
-                                agent_role: active_model.node_id.clone(),
-                                tool_detail: None,
-                                usage_delta: None,
-                                subagent_id: String::new(),
-                                subagent: None,
-                            })
-                            .await;
-                    }
-                    return Err(StatusCode::BAD_GATEWAY);
-                }
-                answer = Some(format!(
-                    "{INTERRUPTED_ANSWER} {}",
-                    provider_error_message(provider, mode, &error)
-                ));
-                break;
-            }
-        };
-        if stop_requested(&stop) {
-            answer = Some(STOPPED_ANSWER.to_owned());
-            break;
-        }
-        model_usage.push(ModelUsageRow {
-            agent_id: active_model.node_id.clone(),
-            role: active_model.node_id.clone(),
-            provider: active_model.provider,
-            method: active_model.method,
-            model: active_model.model.clone(),
-            input_tokens: step.usage.map(|usage| usage.input_tokens as i64),
-            output_tokens: step.usage.map(|usage| usage.output_tokens as i64),
-            cache_read_tokens: step
-                .usage
-                .and_then(|usage| usage.cache_read_tokens.map(|count| count as i64)),
-            work_elapsed_ms: Some(started.elapsed().as_millis().min(i64::MAX as u128) as i64),
-            duration_ms: call_started.elapsed().as_millis().min(i64::MAX as u128) as i64,
-            observed_at_ms: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map_or(0, |duration| {
-                    duration.as_millis().min(i64::MAX as u128) as i64
-                }),
-        });
-        if let Some(tx) = &progress
-            && let Some(item) = model_usage.last()
-        {
-            let _ = tx.send(usage_update(item, &active_model.node_id)).await;
-        }
-        for summary in step.reasoning_summaries {
-            if summary.trim().is_empty() {
-                continue;
-            }
-            reasoning_rows.push(ReasoningSummaryRow {
-                turn_number: next_turn_number,
-                ordinal: reasoning_rows.len() as i64,
-                after_tool_count: tool_rows.len() as i64,
-                text: summary,
-                agent_role: active_model.node_id.clone(),
-            });
-        }
-        let prior_input_len = input.len();
-        input.extend(step.continuation);
-        if step.calls.is_empty() {
-            answer = Some(step.text);
-            break;
-        }
-        if !step.text.trim().is_empty() {
-            let text = step.text;
-            if !text.trim().is_empty() {
-                commentary_rows.push(CommentaryRow {
-                    turn_number: next_turn_number,
-                    ordinal: commentary_rows.len() as i64,
-                    after_tool_count: tool_rows.len() as i64,
-                    text,
-                    agent_role: active_model.node_id.clone(),
-                });
-            }
-        }
-        let mut anthropic_tool_results = Vec::new();
-        #[cfg(feature = "graphs")]
-        let mut pending_handoff: Option<(beale_graphs::Role, String)> = None;
-        for call in step.calls {
-            if stop_requested(&stop) {
-                input.truncate(prior_input_len);
-                answer = Some(STOPPED_ANSWER.to_owned());
-                break 'rounds;
-            }
-            if call.id.is_empty()
-                || call.id.len() > 256
-                || call.name.len() > 128
-                || call.arguments.len() > 65_536
-            {
-                if tool_rows.is_empty() {
-                    return Err(StatusCode::BAD_GATEWAY);
-                }
-                answer = Some(format!(
-                    "{INTERRUPTED_ANSWER} The provider returned an invalid tool call."
-                ));
-                break 'rounds;
-            }
-            let id = Uuid::new_v4().to_string();
-            let args: Result<Value, _> = serde_json::from_str(&call.arguments);
-            let summary = if call.name == "goal_status" {
-                goal_status_summary(args.as_ref().unwrap_or(&Value::Null))
-            } else if cfg!(feature = "agent-feedback") && call.name == "agent_feedback" {
-                "Record agent feedback".to_owned()
-            } else if cfg!(feature = "surfaces") && call.name.starts_with("surface_") {
-                #[cfg(feature = "surfaces")]
-                {
-                    beale_surfaces::summary(
-                        &state.workspaces,
-                        &request.workspace_id,
-                        &call.name,
-                        args.as_ref().unwrap_or(&Value::Null),
-                    )
-                }
-                #[cfg(not(feature = "surfaces"))]
-                {
-                    base_tool_summary(&call.name, args.as_ref().unwrap_or(&Value::Null))
-                }
-            } else if cfg!(feature = "findings") && call.name.starts_with("findings_") {
-                #[cfg(feature = "findings")]
-                {
-                    beale_findings::summary(
-                        &state.db,
-                        &request.workspace_id,
-                        &call.name,
-                        args.as_ref().unwrap_or(&Value::Null),
-                    )
-                }
-                #[cfg(not(feature = "findings"))]
-                {
-                    base_tool_summary(&call.name, args.as_ref().unwrap_or(&Value::Null))
-                }
-            } else if cfg!(feature = "memories") && call.name.starts_with("memory_") {
-                #[cfg(feature = "memories")]
-                {
-                    beale_memories::summary(
-                        state.workspaces.root(),
-                        &request.workspace_id,
-                        &call.name,
-                        args.as_ref().unwrap_or(&Value::Null),
-                    )
-                }
-                #[cfg(not(feature = "memories"))]
-                {
-                    base_tool_summary(&call.name, args.as_ref().unwrap_or(&Value::Null))
-                }
-            } else if cfg!(feature = "runbooks") && call.name.starts_with("runbook_") {
-                #[cfg(feature = "runbooks")]
-                {
-                    beale_runbooks::summary(
-                        &state.db,
-                        &request.workspace_id,
-                        &session.id,
-                        &call.name,
-                        args.as_ref().unwrap_or(&Value::Null),
-                    )
-                }
-                #[cfg(not(feature = "runbooks"))]
-                {
-                    base_tool_summary(&call.name, args.as_ref().unwrap_or(&Value::Null))
-                }
-            } else if cfg!(feature = "graphs") && call.name.starts_with("graph_") {
-                #[cfg(feature = "graphs")]
-                {
-                    graph_tool_summary(
-                        state,
-                        &session.id,
-                        active_role,
-                        &subagents,
-                        &call.name,
-                        args.as_ref().unwrap_or(&Value::Null),
-                    )
-                    .await
-                }
-                #[cfg(not(feature = "graphs"))]
-                {
-                    base_tool_summary(&call.name, args.as_ref().unwrap_or(&Value::Null))
-                }
-            } else {
-                tool_summary(&call.name, args.as_ref().unwrap_or(&Value::Null))
-            };
-            #[cfg(feature = "graphs")]
-            let summary = if peer.is_none()
-                && active_graph.is_some()
-                && matches!(
-                    saved_graph_id.as_str(),
-                    beale_graphs::CLOUDFLARE_ID
-                        | beale_graphs::OPENAI_ID
-                        | beale_graphs::SEQUENTIAL_ID
-                ) {
-                format!("{}: {summary}", active_role.label())
-            } else {
-                summary
-            };
-            if let Some(tx) = &progress {
-                let _ = tx
-                    .send(SessionStreamEvent {
-                        runbook_progress: None,
-                        kind: SessionStreamKind::ToolStarted as i32,
-                        text: String::new(),
-                        tool: Some(SessionToolSummary {
-                            id: id.clone(),
-                            name: call.name.clone(),
-                            summary: summary.clone(),
-                            is_error: false,
-                            agent_role: active_model.node_id.clone(),
-                        }),
-                        detail: None,
-                        segment_index: 0,
-                        agent_role: active_model.node_id.clone(),
-                        tool_detail: Some(SessionToolDetailPage {
-                            id: id.clone(),
-                            name: call.name.clone(),
-                            arguments: call.arguments.clone(),
-                            output: String::new(),
-                            offset: 0,
-                            next_offset: 0,
-                            total_bytes: 0,
-                            is_error: false,
-                        }),
-                        usage_delta: None,
-                        subagent_id: String::new(),
-                        subagent: None,
-                    })
-                    .await;
-            }
-            let mut review_unavailable = false;
-            let (review_denial, feature_review_approved) =
-                if feature_tool_requires_review(&call.name) {
-                    if let Ok(arguments) = args.as_ref() {
-                        match until_stopped(
-                            beale_safety::review(
-                                &state.db,
-                                &state.provider,
-                                &state.credentials,
-                                ReviewRequest {
-                                    provider,
-                                    mode,
-                                    model: &active_model.model,
-                                    name: &call.name,
-                                    arguments,
-                                    workspace_context: &review_context,
-                                },
-                            ),
-                            &mut stop,
-                        )
-                        .await
-                        {
-                            Some(decision) => {
-                                review_unavailable = review_failed(&decision);
-                                (
-                                    (!decision.approved).then_some(decision.reason),
-                                    decision.approved && decision.reviewed,
-                                )
-                            }
-                            None => (Some("Stopped by user".to_owned()), false),
-                        }
-                    } else {
-                        (None, false)
-                    }
-                } else {
-                    (None, false)
-                };
-            #[cfg(not(feature = "surfaces"))]
-            let _ = feature_review_approved;
-            let (output, is_error) = if let Some(reason) = review_denial {
-                (
-                    if review_unavailable {
-                        reason
-                    } else {
-                        format!("Tool denied by review: {reason}")
-                    },
-                    true,
-                )
-            } else {
-                match args {
-                    #[cfg(feature = "webfetch")]
-                    Ok(args) if call.name == beale_webfetch::TOOL_NAME => {
-                        match until_stopped(
-                            execute_webfetch(&state.db, &request.workspace_id, &args),
-                            &mut stop,
-                        )
-                        .await
-                        {
-                            Some(Ok(value)) => (value.output, value.is_error),
-                            Some(Err(error)) => (format!("Webfetch error: {error:#}"), true),
-                            None => ("Webfetch stopped by user.".to_owned(), true),
-                        }
-                    }
-                    Ok(args) if call.name == "plugin_call" => {
-                        let result = async {
-                            let parsed: PluginCallArgs = serde_json::from_value(args)?;
-                            anyhow::ensure!(
-                                parsed.arguments.is_object(),
-                                "arguments must be an object"
-                            );
-                            anyhow::ensure!(
-                                callable_plugins.contains(&parsed.plugin),
-                                "plugin tools are unavailable in this workspace"
-                            );
-                            let review_args = json!({"plugin":parsed.plugin,"server":parsed.server,"tool":parsed.tool,"arguments":parsed.arguments});
-                            let decision = beale_safety::review(
-                                &state.db,
-                                &state.provider,
-                                &state.credentials,
-                                ReviewRequest {
-                                    provider,
-                                    mode,
-                                    model: &active_model.model,
-                                    name: "plugin_call",
-                                    arguments: &review_args,
-                                    workspace_context: &review_context,
-                                },
-                            )
-                            .await;
-                            if !decision.approved {
-                                if review_failed(&decision) {
-                                    review_unavailable = true;
-                                    anyhow::bail!("{}", decision.reason);
-                                }
-                                anyhow::bail!("plugin tool denied by review: {}", decision.reason);
-                            }
-                            let value = state
-                                .plugins
-                                .call_tool(
-                                    &parsed.plugin,
-                                    &parsed.server,
-                                    &parsed.tool,
-                                    parsed.arguments,
-                                    &request.workspace_id,
-                                )
-                                .await?;
-                            Ok::<_, anyhow::Error>((
-                                value.to_string(),
-                                value["isError"].as_bool().unwrap_or(false),
-                            ))
-                        };
-                        let result = until_stopped(result, &mut stop).await;
-                        match result {
-                            Some(Ok(value)) => value,
-                            Some(Err(error)) => (format!("Plugin tool error: {error}"), true),
-                            None => ("Plugin tool stopped by user.".to_owned(), true),
-                        }
-                    }
-                    #[cfg(feature = "runbooks")]
-                    Ok(args) if runbook_tools_enabled && call.name == beale_runbooks::RUN => {
-                        let result = async {
-                            let runbook_id = args
-                                .get("id")
-                                .and_then(Value::as_str)
-                                .ok_or_else(|| anyhow::anyhow!("id is required"))?;
-                            let document = state
-                                .db
-                                .runbook_get(&request.workspace_id, runbook_id)?
-                                .ok_or_else(|| anyhow::anyhow!("runbook not found"))?;
-                            for cell in &document.cells {
-                                if let beale_contracts::runbooks::Cell::Code {
-                                    language,
-                                    source,
-                                    ..
-                                } = cell
-                                {
-                                    let review_args = serde_json::json!({"command":format!("# {language} runbook cell\n{source}")});
-                                    let decision = beale_safety::review(
-                                        &state.db,
-                                        &state.provider,
-                                        &state.credentials,
-                                        ReviewRequest {
-                                            provider,
-                                            mode,
-                                            model: &active_model.model,
-                                            name: "bash",
-                                            arguments: &review_args,
-                                            workspace_context: &review_context,
-                                        },
-                                    )
-                                    .await;
-                                    if !decision.approved {
-                                        if review_failed(&decision) {
-                                            review_unavailable = true;
-                                            anyhow::bail!("{}", decision.reason);
-                                        }
-                                        anyhow::bail!(
-                                            "runbook cell denied by review: {}",
-                                            decision.reason
-                                        );
-                                    }
-                                }
-                            }
-                            let run = state.db.runbook_run_start(
-                                &request.workspace_id,
-                                &session.id,
-                                runbook_id,
-                                document.revision,
-                            )?;
-                            let mut active = ActiveRunbookRun {
-                                db: state.db.clone(),
-                                id: run.id.clone(),
-                                finished: false,
-                            };
-                            let progress_tx = progress.clone();
-                            let progress_title = document.title.clone();
-                            let progress_id = runbook_id.to_owned();
-                            let result = beale_runbooks::run_document(
-                                &document,
-                                &workspace,
-                                |cell_number| {
-                                    let cell_name =
-                                        document.cells[(cell_number - 1) as usize].name();
-                                    state.db.runbook_run_cell(&run.id, cell_number, cell_name)?;
-                                    if let Some(tx) = &progress_tx {
-                                        let _ = tx.try_send(SessionStreamEvent {
-                                            kind: SessionStreamKind::RunbookProgress as i32,
-                                            runbook_progress: Some(
-                                                beale_contracts::v1::RunbookProgress {
-                                                    runbook_id: progress_id.clone(),
-                                                    title: progress_title.clone(),
-                                                    cell_number,
-                                                    cell_name: cell_name.to_owned(),
-                                                },
-                                            ),
-                                            ..Default::default()
-                                        });
-                                    }
-                                    Ok(())
-                                },
-                                |cell_id, success, exit_code, stdout, stderr| {
-                                    state.db.runbook_run_cell_result(
-                                        &run.id, cell_id, success, exit_code, stdout, stderr,
-                                    )
-                                },
-                            )
-                            .await;
-                            let (success, output) = match result {
-                                Ok(result) => (result.success, result.output),
-                                Err(error) => (false, format!("Runbook execution error: {error}")),
-                            };
-                            active.finish(success, &output)?;
-                            Ok((serde_json::json!({"run_id":run.id,"runbook_id":runbook_id,"status":if success {"completed"} else {"failed"}}).to_string(), !success))
-                        };
-                        let result = until_stopped(result, &mut stop).await;
-                        match result {
-                            Some(Ok(value)) => value,
-                            Some(Err(error)) => (format!("Runbook tool error: {error}"), true),
-                            None => ("Runbook stopped by user.".to_owned(), true),
-                        }
-                    }
-                    #[cfg(feature = "runbooks")]
-                    Ok(args) if runbook_tools_enabled && beale_runbooks::is_tool(&call.name) => {
-                        match beale_runbooks::execute(
-                            &state.db,
-                            &request.workspace_id,
-                            &session.id,
-                            &call.name,
-                            &args,
-                        ) {
-                            Ok(value) => (value, false),
-                            Err(error) => (format!("Runbook tool error: {error}"), true),
-                        }
-                    }
-                    #[cfg(feature = "findings")]
-                    Ok(args) if findings_tools_enabled && beale_findings::is_tool(&call.name) => {
-                        let allowed = {
-                            #[cfg(feature = "graphs")]
-                            {
-                                peer.is_none()
-                                    || !beale_graphs::is_pipeline_graph(&saved_graph_id)
-                                    || pipeline_finding_allowed(active_role, &call.name, &args)
-                            }
-                            #[cfg(not(feature = "graphs"))]
-                            {
-                                true
-                            }
-                        };
-                        if !allowed {
-                            ("This finding action belongs to another Research Pipeline agent. Hand off the finding and evidence to that role.".to_owned(), true)
-                        } else {
-                            let pending = tool_rows
-                                .iter()
-                                .map(|row| beale_findings::PendingSource {
-                                    id: &row.id,
-                                    name: &row.name,
-                                    output: &row.output,
-                                    is_error: row.is_error,
-                                })
-                                .collect::<Vec<_>>();
-                            match beale_findings::execute(
-                                &state.db,
-                                &request.workspace_id,
-                                &session.id,
-                                &call.name,
-                                &args,
-                                &pending,
-                            ) {
-                                Ok(value) => (value, false),
-                                Err(error) => (format!("Findings tool error: {error}"), true),
-                            }
-                        }
-                    }
-                    #[cfg(feature = "memories")]
-                    Ok(args) if memories_tools_enabled && beale_memories::is_tool(&call.name) => {
-                        match beale_memories::MemoryStore::open(state.workspaces.root()).and_then(
-                            |store| {
-                                beale_memories::execute(
-                                    &store,
-                                    &state.db,
-                                    &request.workspace_id,
-                                    &session.id,
-                                    &call.name,
-                                    &args,
-                                )
-                            },
-                        ) {
-                            Ok(value) => (value, false),
-                            Err(error) => (format!("Memory tool error: {error}"), true),
-                        }
-                    }
-                    #[cfg(feature = "agent-feedback")]
-                    Ok(args)
-                        if agent_feedback_tools_enabled
-                            && call.name == beale_agent_feedback::TOOL_NAME =>
-                    {
-                        match beale_agent_feedback::execute(
-                            state.workspaces.root(),
-                            &request.workspace_id,
-                            &session.id,
-                            &active_model.node_id,
-                            &args,
-                        ) {
-                            Ok(value) => (value, false),
-                            Err(error) => (format!("Agent feedback error: {error}"), true),
-                        }
-                    }
-                    #[cfg(feature = "surfaces")]
-                    Ok(args) if surface_tools_enabled && beale_surfaces::is_tool(&call.name) => {
-                        match beale_surfaces::execute(
-                            &state.workspaces,
-                            &request.workspace_id,
-                            &call.name,
-                            &args,
-                            feature_review_approved,
-                        ) {
-                            Ok(value) => (value, false),
-                            Err(error) => (format!("Surface tool error: {error}"), true),
-                        }
-                    }
-                    #[cfg(feature = "goal-mode")]
-                    Ok(args) if call.name == beale_goals::TOOL_NAME && goal_active => {
-                        if goal_signal.is_some() {
-                            (
-                                "Goal status was already recorded for this turn.".to_owned(),
-                                true,
-                            )
-                        } else {
-                            match beale_goals::parse_signal(&args) {
-                                Ok(signal) => {
-                                    goal_signal = Some(signal);
-                                    ("Goal status recorded.".to_owned(), false)
-                                }
-                                Err(error) => (format!("Invalid goal status: {error}"), true),
-                            }
-                        }
-                    }
-                    #[cfg(feature = "graphs")]
-                    Ok(args)
-                        if call.name == beale_graphs::HANDOFF_TOOL && active_graph.is_some() =>
-                    {
-                        if peer.is_none() && pending_handoff.is_some() {
-                            (
-                                "Finish the pending handoff before adding another.".to_owned(),
-                                true,
-                            )
-                        } else {
-                            match beale_graphs::handoff_target(&saved_graph_id, active_role, &args)
-                            {
-                                Ok((role, task)) => {
-                                    if let Some(peer) = &peer {
-                                        let item = beale_storage::GraphHandoffRow {
-                                            id: Uuid::new_v4().to_string(),
-                                            from_role: active_role.id().to_owned(),
-                                            to_role: role.id().to_owned(),
-                                            task,
-                                            status: "pending".to_owned(),
-                                        };
-                                        let now = SystemTime::now()
-                                            .duration_since(UNIX_EPOCH)
-                                            .map_or(0, |time| {
-                                                time.as_millis().min(i64::MAX as u128) as i64
-                                            });
-                                        match state.db.enqueue_graph_handoff(
-                                            &session.id,
-                                            &item,
-                                            now,
-                                        ) {
-                                            Ok(()) => {
-                                                let _ = peer.notify.send(());
-                                                (
-                                                    format!(
-                                                        "Queued a handoff to {}.",
-                                                        role.label()
-                                                    ),
-                                                    false,
-                                                )
-                                            }
-                                            Err(error) => (
-                                                format!("Handoff could not be saved: {error}"),
-                                                true,
-                                            ),
-                                        }
-                                    } else {
-                                        pending_handoff = Some((role, task));
-                                        (format!("Handing off to {}.", role.label()), false)
-                                    }
-                                }
-                                Err(error) => (format!("Invalid handoff: {error}"), true),
-                            }
-                        }
-                    }
-                    #[cfg(feature = "graphs")]
-                    Ok(args) if call.name == beale_graphs::SPAWN_TOOL && active_graph.is_some() => {
-                        let reservation = active_graph
-                            .ok_or_else(|| "Graph runtime is unavailable.".to_owned())
-                            .and_then(|runtime| {
-                                validate_delegations(
-                                    runtime,
-                                    &args,
-                                    &active_graph_config,
-                                    &graph_fallback,
-                                )
-                            });
-                        if let Err(error) = reservation {
-                            (error, true)
-                        } else {
-                            let assignments = active_graph
-                                .and_then(|runtime| {
-                                    runtime
-                                        .assignments(&args, &active_graph_config, &graph_fallback)
-                                        .ok()
-                                })
-                                .unwrap_or_default();
-                            let manager = subagents
-                                .entry(active_role)
-                                .or_insert_with(|| graphs::Subagents::new(&active_graph_config));
-                            let output = manager
-                                .spawn(
-                                    assignments,
-                                    graphs::ChildContext {
-                                        parent_role: active_role,
-                                        state: state.clone(),
-                                        workspace: workspace.clone(),
-                                        agent_files: Arc::clone(&agent_files),
-                                        #[cfg(any(
-                                            feature = "agent-feedback",
-                                            feature = "webfetch"
-                                        ))]
-                                        workspace_id: request.workspace_id.clone(),
-                                        #[cfg(feature = "webfetch")]
-                                        webfetch_enabled: webfetch_tools_enabled,
-                                        #[cfg(feature = "agent-feedback")]
-                                        session_id: session.id.clone(),
-                                        #[cfg(feature = "agent-feedback")]
-                                        feedback_enabled: agent_feedback_tools_enabled,
-                                        workspace_context: review_context.clone(),
-                                        surfaces_context: surfaces_context.clone(),
-                                        base_system: child_system.clone(),
-                                        reasoning_effort: reasoning_effort.map(str::to_owned),
-                                        turn_number: next_turn_number,
-                                        turn_started: started,
-                                        progress: progress.clone(),
-                                        message_sequence: Arc::clone(&child_message_sequence),
-                                        model_usage: Arc::clone(&child_usage),
-                                    },
-                                )
-                                .await;
-                            match output {
-                                Ok(output) => (output, false),
-                                Err(error) => (error.to_owned(), true),
-                            }
-                        }
-                    }
-                    #[cfg(feature = "graphs")]
-                    Ok(args) if call.name == beale_graphs::LIST_TOOL && active_graph.is_some() => {
-                        if !args.as_object().is_some_and(serde_json::Map::is_empty) {
-                            ("Invalid subagent list arguments.".to_owned(), true)
-                        } else {
-                            let manager = subagents
-                                .entry(active_role)
-                                .or_insert_with(|| graphs::Subagents::new(&active_graph_config));
-                            (manager.list().await, false)
-                        }
-                    }
-                    #[cfg(feature = "graphs")]
-                    Ok(args)
-                        if call.name == beale_graphs::INSPECT_TOOL && active_graph.is_some() =>
-                    {
-                        match graphs::InspectRequest::parse(&args) {
-                            Err(error) => (error.to_owned(), true),
-                            Ok(request) => {
-                                if let Some(value) = match subagents.get(&active_role) {
-                                    Some(manager) => manager.inspect(&request).await,
-                                    None => None,
-                                } {
-                                    (value, false)
-                                } else {
-                                    match graphs::inspect_saved(
-                                        &state.db,
-                                        &session.id,
-                                        active_role,
-                                        &request,
-                                    ) {
-                                        Ok(Some(value)) => (value, false),
-                                        Ok(None) => (
-                                            "Subagent not found for this top-level agent."
-                                                .to_owned(),
-                                            true,
-                                        ),
-                                        Err(error) => {
-                                            beale_host_log::error!(
-                                                "saved graph subagent inspect failed: {error:#}"
-                                            );
-                                            (
-                                                "Subagent transcript could not be read.".to_owned(),
-                                                true,
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    #[cfg(feature = "graphs")]
-                    Ok(args)
-                        if call.name == beale_graphs::MESSAGE_TOOL && active_graph.is_some() =>
-                    {
-                        let manager = subagents
-                            .entry(active_role)
-                            .or_insert_with(|| graphs::Subagents::new(&active_graph_config));
-                        match manager.message("parent", &args).await {
-                            Ok(output) => (output, false),
-                            Err(error) => (error.to_owned(), true),
-                        }
-                    }
-                    #[cfg(feature = "graphs")]
-                    Ok(args) if call.name == beale_graphs::KILL_TOOL && active_graph.is_some() => {
-                        let manager = subagents
-                            .entry(active_role)
-                            .or_insert_with(|| graphs::Subagents::new(&active_graph_config));
-                        match manager.kill(&args).await {
-                            Ok(output) => (output, false),
-                            Err(error) => (error.to_owned(), true),
-                        }
-                    }
-                    Ok(args) => {
-                        let decision =
-                            if matches!(call.name.as_str(), "read" | "write" | "edit" | "bash") {
-                                until_stopped(
-                                    beale_safety::review(
-                                        &state.db,
-                                        &state.provider,
-                                        &state.credentials,
-                                        ReviewRequest {
-                                            provider,
-                                            mode,
-                                            model: &active_model.model,
-                                            name: &call.name,
-                                            arguments: &args,
-                                            workspace_context: &review_context,
-                                        },
-                                    ),
-                                    &mut stop,
-                                )
-                                .await
-                            } else {
-                                None
-                            };
-                        if decision.as_ref().is_some_and(review_failed) {
-                            review_unavailable = true;
-                        }
-                        if stop_requested(&stop) {
-                            ("Tool stopped by user.".to_owned(), true)
-                        } else if let Some(decision) = decision
-                            && !decision.approved
-                        {
-                            (
-                                if review_failed(&decision) {
-                                    decision.reason
-                                } else {
-                                    format!("Tool denied by review: {}", decision.reason)
-                                },
-                                true,
-                            )
-                        } else {
-                            match until_stopped(
-                                execute(&call.name, &args, &workspace, state.workspaces.root()),
-                                &mut stop,
-                            )
-                            .await
-                            {
-                                Some(Ok(value)) => (value.output, value.is_error),
-                                Some(Err(error)) => (format!("Tool error: {error:#}"), true),
-                                None => ("Tool stopped by user.".to_owned(), true),
-                            }
-                        }
-                    }
-                    Err(_) => ("Tool error: invalid JSON arguments".to_owned(), true),
-                }
-            };
-            let model_output = {
-                if let Some(tx) = &progress {
-                    let _ = tx
-                        .send(SessionStreamEvent {
-                            runbook_progress: None,
-                            kind: SessionStreamKind::ToolFinished as i32,
-                            text: String::new(),
-                            tool: Some(SessionToolSummary {
-                                id: id.clone(),
-                                name: call.name.clone(),
-                                summary: summary.clone(),
-                                is_error,
-                                agent_role: active_model.node_id.clone(),
-                            }),
-                            detail: None,
-                            segment_index: 0,
-                            agent_role: active_model.node_id.clone(),
-                            tool_detail: Some(SessionToolDetailPage {
-                                id: id.clone(),
-                                name: call.name.clone(),
-                                arguments: call.arguments.clone(),
-                                output: page(&output, 0, TOOL_PAGE_BYTES)
-                                    .map_or_else(|_| String::new(), |(first, _)| first),
-                                offset: 0,
-                                next_offset: page(&output, 0, TOOL_PAGE_BYTES)
-                                    .map_or(0, |(_, next)| next as u64),
-                                total_bytes: output.len() as u64,
-                                is_error,
-                            }),
-                            usage_delta: None,
-                            subagent_id: String::new(),
-                            subagent: None,
-                        })
-                        .await;
-                }
-                tool_rows.push(ToolCallRow {
-                    id: id.clone(),
-                    turn_number: next_turn_number,
-                    ordinal: tool_rows.len() as i64,
-                    name: call.name.clone(),
-                    summary,
-                    arguments: call.arguments,
-                    output: output.clone(),
-                    is_error,
-                    agent_role: active_model.node_id.clone(),
-                });
-                model_tool_preview(&call.name, &id, &output, is_error, &agent_files)
-            };
-            append_tool_result(
-                &mut input,
-                &mut anthropic_tool_results,
-                provider,
-                mode,
-                &call.id,
-                &model_output,
-            );
-            if review_unavailable {
-                answer = Some("Auto-Review was unavailable, so the requested tool was not run. Saved activity can be resumed after the review service is available.".to_owned());
-                break 'rounds;
-            }
-        }
-        if !anthropic_tool_results.is_empty() {
-            input.push(json!({"role":"user","content":anthropic_tool_results}));
-        }
-        #[cfg(feature = "graphs")]
-        if let Some((role, task)) = pending_handoff {
-            peer_messages.push(format!(
-                "{} → {}: {}",
-                active_role.label(),
-                role.label(),
-                task
-            ));
-            active_role = role;
-            active_model =
-                beale_graphs::top_level_model(&active_graph_config, role, &graph_fallback);
-            (provider, mode) =
-                graphs::provider_for(&active_model).ok_or(StatusCode::BAD_REQUEST)?;
-            openai_connection = OpenAiConnection::default();
-            definitions.retain(|tool| tool["name"] != beale_graphs::HANDOFF_TOOL);
-            if let Some(tool) = beale_graphs::handoff_definition(&saved_graph_id, role) {
-                definitions.push(tool);
-            }
-            system = format!(
-                "{base_system}\n\n## Active agent: {}\n\n{}",
-                role.label(),
-                role.instruction()
-            );
-            input = input_messages(&messages);
-            input.push(json!({"role":"user","content":format!("Peer handoff to {}. Task: {}\n\nHandoffs in this turn:\n{}\n\nWork in this session. You may delegate to your own subagents and hand off to a peer when needed.", role.label(), task, peer_messages.join("\n"))}));
-            if provider != Provider::OpenAi {
-                input.insert(0, json!({"role":"system","content":system}));
-            }
-            continue 'rounds;
-        }
-    }
-    #[cfg(feature = "graphs")]
-    for (_, mut manager) in subagents {
-        if stop_requested(&stop) {
-            manager.abort_all().await;
-        }
-        let result = manager.finish().await;
-        for mut tool in result.tools {
-            tool.ordinal = tool_rows.len() as i64;
-            tool_rows.push(tool);
-        }
-        child_turns.extend(result.child_turns);
-    }
-    #[cfg(feature = "graphs")]
-    model_usage.extend(child_usage.lock().await.drain(..));
-    let mut answer = answer.ok_or(StatusCode::BAD_GATEWAY)?;
-    if answer.trim().is_empty() || history_bytes.saturating_add(answer.len()) > MAX_HISTORY_BYTES {
-        if tool_rows.is_empty() {
-            if let Some(tx) = &progress {
-                let text = if answer.trim().is_empty() {
-                    "The provider completed without a message or tool call. Try again."
-                } else {
-                    "The provider answer exceeded this session's history limit."
-                };
-                let _ = tx
-                    .send(SessionStreamEvent {
-                        runbook_progress: None,
-                        kind: SessionStreamKind::Failed as i32,
-                        text: text.to_owned(),
-                        tool: None,
-                        detail: None,
-                        segment_index: 0,
-                        agent_role: active_model.node_id.clone(),
-                        tool_detail: None,
-                        usage_delta: None,
-                        subagent_id: String::new(),
-                        subagent: None,
-                    })
-                    .await;
-            }
-            return Err(StatusCode::BAD_GATEWAY);
-        }
-        answer = if answer.trim().is_empty() {
-            format!("{INTERRUPTED_ANSWER} The provider completed without a message.")
-        } else {
-            format!(
-                "{INTERRUPTED_ANSWER} The provider answer exceeded the session history boundary."
-            )
-        };
-    }
-    #[cfg(feature = "goal-mode")]
-    if let Some(goal) = goal.as_mut().filter(|_| goal_active) {
-        goal.turns_used = goal.turns_used.checked_add(1).ok_or(StatusCode::CONFLICT)?;
-        goal.active_ms = goal.active_ms.saturating_add(
-            i64::try_from(started.elapsed().as_millis().min(i64::MAX as u128))
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
-        );
-        let signal = goal_signal_for_answer(&answer, goal_signal);
-        match beale_goals::after_turn(
-            signal,
-            goal.turns_used as u64,
-            goal.active_ms as u64,
-            beale_goals::Limits {
-                max_turns: goal.max_turns as u64,
-                max_duration_minutes: goal.max_duration_minutes as u64,
-            },
-        ) {
-            beale_goals::Outcome::Active => {}
-            beale_goals::Outcome::Complete => goal.status = GoalStatus::Complete as i32,
-            beale_goals::Outcome::Waiting(required) => {
-                goal.status = GoalStatus::Waiting as i32;
-                goal.required_state = required;
-            }
-            beale_goals::Outcome::Paused => goal.status = GoalStatus::Paused as i32,
-        }
-        if stop_requested(&stop) && goal.status == GoalStatus::Active as i32 {
-            goal.status = GoalStatus::Paused as i32;
-        }
-    }
-    turns.push(StoredTurn {
-        number: next_turn_number,
-        provider: active_model.provider,
-        method: active_model.method,
-        model: active_model.model.clone(),
-        prompt: request.prompt,
-        answer,
-        duration_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,
-        internal_prompt: automatic || {
-            #[cfg(feature = "graphs")]
-            {
-                peer.as_ref().is_some_and(|peer| peer.handoff)
-            }
-            #[cfg(not(feature = "graphs"))]
-            {
-                false
-            }
-        },
-        agent_role: active_model.node_id.clone(),
-    });
-    let repeat_preset = request.repeat_preset;
-    let automation_options = AutomationOptions {
-        reasoning_effort: request.reasoning_effort,
-        goal_mode: request.goal_mode,
-        goal_max_turns: request.goal_max_turns,
-        goal_max_duration_minutes: request.goal_max_duration_minutes,
-    };
-    let latest = turns.last().ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
-    #[cfg(feature = "graphs")]
-    let save_peer_context = peer.is_some();
-    #[cfg(not(feature = "graphs"))]
-    let save_peer_context = false;
-    if provider == Provider::OpenAi {
-        close_unanswered_openai_calls(&mut input);
-    }
-    #[cfg(feature = "graphs")]
-    if stage_reminder_sent && provider != Provider::OpenAi {
-        input[0]["content"] = json!(system_before_stage_reminder);
-    }
-    let provider_context_json = if save_peer_context
-        || (provider == Provider::OpenAi && !latest.answer.starts_with(INTERRUPTED_ANSWER))
-    {
-        let context = if provider == Provider::OpenAi {
-            compact_openai_context(&input)
-        } else {
-            input.clone()
-        };
-        let encoded =
-            serde_json::to_string(&context).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        (encoded.len() <= 8_388_608).then_some(encoded)
-    } else {
-        None
-    };
-    session.last_message_at_ms = u64::try_from(
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-            .as_millis(),
-    )
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let session_row = SessionRow {
-        id: session.id.clone(),
-        workspace_id: session.workspace_id.clone(),
-        title: session.title.clone(),
-        created_at_ms: i64::try_from(session.created_at_ms)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
-        last_message_at_ms: i64::try_from(session.last_message_at_ms)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
-    };
-    state
-        .db
-        .append_turn_with_metadata(
-            &session_row,
-            &TurnRow {
-                number: next_turn_number,
-                provider: latest.provider,
-                method: latest.method,
-                model: latest.model.clone(),
-                prompt: latest.prompt.clone(),
-                answer: latest.answer.clone(),
-                duration_ms: i64::try_from(latest.duration_ms)
-                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
-                internal_prompt: latest.internal_prompt,
-            },
-            next_turn_number == 1 && {
-                #[cfg(feature = "graphs")]
-                {
-                    peer.is_none()
-                }
-                #[cfg(not(feature = "graphs"))]
-                {
-                    true
-                }
-            },
-            TurnActivity {
-                tools: &tool_rows,
-                reasoning: &reasoning_rows,
-                commentary: &commentary_rows,
-                goal: goal.as_ref(),
-            },
-            (!repeat_preset.is_empty()).then_some((repeat_preset.as_str(), automation_options)),
-            TurnMetadata {
-                provider_context_json: provider_context_json.as_deref(),
-                graph_id: (!request.graph_id.is_empty()).then_some(request.graph_id.as_str()),
-                graph_config: graph_config.as_deref(),
-                model_usage: Some(&model_usage),
-                child_turns: &child_turns,
-                queue_memories: memories_tools_enabled,
-            },
-        )
-        .map_err(|error| {
-            beale_host_log::error!("session turn save failed: {error:#}");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-    #[cfg(feature = "graphs")]
-    if peer.is_some() {
-        let (saved, turns) = load_persisted(&state.db, parse_id(&session.id)?)?;
-        return detail(&state.db, &saved, &turns);
-    }
-    trim_recent_turns(&mut turns);
-    detail(&state.db, &session, &turns)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use axum::body::to_bytes;
     use axum::{body::Body, http::Request};
-    #[cfg(any(feature = "agent-feedback", feature = "webfetch"))]
+    #[cfg(feature = "fleet")]
+    use beale_fleet::FleetStore;
+    #[cfg(any(feature = "agent-feedback", feature = "webfetch", feature = "fleet"))]
     use beale_storage::WorkspaceRow;
+
+    #[cfg(feature = "fleet")]
+    #[test]
+    fn fleet_prompt_lists_only_allowed_tools_in_scope() {
+        let root =
+            std::env::temp_dir().join(format!("beale-fleet-prompt-example-{}", Uuid::new_v4()));
+        let db = HostDatabase::open(&root).unwrap();
+        crate::features::migrate(&db).unwrap();
+        let workspace = "workspace-example-a";
+        db.replace_workspaces(&[WorkspaceRow {
+            id: workspace.to_owned(),
+            name: "Example A".to_owned(),
+            directory: "example-a".to_owned(),
+        }])
+        .unwrap();
+        db.set_research_tool_settings("ripgrep", true, false)
+            .unwrap();
+        assert_eq!(fleet_prompt_note(&db, workspace).unwrap(), None);
+        db.set_feature_enabled(beale_fleet::FEATURE_ID, true)
+            .unwrap();
+        assert!(
+            fleet_prompt_note(&db, workspace)
+                .unwrap()
+                .unwrap()
+                .contains("ripgrep (locally)")
+        );
+        db.set_extension_scope("feature", beale_fleet::FEATURE_ID, false, &[])
+            .unwrap();
+        assert_eq!(fleet_prompt_note(&db, workspace).unwrap(), None);
+        drop(db);
+        std::fs::remove_dir_all(root).unwrap();
+    }
     use prost::Message;
     use tower::ServiceExt;
 
@@ -4455,6 +2298,7 @@ mod tests {
         }));
     }
 
+    #[cfg(feature = "findings")]
     #[test]
     fn successful_workspace_reads_expose_the_exact_finding_evidence_reference() {
         let files = AgentFiles::new().unwrap();
@@ -4483,49 +2327,50 @@ mod tests {
             "findings_complete_state",
             "findings_reject",
         ] {
-            assert!(!pipeline_finding_allowed(
+            assert!(!tool_runtime::pipeline_finding_allowed(
                 Role::AuditTargets,
                 name,
                 &json!({"state":"candidate"})
             ));
         }
-        assert!(pipeline_finding_allowed(
+        assert!(tool_runtime::pipeline_finding_allowed(
             Role::Discovery,
             "findings_create",
             &json!({})
         ));
-        assert!(pipeline_finding_allowed(
+        assert!(tool_runtime::pipeline_finding_allowed(
             Role::Discovery,
             "findings_update",
             &json!({"state":"candidate"})
         ));
-        assert!(!pipeline_finding_allowed(
+        assert!(!tool_runtime::pipeline_finding_allowed(
             Role::Discovery,
             "findings_complete_state",
             &json!({"state":"validated"})
         ));
-        assert!(pipeline_finding_allowed(
+        assert!(tool_runtime::pipeline_finding_allowed(
             Role::Validation,
             "findings_complete_state",
             &json!({"state":"validated"})
         ));
-        assert!(!pipeline_finding_allowed(
+        assert!(!tool_runtime::pipeline_finding_allowed(
             Role::Validation,
             "findings_complete_state",
             &json!({"state":"screened"})
         ));
-        assert!(pipeline_finding_allowed(
+        assert!(tool_runtime::pipeline_finding_allowed(
             Role::Reporter,
             "findings_complete_state",
             &json!({"state":"screened"})
         ));
-        assert!(!pipeline_finding_allowed(
+        assert!(!tool_runtime::pipeline_finding_allowed(
             Role::Reporter,
             "findings_create",
             &json!({})
         ));
     }
 
+    #[cfg(feature = "goal-mode")]
     #[cfg(feature = "goal-mode")]
     #[test]
     fn omitted_goal_status_continues_without_an_explicit_limit() {
@@ -4602,6 +2447,7 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("beale-webfetch-example-{}", uuid::Uuid::new_v4()));
         let db = HostDatabase::open(&root).unwrap();
+        crate::features::migrate(&db).unwrap();
         let id = beale_webfetch::FEATURE_ID;
         let workspace = "workspace-example-a";
         let unavailable = "Webfetch is disabled or unavailable in this workspace";
@@ -4674,7 +2520,10 @@ mod tests {
             uuid::Uuid::new_v4()
         ));
         let db = HostDatabase::open(&root).unwrap();
-        assert!(!agent_feedback_feature_enabled(&db, "workspace-example-a").unwrap());
+        crate::features::migrate(&db).unwrap();
+        assert!(
+            !feature_applies(&db, beale_agent_feedback::FEATURE_ID, "workspace-example-a").unwrap()
+        );
         db.replace_workspaces(&[
             WorkspaceRow {
                 id: "workspace-example-a".to_owned(),
@@ -4697,33 +2546,49 @@ mod tests {
             &["workspace-example-a".to_owned()],
         )
         .unwrap();
-        assert!(agent_feedback_feature_enabled(&db, "workspace-example-a").unwrap());
-        assert!(!agent_feedback_feature_enabled(&db, "workspace-example-b").unwrap());
+        assert!(
+            feature_applies(&db, beale_agent_feedback::FEATURE_ID, "workspace-example-a").unwrap()
+        );
+        assert!(
+            !feature_applies(&db, beale_agent_feedback::FEATURE_ID, "workspace-example-b").unwrap()
+        );
         drop(db);
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    #[cfg(feature = "goal-mode")]
     #[test]
-    fn feature_tools_require_review_without_double_reviewing_base_tools() {
+    fn feature_and_base_tools_share_one_review_gate() {
+        for name in ["read", "write", "edit", "bash"] {
+            assert!(tool_runtime::requires_call_review(name), "{name}");
+        }
         #[cfg(feature = "webfetch")]
-        assert!(feature_tool_requires_review(beale_webfetch::TOOL_NAME));
+        assert!(tool_runtime::requires_call_review(
+            beale_webfetch::TOOL_NAME
+        ));
         #[cfg(feature = "surfaces")]
         for tool in beale_surfaces::definitions() {
-            assert!(feature_tool_requires_review(tool["name"].as_str().unwrap()));
+            assert!(tool_runtime::requires_call_review(
+                tool["name"].as_str().unwrap()
+            ));
         }
         #[cfg(feature = "findings")]
         for tool in beale_findings::definitions() {
-            assert!(feature_tool_requires_review(tool["name"].as_str().unwrap()));
+            assert!(tool_runtime::requires_call_review(
+                tool["name"].as_str().unwrap()
+            ));
         }
         #[cfg(feature = "memories")]
         for tool in beale_memories::definitions() {
-            assert!(feature_tool_requires_review(tool["name"].as_str().unwrap()));
+            assert!(tool_runtime::requires_call_review(
+                tool["name"].as_str().unwrap()
+            ));
         }
         #[cfg(feature = "runbooks")]
-        assert!(feature_tool_requires_review(beale_runbooks::RUN));
+        assert!(tool_runtime::requires_call_review(beale_runbooks::RUN));
         #[cfg(feature = "goal-mode")]
-        assert!(feature_tool_requires_review(beale_goals::TOOL_NAME));
-        for name in [
+        assert!(tool_runtime::requires_call_review(beale_goals::TOOL_NAME));
+        let unreviewed: Vec<&str> = vec![
             #[cfg(feature = "agent-feedback")]
             beale_agent_feedback::TOOL_NAME,
             #[cfg(feature = "graphs")]
@@ -4736,19 +2601,17 @@ mod tests {
             beale_graphs::MESSAGE_TOOL,
             #[cfg(feature = "graphs")]
             beale_graphs::KILL_TOOL,
-            "read",
-            "write",
-            "edit",
-            "bash",
             "plugin_call",
-        ] {
-            assert!(!feature_tool_requires_review(name));
+        ];
+        for name in unreviewed {
+            assert!(!tool_runtime::requires_call_review(name), "{name}");
         }
     }
 
     #[cfg(all(
         feature = "agent-feedback",
         feature = "webfetch",
+        feature = "fleet",
         feature = "surfaces",
         feature = "findings",
         feature = "memories",
@@ -4756,6 +2619,7 @@ mod tests {
         feature = "graphs",
         feature = "goal-mode"
     ))]
+    #[cfg(feature = "goal-mode")]
     #[test]
     fn built_in_tool_counts_include_optional_features() {
         let base = beale_tools::definitions().len();
@@ -4767,9 +2631,10 @@ mod tests {
             + beale_memories::definitions().len()
             + beale_agent_feedback::TOOL_COUNT as usize
             + beale_webfetch::TOOL_COUNT as usize
+            + beale_fleet::TOOL_COUNT as usize
             + beale_graphs::TOOL_COUNT as usize
             + beale_goals::TOOL_COUNT as usize;
-        assert_eq!(all, 31);
+        assert_eq!(all, 36);
     }
 
     #[cfg(feature = "graphs")]
@@ -4777,6 +2642,7 @@ mod tests {
     fn graph_selection_requires_an_enabled_in_scope_feature_and_new_session() {
         let root = std::env::temp_dir().join(format!("beale-graph-example-{}", Uuid::new_v4()));
         let db = HostDatabase::open(&root).unwrap();
+        crate::features::migrate(&db).unwrap();
         let workspace = Uuid::new_v4().to_string();
         let other = Uuid::new_v4().to_string();
         db.replace_workspaces(
@@ -5246,7 +3112,7 @@ mod tests {
             reasoning_effort_name(ReasoningEffort::Unspecified as i32),
             Ok(None)
         );
-        assert_eq!(reasoning_effort_name(99), Err(StatusCode::BAD_REQUEST));
+        assert_eq!(reasoning_effort_name(99), Err(TurnError::Invalid));
     }
 
     #[test]
@@ -5276,10 +3142,12 @@ mod tests {
         assert_eq!(decoded.prompt, request.prompt);
     }
 
+    #[cfg(feature = "goal-mode")]
     #[test]
     fn goal_continuation_keeps_model_context_and_hides_its_internal_prompt() {
         let root = std::env::temp_dir().join(format!("beale-goal-example-{}", Uuid::new_v4()));
         let db = HostDatabase::open(&root).unwrap();
+        crate::features::migrate(&db).unwrap();
         let id = Uuid::new_v4();
         let session = SessionRow {
             id: id.to_string(),
@@ -5308,7 +3176,7 @@ mod tests {
             max_duration_minutes: 0,
             active_ms: 1,
         };
-        db.append_turn_with_goal_activity(
+        db.append_turn_with_metadata(
             &session,
             &first,
             true,
@@ -5316,7 +3184,11 @@ mod tests {
                 tools: &[],
                 reasoning: &[],
                 commentary: &[],
-                goal: Some(&goal),
+            },
+            None,
+            TurnMetadata {
+                extensions: &[&beale_goals::GoalCommit(&goal)],
+                ..TurnMetadata::default()
             },
         )
         .unwrap();
@@ -5332,7 +3204,7 @@ mod tests {
             turns_used: 2,
             ..goal
         };
-        db.append_turn_with_goal_activity(
+        db.append_turn_with_metadata(
             &session,
             &second,
             false,
@@ -5340,7 +3212,11 @@ mod tests {
                 tools: &[],
                 reasoning: &[],
                 commentary: &[],
-                goal: Some(&done),
+            },
+            None,
+            TurnMetadata {
+                extensions: &[&beale_goals::GoalCommit(&done)],
+                ..TurnMetadata::default()
             },
         )
         .unwrap();
@@ -5356,11 +3232,13 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    #[cfg(feature = "goal-mode")]
     #[test]
     fn goal_history_can_advance_beyond_the_ordinary_session_limit() {
         let root =
             std::env::temp_dir().join(format!("beale-goal-history-example-{}", Uuid::new_v4()));
         let db = HostDatabase::open(&root).unwrap();
+        crate::features::migrate(&db).unwrap();
         let id = Uuid::new_v4();
         let session = SessionRow {
             id: id.to_string(),
@@ -5395,7 +3273,7 @@ mod tests {
                 max_duration_minutes: 0,
                 active_ms: number,
             };
-            db.append_turn_with_goal_activity(
+            db.append_turn_with_metadata(
                 &session,
                 &turn,
                 number == 1,
@@ -5403,7 +3281,11 @@ mod tests {
                     tools: &[],
                     reasoning: &[],
                     commentary: &[],
-                    goal: Some(&goal),
+                },
+                None,
+                TurnMetadata {
+                    extensions: &[&beale_goals::GoalCommit(&goal)],
+                    ..TurnMetadata::default()
                 },
             )
             .unwrap();
@@ -5423,11 +3305,13 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    #[cfg(feature = "runbooks")]
     #[test]
     fn session_detail_includes_runbook_activity_counts() {
         let root =
             std::env::temp_dir().join(format!("beale-session-runbook-example-{}", Uuid::new_v4()));
         let db = HostDatabase::open(&root).unwrap();
+        crate::features::migrate(&db).unwrap();
         let workspace_id = Uuid::new_v4().to_string();
         db.replace_workspaces(&[beale_storage::WorkspaceRow {
             id: workspace_id.clone(),
@@ -5515,6 +3399,7 @@ mod tests {
             internal_prompt: false,
         };
         let db = HostDatabase::open(&root).unwrap();
+        crate::features::migrate(&db).unwrap();
         let usage = [
             ModelUsageRow {
                 agent_id: "main".to_owned(),
@@ -5551,7 +3436,6 @@ mod tests {
                 tools: &[],
                 reasoning: &[],
                 commentary: &[],
-                goal: None,
             },
             None,
             TurnMetadata {
@@ -5642,6 +3526,7 @@ mod tests {
         }
         .encode_to_vec();
         let db = HostDatabase::open(&root).unwrap();
+        crate::features::migrate(&db).unwrap();
         db.append_turn_with_metadata(
             &session,
             &turn,
@@ -5650,12 +3535,12 @@ mod tests {
                 tools: &[],
                 reasoning: &[],
                 commentary: &[],
-                goal: None,
             },
             None,
             TurnMetadata {
-                graph_id: Some(beale_graphs::SIMPLE_ID),
-                graph_config: Some(&encoded),
+                extensions: &[&beale_graphs::GraphCommit {
+                    selection: Some((beale_graphs::SIMPLE_ID, &encoded)),
+                }],
                 ..TurnMetadata::default()
             },
         )
@@ -5673,6 +3558,7 @@ mod tests {
     fn transcript_keeps_full_tool_details_on_host_until_requested() {
         let root = std::env::temp_dir().join(format!("beale-session-example-{}", Uuid::new_v4()));
         let db = HostDatabase::open(&root).unwrap();
+        crate::features::migrate(&db).unwrap();
         let session = SessionRow {
             id: Uuid::new_v4().to_string(),
             workspace_id: Uuid::new_v4().to_string(),
@@ -5700,6 +3586,7 @@ mod tests {
             output: "private example output".to_owned(),
             is_error: false,
             agent_role: "main".to_owned(),
+            created_at_ms: 0,
         };
         db.append_turn_with_full_activity(
             &session,
@@ -5763,6 +3650,7 @@ mod tests {
     fn long_turn_detail_keeps_recent_tools_and_commentary_order() {
         let root = std::env::temp_dir().join(format!("beale-session-example-{}", Uuid::new_v4()));
         let db = HostDatabase::open(&root).unwrap();
+        crate::features::migrate(&db).unwrap();
         let session = SessionRow {
             id: Uuid::new_v4().to_string(),
             workspace_id: Uuid::new_v4().to_string(),
@@ -5781,6 +3669,7 @@ mod tests {
                 output: String::new(),
                 is_error: false,
                 agent_role: "main".to_owned(),
+                created_at_ms: 0,
             })
             .collect::<Vec<_>>();
         db.append_turn_with_full_activity(
@@ -5823,6 +3712,7 @@ mod tests {
     fn saved_subagent_messages_stay_in_child_detail() {
         let root = std::env::temp_dir().join(format!("beale-session-example-{}", Uuid::new_v4()));
         let db = HostDatabase::open(&root).unwrap();
+        crate::features::migrate(&db).unwrap();
         let session = SessionRow {
             id: Uuid::new_v4().to_string(),
             workspace_id: Uuid::new_v4().to_string(),
@@ -5855,6 +3745,7 @@ mod tests {
             output: "Example file contents".to_owned(),
             is_error: false,
             agent_role: "main".to_owned(),
+            created_at_ms: 0,
         };
         db.append_turn_with_metadata(
             &session,
@@ -5873,7 +3764,6 @@ mod tests {
                 tools: &[child_tool],
                 reasoning: &[],
                 commentary: &[],
-                goal: None,
             },
             None,
             TurnMetadata {
@@ -6059,6 +3949,7 @@ mod tests {
         let workspace_id = Uuid::new_v4().to_string();
         let session_id = Uuid::new_v4().to_string();
         let db = HostDatabase::open(&root).unwrap();
+        crate::features::migrate(&db).unwrap();
         db.replace_workspaces(&[beale_storage::WorkspaceRow {
             id: workspace_id.clone(),
             name: "Example Workspace".to_owned(),
@@ -6160,6 +4051,7 @@ mod tests {
         let child_id = Uuid::new_v4().to_string();
         let tool_id = Uuid::new_v4().to_string();
         let db = HostDatabase::open(&root).unwrap();
+        crate::features::migrate(&db).unwrap();
         db.replace_workspaces(&[beale_storage::WorkspaceRow {
             id: workspace_id.clone(),
             name: "Example Workspace".to_owned(),
@@ -6195,6 +4087,7 @@ mod tests {
             output: "Synthetic output".to_owned(),
             is_error: false,
             agent_role: "main".to_owned(),
+            created_at_ms: 0,
         };
         db.append_turn_with_metadata(
             &SessionRow {
@@ -6219,7 +4112,6 @@ mod tests {
                 tools: &[tool],
                 reasoning: &[],
                 commentary: &[],
-                goal: None,
             },
             None,
             TurnMetadata {
@@ -6381,6 +4273,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("beale-chat-example-{}", Uuid::new_v4()));
         let id = Uuid::new_v4().to_string();
         let db = HostDatabase::open(&root).unwrap();
+        crate::features::migrate(&db).unwrap();
         db.append_new_quick_chat_turn(
             &SessionRow {
                 id: id.clone(),
@@ -6492,6 +4385,7 @@ mod tests {
         let workspace = root.join("workspace");
         std::fs::create_dir_all(&workspace).unwrap();
         let db = HostDatabase::open(&root).unwrap();
+        crate::features::migrate(&db).unwrap();
         let workspace_id = Uuid::new_v4().to_string();
         db.replace_workspaces(&[beale_storage::WorkspaceRow {
             id: workspace_id.clone(),
@@ -6526,6 +4420,7 @@ mod tests {
             output: "x".repeat(20_000),
             is_error: false,
             agent_role: "main".to_owned(),
+            created_at_ms: 0,
         };
         db.append_turn_with_tools(&session, &turn, true, std::slice::from_ref(&tool))
             .unwrap();

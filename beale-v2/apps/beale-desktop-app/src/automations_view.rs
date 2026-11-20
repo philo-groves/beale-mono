@@ -1,4 +1,4 @@
-use crate::design::FadeText;
+use crate::design::{FadeText, SIDENAV_ACTIVE_TEXT};
 use beale_contracts::{
     AUTOMATIONS_CANCEL_PATH, AUTOMATIONS_PATH, PROTOBUF_CONTENT_TYPE,
     v1::{
@@ -12,7 +12,8 @@ use rune::{Color, El, ScrollSpec, col, el, icon, row, text};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{
-    AUTH_HANDLE, ConnectionStatus, SelectionMenu, State, ThemeStyle, form_button,
+    AUTH_HANDLE, ConnectionStatus, PrimaryView, SelectionMenu, State, ThemeStyle, ViewLocation,
+    form_button,
     icons::{ARCHIVE, AUTOMATION_ACTIVE, AUTOMATION_SCHEDULE, AUTOMATIONS, SEARCH},
     start_session_load, ui_font,
 };
@@ -243,6 +244,17 @@ fn selected_run(state: &State) -> Option<&AutomationRun> {
     state.automations.runs.iter().find(|run| run.id == id)
 }
 
+fn open_details(state: &mut State, job_id: Option<String>, run_id: Option<String>) {
+    if state.primary_view != PrimaryView::Automations {
+        state.navigate_to(ViewLocation::Automations);
+    }
+    if state.primary_view == PrimaryView::Automations {
+        state.close_sidenav_flyout();
+        state.automations.selected_id = job_id;
+        state.automations.selected_run_id = run_id;
+    }
+}
+
 fn list_row(job: &AutomationJob, future: bool, selected: bool, theme: ThemeStyle<'_>) -> El {
     let id = job.id.clone();
     let session_id = job.session_id.clone();
@@ -275,12 +287,15 @@ fn list_row(job: &AutomationJob, future: bool, selected: bool, theme: ThemeStyle
                 .min_w(0.0)
                 .fade_truncate()
                 .font(ui_font(14.0, if selected { 550.0 } else { 400.0 }))
-                .color(theme.color("#b8b8b8")),
+                .color(theme.color(if selected {
+                    SIDENAV_ACTIVE_TEXT
+                } else {
+                    "#b8b8b8"
+                })),
         );
     if future {
         item = item.on_press(move |state: &mut State| {
-            state.automations.selected_id = Some(id.clone());
-            state.automations.selected_run_id = None;
+            open_details(state, Some(id.clone()), None);
         });
     } else {
         item =
@@ -314,8 +329,7 @@ fn run_row(run: &AutomationRun, active: bool, selected: bool, theme: ThemeStyle<
         .hover(theme.color("#282828"))
         .on_press(move |state: &mut State| {
             if session_id.is_empty() {
-                state.automations.selected_id = None;
-                state.automations.selected_run_id = Some(id.clone());
+                open_details(state, None, Some(id.clone()));
             } else {
                 start_session_load(state, session_id.clone());
             }
@@ -330,7 +344,11 @@ fn run_row(run: &AutomationRun, active: bool, selected: bool, theme: ThemeStyle<
                 .min_w(0.0)
                 .fade_truncate()
                 .font(ui_font(14.0, if selected { 550.0 } else { 400.0 }))
-                .color(theme.color("#b8b8b8")),
+                .color(theme.color(if selected {
+                    SIDENAV_ACTIVE_TEXT
+                } else {
+                    "#b8b8b8"
+                })),
         )
 }
 

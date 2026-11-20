@@ -1,5 +1,5 @@
+use crate::ManualBrowserRow;
 use beale_contracts::v1::FleetBrowser;
-use beale_storage::ManualBrowserRow;
 use std::{
     collections::HashSet,
     path::{Path, PathBuf},

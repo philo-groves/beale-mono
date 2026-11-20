@@ -18,7 +18,6 @@ fn background_drag(state: &mut State, drag: &mut Drag, tx: &mut Tx) {
             state.workspace_surface_pan = state.workspace_surface_pan_origin
         }
         Phase::Up if drag.dx.abs() <= 4.0 && drag.dy.abs() <= 4.0 => {
-            state.workspace_surface_selected = None;
             state.workspace_surface_connecting = None;
         }
         Phase::Up => {}
@@ -326,8 +325,7 @@ fn node(
             state.workspace_surface_hovered = None;
         }
     })
-    .on_press_tx(move |state: &mut State, tx| {
-        tx.instant();
+    .on_press(move |state: &mut State| {
         if let Some(source) = state.workspace_surface_connecting.take() {
             if source != index {
                 state.workspace_surface_relationship_target = Some(index);
@@ -337,7 +335,7 @@ fn node(
                 state.workspace_surface_selected = Some(source);
             }
         } else {
-            state.workspace_surface_selected = Some(index);
+            crate::surface_canvas::open(state, index);
         }
     })
 }
@@ -702,14 +700,7 @@ pub(super) fn render(
     let narrow = width < 650.0;
     let toolbar_y = if narrow { 196.0 } else { 140.0 };
     let graph_top = toolbar_y + 54.0;
-    let panel_width = (width - 48.0).clamp(1.0, 340.0);
-    let panel_height = (height - graph_top - 86.0).clamp(120.0, 450.0);
-    let panel_x = width - panel_width - 24.0;
-    let map_width = if state.workspace_surface_selected.is_some() && width >= 980.0 {
-        panel_x - 16.0
-    } else {
-        width
-    };
+    let map_width = width;
     let map_height = (height - graph_top - 74.0).max(60.0);
     let positions = atlas::layout(surfaces, width, map_height);
     let bounds = positions
@@ -913,42 +904,12 @@ pub(super) fn render(
         .key("workspace-surface-network")
         .size(width, height)
         .child(canvas(shape).absolute(0.0, 0.0).size(width, height));
-    let selected = state.workspace_surface_selected.is_some();
-    let measured_height = if state.workspace_surface_detail_height > 0.0 {
-        state.workspace_surface_detail_height.min(panel_height)
-    } else {
-        panel_height
-    };
-    let panel_bottom = (graph_top + measured_height).min(height);
-    let regions = if selected {
-        [
-            [0.0, 0.0, width, graph_top],
-            [0.0, graph_top, panel_x, panel_bottom - graph_top],
-            [
-                panel_x + panel_width,
-                graph_top,
-                width - panel_x - panel_width,
-                panel_bottom - graph_top,
-            ],
-            [0.0, panel_bottom, width, height - panel_bottom],
-        ]
-    } else {
-        [[0.0, 0.0, width, height], [0.0; 4], [0.0; 4], [0.0; 4]]
-    };
-    for (index, [x, y, w, h]) in regions.into_iter().enumerate() {
-        if w > 0.0 && h > 0.0 {
-            stage = stage.child(
-                el().key(if selected {
-                    format!("workspace-surface-background-{index}")
-                } else {
-                    "workspace-surface-background-full".to_owned()
-                })
-                .absolute(x, y)
-                .size(w, h)
-                .on_drag(background_drag),
-            );
-        }
-    }
+    stage = stage.child(
+        el().key("workspace-surface-background-full")
+            .absolute(0.0, 0.0)
+            .size(width, height)
+            .on_drag(background_drag),
+    );
     for label in labels {
         stage = stage.child(label);
     }
@@ -972,22 +933,6 @@ pub(super) fn render(
             .child(icon(&WORKSPACE_SURFACES, 34.0).color(theme.accent()))
             .child(text("Your surface map starts here").font(ui_font(18.0, 600.0)).color(theme.color("#eeeeee")))
             .child(text("Add surfaces and record their relationships to see the research landscape.").wrap().font(ui_font(13.0, 400.0)).color(theme.color("#999999"))));
-    }
-    if selected {
-        stage = stage.child(
-            surface_network_details(state, theme)
-                .absolute(panel_x, graph_top)
-                .w(panel_width)
-                .max_h(panel_height)
-                .on_layout_tx(|state: &mut State, [_, _, _, height], tx| {
-                    if (state.workspace_surface_detail_height - height).abs() > 0.5 {
-                        state.workspace_surface_detail_height = height;
-                        tx.instant();
-                    } else {
-                        tx.live_only();
-                    }
-                }),
-        );
     }
     let matching = matches.iter().filter(|value| **value).count();
     let search_font = ui_font(12.0, 400.0);

@@ -263,7 +263,10 @@ pub(crate) fn sidenav(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
                 .hover(theme.color("#303030"))
                 .on_press(|state: &mut State| state.navigate_to(crate::ViewLocation::Tracking))
                 .child(icon(&SESSION_TOKENS, 16.0).color(theme.accent()))
-                .child(copy("Token Tracking", 14.0, 550.0, theme).color(theme.accent())),
+                .child(
+                    copy("Token Tracking", 14.0, 550.0, theme)
+                        .color(theme.color(design::SIDENAV_ACTIVE_TEXT)),
+                ),
         )
         .child(el().grow(1.0))
         .child(

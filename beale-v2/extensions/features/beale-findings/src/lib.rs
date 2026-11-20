@@ -10,19 +10,39 @@ use axum::{
 };
 use beale_contracts::findings::{
     self, Candidate, Completion, EvidenceKind, Finding, FindingAttackPath, FindingRootCause,
-    FindingState, GetRequest, QueryRequest, Rejected, Reported, Screened, Status, Summary,
-    Validated,
+    FindingState, GetRequest, Oracle, QueryRequest, Rejected, Reported, Screened, Status, Summary,
+    Validated, Verification, VerificationRun,
 };
 use beale_storage::HostDatabase;
+mod store;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+pub use store::{
+    EVIDENCE_TOOLS, EvidenceBinding, EvidenceSource, FindingStore, MIGRATIONS, migrate, now_ms,
+};
 
 pub const FEATURE_ID: &str = "beale-findings";
 pub const FEATURE_NAME: &str = "Findings";
 pub const FEATURE_DESCRIPTION: &str = "Independent, evidence-backed findings with explicit validation, screening, and reporting states.";
 pub const HAS_PROMPT_EXTENSION: bool = true;
-pub const TOOL_COUNT: u32 = 6;
-pub const PROMPT_EXTENSION: &str = "## Findings\n\nUse Candidate for a specific hypothesis. A finding may cover multiple surfaces; keep its summary concise. Record root_cause and attack_path as they become supported, and remediation when known. Complete Validated only after evidence establishes the behavior; name and describe the validation method, record its result and limitations, cite the exact Finding evidence reference returned by a successful workspace read or bash result, and record counter_evidence when present. A local proof may help but is not required. Complete Screened only after recording root_cause and all attack_path.reachability details, assigning integer impact_score and reachability_score values from 0 to 100 in the screened state, and checking validation quality, accepted risks or known issues, and scope/reportability. Set known_issue_review, scope_review, and validation_review on the screened state, not validated. Higher scores mean greater impact or easier reachability; they are assessments, not probabilities. Prepare a triage-facing, machine-agnostic PoC and report only after Screened. Draft finding or state details with findings_update, then use findings_complete_state; it reports missing fields. Rejected records a reason without discarding earlier state. A state object is not a completed status until its completion passes the predecessor check.";
+pub const TOOL_COUNT: u32 = 7;
+
+/// Catalog and session descriptor for this feature.
+pub const FEATURE: beale_feature_api::Feature = beale_feature_api::Feature {
+    id: FEATURE_ID,
+    name: FEATURE_NAME,
+    description: FEATURE_DESCRIPTION,
+    prompt_extension: PROMPT_EXTENSION,
+    use_case: "Use to track candidate findings through validation, screening, and reporting.",
+    tool_names: &[QUERY, READ, CREATE, UPDATE, COMPLETE, REJECT, VERIFY],
+    definitions: Some(definitions),
+    review: beale_feature_api::ToolReview::Required,
+    subagents: false,
+    migrations: MIGRATIONS,
+    startup: &[],
+};
+pub const PROMPT_EXTENSION: &str = "## Findings\n\nUse Candidate for a specific hypothesis. A finding may cover multiple surfaces; keep its summary concise. Record root_cause and attack_path as they become supported, and remediation when known. Complete Validated only after evidence establishes the behavior; name and describe the validation method, record its result and limitations, cite the exact Finding evidence reference returned by a successful workspace read, bash, or verified findings_verify result produced after the Candidate was recorded, and record counter_evidence when present. Evidence gathered before the Candidate existed cannot validate it. When a reproducible proof exists, use findings_verify: the host reruns the command twice in fresh processes and records whether a deterministic oracle (exit code or output text) held each time; the oracle text must come from the target's behavior, not the command itself. Verification is recorded on the finding but is not required for every validation. Complete Screened only after recording root_cause and all attack_path.reachability details, assigning integer impact_score and reachability_score values from 0 to 100 in the screened state, and checking validation quality, accepted risks or known issues, and scope/reportability. Set known_issue_review, scope_review, and validation_review on the screened state, not validated. Higher scores mean greater impact or easier reachability; they are assessments, not probabilities. Prepare a triage-facing, machine-agnostic PoC and report only after Screened. Draft finding or state details with findings_update, then use findings_complete_state; it reports missing fields. Rejected records a reason without discarding earlier state. A state object is not a completed status until its completion passes the predecessor check.";
 
 const QUERY: &str = "findings_query";
 const READ: &str = "findings_read";
@@ -30,6 +50,14 @@ const CREATE: &str = "findings_create";
 const UPDATE: &str = "findings_update";
 const COMPLETE: &str = "findings_complete_state";
 const REJECT: &str = "findings_reject";
+pub const VERIFY: &str = "findings_verify";
+
+/// Fresh-process runs per verification; every run must satisfy the oracle.
+pub const VERIFY_RUNS: usize = 2;
+const DEFAULT_VERIFY_TIMEOUT_SECONDS: u64 = 120;
+const MAX_VERIFY_TIMEOUT_SECONDS: u64 = 600;
+const MAX_VERIFY_COMMAND_BYTES: usize = 16_384;
+const MAX_ORACLE_TEXT_BYTES: usize = 1_024;
 
 pub fn definitions() -> Vec<Value> {
     let attack_path_schema = json!({
@@ -84,13 +112,17 @@ pub fn definitions() -> Vec<Value> {
         json!({"type":"function","name":READ,"description":"Read a finding. Pass history_offset (starting at 0) to include one newest-first revision; omit it for the current record only.","parameters":{"type":"object","properties":{"id":{"type":"string"},"history_offset":{"type":"integer","minimum":0}},"required":["id"],"additionalProperties":false}}),
         json!({"type":"function","name":CREATE,"description":"Create a Candidate finding with a concise summary, concrete hypothesis, and optional surface IDs, root cause, attack path, and remediation.","parameters":{"type":"object","properties":{"title":{"type":"string"},"summary":{"type":"string"},"surface_ids":{"type":"array","items":{"type":"string"}},"root_cause":{"type":"object","properties":{"summary":{"type":"string"},"evidence_refs":{"type":"array","items":{"type":"object","properties":{"kind":{"type":"string","enum":["tool_call","artifact","surface","document","url","other"]},"reference":{"type":"string"},"note":{"type":"string"}},"required":["kind","reference"],"additionalProperties":false}}},"required":["summary","evidence_refs"],"additionalProperties":false},"attack_path":attack_path_schema,"remediation":{"type":"string"},"hypothesis":{"type":"string"}},"required":["title","summary","hypothesis"],"additionalProperties":false}}),
         json!({"type":"function","name":UPDATE,"description":"Revise finding metadata or one state object. Set state to finding, candidate, validated, screened, or reported. Supply a complete root_cause or attack_path object when setting it. State-specific fields are listed in patch; only fields belonging to the selected state are accepted. Reported PoC details require completed screening.","parameters":{"type":"object","properties":{"id":{"type":"string"},"expected_revision":{"type":"integer","minimum":1},"state":{"type":"string","enum":["finding","candidate","validated","screened","reported"]},"patch":patch_schema,"reason":{"type":"string"}},"required":["id","expected_revision","state","patch","reason"],"additionalProperties":false}}),
-        json!({"type":"function","name":COMPLETE,"description":"Complete Validated, Screened, or Reported in order. Returns missing state details when incomplete. Validation evidence must cite durable successful read or bash calls in this workspace. Screening requires root_cause, complete attack_path.reachability details, and impact_score and reachability_score integers from 0 to 100.","parameters":{"type":"object","properties":{"id":{"type":"string"},"expected_revision":{"type":"integer","minimum":1},"state":{"type":"string","enum":["validated","screened","reported"]}},"required":["id","expected_revision","state"],"additionalProperties":false}}),
+        json!({"type":"function","name":COMPLETE,"description":"Complete Validated, Screened, or Reported in order. Returns missing state details when incomplete. Validation evidence must cite successful read, bash, or verified findings_verify calls in this workspace made after the Candidate was recorded. Screening requires root_cause, complete attack_path.reachability details, and impact_score and reachability_score integers from 0 to 100.","parameters":{"type":"object","properties":{"id":{"type":"string"},"expected_revision":{"type":"integer","minimum":1},"state":{"type":"string","enum":["validated","screened","reported"]}},"required":["id","expected_revision","state"],"additionalProperties":false}}),
+        json!({"type":"function","name":VERIFY,"description":"Rerun a reproducible proof command for a Candidate or Validated finding twice in fresh workspace processes with the current user's host privileges, and record whether the oracle held on every run. Oracle kinds: exit_code (value integer), exit_nonzero, stdout_contains, stderr_contains, output_contains (value text). Oracle text must not appear in the command. A verified result is citable as validation evidence.","parameters":{"type":"object","properties":{"id":{"type":"string"},"expected_revision":{"type":"integer","minimum":1},"command":{"type":"string"},"oracle":{"type":"object","properties":{"kind":{"type":"string","enum":["exit_code","exit_nonzero","stdout_contains","stderr_contains","output_contains"]},"value":{"type":["integer","string"]}},"required":["kind"],"additionalProperties":false},"timeout_seconds":{"type":"integer","minimum":1,"maximum":600}},"required":["id","expected_revision","command","oracle"],"additionalProperties":false}}),
         json!({"type":"function","name":REJECT,"description":"Reject a finding from its current state with a reason and optional typed evidence_refs, retaining prior state objects.","parameters":{"type":"object","properties":{"id":{"type":"string"},"expected_revision":{"type":"integer","minimum":1},"reason":{"type":"string"},"evidence_refs":{"type":"array","items":{"type":"object","properties":{"kind":{"type":"string","enum":["tool_call","artifact","surface","document","url","other"]},"reference":{"type":"string"},"note":{"type":"string"}},"required":["kind","reference"],"additionalProperties":false}}},"required":["id","expected_revision","reason"],"additionalProperties":false}}),
     ]
 }
 
 pub fn is_tool(name: &str) -> bool {
-    matches!(name, QUERY | READ | CREATE | UPDATE | COMPLETE | REJECT)
+    matches!(
+        name,
+        QUERY | READ | CREATE | UPDATE | COMPLETE | REJECT | VERIFY
+    )
 }
 
 fn summary_value(value: &str) -> String {
@@ -138,11 +170,229 @@ pub fn summary(db: &HostDatabase, workspace_id: &str, name: &str, args: &Value) 
     )
 }
 
+/// A tool result from the current turn that has not been saved yet.
 pub struct PendingSource<'a> {
     pub id: &'a str,
     pub name: &'a str,
     pub output: &'a str,
     pub is_error: bool,
+    pub agent_role: &'a str,
+    pub created_at_ms: i64,
+}
+
+/// The calling agent's context for one Findings tool call.
+pub struct ToolContext<'a> {
+    pub workspace_id: &'a str,
+    pub session_id: &'a str,
+    /// Stored role that must have produced validation evidence, when the
+    /// caller is a Research Pipeline role with exclusive validation ownership.
+    pub evidence_role: Option<&'a str>,
+    pub pending: &'a [PendingSource<'a>],
+}
+
+fn record_pending(db: &HostDatabase, context: &ToolContext<'_>, ids: &[String]) -> Result<()> {
+    for id in ids {
+        if let Some(source) = context.pending.iter().find(|source| source.id == id) {
+            db.finding_record_tool_source(
+                context.workspace_id,
+                context.session_id,
+                &EvidenceSource {
+                    id: source.id,
+                    name: source.name,
+                    output: source.output,
+                    is_error: source.is_error,
+                    agent_role: source.agent_role,
+                    created_at_ms: source.created_at_ms,
+                },
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// A parsed `findings_verify` request.
+pub struct VerifyRequest {
+    pub id: String,
+    pub expected_revision: u64,
+    pub command: String,
+    pub oracle: Oracle,
+    pub timeout_seconds: u64,
+}
+
+impl VerifyRequest {
+    pub fn parse(args: &Value) -> Result<Self> {
+        ensure!(args.is_object(), "arguments must be an object");
+        let command = required(args, "command")?;
+        ensure!(
+            !command.trim().is_empty() && command.len() <= MAX_VERIFY_COMMAND_BYTES,
+            "invalid verification command"
+        );
+        let oracle: Oracle =
+            serde_json::from_value(args.get("oracle").cloned().context("oracle is required")?)
+                .context("invalid oracle")?;
+        if let Oracle::StdoutContains { value }
+        | Oracle::StderrContains { value }
+        | Oracle::OutputContains { value } = &oracle
+        {
+            ensure!(
+                !value.trim().is_empty() && value.len() <= MAX_ORACLE_TEXT_BYTES,
+                "oracle text must be 1 to {MAX_ORACLE_TEXT_BYTES} bytes"
+            );
+            ensure!(
+                !command.contains(value.as_str()),
+                "oracle text appears in the command; choose output the target produces"
+            );
+        }
+        let timeout_seconds = args
+            .get("timeout_seconds")
+            .map_or(Ok(DEFAULT_VERIFY_TIMEOUT_SECONDS), |value| {
+                value.as_u64().context("invalid timeout_seconds")
+            })?;
+        ensure!(
+            (1..=MAX_VERIFY_TIMEOUT_SECONDS).contains(&timeout_seconds),
+            "invalid timeout_seconds"
+        );
+        Ok(Self {
+            id: required(args, "id")?.to_owned(),
+            expected_revision: revision(args)?,
+            command: command.to_owned(),
+            oracle,
+            timeout_seconds,
+        })
+    }
+}
+
+fn verifiable_finding(
+    db: &HostDatabase,
+    context: &ToolContext<'_>,
+    request: &VerifyRequest,
+) -> Result<Finding> {
+    let finding = db
+        .finding_get(context.workspace_id, &request.id)?
+        .context("finding not found")?;
+    ensure!(
+        finding.revision == request.expected_revision,
+        "finding revision conflict"
+    );
+    ensure!(
+        matches!(finding.status(), Status::Candidate | Status::Validated),
+        "verify a Candidate or Validated finding"
+    );
+    Ok(finding)
+}
+
+/// Checks a verification request before any command runs.
+pub fn check_verifiable(
+    db: &HostDatabase,
+    context: &ToolContext<'_>,
+    request: &VerifyRequest,
+) -> Result<()> {
+    verifiable_finding(db, context, request).map(|_| ())
+}
+
+/// Whether one completed run satisfied the oracle.
+pub fn oracle_satisfied(
+    oracle: &Oracle,
+    exit_code: Option<i32>,
+    stdout: &str,
+    stderr: &str,
+) -> bool {
+    match oracle {
+        Oracle::ExitCode { value } => exit_code == Some(*value),
+        Oracle::ExitNonzero => exit_code != Some(0),
+        Oracle::StdoutContains { value } => stdout.contains(value.as_str()),
+        Oracle::StderrContains { value } => stderr.contains(value.as_str()),
+        Oracle::OutputContains { value } => {
+            stdout.contains(value.as_str()) || stderr.contains(value.as_str())
+        }
+    }
+}
+
+/// A host-observed verification run.
+pub struct VerifyRun(VerificationRun);
+
+impl VerifyRun {
+    /// A run that completed; the caller passes already redacted output.
+    pub fn observe(
+        oracle: &Oracle,
+        exit_code: Option<i32>,
+        stdout: &str,
+        stderr: &str,
+        duration_ms: i64,
+    ) -> Self {
+        let mut digest = Sha256::new();
+        digest.update(stdout.as_bytes());
+        digest.update([0]);
+        digest.update(stderr.as_bytes());
+        Self(VerificationRun {
+            exit_code,
+            satisfied: oracle_satisfied(oracle, exit_code, stdout, stderr),
+            output_sha256: format!("{:x}", digest.finalize()),
+            duration_ms,
+            error: None,
+        })
+    }
+
+    /// A run that could not complete, such as a timeout.
+    pub fn failed(error: &str, duration_ms: i64) -> Self {
+        Self(VerificationRun {
+            exit_code: None,
+            satisfied: false,
+            output_sha256: String::new(),
+            duration_ms,
+            error: Some(error.chars().take(512).collect()),
+        })
+    }
+}
+
+/// Saves a verification on the finding. Returns the model-visible result and
+/// whether every run satisfied the oracle.
+pub fn record_verification(
+    db: &HostDatabase,
+    context: &ToolContext<'_>,
+    request: &VerifyRequest,
+    tool_call_id: &str,
+    agent_role: &str,
+    runs: Vec<VerifyRun>,
+) -> Result<(String, bool)> {
+    ensure!(runs.len() == VERIFY_RUNS, "incomplete verification runs");
+    let mut finding = verifiable_finding(db, context, request)?;
+    let runs: Vec<VerificationRun> = runs.into_iter().map(|run| run.0).collect();
+    let verified = runs.iter().all(|run| run.satisfied);
+    let verification = Verification {
+        command: request.command.clone(),
+        oracle: request.oracle.clone(),
+        runs,
+        verified,
+        at_ms: now_ms()?,
+        session_id: context.session_id.to_owned(),
+        agent_role: agent_role.to_owned(),
+        tool_call_id: tool_call_id.to_owned(),
+    };
+    finding
+        .state
+        .validated
+        .get_or_insert_with(|| Validated {
+            revision: 1,
+            ..Default::default()
+        })
+        .verification = Some(verification.clone());
+    let saved = db.finding_update(
+        finding,
+        request.expected_revision,
+        context.session_id,
+        if verified {
+            "verification reproduced the oracle"
+        } else {
+            "verification did not reproduce the oracle"
+        },
+    )?;
+    let result = json!({
+        "verified": verified,
+        "runs": verification.runs,
+        "record": Summary::from(&saved),
+    });
+    Ok((result.to_string(), verified))
 }
 
 fn required<'a>(args: &'a Value, key: &str) -> Result<&'a str> {
@@ -207,7 +457,10 @@ fn patch_state<T: serde::Serialize + DeserializeOwned>(state: &mut T, patch: &Va
     let target = value.as_object_mut().context("invalid state object")?;
     for (key, value) in fields {
         ensure!(
-            !matches!(key.as_str(), "revision" | "completion" | "completed_at_ms"),
+            !matches!(
+                key.as_str(),
+                "revision" | "completion" | "completed_at_ms" | "verification" | "evidence_digests"
+            ),
             "state metadata is host-owned"
         );
         ensure!(target.contains_key(key), "unknown state field: {key}");
@@ -266,15 +519,18 @@ fn screening_missing(finding: &Finding, state: &Screened) -> Vec<String> {
     missing
 }
 
+/// Runs a Findings tool other than `findings_verify`, which needs host
+/// execution and goes through [`VerifyRequest`] and [`record_verification`].
 pub fn execute(
     db: &HostDatabase,
-    workspace_id: &str,
-    session_id: &str,
+    context: &ToolContext<'_>,
     name: &str,
     args: &Value,
-    pending: &[PendingSource<'_>],
 ) -> Result<String> {
     ensure!(args.is_object(), "arguments must be an object");
+    ensure!(name != VERIFY, "verification requires host execution");
+    let workspace_id = context.workspace_id;
+    let session_id = context.session_id;
     let result = match name {
         QUERY => {
             let status = args
@@ -363,7 +619,7 @@ pub fn execute(
                 finding.state.rejected = Some(Rejected {
                     reason: reason.to_owned(),
                     from: finding.status(),
-                    at_ms: beale_storage::finding_now_ms()?,
+                    at_ms: now_ms()?,
                     session_id: session_id.to_owned(),
                     evidence_refs: optional_field(args, "evidence_refs")?,
                 });
@@ -457,23 +713,18 @@ pub fn execute(
                                 missing.push("evidence_refs (tool_call)".to_owned());
                             }
                             if missing.is_empty() {
-                                for id in &tool_ids {
-                                    if let Some(source) =
-                                        pending.iter().find(|source| source.id == id)
-                                    {
-                                        db.finding_record_tool_source(
-                                            workspace_id,
-                                            session_id,
-                                            source.id,
-                                            source.name,
-                                            source.output,
-                                            source.is_error,
-                                        )?;
-                                    }
-                                }
-                                db.finding_validate_tool_evidence(workspace_id, &tool_ids)?;
+                                record_pending(db, context, &tool_ids)?;
+                                stage.evidence_digests = db.finding_validate_tool_evidence(
+                                    workspace_id,
+                                    &tool_ids,
+                                    &EvidenceBinding {
+                                        not_before_ms: i64::try_from(finding.created_at_ms)
+                                            .unwrap_or(i64::MAX),
+                                        agent_role: context.evidence_role,
+                                    },
+                                )?;
                                 stage.completion = Some(Completion {
-                                    at_ms: beale_storage::finding_now_ms()?,
+                                    at_ms: now_ms()?,
                                     session_id: session_id.to_owned(),
                                     predecessor_revision: finding.state.candidate.revision,
                                 });
@@ -499,7 +750,7 @@ pub fn execute(
                             missing = screening_missing(&finding, &stage);
                             if missing.is_empty() {
                                 stage.completion = Some(Completion {
-                                    at_ms: beale_storage::finding_now_ms()?,
+                                    at_ms: now_ms()?,
                                     session_id: session_id.to_owned(),
                                     predecessor_revision: predecessor,
                                 });
@@ -534,7 +785,7 @@ pub fn execute(
                             }
                             if missing.is_empty() {
                                 stage.completion = Some(Completion {
-                                    at_ms: beale_storage::finding_now_ms()?,
+                                    at_ms: now_ms()?,
                                     session_id: session_id.to_owned(),
                                     predecessor_revision: predecessor,
                                 });
@@ -667,11 +918,26 @@ mod tests {
     use beale_storage::{SessionRow, ToolCallRow, TurnRow, WorkspaceRow};
     use tower::ServiceExt;
 
+    fn context<'a>(pending: &'a [PendingSource<'a>]) -> ToolContext<'a> {
+        ToolContext {
+            workspace_id: "workspace-example",
+            session_id: "session-example",
+            evidence_role: None,
+            pending,
+        }
+    }
+
+    fn execute_with(
+        db: &HostDatabase,
+        name: &str,
+        args: &Value,
+        pending: &[PendingSource<'_>],
+    ) -> Result<String> {
+        execute(db, &context(pending), name, args)
+    }
+
     fn invoke(db: &HostDatabase, name: &str, args: Value) -> Value {
-        serde_json::from_str(
-            &execute(db, "workspace-example", "session-example", name, &args, &[]).unwrap(),
-        )
-        .unwrap()
+        serde_json::from_str(&execute_with(db, name, &args, &[]).unwrap()).unwrap()
     }
 
     fn example_path() -> Value {
@@ -743,6 +1009,7 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("beale-findings-example-{}", uuid::Uuid::new_v4()));
         let db = HostDatabase::open(&root).unwrap();
+        migrate(&db).unwrap();
         db.replace_workspaces(&[WorkspaceRow {
             id: "workspace-example".to_owned(),
             name: "Example Workspace".to_owned(),
@@ -798,8 +1065,8 @@ mod tests {
             "Finding title: Renamed example"
         );
         assert_eq!(created["record"]["status"], "candidate");
-        assert!(execute(&db,"workspace-example","session-example",UPDATE,&json!({"id":id,"expected_revision":1,"state":"reported","patch":{"poc_steps":"Run an example"},"reason":"Draft"}),&[]).is_err());
-        assert!(execute(&db,"workspace-example","session-example",UPDATE,&json!({"id":id,"expected_revision":1,"state":"screened","patch":{"scope_review":{"passed":true,"method":"Example review","conclusion":"In scope"}},"reason":"Draft"}),&[]).is_err());
+        assert!(execute_with(&db, UPDATE,&json!({"id":id,"expected_revision":1,"state":"reported","patch":{"poc_steps":"Run an example"},"reason":"Draft"}),&[]).is_err());
+        assert!(execute_with(&db, UPDATE,&json!({"id":id,"expected_revision":1,"state":"screened","patch":{"scope_review":{"passed":true,"method":"Example review","conclusion":"In scope"}},"reason":"Draft"}),&[]).is_err());
         let validation = invoke(
             &db,
             UPDATE,
@@ -848,17 +1115,23 @@ mod tests {
             output: "Synthetic observed response".to_owned(),
             is_error: false,
             agent_role: "main".to_owned(),
+            created_at_ms: now_ms().unwrap() as i64,
         };
         db.append_turn_with_tools(&session, &turn, true, &[])
             .unwrap();
+        let source = |id, name, output, is_error| EvidenceSource {
+            id,
+            name,
+            output,
+            is_error,
+            agent_role: "main",
+            created_at_ms: tool.created_at_ms,
+        };
         assert!(
             db.finding_record_tool_source(
                 "workspace-example",
                 "session-example",
-                "tool-rejected",
-                "bash",
-                "Synthetic error",
-                true
+                &source("tool-rejected", "bash", "Synthetic error", true),
             )
             .is_err()
         );
@@ -866,10 +1139,15 @@ mod tests {
             db.finding_record_tool_source(
                 "workspace-other",
                 "session-example",
-                "tool-other",
-                "read",
-                "Other data",
-                false
+                &source("tool-other", "read", "Other data", false),
+            )
+            .is_err()
+        );
+        assert!(
+            db.finding_record_tool_source(
+                "workspace-example",
+                "session-example",
+                &source("tool-write", "write", "Wrote example", false),
             )
             .is_err()
         );
@@ -880,35 +1158,72 @@ mod tests {
         );
         assert_eq!(updated["record"]["revision"], 3);
         assert!(
-            execute(
+            execute_with(
                 &db,
-                "workspace-example",
-                "session-example",
                 COMPLETE,
                 &json!({"id":id,"expected_revision":3,"state":"validated"}),
                 &[]
             )
             .is_err()
         );
-        let validated: Value = serde_json::from_str(
-            &execute(
+        assert!(
+            execute_with(
                 &db,
-                "workspace-example",
-                "session-example",
+                UPDATE,
+                &json!({"id":id,"expected_revision":3,"state":"validated","patch":{"verification":null},"reason":"Forge verification"}),
+                &[]
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("host-owned")
+        );
+        let pending = [PendingSource {
+            id: &tool.id,
+            name: &tool.name,
+            output: &tool.output,
+            is_error: tool.is_error,
+            agent_role: &tool.agent_role,
+            created_at_ms: tool.created_at_ms,
+        }];
+        let wrong_role = ToolContext {
+            evidence_role: Some("validation"),
+            ..context(&pending)
+        };
+        assert!(
+            execute(
+                &db,
+                &wrong_role,
                 COMPLETE,
                 &json!({"id":id,"expected_revision":3,"state":"validated"}),
-                &[PendingSource {
-                    id: &tool.id,
-                    name: &tool.name,
-                    output: &tool.output,
-                    is_error: tool.is_error,
-                }],
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("another agent role")
+        );
+        let validated: Value = serde_json::from_str(
+            &execute_with(
+                &db,
+                COMPLETE,
+                &json!({"id":id,"expected_revision":3,"state":"validated"}),
+                &pending,
             )
             .unwrap(),
         )
         .unwrap();
         assert_eq!(validated["record"]["status"], "validated");
-        assert!(execute(&db,"workspace-example","session-example",UPDATE,&json!({"id":id,"expected_revision":4,"state":"reported","patch":{"poc_steps":"Too early"},"reason":"Draft"}),&[]).is_err());
+        assert_eq!(validated["record"]["verified"], false);
+        let digests = db
+            .finding_get("workspace-example", id)
+            .unwrap()
+            .unwrap()
+            .state
+            .validated
+            .unwrap()
+            .evidence_digests;
+        assert_eq!(digests.len(), 1);
+        assert_eq!(digests[0].reference, "tool-example");
+        assert_eq!(digests[0].sha256.len(), 64);
+        assert!(execute_with(&db, UPDATE,&json!({"id":id,"expected_revision":4,"state":"reported","patch":{"poc_steps":"Too early"},"reason":"Draft"}),&[]).is_err());
         let missing_screening = invoke(
             &db,
             COMPLETE,
@@ -1032,7 +1347,7 @@ mod tests {
             1
         );
         assert_eq!(history_page["next_history_offset"], 1);
-        assert!(execute(&db,"workspace-example","session-example",UPDATE,&json!({"id":id,"expected_revision":11,"state":"candidate","patch":{"hypothesis":"Another"},"reason":"Edit"}),&[]).is_err());
+        assert!(execute_with(&db, UPDATE,&json!({"id":id,"expected_revision":11,"state":"candidate","patch":{"hypothesis":"Another"},"reason":"Edit"}),&[]).is_err());
         drop(db);
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -1044,6 +1359,7 @@ mod tests {
             uuid::Uuid::new_v4()
         ));
         let db = HostDatabase::open(&root).unwrap();
+        migrate(&db).unwrap();
         db.replace_workspaces(&[WorkspaceRow {
             id: "workspace-example".to_owned(),
             name: "Example Workspace".to_owned(),
@@ -1109,9 +1425,9 @@ mod tests {
                 .len(),
             1
         );
-        assert!(execute(&db,"workspace-example","session-example",UPDATE,&json!({"id":id,"expected_revision":2,"state":"finding","patch":{"root_cause":{"summary":" ","evidence_refs":[]}},"reason":"Invalid cause"}),&[]).is_err());
-        assert!(execute(&db,"workspace-example","session-example",UPDATE,&json!({"id":id,"expected_revision":2,"state":"finding","patch":{"root_cause":{"summary":"Example cause","evidence_refs":[{"kind":"surface","reference":"S1"},{"kind":"surface","reference":"S1"}]}},"reason":"Duplicate evidence"}),&[]).is_err());
-        assert!(execute(&db,"workspace-example","session-example",UPDATE,&json!({"id":id,"expected_revision":2,"state":"finding","patch":{"remediation":"  "},"reason":"Invalid remediation"}),&[]).is_err());
+        assert!(execute_with(&db, UPDATE,&json!({"id":id,"expected_revision":2,"state":"finding","patch":{"root_cause":{"summary":" ","evidence_refs":[]}},"reason":"Invalid cause"}),&[]).is_err());
+        assert!(execute_with(&db, UPDATE,&json!({"id":id,"expected_revision":2,"state":"finding","patch":{"root_cause":{"summary":"Example cause","evidence_refs":[{"kind":"surface","reference":"S1"},{"kind":"surface","reference":"S1"}]}},"reason":"Duplicate evidence"}),&[]).is_err());
+        assert!(execute_with(&db, UPDATE,&json!({"id":id,"expected_revision":2,"state":"finding","patch":{"remediation":"  "},"reason":"Invalid remediation"}),&[]).is_err());
         let cleared = invoke(
             &db,
             UPDATE,
@@ -1146,6 +1462,7 @@ mod tests {
             uuid::Uuid::new_v4()
         ));
         let db = HostDatabase::open(&root).unwrap();
+        migrate(&db).unwrap();
         db.replace_workspaces(&[WorkspaceRow {
             id: "workspace-example".to_owned(),
             name: "Example Workspace".to_owned(),
@@ -1196,13 +1513,13 @@ mod tests {
         );
         let mut invalid = page["record"]["attack_path"].clone();
         invalid["steps"] = json!([" "]);
-        assert!(execute(&db,"workspace-example","session-example",UPDATE,&json!({"id":id,"expected_revision":1,"state":"finding","patch":{"attack_path":invalid},"reason":"Invalid step"}),&[]).is_err());
+        assert!(execute_with(&db, UPDATE,&json!({"id":id,"expected_revision":1,"state":"finding","patch":{"attack_path":invalid},"reason":"Invalid step"}),&[]).is_err());
         let mut incomplete = page["record"]["attack_path"].clone();
         incomplete["reachability"]
             .as_object_mut()
             .unwrap()
             .remove("sink");
-        assert!(execute(&db,"workspace-example","session-example",UPDATE,&json!({"id":id,"expected_revision":1,"state":"finding","patch":{"attack_path":incomplete},"reason":"Incomplete reachability"}),&[]).is_err());
+        assert!(execute_with(&db, UPDATE,&json!({"id":id,"expected_revision":1,"state":"finding","patch":{"attack_path":incomplete},"reason":"Incomplete reachability"}),&[]).is_err());
         let mut revised = page["record"]["attack_path"].clone();
         revised["likelihood_description"] = json!("Requires a specific example account");
         let updated = invoke(
@@ -1230,6 +1547,7 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("beale-screening-example-{}", uuid::Uuid::new_v4()));
         let db = HostDatabase::open(&root).unwrap();
+        migrate(&db).unwrap();
         db.replace_workspaces(&[WorkspaceRow {
             id: "workspace-example".into(),
             name: "Example Workspace".into(),
@@ -1267,7 +1585,7 @@ mod tests {
         );
         for field in ["impact_score", "reachability_score"] {
             for value in [json!(-1), json!(101), json!(1000), json!(0.5), json!("80")] {
-                assert!(execute(&db,"workspace-example","session-example",UPDATE,
+                assert!(execute_with(&db, UPDATE,
                     &json!({"id":id,"expected_revision":2,"state":"screened","patch":{field:value},"reason":"Invalid score"}),&[]).is_err());
                 assert_eq!(
                     db.finding_get("workspace-example", id)
@@ -1348,6 +1666,7 @@ mod tests {
         assert_eq!(missing["missing"], json!(["impact_score"]));
         drop(db);
         let reopened = HostDatabase::open(&root).unwrap();
+        migrate(&reopened).unwrap();
         let saved = reopened
             .finding_get("workspace-example", id)
             .unwrap()
@@ -1368,6 +1687,7 @@ mod tests {
             uuid::Uuid::new_v4()
         ));
         let db = HostDatabase::open(&root).unwrap();
+        migrate(&db).unwrap();
         db.replace_workspaces(&[WorkspaceRow {
             id: "workspace-example".to_owned(),
             name: "Example Workspace".to_owned(),
@@ -1389,6 +1709,7 @@ mod tests {
         }
         drop(db);
         let db = HostDatabase::open(&root).unwrap();
+        migrate(&db).unwrap();
         let current = invoke(&db, READ, json!({"id":id}));
         assert_eq!(current["record"]["revision"], 261);
         assert_eq!(current["history_total"], 261);
@@ -1407,6 +1728,7 @@ mod tests {
             uuid::Uuid::new_v4()
         ));
         let db = HostDatabase::open(&root).unwrap();
+        migrate(&db).unwrap();
         db.replace_workspaces(&[WorkspaceRow {
             id: "workspace-example".to_owned(),
             name: "Example Workspace".to_owned(),
@@ -1485,6 +1807,199 @@ mod tests {
             serde_json::from_slice(&to_bytes(response.into_body(), 16_384).await.unwrap()).unwrap();
         assert_eq!(detail["record"]["id"], id);
         assert_eq!(detail["record"]["history"], json!([]));
+        drop(db);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    fn evidence_fixture() -> (std::path::PathBuf, HostDatabase, String) {
+        let root =
+            std::env::temp_dir().join(format!("beale-findings-evidence-{}", uuid::Uuid::new_v4()));
+        let db = HostDatabase::open(&root).unwrap();
+        migrate(&db).unwrap();
+        db.replace_workspaces(&[WorkspaceRow {
+            id: "workspace-example".to_owned(),
+            name: "Example Workspace".to_owned(),
+            directory: "example-directory".to_owned(),
+        }])
+        .unwrap();
+        db.append_turn_with_tools(
+            &SessionRow {
+                id: "session-example".to_owned(),
+                workspace_id: "workspace-example".to_owned(),
+                title: "Example".to_owned(),
+                created_at_ms: 1,
+                last_message_at_ms: 1,
+            },
+            &TurnRow {
+                number: 1,
+                provider: 1,
+                method: 1,
+                model: "example-model".to_owned(),
+                prompt: "Example prompt".to_owned(),
+                answer: "Example answer".to_owned(),
+                duration_ms: 1,
+                internal_prompt: false,
+            },
+            true,
+            &[],
+        )
+        .unwrap();
+        let created = invoke(
+            &db,
+            CREATE,
+            json!({"title":"Example evidence finding","summary":"A synthetic issue","hypothesis":"An example.test input reaches an example sink"}),
+        );
+        let id = created["record"]["id"].as_str().unwrap().to_owned();
+        invoke(
+            &db,
+            UPDATE,
+            json!({"id":id,"expected_revision":1,"state":"validated","patch":{"attacker_control":"Example input","violated_invariant":"Example boundary","observed_behavior":"Synthetic response","impact":"Example impact","validation_method":"Example rerun","validation_description":"Run a synthetic proof","validation_result":"Synthetic behavior observed","evidence_refs":[{"kind":"tool_call","reference":"tool-evidence"}]},"reason":"Draft validation"}),
+        );
+        (root, db, id)
+    }
+
+    #[test]
+    fn evidence_gathered_before_the_candidate_cannot_validate_it() {
+        let (root, db, id) = evidence_fixture();
+        let created_at = db
+            .finding_get("workspace-example", &id)
+            .unwrap()
+            .unwrap()
+            .created_at_ms as i64;
+        let pending = [PendingSource {
+            id: "tool-evidence",
+            name: "read",
+            output: "Synthetic observed response",
+            is_error: false,
+            agent_role: "main",
+            created_at_ms: created_at - 1,
+        }];
+        let error = execute_with(
+            &db,
+            COMPLETE,
+            &json!({"id":id,"expected_revision":2,"state":"validated"}),
+            &pending,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("predates"), "{error}");
+        drop(db);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn verification_requests_reject_oracles_copied_from_the_command() {
+        let base = json!({"id":"F1","expected_revision":1,"command":"./example-proof --input example.test"});
+        let with = |oracle: Value| {
+            let mut args = base.clone();
+            args["oracle"] = oracle;
+            VerifyRequest::parse(&args)
+        };
+        assert!(with(json!({"kind":"stdout_contains","value":"example.test"})).is_err());
+        assert!(with(json!({"kind":"stdout_contains","value":" "})).is_err());
+        assert!(with(json!({"kind":"regex","value":"x"})).is_err());
+        assert!(with(json!({"kind":"stderr_contains","value":"example-sanitizer-report"})).is_ok());
+        assert!(with(json!({"kind":"exit_code","value":3})).is_ok());
+        let mut slow = base.clone();
+        slow["oracle"] = json!({"kind":"exit_nonzero"});
+        slow["timeout_seconds"] = json!(601);
+        assert!(VerifyRequest::parse(&slow).is_err());
+    }
+
+    #[test]
+    fn oracles_are_evaluated_by_the_host() {
+        let text = |value: &str| value.to_owned();
+        assert!(oracle_satisfied(
+            &Oracle::ExitCode { value: 3 },
+            Some(3),
+            "",
+            ""
+        ));
+        assert!(!oracle_satisfied(
+            &Oracle::ExitCode { value: 3 },
+            None,
+            "",
+            ""
+        ));
+        assert!(oracle_satisfied(&Oracle::ExitNonzero, None, "", ""));
+        assert!(!oracle_satisfied(&Oracle::ExitNonzero, Some(0), "", ""));
+        let stderr = Oracle::StderrContains {
+            value: text("example-report"),
+        };
+        assert!(oracle_satisfied(
+            &stderr,
+            Some(0),
+            "",
+            "an example-report line"
+        ));
+        assert!(!oracle_satisfied(&stderr, Some(0), "example-report", ""));
+        let either = Oracle::OutputContains {
+            value: text("example-report"),
+        };
+        assert!(oracle_satisfied(&either, Some(0), "example-report", ""));
+    }
+
+    #[test]
+    fn verified_reproduction_is_recorded_and_citable_as_evidence() {
+        let (root, db, id) = evidence_fixture();
+        let pending: [PendingSource<'_>; 0] = [];
+        let context = context(&pending);
+        let oracle = json!({"kind":"stderr_contains","value":"example-report"});
+        let request = VerifyRequest::parse(&json!({"id":id,"expected_revision":2,
+            "command":"./example-proof","oracle":oracle}))
+        .unwrap();
+        check_verifiable(&db, &context, &request).unwrap();
+        let failed = vec![
+            VerifyRun::observe(&request.oracle, Some(1), "", "example-report", 4),
+            VerifyRun::failed("bash timed out after 120 seconds", 120_000),
+        ];
+        let (output, verified) =
+            record_verification(&db, &context, &request, "tool-unverified", "main", failed)
+                .unwrap();
+        assert!(!verified);
+        assert_eq!(
+            serde_json::from_str::<Value>(&output).unwrap()["verified"],
+            false
+        );
+        let request = VerifyRequest::parse(&json!({"id":id,"expected_revision":3,
+            "command":"./example-proof","oracle":oracle}))
+        .unwrap();
+        let runs = (0..VERIFY_RUNS)
+            .map(|_| VerifyRun::observe(&request.oracle, Some(1), "", "example-report", 4))
+            .collect();
+        let (output, verified) =
+            record_verification(&db, &context, &request, "tool-evidence", "main", runs).unwrap();
+        assert!(verified);
+        let output: Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(output["record"]["verified"], true);
+        assert_eq!(output["runs"].as_array().unwrap().len(), VERIFY_RUNS);
+        let finding = db.finding_get("workspace-example", &id).unwrap().unwrap();
+        let verification = finding.state.validated.unwrap().verification.unwrap();
+        assert_eq!(verification.tool_call_id, "tool-evidence");
+        assert_eq!(verification.runs[0].output_sha256.len(), 64);
+        let pending = [PendingSource {
+            id: "tool-evidence",
+            name: VERIFY,
+            output: "{\"verified\":true}",
+            is_error: false,
+            agent_role: "main",
+            created_at_ms: now_ms().unwrap() as i64,
+        }];
+        let completed: Value = serde_json::from_str(
+            &execute_with(
+                &db,
+                COMPLETE,
+                &json!({"id":id,"expected_revision":4,"state":"validated"}),
+                &pending,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(completed["record"]["status"], "validated");
+        assert_eq!(completed["record"]["verified"], true);
+        let stale = VerifyRequest::parse(&json!({"id":id,"expected_revision":4,
+            "command":"./example-proof","oracle":oracle}))
+        .unwrap();
+        assert!(check_verifiable(&db, &context, &stale).is_err());
         drop(db);
         std::fs::remove_dir_all(root).unwrap();
     }

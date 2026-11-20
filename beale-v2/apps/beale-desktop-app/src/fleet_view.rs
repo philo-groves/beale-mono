@@ -1,4 +1,4 @@
-use crate::design::FadeText;
+use crate::design::{FadeText, SIDENAV_ACTIVE_TEXT};
 use qrcodegen::{QrCode, QrCodeEcc};
 use rune::{Color, El, Icon, Pixels, ScrollSpec, TextEdit, col, el, icon, row, text, text_input};
 
@@ -6,14 +6,14 @@ use crate::{
     AUTH_HANDLE, ConnectionStatus, PrimaryView, SelectionMenu, State, ThemeStyle, ViewLocation,
     extensions_view::{workspace_scope_button, workspace_scope_label},
     fleet_connection::{
-        self, FleetServer, Mutation, MutationResult, TailnetDevice, VirtualMachineItem,
-        VirtualMachineMutation,
+        self, FleetServer, Mutation, MutationResult, ResearchToolHost, ResearchToolMutation,
+        TailnetDevice, VirtualMachineItem, VirtualMachineMutation,
     },
     form_button,
     form_controls::toggle_button,
     icons::{
-        FLEET, FLEET_APPLE, FLEET_LINUX, FLEET_QR, FLEET_VIRTUAL_MACHINE, FLEET_WINDOWS, INFO,
-        PLUS, VM_CLONE, VM_CLONE_FILLED, VM_RUN, VM_RUN_FILLED,
+        CHECK, FLEET, FLEET_APPLE, FLEET_LINUX, FLEET_QR, FLEET_VIRTUAL_MACHINE, FLEET_WINDOWS,
+        INFO, PLUS, VM_CLONE, VM_CLONE_FILLED, VM_RUN, VM_RUN_FILLED, WRENCH,
     },
     modal_dialog, ui_font,
 };
@@ -23,6 +23,7 @@ pub(crate) enum FleetSection {
     #[default]
     AppServers,
     VirtualMachines,
+    ResearchTools,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -57,7 +58,7 @@ impl FleetTab {
 
 pub(crate) struct FleetState {
     pub(crate) tab: FleetTab,
-    tabs: [FleetTab; 2],
+    tabs: [FleetTab; 3],
     local: FleetServer,
     servers: Vec<FleetServer>,
     virtual_machines: Vec<VirtualMachineItem>,
@@ -65,6 +66,12 @@ pub(crate) struct FleetState {
     vm_busy: bool,
     vm_error: String,
     vm_generation: u64,
+    tool_hosts: Vec<ResearchToolHost>,
+    selected_tool_host_id: String,
+    tools_loading: bool,
+    tools_busy: bool,
+    tools_error: String,
+    tools_generation: u64,
     loading: bool,
     busy: bool,
     error: String,
@@ -95,7 +102,7 @@ impl Default for FleetState {
     fn default() -> Self {
         Self {
             tab: FleetTab::All,
-            tabs: [FleetTab::All; 2],
+            tabs: [FleetTab::All; 3],
             local: fleet_connection::local_placeholder(),
             servers: Vec::new(),
             virtual_machines: Vec::new(),
@@ -103,6 +110,12 @@ impl Default for FleetState {
             vm_busy: false,
             vm_error: String::new(),
             vm_generation: 0,
+            tool_hosts: Vec::new(),
+            selected_tool_host_id: "local".to_owned(),
+            tools_loading: false,
+            tools_busy: false,
+            tools_error: String::new(),
+            tools_generation: 0,
             loading: false,
             busy: false,
             error: String::new(),
@@ -132,12 +145,13 @@ impl Default for FleetState {
 }
 
 impl FleetSection {
-    const ALL: [Self; 2] = [Self::AppServers, Self::VirtualMachines];
+    const ALL: [Self; 3] = [Self::AppServers, Self::VirtualMachines, Self::ResearchTools];
 
     fn index(self) -> usize {
         match self {
             Self::AppServers => 0,
             Self::VirtualMachines => 1,
+            Self::ResearchTools => 2,
         }
     }
 
@@ -145,6 +159,7 @@ impl FleetSection {
         match self {
             Self::AppServers => "App Servers",
             Self::VirtualMachines => "Virtual Machines",
+            Self::ResearchTools => "Research Tools",
         }
     }
 
@@ -152,6 +167,7 @@ impl FleetSection {
         match self {
             Self::AppServers => "fleet-app-servers",
             Self::VirtualMachines => "fleet-virtual-machines",
+            Self::ResearchTools => "fleet-research-tools",
         }
     }
 
@@ -159,6 +175,7 @@ impl FleetSection {
         match self {
             Self::AppServers => &FLEET,
             Self::VirtualMachines => &FLEET_VIRTUAL_MACHINE,
+            Self::ResearchTools => &WRENCH,
         }
     }
 }
@@ -183,6 +200,85 @@ impl FleetState {
                 all_workspaces: true,
                 ..Default::default()
             },
+        });
+        self.tool_hosts.push(ResearchToolHost {
+            id: "local".into(),
+            name: "Example research host".into(),
+            tools: [
+                (
+                    "ripgrep",
+                    "ripgrep",
+                    "Source",
+                    "Fast search across source and artifacts.",
+                ),
+                (
+                    "opengrep",
+                    "Opengrep",
+                    "Source",
+                    "Rule-based source scanning.",
+                ),
+                ("git", "Git", "Source", "Repository history and changes."),
+                (
+                    "radare2",
+                    "radare2",
+                    "Binary",
+                    "Scriptable binary inspection and analysis.",
+                ),
+                (
+                    "ghidra",
+                    "Ghidra",
+                    "Binary",
+                    "Disassembly and decompilation.",
+                ),
+                (
+                    "llvm",
+                    "LLVM tools",
+                    "Binary",
+                    "Object, symbol, and disassembly utilities.",
+                ),
+                (
+                    "jadx",
+                    "JADX",
+                    "Mobile",
+                    "Android APK and DEX decompilation.",
+                ),
+                (
+                    "ipsw",
+                    "ipsw",
+                    "Mobile",
+                    "Apple firmware and binary inspection.",
+                ),
+                (
+                    "python",
+                    "Python 3",
+                    "Runtimes",
+                    "Runtime for research scripts.",
+                ),
+                (
+                    "java",
+                    "Java JDK",
+                    "Runtimes",
+                    "Runtime required by Java-based tools.",
+                ),
+                (
+                    "node",
+                    "Node.js",
+                    "Runtimes",
+                    "Runtime for JavaScript research tooling.",
+                ),
+            ]
+            .into_iter()
+            .map(
+                |(id, name, category, description)| beale_contracts::v1::FleetResearchTool {
+                    id: id.into(),
+                    name: name.into(),
+                    category: category.into(),
+                    description: description.into(),
+                    allow_locally: id == "ripgrep",
+                    allow_in_vms: id == "ghidra",
+                },
+            )
+            .collect(),
         });
     }
 
@@ -234,7 +330,11 @@ pub(crate) fn sidenav(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
                 .child(
                     text(section.label())
                         .font(ui_font(14.0, if active { 550.0 } else { 400.0 }))
-                        .color(theme.color(if active { "#f2f2f2" } else { "#c8c8c8" })),
+                        .color(theme.color(if active {
+                            SIDENAV_ACTIVE_TEXT
+                        } else {
+                            "#c8c8c8"
+                        })),
                 ),
         );
     }
@@ -249,6 +349,12 @@ pub(crate) fn sidenav(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
 }
 
 pub(crate) fn start_load(state: &mut State) {
+    if state.primary_view == PrimaryView::Fleet
+        && state.fleet_section == FleetSection::ResearchTools
+    {
+        start_research_tools_load(state);
+        return;
+    }
     if state.primary_view == PrimaryView::Fleet
         && state.fleet_section == FleetSection::VirtualMachines
     {
@@ -320,6 +426,74 @@ fn start_virtual_machine_load(state: &mut State) {
                     state.fleet.vm_error = snapshot.error;
                 }
                 Err(_) => state.fleet.vm_error = "Could not initialize VM inventory.".to_owned(),
+            }
+        });
+    });
+}
+
+fn start_research_tools_load(state: &mut State) {
+    if state.fleet.tools_loading || state.fleet.tools_busy {
+        return;
+    }
+    let Some(handle) = AUTH_HANDLE.get().cloned() else {
+        return;
+    };
+    state.fleet.tools_loading = true;
+    state.fleet.tools_generation = state.fleet.tools_generation.wrapping_add(1);
+    let generation = state.fleet.tools_generation;
+    std::thread::spawn(move || {
+        let result = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map(|runtime| runtime.block_on(fleet_connection::load_research_tools()));
+        handle.update(move |state, _| {
+            if state.fleet.tools_generation != generation {
+                return;
+            }
+            state.fleet.tools_loading = false;
+            match result {
+                Ok(snapshot) => {
+                    state.fleet.tool_hosts = snapshot.hosts;
+                    state.fleet.tools_error = snapshot.error;
+                    if !state
+                        .fleet
+                        .tool_hosts
+                        .iter()
+                        .any(|host| host.id == state.fleet.selected_tool_host_id)
+                        && let Some(host) = state.fleet.tool_hosts.first()
+                    {
+                        state.fleet.selected_tool_host_id = host.id.clone();
+                    }
+                }
+                Err(_) => {
+                    state.fleet.tools_error = "Could not initialize research tools.".to_owned()
+                }
+            }
+        });
+    });
+}
+
+fn start_research_tool_mutation(state: &mut State, action: ResearchToolMutation) {
+    if state.fleet.tools_busy {
+        return;
+    }
+    let Some(handle) = AUTH_HANDLE.get().cloned() else {
+        state.fleet.tools_error = "Desktop is not ready.".to_owned();
+        return;
+    };
+    state.fleet.tools_busy = true;
+    state.fleet.tools_error.clear();
+    std::thread::spawn(move || {
+        let result = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|_| "Could not initialize research tool settings.".to_owned())
+            .and_then(|runtime| runtime.block_on(fleet_connection::mutate_research_tool(action)));
+        handle.update(move |state, _| {
+            state.fleet.tools_busy = false;
+            match result {
+                Ok(()) => start_research_tools_load(state),
+                Err(error) => state.fleet.tools_error = error,
             }
         });
     });
@@ -609,6 +783,7 @@ fn tab_button(tab: FleetTab, section: FleetSection, active: bool, theme: ThemeSt
         (FleetTab::Enabled, FleetSection::VirtualMachines) => &crate::icons::STOP,
         (FleetTab::Available, FleetSection::AppServers) => &PLUS,
         (FleetTab::Enabled, FleetSection::AppServers) => &crate::icons::CHECK,
+        (_, FleetSection::ResearchTools) => &WRENCH,
     };
     crate::design::segmented_tab(tab.label(section), Some(glyph), active, true, theme)
         .key(tab.key())
@@ -635,9 +810,17 @@ fn stat_row(label: &'static str, value: String, theme: ThemeStyle<'_>) -> El {
         )
 }
 
-fn stat_block(rows: impl IntoIterator<Item = El>, top_spacing: f32, theme: ThemeStyle<'_>) -> El {
+fn stat_block(
+    rows: impl IntoIterator<Item = El>,
+    top_spacing: f32,
+    top_divider: bool,
+    theme: ThemeStyle<'_>,
+) -> El {
     let divider = || el().w_full().h(1.0).fill(theme.color("#303030"));
-    let mut block = col().w_full().mt(top_spacing).child(divider());
+    let mut block = col().w_full().mt(top_spacing);
+    if top_divider {
+        block = block.child(divider());
+    }
     for row in rows {
         block = block.child(row);
     }
@@ -650,6 +833,51 @@ fn server_name(server: &FleetServer) -> &str {
     } else {
         &server.display_name
     }
+}
+
+fn resource_size(bytes: u64) -> String {
+    const MIB: f64 = 1_048_576.0;
+    const GIB: f64 = 1_073_741_824.0;
+    const TIB: u64 = 1_099_511_627_776;
+    if bytes >= TIB {
+        format!("{:.1} TiB", bytes as f64 / TIB as f64)
+    } else if bytes >= GIB as u64 {
+        format!("{:.1} GiB", bytes as f64 / GIB)
+    } else {
+        format!("{:.1} MiB", bytes as f64 / MIB)
+    }
+}
+
+fn resource_values(server: &FleetServer, detailed: bool) -> [String; 3] {
+    let Some(resources) = &server.resources else {
+        return std::array::from_fn(|_| "Unavailable".to_owned());
+    };
+    let cpu = if resources.cpu_logical_cores == 0 {
+        "Unavailable".to_owned()
+    } else {
+        format!("{} logical cores", resources.cpu_logical_cores)
+    };
+    let size = |total, available| {
+        if total == 0 {
+            "Unavailable".to_owned()
+        } else if detailed {
+            format!(
+                "{} available / {} total",
+                resource_size(available),
+                resource_size(total)
+            )
+        } else {
+            resource_size(total)
+        }
+    };
+    [
+        cpu,
+        size(
+            resources.memory_total_bytes,
+            resources.memory_available_bytes,
+        ),
+        size(resources.disk_total_bytes, resources.disk_available_bytes),
+    ]
 }
 
 fn server_mark(server: &FleetServer, theme: ThemeStyle<'_>) -> El {
@@ -679,6 +907,7 @@ fn server_card(server: &FleetServer, state: &State, text_width: f32, theme: Them
     let id = server.id.clone();
     let enabled = server.enabled;
     let display_name = server.display_name.clone();
+    let [cpu, memory, disk] = resource_values(server, false);
     let toggle = if is_local {
         text("Local")
             .font(ui_font(13.0, 450.0))
@@ -748,6 +977,17 @@ fn server_card(server: &FleetServer, state: &State, text_width: f32, theme: Them
                 stat_row("Condition", server.condition.clone(), theme),
             ],
             12.0,
+            true,
+            theme,
+        ))
+        .child(stat_block(
+            [
+                stat_row("CPU", cpu, theme),
+                stat_row("Memory", memory, theme),
+                stat_row("Disk", disk, theme),
+            ],
+            2.0,
+            false,
             theme,
         ))
         .child(
@@ -980,6 +1220,7 @@ fn virtual_machine_card(
                 stat_row("Generation", item.machine.generation.to_string(), theme),
             ],
             12.0,
+            true,
             theme,
         ))
         .child(footer)
@@ -987,6 +1228,9 @@ fn virtual_machine_card(
 
 pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> Vec<El> {
     let section = state.fleet_section;
+    if section == FleetSection::ResearchTools {
+        return render_research_tools(state, theme);
+    }
     let mut tabs = crate::design::segmented_control(theme)
         .key("fleet-view-tabs")
         .label("Fleet views");
@@ -1104,6 +1348,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> V
                 "No virtual machines are stopped or paused."
             }
             (FleetSection::VirtualMachines, _) => "No virtual machines detected.",
+            (FleetSection::ResearchTools, _) => "No research tools available.",
         };
         cards = cards.child(
             text(empty)
@@ -1112,6 +1357,191 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> V
         );
     }
     content.push(cards);
+    content
+}
+
+fn research_tool_permission_button(
+    key: String,
+    label: &'static str,
+    selected: bool,
+    enabled: bool,
+    action: ResearchToolMutation,
+    theme: ThemeStyle<'_>,
+) -> El {
+    let mut button = el()
+        .key(key)
+        .role("checkbox")
+        .label(format!(
+            "{label} for {}: {}",
+            action.id,
+            if selected { "allowed" } else { "not allowed" }
+        ))
+        .size(104.0, 36.0)
+        .center()
+        .radius(8.0)
+        .hover(theme.color("#303030"))
+        .child(
+            el().size(22.0, 22.0)
+                .center()
+                .radius(6.0)
+                .continuous_corners()
+                .fill(theme.color(if selected { "#3c513d" } else { "#242424" }))
+                .border(
+                    1.0,
+                    theme.color(if selected { "#3c513d" } else { "#696969" }),
+                )
+                .child(if selected {
+                    icon(&CHECK, 15.0).color(theme.color("#d8efd7"))
+                } else {
+                    el().size(0.0, 0.0)
+                }),
+        );
+    if enabled {
+        button = button
+            .on_press(move |state: &mut State| start_research_tool_mutation(state, action.clone()));
+    }
+    button
+}
+
+fn render_research_tools(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
+    let mut content = Vec::new();
+    if !state.fleet.tools_error.is_empty() {
+        content.push(
+            text(state.fleet.tools_error.clone())
+                .key("fleet-research-tools-error")
+                .mt(10.0)
+                .font(ui_font(13.0, 400.0))
+                .color(theme.color("#e07676")),
+        );
+    }
+    let mut hosts = row()
+        .key("fleet-research-tool-hosts")
+        .w_full()
+        .mt(14.0)
+        .gaps(8.0, 8.0);
+    for host in &state.fleet.tool_hosts {
+        let id = host.id.clone();
+        let active = id == state.fleet.selected_tool_host_id;
+        hosts = hosts.child(
+            el().key(format!("fleet-research-tool-host-{id}"))
+                .role("button")
+                .label(host.name.clone())
+                .h(32.0)
+                .px(12.0)
+                .center()
+                .radius(16.0)
+                .fill(theme.color(if active { "#353535" } else { "#222222" }))
+                .hover(theme.color("#393939"))
+                .on_press(move |state: &mut State| state.fleet.selected_tool_host_id = id.clone())
+                .child(
+                    text(host.name.clone())
+                        .font(ui_font(13.0, if active { 550.0 } else { 400.0 }))
+                        .color(theme.color(if active { "#f2f2f2" } else { "#bdbdbd" })),
+                ),
+        );
+    }
+    content.push(hosts);
+    let Some(host) = state
+        .fleet
+        .tool_hosts
+        .iter()
+        .find(|host| host.id == state.fleet.selected_tool_host_id)
+    else {
+        content.push(
+            text(if state.fleet.tools_loading {
+                "Loading research tools…"
+            } else {
+                "No app-server research tools are available."
+            })
+            .mt(18.0)
+            .font(ui_font(14.0, 400.0))
+            .color(theme.color("#969696")),
+        );
+        return content;
+    };
+    let divider = || el().w_full().h(1.0).fill(theme.color("#303030"));
+    let header_font = ui_font(12.5, 500.0);
+    let header_color = theme.color("#969696");
+    let headers = row()
+        .key("fleet-research-tool-headers")
+        .w_full()
+        .h(34.0)
+        .px(12.0)
+        .center_y()
+        .gap(12.0)
+        .child(text("Tool").grow(1.0).font(header_font).color(header_color))
+        .child(
+            row()
+                .gap(8.0)
+                .child(
+                    el().w(104.0)
+                        .center()
+                        .child(text("Allow Locally").font(header_font).color(header_color)),
+                )
+                .child(
+                    el().w(104.0)
+                        .center()
+                        .child(text("Allow in VMs").font(header_font).color(header_color)),
+                ),
+        );
+    let mut tools = col()
+        .key("fleet-research-tool-list")
+        .w_full()
+        .mt(16.0)
+        .child(headers)
+        .child(divider());
+    for tool in &host.tools {
+        let local_action = ResearchToolMutation {
+            host_id: host.id.clone(),
+            id: tool.id.clone(),
+            allow_locally: !tool.allow_locally,
+            allow_in_vms: tool.allow_in_vms,
+        };
+        let vm_action = ResearchToolMutation {
+            host_id: host.id.clone(),
+            id: tool.id.clone(),
+            allow_locally: tool.allow_locally,
+            allow_in_vms: !tool.allow_in_vms,
+        };
+        let buttons = row()
+            .gap(8.0)
+            .child(research_tool_permission_button(
+                format!("fleet-tool-local-{}-{}", host.id, tool.id),
+                "Allow Locally",
+                tool.allow_locally,
+                !state.fleet.tools_busy,
+                local_action,
+                theme,
+            ))
+            .child(research_tool_permission_button(
+                format!("fleet-tool-vms-{}-{}", host.id, tool.id),
+                "Allow in VMs",
+                tool.allow_in_vms,
+                !state.fleet.tools_busy,
+                vm_action,
+                theme,
+            ));
+        tools = tools
+            .child(
+                row()
+                    .key(format!("fleet-tool-row-{}-{}", host.id, tool.id))
+                    .w_full()
+                    .h(54.0)
+                    .px(12.0)
+                    .center_y()
+                    .gap(12.0)
+                    .child(
+                        text(tool.name.clone())
+                            .grow(1.0)
+                            .min_w(0.0)
+                            .font(ui_font(14.0, 550.0))
+                            .color(theme.color("#f2f2f2")),
+                    )
+                    .child(buttons),
+            )
+            .child(divider());
+    }
+    content.push(tools);
     content
 }
 
@@ -1437,6 +1867,7 @@ pub(crate) fn details_dialog(state: &State, theme: ThemeStyle<'_>) -> [El; 2] {
     });
     let mut body = col().w_full().gap(12.0);
     if let Some(server) = server {
+        let [cpu, memory, disk] = resource_values(server, true);
         body = body
             .child(input_field(
                 "Display Name (optional)",
@@ -1457,6 +1888,18 @@ pub(crate) fn details_dialog(state: &State, theme: ThemeStyle<'_>) -> [El; 2] {
                 theme,
             ))
             .child(stat_row("OS", server.os_name.clone(), theme))
+            .child(stat_row("CPU", cpu, theme))
+            .child(stat_row("Memory", memory, theme))
+            .child(stat_row("Disk", disk, theme))
+            .child(stat_row(
+                "Allowed Tools",
+                if server.allowed_research_tools.is_empty() {
+                    "None".to_owned()
+                } else {
+                    server.allowed_research_tools.len().to_string()
+                },
+                theme,
+            ))
             .child(stat_row(
                 "Contract",
                 format!("v{}.{}", server.protocol_major, server.protocol_minor),
@@ -1481,6 +1924,28 @@ pub(crate) fn details_dialog(state: &State, theme: ThemeStyle<'_>) -> [El; 2] {
                     .color(theme.color("#969696"))
                     .wrap(),
             );
+        if !server.allowed_research_tools.is_empty() {
+            let allowed = server
+                .allowed_research_tools
+                .iter()
+                .map(|tool| {
+                    let where_allowed = match (tool.allow_locally, tool.allow_in_vms) {
+                        (true, true) => "Local, VMs",
+                        (true, false) => "Local",
+                        (false, true) => "VMs",
+                        (false, false) => "",
+                    };
+                    format!("{} ({where_allowed})", tool.name)
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            body = body.child(
+                text(allowed)
+                    .font(ui_font(13.0, 400.0))
+                    .color(theme.color("#bdbdbd"))
+                    .wrap(),
+            );
+        }
     }
     if state.fleet.remove_confirm {
         body = body.child(
@@ -1637,7 +2102,73 @@ pub(crate) fn qr_dialog(state: &State, theme: ThemeStyle<'_>) -> [El; 2] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use beale_contracts::v1::FleetSystemResources;
     use rune::{Env, Runtime};
+
+    #[test]
+    fn research_tools_have_a_sidenav_item_and_separate_permissions() {
+        let mut state = State {
+            primary_view: PrimaryView::Fleet,
+            fleet_section: FleetSection::ResearchTools,
+            ..State::default()
+        };
+        state.fleet.tool_hosts.push(ResearchToolHost {
+            id: "local".to_owned(),
+            name: "Local App Server".to_owned(),
+            tools: vec![beale_contracts::v1::FleetResearchTool {
+                id: "ripgrep".to_owned(),
+                name: "ripgrep".to_owned(),
+                category: "Source".to_owned(),
+                description: "Fast search across source and artifacts.".to_owned(),
+                allow_locally: true,
+                allow_in_vms: false,
+            }],
+        });
+        let mut runtime = Runtime::new(
+            state,
+            |state, _| {
+                let theme = state.appearance.style();
+                col()
+                    .child(sidenav(state, 220.0, theme))
+                    .children(render(state, theme, 820.0))
+            },
+            (1100.0, 700.0),
+            Env::new(true, 1.0),
+        );
+        runtime.frame(0.0);
+        assert!(runtime.find("fleet-research-tools").is_some());
+        assert!(runtime.find("fleet-research-tool-list").is_some());
+        assert!(runtime.find("fleet-tool-row-local-ripgrep").is_some());
+        assert!(runtime.find("fleet-tool-local-local-ripgrep").is_some());
+        assert!(runtime.find("fleet-tool-vms-local-ripgrep").is_some());
+        assert!(runtime.find("fleet-tool-install-local-ripgrep").is_none());
+    }
+
+    #[test]
+    fn app_server_resource_values_show_capacity_and_availability() {
+        let mut server = fleet_connection::local_placeholder();
+        server.resources = Some(FleetSystemResources {
+            cpu_logical_cores: 8,
+            memory_total_bytes: 32 * 1024 * 1024 * 1024,
+            memory_available_bytes: 12 * 1024 * 1024 * 1024,
+            disk_total_bytes: 512 * 1024 * 1024 * 1024,
+            disk_available_bytes: 256 * 1024 * 1024 * 1024,
+        });
+        assert_eq!(
+            resource_values(&server, false),
+            ["8 logical cores", "32.0 GiB", "512.0 GiB"]
+        );
+        assert_eq!(
+            resource_values(&server, true),
+            [
+                "8 logical cores",
+                "12.0 GiB available / 32.0 GiB total",
+                "256.0 GiB available / 512.0 GiB total",
+            ]
+        );
+        server.resources = None;
+        assert_eq!(resource_values(&server, false), ["Unavailable"; 3]);
+    }
 
     #[test]
     fn hyper_v_card_uses_fleet_card_layout() {

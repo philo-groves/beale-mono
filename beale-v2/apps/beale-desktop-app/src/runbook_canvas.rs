@@ -464,6 +464,7 @@ pub(crate) fn delete_cell(state: &mut State, cell_id: String) {
 
 pub(crate) fn open(state: &mut State, selected: SessionRunbook) {
     state.canvas_subagent = None;
+    state.canvas_surface.deactivate();
     let session = state
         .active_session
         .as_ref()
@@ -518,7 +519,7 @@ pub(crate) fn tab_bar(state: &State, theme: ThemeStyle<'_>) -> Option<El> {
             continue;
         };
         let title = selected.title.clone();
-        let title_width = rune::text::measure(&title, &[], ui_font(11.0, 450.0), None)
+        let title_width = rune::text::measure(&title, &[], ui_font(13.0, 500.0), None)
             .0
             .ceil()
             .max(1.0);
@@ -530,11 +531,11 @@ pub(crate) fn tab_bar(state: &State, theme: ThemeStyle<'_>) -> Option<El> {
             row()
                 .key(format!("canvas-tab-{instance_id}"))
                 .w(title_width + 64.0)
-                .h(32.0)
+                .h(34.0)
                 .px(7.0)
                 .center_y()
                 .gap(5.0)
-                .radius(10.0)
+                .radius(11.0)
                 .fill(theme.color(if active { "#303030" } else { "#242424" }))
                 .border(1.0, theme.color(if active { "#555555" } else { "#383838" }))
                 .child(
@@ -548,11 +549,12 @@ pub(crate) fn tab_bar(state: &State, theme: ThemeStyle<'_>) -> Option<El> {
                         .gap(6.0)
                         .on_press(move |state: &mut State| {
                             state.canvas_subagent = None;
+                            state.canvas_surface.deactivate();
                             if state.canvas_runbook.select(&select_key) {
                                 refresh(state);
                             }
                         })
-                        .child(icon(&RUNBOOK, 15.0).color(theme.color(if active {
+                        .child(icon(&RUNBOOK, 16.0).color(theme.color(if active {
                             "#d8d8d8"
                         } else {
                             "#929292"
@@ -561,7 +563,7 @@ pub(crate) fn tab_bar(state: &State, theme: ThemeStyle<'_>) -> Option<El> {
                             el().w(title_width + 2.0).h_full().center().child(
                                 text(title.clone())
                                     .key(format!("canvas-tab-{instance_id}-title"))
-                                    .font(ui_font(11.0, 450.0))
+                                    .font(ui_font(13.0, 500.0))
                                     .color(theme.color(if active { "#eeeeee" } else { "#aaaaaa" })),
                             ),
                         ),

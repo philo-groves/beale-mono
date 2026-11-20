@@ -948,6 +948,23 @@ message FleetAppServerDescriptor {
   string os_vendor = 4;
   uint32 protocol_major = 5;
   uint32 protocol_minor = 6;
+  FleetSystemResources resources = 7;
+  repeated FleetAllowedResearchTool allowed_research_tools = 8;
+}
+
+message FleetAllowedResearchTool {
+  string id = 1;
+  string name = 2;
+  bool allow_locally = 3;
+  bool allow_in_vms = 4;
+}
+
+message FleetSystemResources {
+  uint32 cpu_logical_cores = 1;
+  uint64 memory_total_bytes = 2;
+  uint64 memory_available_bytes = 3;
+  uint64 disk_total_bytes = 4;
+  uint64 disk_available_bytes = 5;
 }
 
 message FleetTotpProvisioningResponse {
@@ -1021,4 +1038,24 @@ message FleetSetVirtualMachineSettingsRequest {
   repeated string workspace_ids = 4;
   bool can_run = 5;
   bool can_clone = 6;
+}
+
+message FleetResearchTool {
+  string id = 1;
+  string name = 2;
+  string category = 3;
+  string description = 4;
+  bool allow_locally = 5;
+  bool allow_in_vms = 6;
+  reserved 7;
+}
+
+message FleetResearchToolsResponse {
+  repeated FleetResearchTool tools = 1;
+}
+
+message FleetSetResearchToolSettingsRequest {
+  string id = 1;
+  bool allow_locally = 2;
+  bool allow_in_vms = 3;
 }

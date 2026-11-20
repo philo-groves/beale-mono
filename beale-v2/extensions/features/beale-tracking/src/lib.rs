@@ -10,9 +10,11 @@ use beale_contracts::{
     PROTOBUF_CONTENT_TYPE, TRACKING_PATH,
     v1::{TrackingModelDay, TrackingResponse, TrackingSubscriptionPoint},
 };
-use beale_storage::{HostDatabase, SubscriptionUsageRow};
+use beale_storage::HostDatabase;
+mod store;
 use prost::Message;
 use std::collections::BTreeMap;
+pub use store::{MIGRATIONS, ModelUsageDayRow, SubscriptionUsageRow, TrackingStore, migrate};
 
 pub const FEATURE_ID: &str = "tracking";
 pub const FEATURE_NAME: &str = "Tracking";
@@ -20,6 +22,21 @@ pub const FEATURE_DESCRIPTION: &str =
     "Explore daily tokens, model usage, cache reuse, and subscription headroom over the past week.";
 pub const HAS_PROMPT_EXTENSION: bool = false;
 pub const TOOL_COUNT: u32 = 0;
+
+/// Catalog and session descriptor for this feature.
+pub const FEATURE: beale_feature_api::Feature = beale_feature_api::Feature {
+    id: FEATURE_ID,
+    name: FEATURE_NAME,
+    description: FEATURE_DESCRIPTION,
+    prompt_extension: PROMPT_EXTENSION,
+    use_case: "",
+    tool_names: &[],
+    definitions: None,
+    review: beale_feature_api::ToolReview::Exempt,
+    subagents: false,
+    migrations: MIGRATIONS,
+    startup: &[],
+};
 pub const PROMPT_EXTENSION: &str = "";
 
 #[derive(Clone)]
@@ -203,6 +220,7 @@ mod tests {
                 .as_nanos()
         ));
         let db = HostDatabase::open(&root).unwrap();
+        crate::migrate(&db).unwrap();
         let state = TrackingState {
             token: "example-token".to_owned(),
             db: db.clone(),
@@ -281,7 +299,6 @@ mod tests {
                 tools: &[],
                 reasoning: &[],
                 commentary: &[],
-                goal: None,
             },
             None,
             TurnMetadata {

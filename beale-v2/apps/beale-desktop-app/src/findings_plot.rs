@@ -236,21 +236,29 @@ pub(super) fn render(state: &State, theme: ThemeStyle<'_>, width: f32) -> El {
             .radius(13.0)
             .hover(color.alpha(0.18))
             .child(
-                el().size(
-                    if count > 1 { 23.0 } else { 14.0 },
-                    if count > 1 { 23.0 } else { 14.0 },
-                )
-                .radius(12.0)
-                .fill(color)
-                .border(if selected { 3.0 } else { 2.0 }, theme.color("#171717"))
-                .center()
-                .child(if count > 1 {
-                    text(count.to_string())
-                        .font(ui_font(10.0, 650.0))
-                        .color(theme.color("#111111"))
-                } else {
-                    el()
-                }),
+                el().size(26.0, 26.0)
+                    .center()
+                    .child(
+                        icon(
+                            &FINDING_DIAMOND,
+                            if count > 1 {
+                                if selected { 26.0 } else { 23.0 }
+                            } else {
+                                15.0
+                            },
+                        )
+                        .key(format!("finding-point-{impact}-{reachability}-diamond"))
+                        .color(color),
+                    )
+                    .child(if count > 1 {
+                        el().absolute(0.0, 0.0).size(26.0, 26.0).center().child(
+                            text(count.to_string())
+                                .font(ui_font(10.0, 650.0))
+                                .color(theme.color("#111111")),
+                        )
+                    } else {
+                        el()
+                    }),
             );
         marker = marker.on_press_tx(move |state: &mut State, tx| {
             if count == 1 {
@@ -389,21 +397,16 @@ pub(super) fn render(state: &State, theme: ThemeStyle<'_>, width: f32) -> El {
                 )
                 .hover(theme.color("#2d2d2d"))
                 .child(
-                    el().size(7.0, 7.0)
-                        .radius(4.0)
-                        .fill(if visible {
+                    icon(&FINDING_DIAMOND, 9.0)
+                        .key(format!(
+                            "findings-plot-stage-{}-diamond",
+                            label.to_lowercase()
+                        ))
+                        .color(if visible {
                             color
                         } else {
-                            rune::Color::TRANSPARENT
-                        })
-                        .border(
-                            1.0,
-                            if visible {
-                                color
-                            } else {
-                                theme.color("#777777")
-                            },
-                        ),
+                            theme.color("#777777")
+                        }),
                 )
                 .child(
                     text(label)
@@ -427,7 +430,7 @@ pub(super) fn render(state: &State, theme: ThemeStyle<'_>, width: f32) -> El {
         let mut selected = col()
             .key("findings-plot-selection")
             .w_full()
-            .gap(10.0)
+            .gap(0.0)
             .padding(14.0)
             .radius(12.0)
             .fill(theme.color("#191919"))
@@ -453,8 +456,11 @@ pub(super) fn render(state: &State, theme: ThemeStyle<'_>, width: f32) -> El {
                             }),
                     ),
             );
-        for record in records {
-            selected = selected.child(card(record, theme));
+        for (index, record) in records.iter().enumerate() {
+            if index > 0 {
+                selected = selected.child(finding_separator(&record.id, theme));
+            }
+            selected = selected.child(finding_row(record, theme));
         }
         content = content.child(selected);
     }
@@ -507,9 +513,14 @@ pub(super) fn render(state: &State, theme: ThemeStyle<'_>, width: f32) -> El {
                 }),
         );
         if board.unrated_expanded {
-            for record in unrated {
-                content = content.child(card(record, theme));
+            let mut list = col().key("findings-unrated-list").w_full();
+            for (index, record) in unrated.into_iter().enumerate() {
+                if index > 0 {
+                    list = list.child(finding_separator(&record.id, theme));
+                }
+                list = list.child(finding_row(record, theme));
             }
+            content = content.child(list);
         }
     }
     content

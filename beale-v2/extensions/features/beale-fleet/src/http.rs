@@ -1,3 +1,4 @@
+use crate::{BrowserSettings, FleetStore, ManualBrowserRow, VirtualMachineSettings};
 use axum::{
     Router,
     body::Bytes,
@@ -7,18 +8,20 @@ use axum::{
 };
 use beale_contracts::{
     FLEET_BROWSER_PREFERRED_PATH, FLEET_BROWSER_REMOVE_PATH, FLEET_BROWSER_SETTINGS_PATH,
-    FLEET_BROWSERS_PATH, FLEET_DESCRIPTOR_PATH, FLEET_PAIR_PATH, FLEET_TOTP_PROVISION_PATH,
-    FLEET_VIRTUAL_MACHINE_SETTINGS_PATH, FLEET_VIRTUAL_MACHINES_PATH, PROTOBUF_CONTENT_TYPE,
-    PROTOCOL_MAJOR, PROTOCOL_MINOR, SERVICE_NAME,
+    FLEET_BROWSERS_PATH, FLEET_DESCRIPTOR_PATH, FLEET_PAIR_PATH, FLEET_RESEARCH_TOOL_SETTINGS_PATH,
+    FLEET_RESEARCH_TOOLS_PATH, FLEET_TOTP_PROVISION_PATH, FLEET_VIRTUAL_MACHINE_SETTINGS_PATH,
+    FLEET_VIRTUAL_MACHINES_PATH, PROTOBUF_CONTENT_TYPE, PROTOCOL_MAJOR, PROTOCOL_MINOR,
+    SERVICE_NAME,
     v1::{
         FleetAddBrowserRequest, FleetAppServerDescriptor, FleetBrowsersResponse,
         FleetPairingRequest, FleetPairingResponse, FleetRemoveBrowserRequest,
-        FleetSetBrowserSettingsRequest, FleetSetPreferredBrowserRequest,
+        FleetResearchToolsResponse, FleetSetBrowserSettingsRequest,
+        FleetSetPreferredBrowserRequest, FleetSetResearchToolSettingsRequest,
         FleetSetVirtualMachineSettingsRequest, FleetTotpProvisioningResponse, FleetVirtualMachine,
         FleetVirtualMachinesResponse,
     },
 };
-use beale_storage::{BrowserSettings, HostDatabase, ManualBrowserRow, VirtualMachineSettings};
+use beale_storage::HostDatabase;
 use prost::Message;
 use ring::{
     hmac,
@@ -26,6 +29,7 @@ use ring::{
 };
 use std::{
     collections::HashSet,
+    path::PathBuf,
     sync::{Arc, Mutex},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -35,6 +39,7 @@ use tokio::{process::Command, time::timeout};
 struct HttpState {
     token: String,
     db: HostDatabase,
+    data_root: PathBuf,
     attempts: Arc<Mutex<Attempts>>,
 }
 
@@ -115,7 +120,7 @@ fn base32(secret: &[u8]) -> String {
     output
 }
 
-pub fn router(token: String, db: HostDatabase) -> Router {
+pub fn router(token: String, db: HostDatabase, data_root: PathBuf) -> Router {
     Router::new()
         .route(FLEET_DESCRIPTOR_PATH, get(descriptor))
         .route(FLEET_TOTP_PROVISION_PATH, get(provision))
@@ -125,6 +130,11 @@ pub fn router(token: String, db: HostDatabase) -> Router {
         .route(FLEET_BROWSER_SETTINGS_PATH, post(set_browser_settings))
         .route(FLEET_BROWSER_PREFERRED_PATH, post(set_preferred_browser))
         .route(FLEET_VIRTUAL_MACHINES_PATH, get(list_virtual_machines))
+        .route(FLEET_RESEARCH_TOOLS_PATH, get(list_research_tools))
+        .route(
+            FLEET_RESEARCH_TOOL_SETTINGS_PATH,
+            post(set_research_tool_settings),
+        )
         .route(
             FLEET_VIRTUAL_MACHINE_SETTINGS_PATH,
             post(set_virtual_machine_settings),
@@ -133,6 +143,7 @@ pub fn router(token: String, db: HostDatabase) -> Router {
         .with_state(HttpState {
             token,
             db,
+            data_root,
             attempts: Arc::new(Mutex::new(Attempts::default())),
         })
 }
@@ -153,6 +164,39 @@ fn protobuf_request(headers: &HeaderMap) -> Result<(), StatusCode> {
         return Err(StatusCode::UNSUPPORTED_MEDIA_TYPE);
     }
     Ok(())
+}
+
+async fn list_research_tools(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+) -> Result<([(header::HeaderName, &'static str); 1], Vec<u8>), StatusCode> {
+    require_fleet_access(&state, &headers)?;
+    let tools =
+        crate::research_tools::catalog(|id| state.db.research_tool_settings(id).map_err(|_| ()))
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok((
+        [(header::CONTENT_TYPE, PROTOBUF_CONTENT_TYPE)],
+        FleetResearchToolsResponse { tools }.encode_to_vec(),
+    ))
+}
+
+async fn set_research_tool_settings(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<StatusCode, StatusCode> {
+    require_fleet_access(&state, &headers)?;
+    protobuf_request(&headers)?;
+    let request =
+        FleetSetResearchToolSettingsRequest::decode(body).map_err(|_| StatusCode::BAD_REQUEST)?;
+    if !crate::research_tools::contains(&request.id) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    state
+        .db
+        .set_research_tool_settings(&request.id, request.allow_locally, request.allow_in_vms)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn list_browsers(
@@ -531,6 +575,14 @@ async fn descriptor(
         os_vendor: os_vendor.to_owned(),
         protocol_major: PROTOCOL_MAJOR,
         protocol_minor: PROTOCOL_MINOR,
+        allowed_research_tools: crate::research_tools::allowed_tools(&state.db)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+        resources: tokio::task::spawn_blocking({
+            let data_root = state.data_root.clone();
+            move || crate::resources::snapshot(&data_root)
+        })
+        .await
+        .ok(),
     };
     Ok((
         [(header::CONTENT_TYPE, PROTOBUF_CONTENT_TYPE)],
@@ -573,10 +625,131 @@ mod tests {
     use axum::{body::Body, http::Request};
     use tower::ServiceExt;
 
+    #[tokio::test]
+    async fn research_tool_approvals_are_authenticated_and_catalog_bound() {
+        let root =
+            std::env::temp_dir().join(format!("beale-tools-example-{}", uuid::Uuid::new_v4()));
+        let db = HostDatabase::open(&root).unwrap();
+        crate::migrate(&db).unwrap();
+        let app = router("example-token".to_owned(), db.clone(), root.clone());
+        let request = |method: &str, path: &str, body: Vec<u8>, auth: bool| {
+            let mut builder = Request::builder()
+                .method(method)
+                .uri(path)
+                .header("content-type", PROTOBUF_CONTENT_TYPE);
+            if auth {
+                builder = builder.header("authorization", "Bearer example-token");
+            }
+            builder.body(Body::from(body)).unwrap()
+        };
+        assert_eq!(
+            app.clone()
+                .oneshot(request("GET", FLEET_RESEARCH_TOOLS_PATH, vec![], false))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            app.clone()
+                .oneshot(request("GET", FLEET_RESEARCH_TOOLS_PATH, vec![], true))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        db.set_feature_enabled(crate::FEATURE_ID, true).unwrap();
+        let unknown = FleetSetResearchToolSettingsRequest {
+            id: "unknown".to_owned(),
+            allow_locally: true,
+            allow_in_vms: true,
+        };
+        assert_eq!(
+            app.clone()
+                .oneshot(request(
+                    "POST",
+                    FLEET_RESEARCH_TOOL_SETTINGS_PATH,
+                    unknown.encode_to_vec(),
+                    true
+                ))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::BAD_REQUEST
+        );
+        let setting = FleetSetResearchToolSettingsRequest {
+            id: "ripgrep".to_owned(),
+            allow_locally: true,
+            allow_in_vms: false,
+        };
+        assert_eq!(
+            app.clone()
+                .oneshot(request(
+                    "POST",
+                    FLEET_RESEARCH_TOOL_SETTINGS_PATH,
+                    setting.encode_to_vec(),
+                    false
+                ))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            app.clone()
+                .oneshot(request(
+                    "POST",
+                    FLEET_RESEARCH_TOOL_SETTINGS_PATH,
+                    setting.encode_to_vec(),
+                    true
+                ))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NO_CONTENT
+        );
+        assert_eq!(
+            app.clone()
+                .oneshot(request(
+                    "POST",
+                    "/v1/fleet/research-tools/install",
+                    vec![],
+                    true
+                ))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        let response = app
+            .oneshot(request("GET", FLEET_RESEARCH_TOOLS_PATH, vec![], true))
+            .await
+            .unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), 16_384)
+            .await
+            .unwrap();
+        let catalog = FleetResearchToolsResponse::decode(bytes).unwrap();
+        assert!(
+            catalog
+                .tools
+                .iter()
+                .any(|tool| tool.id == "ripgrep" && tool.allow_locally && !tool.allow_in_vms)
+        );
+        assert!(
+            catalog
+                .tools
+                .iter()
+                .any(|tool| tool.id == "ghidra" && !tool.allow_locally && !tool.allow_in_vms)
+        );
+        drop(db);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn virtual_machine_settings_require_a_detected_id_and_persist_allowances() {
         let root = std::env::temp_dir().join(format!("beale-vm-example-{}", uuid::Uuid::new_v4()));
         let db = HostDatabase::open(&root).unwrap();
+        crate::migrate(&db).unwrap();
         let id = "hyper-v:00000000-0000-4000-8000-000000000001".to_owned();
         let inventory = vec![FleetVirtualMachine {
             id: id.clone(),
@@ -616,6 +789,7 @@ mod tests {
         assert!(!valid_virtual_machine_settings_request(&invalid));
         drop(db);
         let reopened = HostDatabase::open(&root).unwrap();
+        crate::migrate(&reopened).unwrap();
         let saved = reopened.virtual_machine_settings(&id).unwrap();
         assert!(saved.enabled && saved.can_run && !saved.can_clone);
         assert!(!saved.all_workspaces);
@@ -629,7 +803,8 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("beale-browser-example-{}", uuid::Uuid::new_v4()));
         let db = HostDatabase::open(&root).unwrap();
-        let app = router("example-token".to_owned(), db.clone());
+        crate::migrate(&db).unwrap();
+        let app = router("example-token".to_owned(), db.clone(), root.clone());
         let request = |method: &str, path: &str, body: Vec<u8>, authenticated: bool| {
             let mut builder = Request::builder()
                 .method(method)
@@ -845,6 +1020,7 @@ mod tests {
         drop(app);
         drop(db);
         let reopened = HostDatabase::open(&root).unwrap();
+        crate::migrate(&reopened).unwrap();
         assert_eq!(reopened.manual_browsers().unwrap().len(), 1);
         assert_eq!(
             reopened.preferred_browser_id().unwrap().as_deref(),
@@ -858,7 +1034,7 @@ mod tests {
                 workspace_ids: vec![workspace_id],
             }
         );
-        let app = router("example-token".to_owned(), reopened);
+        let app = router("example-token".to_owned(), reopened, root.clone());
         let listed = app
             .clone()
             .oneshot(request("GET", FLEET_BROWSERS_PATH, vec![], true))
@@ -884,6 +1060,7 @@ mod tests {
             StatusCode::NO_CONTENT
         );
         let reopened = HostDatabase::open(&root).unwrap();
+        crate::migrate(&reopened).unwrap();
         assert_eq!(
             reopened.browser_settings(&id).unwrap().workspace_ids.len(),
             0
@@ -936,7 +1113,8 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("beale-fleet-example-{}", uuid::Uuid::new_v4()));
         let db = HostDatabase::open(&root).unwrap();
-        let app = router("example-token".to_owned(), db.clone());
+        crate::migrate(&db).unwrap();
+        let app = router("example-token".to_owned(), db.clone(), root.clone());
         let request = || {
             Request::builder()
                 .uri(FLEET_DESCRIPTOR_PATH)
@@ -981,6 +1159,10 @@ mod tests {
         );
         assert!(db.fleet_totp_secret().unwrap().is_none());
         db.set_feature_enabled(crate::FEATURE_ID, true).unwrap();
+        db.set_research_tool_settings("ripgrep", true, false)
+            .unwrap();
+        db.set_research_tool_settings("ghidra", false, true)
+            .unwrap();
         let response = app.clone().oneshot(request()).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let descriptor = FleetAppServerDescriptor::decode(
@@ -994,6 +1176,19 @@ mod tests {
         assert!(!descriptor.os_name.is_empty());
         assert!(!descriptor.os_vendor.is_empty());
         assert_eq!(descriptor.protocol_minor, PROTOCOL_MINOR);
+        assert_eq!(descriptor.allowed_research_tools.len(), 2);
+        assert_eq!(descriptor.allowed_research_tools[0].id, "ripgrep");
+        assert!(descriptor.allowed_research_tools[0].allow_locally);
+        assert!(!descriptor.allowed_research_tools[0].allow_in_vms);
+        assert_eq!(descriptor.allowed_research_tools[1].id, "ghidra");
+        assert!(!descriptor.allowed_research_tools[1].allow_locally);
+        assert!(descriptor.allowed_research_tools[1].allow_in_vms);
+        let resources = descriptor.resources.expect("host resources");
+        assert!(resources.cpu_logical_cores > 0);
+        assert!(resources.memory_total_bytes > 0);
+        assert!(resources.memory_total_bytes >= resources.memory_available_bytes);
+        assert!(resources.disk_total_bytes > 0);
+        assert!(resources.disk_total_bytes >= resources.disk_available_bytes);
         let provisioning = app.clone().oneshot(provision_request(true)).await.unwrap();
         assert_eq!(provisioning.status(), StatusCode::OK);
         let reply = FleetTotpProvisioningResponse::decode(

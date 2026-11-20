@@ -62,6 +62,40 @@ pub fn configured() -> bool {
     credential().is_ok()
 }
 
+/// String credential values in the Codex sign-in file, for output redaction.
+pub(crate) fn secret_values() -> Vec<String> {
+    let Some(path) = auth_path() else {
+        return Vec::new();
+    };
+    match std::fs::metadata(&path) {
+        Ok(metadata) if metadata.len() <= MAX_AUTH_BYTES => {}
+        _ => return Vec::new(),
+    }
+    let Ok(bytes) = std::fs::read(path) else {
+        return Vec::new();
+    };
+    secret_values_from(&bytes)
+}
+
+fn secret_values_from(bytes: &[u8]) -> Vec<String> {
+    let Ok(auth) = serde_json::from_slice::<Value>(bytes) else {
+        return Vec::new();
+    };
+    let mut values = Vec::new();
+    if let Some(tokens) = auth.get("tokens").and_then(Value::as_object) {
+        values.extend(
+            ["access_token", "refresh_token", "id_token"]
+                .into_iter()
+                .filter_map(|key| tokens.get(key).and_then(Value::as_str))
+                .map(str::to_owned),
+        );
+    }
+    if let Some(key) = auth.get("OPENAI_API_KEY").and_then(Value::as_str) {
+        values.push(key.to_owned());
+    }
+    values
+}
+
 fn parse_credential(bytes: &[u8]) -> Result<CodexCredential> {
     let auth: Value = serde_json::from_slice(bytes).context("Invalid Codex sign-in")?;
     ensure!(
@@ -101,6 +135,21 @@ fn parse_credential(bytes: &[u8]) -> Result<CodexCredential> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn secret_values_cover_every_codex_token() {
+        let auth = br#"{"auth_mode":"chatgpt","OPENAI_API_KEY":"sk-synthetic-key","tokens":{"access_token":"synthetic-access","refresh_token":"synthetic-refresh","id_token":"synthetic-id","account_id":"example-account"}}"#;
+        assert_eq!(
+            secret_values_from(auth),
+            [
+                "synthetic-access",
+                "synthetic-refresh",
+                "synthetic-id",
+                "sk-synthetic-key"
+            ]
+        );
+        assert!(secret_values_from(b"not json").is_empty());
+    }
 
     #[test]
     fn accepts_codex_chatgpt_credential_only() {

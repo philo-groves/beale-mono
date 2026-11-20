@@ -1,4 +1,4 @@
-use crate::design::FadeText;
+use crate::design::{FadeText, SIDENAV_ACTIVE_TEXT};
 use rune::{Align, Color, El, Icon, ScrollSpec, Side, col, el, icon, row, text};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -111,7 +111,13 @@ fn primary_action(spec: &SidebarAction, state: &State, theme: ThemeStyle<'_>) ->
         .child(
             text(spec.label)
                 .font(ui_font(14.0, if selected { 550.0 } else { 400.0 }))
-                .color(color(if available { "#dddddd" } else { "#888888" })),
+                .color(color(if selected {
+                    SIDENAV_ACTIVE_TEXT
+                } else if available {
+                    "#dddddd"
+                } else {
+                    "#888888"
+                })),
         );
     if let Some(action) = spec.action {
         button = button.hover(color("#282828")).on_press(action);
@@ -150,7 +156,11 @@ fn session_row(key: String, label: &str, italic: bool, active: bool, theme: Them
     let font = ui_font(14.0, if active { 550.0 } else { 400.0 });
     let label_text = text(label.to_owned())
         .font(if italic { font.italic() } else { font })
-        .color(color(if active { "#f2f2f2" } else { "#b8b8b8" }))
+        .color(color(if active {
+            SIDENAV_ACTIVE_TEXT
+        } else {
+            "#b8b8b8"
+        }))
         .min_w(0.0)
         .fade_truncate()
         .help_when_truncated(label.to_owned());
@@ -177,6 +187,7 @@ fn session_row(key: String, label: &str, italic: bool, active: bool, theme: Them
 
 pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
     let color = |value| theme.color(value);
+    let collection_header_height = 28.0;
     let mut primary = col().w_full().mb(5.0).gap(2.0);
     for spec in &PRIMARY_ACTIONS {
         primary = primary.child(primary_action(spec, state, theme));
@@ -221,7 +232,7 @@ pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
     let mut header = row()
         .key("home-collection-header")
         .w_full()
-        .h(28.0)
+        .h(collection_header_height)
         .center_y()
         .child(collection_control)
         .child(el().grow(1.0));
@@ -253,11 +264,12 @@ pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
             HOME_SIDEBAR.empty_workspaces
         };
         collection = collection.child(
-            text(label)
-                .key("home-workspaces-empty")
-                .font(ui_font(13.0, 400.0))
-                .color(color("#969696"))
-                .ml(8.0),
+            row().h(collection_header_height).center_y().pl(8.0).child(
+                text(label)
+                    .key("home-workspaces-empty")
+                    .font(ui_font(13.0, 400.0))
+                    .color(color("#969696")),
+            ),
         );
     } else if state.home_collection == HomeCollection::Workspaces {
         let new_session_workspace = (state.primary_view == crate::PrimaryView::NewResearch
@@ -288,7 +300,11 @@ pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
                         .grow(1.0)
                         .min_w(0.0)
                         .font(ui_font(14.0, if selected { 550.0 } else { 400.0 }))
-                        .color(color("#dddddd"))
+                        .color(color(if selected {
+                            SIDENAV_ACTIVE_TEXT
+                        } else {
+                            "#dddddd"
+                        }))
                         .fade_truncate(),
                 );
             if let Some(id) = id {

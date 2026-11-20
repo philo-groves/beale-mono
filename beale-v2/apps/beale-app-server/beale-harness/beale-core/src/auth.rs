@@ -27,7 +27,9 @@ use beale_providers::{
     AuthMode, CredentialStore, CustomProvider, ModelCatalog, ModelDefaults, Provider,
     ProviderClient, codex_configured, login_xai_with_prompt, mode_name, provider_name,
 };
-use beale_storage::{HostDatabase, SubscriptionUsageRow};
+use beale_storage::HostDatabase;
+#[cfg(feature = "tracking")]
+use beale_tracking::{SubscriptionUsageRow, TrackingStore};
 use prost::Message;
 use std::{
     sync::Arc,
@@ -39,6 +41,8 @@ use tokio::sync::{Mutex, oneshot};
 struct AuthState {
     token: String,
     store: Arc<CredentialStore>,
+    /// Records subscription usage samples for Tracking.
+    #[cfg_attr(not(feature = "tracking"), allow(dead_code))]
     db: HostDatabase,
     login: Arc<Mutex<[LoginState; 5]>>,
     lead_lock: Arc<Mutex<()>>,
@@ -394,25 +398,28 @@ async fn provider_usage(
         })
         .collect();
     let value = ProviderUsageResponse { providers };
-    let points = value
-        .providers
-        .iter()
-        .flat_map(|provider| {
-            provider.windows.iter().map(|window| SubscriptionUsageRow {
-                provider: provider.provider,
-                window_id: window.id.clone(),
-                label: window.label.clone(),
-                observed_at_ms: provider
-                    .checked_at_unix
-                    .saturating_mul(1000)
-                    .min(i64::MAX as u64) as i64,
-                used_percent: i64::from(window.used_percent),
-                resets_at_unix: window.resets_at_unix.min(i64::MAX as u64) as i64,
+    #[cfg(feature = "tracking")]
+    {
+        let points = value
+            .providers
+            .iter()
+            .flat_map(|provider| {
+                provider.windows.iter().map(|window| SubscriptionUsageRow {
+                    provider: provider.provider,
+                    window_id: window.id.clone(),
+                    label: window.label.clone(),
+                    observed_at_ms: provider
+                        .checked_at_unix
+                        .saturating_mul(1000)
+                        .min(i64::MAX as u64) as i64,
+                    used_percent: i64::from(window.used_percent),
+                    resets_at_unix: window.resets_at_unix.min(i64::MAX as u64) as i64,
+                })
             })
-        })
-        .collect::<Vec<_>>();
-    if let Err(error) = state.db.record_subscription_usage(&points) {
-        beale_host_log::error!("could not record subscription usage history: {error:#}");
+            .collect::<Vec<_>>();
+        if let Err(error) = state.db.record_subscription_usage(&points) {
+            beale_host_log::error!("could not record subscription usage history: {error:#}");
+        }
     }
     *cache = Some((Instant::now(), value.clone()));
     Ok(response(value))

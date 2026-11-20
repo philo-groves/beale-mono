@@ -35,6 +35,67 @@ pub struct EvidenceRef {
     pub note: Option<String>,
 }
 
+/// SHA-256 of a tool result cited when validation completed.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EvidenceDigest {
+    pub reference: String,
+    pub sha256: String,
+}
+
+/// A deterministic check the host applies to a proof command's result.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Oracle {
+    /// The command exits with exactly this code.
+    ExitCode {
+        value: i32,
+    },
+    /// The command exits unsuccessfully or is ended by a signal.
+    ExitNonzero,
+    StdoutContains {
+        value: String,
+    },
+    StderrContains {
+        value: String,
+    },
+    /// Standard output or standard error contains the text.
+    OutputContains {
+        value: String,
+    },
+}
+
+/// One fresh-process execution of a verification command.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VerificationRun {
+    pub exit_code: Option<i32>,
+    pub satisfied: bool,
+    /// SHA-256 of the redacted stdout and stderr transcript.
+    pub output_sha256: String,
+    pub duration_ms: i64,
+    /// Why the command could not complete, such as a timeout.
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// A host-run reproduction of a declared proof command. `verified` is true
+/// only when every run satisfied the oracle.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Verification {
+    pub command: String,
+    pub oracle: Oracle,
+    pub runs: Vec<VerificationRun>,
+    pub verified: bool,
+    pub at_ms: u64,
+    pub session_id: String,
+    /// Stored role of the agent that requested verification.
+    pub agent_role: String,
+    /// Tool call that ran the verification; citable as validation evidence when verified.
+    pub tool_call_id: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Completion {
     pub at_ms: u64,
@@ -73,6 +134,21 @@ pub struct Validated {
     pub evidence_refs: Option<Vec<EvidenceRef>>,
     pub revision: u64,
     pub completion: Option<Completion>,
+    /// Latest host verification; host-owned and absent on older records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification: Option<Verification>,
+    /// Digests of cited tool results, recorded by the host at completion.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence_digests: Vec<EvidenceDigest>,
+}
+
+impl Validated {
+    /// Whether the latest host verification reproduced the oracle on every run.
+    pub fn verified(&self) -> bool {
+        self.verification
+            .as_ref()
+            .is_some_and(|verification| verification.verified)
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -287,6 +363,9 @@ pub struct Summary {
     /// Distinct supporting evidence references across the record; counter-evidence excluded.
     #[serde(default)]
     pub evidence_count: u32,
+    /// Whether host verification reproduced the validation oracle.
+    #[serde(default)]
+    pub verified: bool,
 }
 
 impl Finding {
@@ -350,6 +429,11 @@ impl From<&Finding> for Summary {
             updated_at_ms: value.updated_at_ms,
             revision: value.revision,
             evidence_count: value.evidence_count(),
+            verified: value
+                .state
+                .validated
+                .as_ref()
+                .is_some_and(Validated::verified),
         }
     }
 }
@@ -375,6 +459,45 @@ mod tests {
         assert!(record.validation_result.is_empty());
         assert!(record.validation_limitations.is_empty());
         assert!(record.counter_evidence.is_empty());
+        assert!(record.verification.is_none());
+        assert!(record.evidence_digests.is_empty());
+        assert!(!record.verified());
+        let wire = serde_json::to_value(&record).unwrap();
+        assert!(wire.get("verification").is_none());
+        assert!(wire.get("evidence_digests").is_none());
+    }
+
+    #[test]
+    fn verification_round_trips_with_tagged_oracles() {
+        let verification = Verification {
+            command: "./example-proof".to_owned(),
+            oracle: Oracle::StderrContains {
+                value: "example-sanitizer-report".to_owned(),
+            },
+            runs: vec![VerificationRun {
+                exit_code: Some(1),
+                satisfied: true,
+                output_sha256: "0".repeat(64),
+                duration_ms: 5,
+                error: None,
+            }],
+            verified: true,
+            at_ms: 1,
+            session_id: "session-example".to_owned(),
+            agent_role: "validation".to_owned(),
+            tool_call_id: "tool-example".to_owned(),
+        };
+        let wire = serde_json::to_value(&verification).unwrap();
+        assert_eq!(wire["oracle"]["kind"], "stderr_contains");
+        assert_eq!(
+            serde_json::from_value::<Verification>(wire).unwrap(),
+            verification
+        );
+        assert_eq!(
+            serde_json::from_value::<Oracle>(json!({"kind":"exit_nonzero"})).unwrap(),
+            Oracle::ExitNonzero
+        );
+        assert!(serde_json::from_value::<Oracle>(json!({"kind":"regex","value":"x"})).is_err());
     }
     #[test]
     fn legacy_screening_and_summary_keep_missing_scores_distinct_from_zero() {

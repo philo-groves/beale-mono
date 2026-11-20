@@ -20,6 +20,25 @@ pub const FEATURE_DESCRIPTION: &str =
     "Record observed Beale harness or agent runtime issues for development review.";
 pub const HAS_PROMPT_EXTENSION: bool = true;
 pub const TOOL_COUNT: u32 = 1;
+
+/// Catalog and session descriptor for this feature.
+pub const FEATURE: beale_feature_api::Feature = beale_feature_api::Feature {
+    id: FEATURE_ID,
+    name: FEATURE_NAME,
+    description: FEATURE_DESCRIPTION,
+    prompt_extension: PROMPT_EXTENSION,
+    use_case: "Use to record an observed Beale harness or agent runtime issue for development review.",
+    tool_names: &[TOOL_NAME],
+    definitions: Some(feature_tools),
+    review: beale_feature_api::ToolReview::Exempt,
+    subagents: true,
+    migrations: &[],
+    startup: &[],
+};
+
+fn feature_tools() -> Vec<Value> {
+    vec![definition()]
+}
 pub const TOOL_NAME: &str = "agent_feedback";
 pub const PROMPT_EXTENSION: &str = "## Agent Feedback\n\nWhen you encounter a concrete Beale harness or agent runtime flaw, quirk, or limitation, call agent_feedback when observed and continue the task. Describe the behavior and its effect, plus any workaround. Do not invent issues or include target findings, credentials, or research details.";
 pub const FILE_NAME: &str = "agent-feedback.jsonl";

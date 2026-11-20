@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, bail, ensure};
 use beale_contracts::runbooks::{Cell, Document};
+use beale_tools::process::{ProcessTree, contained_command};
 use std::{path::Path, process::Stdio, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -34,12 +35,12 @@ impl RunOutput {
 
 fn command(language: &str) -> Result<Command> {
     let mut command = match language {
-        "bash" | "sh" => Command::new(beale_tools::bash_executable()),
+        "bash" | "sh" => contained_command(beale_tools::bash_executable()),
         "python" | "python3" | "py" => {
-            Command::new(if cfg!(windows) { "python" } else { "python3" })
+            contained_command(if cfg!(windows) { "python" } else { "python3" })
         }
-        "javascript" | "js" | "node" => Command::new("node"),
-        "powershell" | "ps1" | "pwsh" => Command::new(if cfg!(windows) {
+        "javascript" | "js" | "node" => contained_command("node"),
+        "powershell" | "ps1" | "pwsh" => contained_command(if cfg!(windows) {
             "powershell.exe"
         } else {
             "pwsh"
@@ -66,9 +67,9 @@ async fn run_cell(language: &str, source: &str, workspace: &Path) -> Result<RunO
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .kill_on_drop(true)
         .spawn()
         .with_context(|| format!("start {language} interpreter"))?;
+    let tree = ProcessTree::attach(&child);
     let mut stdin = child.stdin.take().context("runbook stdin unavailable")?;
     let mut stdout = child.stdout.take().context("runbook stdout unavailable")?;
     let mut stderr = child.stderr.take().context("runbook stderr unavailable")?;
@@ -111,9 +112,11 @@ async fn run_cell(language: &str, source: &str, workspace: &Path) -> Result<RunO
             stderr,
         })
     };
-    timeout(CELL_TIMEOUT, execute)
+    let output = timeout(CELL_TIMEOUT, execute)
         .await
-        .context("runbook cell timed out")?
+        .context("runbook cell timed out")??;
+    tree.release();
+    Ok(output)
 }
 
 pub async fn run_document(

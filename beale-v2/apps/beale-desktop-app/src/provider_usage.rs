@@ -80,11 +80,18 @@ fn decode(bytes: &[u8]) -> Result<[Option<ProviderUsageSnapshot>; 2], String> {
     Ok(result)
 }
 
+pub(crate) const INDICATOR_SIZE: f32 = 34.0;
+const RING_VIEW_SIZE: f32 = 36.0;
+const RING_ICON_SIZE: f32 = 32.0;
+const OUTER_RING_RADIUS: f32 = 16.0;
+const INNER_RING_RADIUS: f32 = 10.5;
+const RING_STROKE_WIDTH: f32 = 1.8;
+
 fn arc_icon(percent_left: u32, inner: bool) -> &'static Icon {
     static OUTER: OnceLock<Vec<Icon>> = OnceLock::new();
     static INNER: OnceLock<Vec<Icon>> = OnceLock::new();
     let icons = if inner { &INNER } else { &OUTER }.get_or_init(|| (0..=100).map(|p| {
-        let r = if inner { 10.5 } else { 16.0 };
+        let r = if inner { INNER_RING_RADIUS } else { OUTER_RING_RADIUS };
         let path = if p == 0 { String::new() } else if p == 100 {
             format!("M18 {} A{r} {r} 0 1 1 18 {} A{r} {r} 0 1 1 18 {}", 18.0-r, 18.0+r, 18.0-r)
         } else {
@@ -95,18 +102,37 @@ fn arc_icon(percent_left: u32, inner: bool) -> &'static Icon {
         };
         Icon {
             name: Box::leak(format!("usage-{}-{p}", if inner { "inner" } else { "outer" }).into_boxed_str()),
-            view: 36.0,
-            body: Box::leak(format!("<path d=\"{path}\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\"/>").into_boxed_str()),
+            view: RING_VIEW_SIZE,
+            body: Box::leak(format!("<path d=\"{path}\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"{RING_STROKE_WIDTH}\" stroke-linecap=\"round\"/>").into_boxed_str()),
         }
     }).collect());
     &icons[percent_left.min(100) as usize]
 }
 
-pub(crate) fn full_outer_ring_icon() -> &'static Icon {
-    arc_icon(100, false)
+fn ring_arc(percent_left: u32, inner: bool, color: Color) -> El {
+    let inset = (INDICATOR_SIZE - RING_ICON_SIZE) / 2.0;
+    icon(arc_icon(percent_left, inner), RING_ICON_SIZE)
+        .absolute(inset, inset)
+        .color(color)
 }
 
-pub(crate) const INDICATOR_SIZE: f32 = 38.0;
+pub(crate) fn full_outer_ring(color: Color) -> El {
+    ring_arc(100, false, color)
+}
+
+fn ring_track(radius: f32, theme: ThemeStyle<'_>) -> El {
+    let scale = RING_ICON_SIZE / RING_VIEW_SIZE;
+    let diameter = 2.0 * radius * scale;
+    let inset = (INDICATOR_SIZE - diameter) / 2.0;
+    el().absolute(inset, inset)
+        .size(diameter, diameter)
+        .radius(diameter / 2.0)
+        .border(RING_STROKE_WIDTH * scale, theme.color("#444444"))
+}
+
+pub(crate) fn outer_ring_track(theme: ThemeStyle<'_>) -> El {
+    ring_track(OUTER_RING_RADIUS, theme)
+}
 
 fn remaining(window: &ProviderUsageWindow) -> u32 {
     100 - window.used_percent.min(100)
@@ -158,7 +184,7 @@ pub(crate) fn indicator(
             }
         ))
         .size(INDICATOR_SIZE, INDICATOR_SIZE)
-        .radius(19.0)
+        .radius(INDICATOR_SIZE / 2.0)
         .hover(theme.color("#292929"))
         .on_hover_change(move |s: &mut State, inside, _| {
             s.rail_usage_tooltip = if inside { Some(provider) } else { None };
@@ -167,38 +193,28 @@ pub(crate) fn indicator(
             s.rail_usage_tooltip = None;
             s.navigate_to(crate::ViewLocation::Providers(provider));
         });
-    ring = ring
-        .child(
-            el().absolute(3.0, 3.0)
-                .size(32.0, 32.0)
-                .radius(16.0)
-                .border(1.8, theme.color("#444444")),
-        )
-        .child(
-            icon(arc_icon(remaining(outer), false), 36.0)
-                .absolute(1.0, 1.0)
-                .color(theme.color(progress_color(remaining(outer)))),
-        );
+    let outer_remaining = remaining(outer);
+    ring = ring.child(outer_ring_track(theme)).child(ring_arc(
+        outer_remaining,
+        false,
+        theme.color(progress_color(outer_remaining)),
+    ));
     if let Some(inner) = inner {
+        let inner_remaining = remaining(inner);
         ring = ring
-            .child(
-                el().absolute(8.5, 8.5)
-                    .size(21.0, 21.0)
-                    .radius(10.5)
-                    .border(1.8, theme.color("#444444")),
-            )
-            .child(
-                icon(arc_icon(remaining(inner), true), 36.0)
-                    .absolute(1.0, 1.0)
-                    .color(theme.color(progress_color(remaining(inner)))),
-            );
+            .child(ring_track(INNER_RING_RADIUS, theme))
+            .child(ring_arc(
+                inner_remaining,
+                true,
+                theme.color(progress_color(inner_remaining)),
+            ));
     }
     let logo_size = if provider == Provider::OpenAi {
-        16.0
+        14.0
     } else {
-        21.0
+        19.0
     };
-    let logo_inset = (38.0 - logo_size) / 2.0;
+    let logo_inset = (INDICATOR_SIZE - logo_size) / 2.0;
     ring.child(
         icon(logo, logo_size)
             .absolute(logo_inset, logo_inset)

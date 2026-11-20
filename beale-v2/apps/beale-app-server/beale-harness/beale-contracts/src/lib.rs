@@ -1573,6 +1573,36 @@ pub mod v1 {
         pub protocol_major: u32,
         #[prost(uint32, tag = "6")]
         pub protocol_minor: u32,
+        #[prost(message, optional, tag = "7")]
+        pub resources: Option<FleetSystemResources>,
+        #[prost(message, repeated, tag = "8")]
+        pub allowed_research_tools: Vec<FleetAllowedResearchTool>,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct FleetAllowedResearchTool {
+        #[prost(string, tag = "1")]
+        pub id: String,
+        #[prost(string, tag = "2")]
+        pub name: String,
+        #[prost(bool, tag = "3")]
+        pub allow_locally: bool,
+        #[prost(bool, tag = "4")]
+        pub allow_in_vms: bool,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct FleetSystemResources {
+        #[prost(uint32, tag = "1")]
+        pub cpu_logical_cores: u32,
+        #[prost(uint64, tag = "2")]
+        pub memory_total_bytes: u64,
+        #[prost(uint64, tag = "3")]
+        pub memory_available_bytes: u64,
+        #[prost(uint64, tag = "4")]
+        pub disk_total_bytes: u64,
+        #[prost(uint64, tag = "5")]
+        pub disk_available_bytes: u64,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1696,10 +1726,69 @@ pub mod v1 {
         #[prost(bool, tag = "6")]
         pub can_clone: bool,
     }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct FleetResearchTool {
+        #[prost(string, tag = "1")]
+        pub id: String,
+        #[prost(string, tag = "2")]
+        pub name: String,
+        #[prost(string, tag = "3")]
+        pub category: String,
+        #[prost(string, tag = "4")]
+        pub description: String,
+        #[prost(bool, tag = "5")]
+        pub allow_locally: bool,
+        #[prost(bool, tag = "6")]
+        pub allow_in_vms: bool,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct FleetResearchToolsResponse {
+        #[prost(message, repeated, tag = "1")]
+        pub tools: Vec<FleetResearchTool>,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct FleetSetResearchToolSettingsRequest {
+        #[prost(string, tag = "1")]
+        pub id: String,
+        #[prost(bool, tag = "2")]
+        pub allow_locally: bool,
+        #[prost(bool, tag = "3")]
+        pub allow_in_vms: bool,
+    }
+}
+
+#[cfg(test)]
+mod fleet_allowed_tools_tests {
+    use super::v1::{FleetAllowedResearchTool, FleetAppServerDescriptor};
+    use prost::Message;
+
+    #[test]
+    fn descriptor_appends_allowed_tools_at_tag_eight() {
+        let allowed = FleetAllowedResearchTool {
+            id: "ripgrep".to_owned(),
+            name: "ripgrep".to_owned(),
+            allow_locally: true,
+            allow_in_vms: false,
+        };
+        let encoded = allowed.encode_to_vec();
+        let mut bytes = vec![0x42, encoded.len() as u8];
+        bytes.extend(encoded);
+        let descriptor = FleetAppServerDescriptor::decode(bytes.as_slice()).unwrap();
+        assert_eq!(descriptor.allowed_research_tools, vec![allowed]);
+        assert_eq!(
+            FleetAppServerDescriptor::decode([].as_slice())
+                .unwrap()
+                .allowed_research_tools,
+            Vec::new()
+        );
+    }
 }
 
 pub const PROTOCOL_MAJOR: u32 = 2;
-pub const PROTOCOL_MINOR: u32 = 23;
+pub const PROTOCOL_MINOR: u32 = 27;
 pub const SERVICE_NAME: &str = "beale-app-server";
 pub const HEALTH_PATH: &str = "/v1/health";
 pub const AUTH_STATUS_PATH: &str = "/v1/providers/status";
@@ -1758,6 +1847,8 @@ pub const FLEET_BROWSER_PREFERRED_PATH: &str = "/v1/fleet/browsers/preferred";
 pub const FLEET_BROWSER_REMOVE_PATH: &str = "/v1/fleet/browsers/remove";
 pub const FLEET_VIRTUAL_MACHINES_PATH: &str = "/v1/fleet/virtual-machines";
 pub const FLEET_VIRTUAL_MACHINE_SETTINGS_PATH: &str = "/v1/fleet/virtual-machines/settings";
+pub const FLEET_RESEARCH_TOOLS_PATH: &str = "/v1/fleet/research-tools";
+pub const FLEET_RESEARCH_TOOL_SETTINGS_PATH: &str = "/v1/fleet/research-tools/settings";
 pub const PLUGIN_INSTALL_PATH: &str = "/v1/plugins/install";
 pub const PLUGIN_UNINSTALL_PATH: &str = "/v1/plugins/uninstall";
 pub const PLUGIN_MANIFEST_PATH: &str = "/v1/plugins/manifest";

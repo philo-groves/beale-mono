@@ -1,4 +1,4 @@
-use crate::design::FadeText;
+use crate::design::{FadeText, SIDENAV_ACTIVE_TEXT};
 use beale_contracts::{
     FEATURE_DETAILS_PATH, FEATURE_SCOPE_PATH, FEATURE_SET_ENABLED_PATH, FEATURES_PATH,
     PLUGIN_INSTALL_PATH, PLUGIN_MANIFEST_PATH, PLUGIN_SCOPE_PATH, PLUGIN_UNINSTALL_PATH,
@@ -188,9 +188,9 @@ pub(crate) fn bundled_features() -> Vec<FeatureEntry> {
     }, FeatureEntry {
         id: "fleet".to_owned(),
         name: "Fleet".to_owned(),
-        description: "Open the Fleet area in the desktop app.".to_owned(),
+        description: "Manage app-server connections and approved research tools.".to_owned(),
         enabled: false,
-        has_prompt_extension: false,
+        has_prompt_extension: true,
         tool_count: 0,
         workspace_ids: Vec::new(),
         all_workspaces: true,
@@ -1308,7 +1308,11 @@ pub(crate) fn sidenav(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
                 .child(
                     text(section.label())
                         .font(ui_font(14.0, if active { 550.0 } else { 400.0 }))
-                        .color(theme.color(if active { "#f2f2f2" } else { "#c8c8c8" })),
+                        .color(theme.color(if active {
+                            SIDENAV_ACTIVE_TEXT
+                        } else {
+                            "#c8c8c8"
+                        })),
                 ),
         );
     }

@@ -17,6 +17,7 @@ pub(crate) struct SubagentCanvas {
 }
 
 pub(crate) fn open(state: &mut State, summary: SessionSubagentSummary) {
+    state.canvas_surface.deactivate();
     let Some(session_id) = state
         .active_session
         .as_ref()
@@ -162,17 +163,17 @@ pub(crate) fn tab_bar(state: &State, theme: ThemeStyle<'_>) -> Option<El> {
             .child(
                 row()
                     .key("subagent-canvas-tab")
-                    .h(32.0)
+                    .h(34.0)
                     .px(9.0)
                     .center_y()
                     .gap(7.0)
-                    .radius(10.0)
+                    .radius(11.0)
                     .fill(theme.color("#303030"))
                     .border(1.0, theme.color("#555555"))
-                    .child(icon(&BRAIN, 15.0).color(theme.color("#d8d8d8")))
+                    .child(icon(&BRAIN, 16.0).color(theme.color("#d8d8d8")))
                     .child(
                         text(role)
-                            .font(ui_font(11.0, 450.0))
+                            .font(ui_font(13.0, 500.0))
                             .color(theme.color("#eeeeee")),
                     )
                     .child(

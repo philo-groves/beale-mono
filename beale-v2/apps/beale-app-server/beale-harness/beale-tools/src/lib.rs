@@ -10,12 +10,105 @@ use std::{
 };
 use tokio::{io::AsyncReadExt, process::Command, time::timeout};
 mod agent_files;
+pub mod process;
+pub mod redact;
 pub use agent_files::AgentFiles;
+pub use redact::Redactor;
 
 pub const MAX_RESULT_BYTES: usize = 8_000_000;
 const MAX_INPUT_BYTES: usize = 8_000_000;
-const DEFAULT_BASH_TIMEOUT_SECONDS: u64 = 120;
-const MAX_BASH_TIMEOUT_SECONDS: u64 = 600;
+pub const DEFAULT_BASH_TIMEOUT_SECONDS: u64 = 120;
+pub const MAX_BASH_TIMEOUT_SECONDS: u64 = 600;
+pub const MAX_BASH_COMMAND_BYTES: usize = 16_384;
+
+/// The bounded result of a contained bash command.
+pub struct CommandOutput {
+    pub success: bool,
+    pub exit_code: Option<i32>,
+    pub status: String,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+impl CommandOutput {
+    pub fn transcript(&self) -> String {
+        format!(
+            "exit status: {}\nstdout:\n{}\nstderr:\n{}",
+            self.status, self.stdout, self.stderr
+        )
+    }
+}
+
+/// Runs a bash command in the workspace with the tool environment. A timeout,
+/// oversized output, or dropped future ends the command's whole process tree;
+/// background processes started by a command that exits normally keep running.
+pub async fn run_bash(
+    command: &str,
+    workspace: &Path,
+    timeout_seconds: u64,
+) -> Result<CommandOutput> {
+    ensure!(
+        (1..=MAX_BASH_TIMEOUT_SECONDS).contains(&timeout_seconds),
+        "invalid bash timeout_seconds"
+    );
+    ensure!(
+        !command.trim().is_empty() && command.len() <= MAX_BASH_COMMAND_BYTES,
+        "invalid command"
+    );
+    let mut process = process::contained_command(bash_executable());
+    process
+        .arg("-lc")
+        .arg(command)
+        .current_dir(workspace)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    enable_git_long_paths(&mut process);
+    let mut child = process.spawn().context("start bash")?;
+    let tree = process::ProcessTree::attach(&child);
+    let stdout = child.stdout.take().context("bash stdout unavailable")?;
+    let stderr = child.stderr.take().context("bash stderr unavailable")?;
+    let collect = async {
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let mut stdout = stdout;
+        let mut stderr = stderr;
+        let mut out_done = false;
+        let mut err_done = false;
+        let mut out_buffer = [0_u8; 8192];
+        let mut err_buffer = [0_u8; 8192];
+        while !out_done || !err_done {
+            tokio::select! {
+                count = stdout.read(&mut out_buffer), if !out_done => {
+                    let count = count.context("read bash stdout")?;
+                    if count == 0 { out_done = true; } else { out.extend_from_slice(&out_buffer[..count]); }
+                }
+                count = stderr.read(&mut err_buffer), if !err_done => {
+                    let count = count.context("read bash stderr")?;
+                    if count == 0 { err_done = true; } else { err.extend_from_slice(&err_buffer[..count]); }
+                }
+            }
+            ensure!(
+                out.len().saturating_add(err.len()) <= MAX_RESULT_BYTES,
+                "bash output is too large"
+            );
+        }
+        let status = child.wait().await.context("wait for bash")?;
+        Ok::<_, anyhow::Error>(CommandOutput {
+            success: status.success(),
+            exit_code: status.code(),
+            status: status.to_string(),
+            stdout: String::from_utf8_lossy(&out).into_owned(),
+            stderr: String::from_utf8_lossy(&err).into_owned(),
+        })
+    };
+    let output = timeout(Duration::from_secs(timeout_seconds), collect)
+        .await
+        .with_context(|| format!("bash timed out after {timeout_seconds} seconds"))??;
+    tree.release();
+    Ok(output)
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -246,64 +339,11 @@ pub async fn execute(
                 .map_or(Ok(DEFAULT_BASH_TIMEOUT_SECONDS), |value| {
                     value.as_u64().context("invalid bash timeout_seconds")
                 })?;
-            ensure!(
-                (1..=MAX_BASH_TIMEOUT_SECONDS).contains(&timeout_seconds),
-                "invalid bash timeout_seconds"
-            );
-            ensure!(
-                !command.trim().is_empty() && command.len() <= 16_384,
-                "invalid command"
-            );
-            let mut process = Command::new(bash_executable());
-            process
-                .arg("-lc")
-                .arg(command)
-                .current_dir(workspace)
-                .stdin(Stdio::null())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .kill_on_drop(true);
-            #[cfg(windows)]
-            enable_git_long_paths(&mut process);
-            let mut child = process.spawn().context("start bash")?;
-            let stdout = child.stdout.take().context("bash stdout unavailable")?;
-            let stderr = child.stderr.take().context("bash stderr unavailable")?;
-            let collect = async {
-                let mut out = Vec::new();
-                let mut err = Vec::new();
-                let mut stdout = stdout;
-                let mut stderr = stderr;
-                let mut out_done = false;
-                let mut err_done = false;
-                let mut out_buffer = [0_u8; 8192];
-                let mut err_buffer = [0_u8; 8192];
-                while !out_done || !err_done {
-                    tokio::select! {
-                        count = stdout.read(&mut out_buffer), if !out_done => {
-                            let count = count.context("read bash stdout")?;
-                            if count == 0 { out_done = true; } else { out.extend_from_slice(&out_buffer[..count]); }
-                        }
-                        count = stderr.read(&mut err_buffer), if !err_done => {
-                            let count = count.context("read bash stderr")?;
-                            if count == 0 { err_done = true; } else { err.extend_from_slice(&err_buffer[..count]); }
-                        }
-                    }
-                    ensure!(
-                        out.len().saturating_add(err.len()) <= MAX_RESULT_BYTES,
-                        "bash output is too large"
-                    );
-                }
-                let status = child.wait().await.context("wait for bash")?;
-                let out = String::from_utf8_lossy(&out);
-                let err = String::from_utf8_lossy(&err);
-                Ok::<_, anyhow::Error>(ToolOutcome {
-                    output: format!("exit status: {status}\nstdout:\n{out}\nstderr:\n{err}"),
-                    is_error: !status.success(),
-                })
-            };
-            timeout(Duration::from_secs(timeout_seconds), collect)
-                .await
-                .with_context(|| format!("bash timed out after {timeout_seconds} seconds"))?
+            let output = run_bash(command, workspace, timeout_seconds).await?;
+            Ok(ToolOutcome {
+                output: output.transcript(),
+                is_error: !output.success,
+            })
         }
         _ => bail!("unknown tool"),
     }
@@ -556,6 +596,72 @@ mod tests {
             .await
             .unwrap();
         assert!(failed.is_error);
+        tokio::fs::remove_dir_all(root).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn bash_does_not_inherit_credential_variables() {
+        let root = std::env::temp_dir().join(format!("beale-bash-env-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(&root).await.unwrap();
+        let output = run_bash("env", &root, 30).await.unwrap();
+        assert!(output.success, "{}", output.stderr);
+        for line in output.stdout.lines() {
+            let name = line.split('=').next().unwrap_or_default();
+            assert!(
+                !process::secret_like_env_name(name),
+                "tool environment exposed {name}"
+            );
+        }
+        tokio::fs::remove_dir_all(root).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn bash_timeout_ends_background_descendants() {
+        let root = std::env::temp_dir().join(format!("beale-bash-tree-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(&root).await.unwrap();
+        let timed_out = run_bash(
+            "sleep 30 >/dev/null 2>&1 & echo $! > child.pid; wait",
+            &root,
+            2,
+        )
+        .await;
+        assert!(timed_out.is_err());
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let pid = tokio::fs::read_to_string(root.join("child.pid"))
+            .await
+            .unwrap();
+        let check = run_bash(
+            &format!(
+                "kill -0 {} 2>/dev/null && echo alive || echo gone",
+                pid.trim()
+            ),
+            &root,
+            10,
+        )
+        .await
+        .unwrap();
+        assert_eq!(check.stdout.trim(), "gone");
+        tokio::fs::remove_dir_all(root).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn normal_exit_keeps_background_processes() {
+        let root = std::env::temp_dir().join(format!("beale-bash-release-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(&root).await.unwrap();
+        let started = run_bash("sleep 30 >/dev/null 2>&1 & echo $!", &root, 10)
+            .await
+            .unwrap();
+        let pid = started.stdout.trim().to_owned();
+        let check = run_bash(
+            &format!(
+                "kill -0 {pid} 2>/dev/null && echo alive || echo gone; kill {pid} 2>/dev/null; true"
+            ),
+            &root,
+            10,
+        )
+        .await
+        .unwrap();
+        assert_eq!(check.stdout.lines().next(), Some("alive"));
         tokio::fs::remove_dir_all(root).await.unwrap();
     }
 }

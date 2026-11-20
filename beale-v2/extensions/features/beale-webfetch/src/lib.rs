@@ -12,6 +12,25 @@ pub const FEATURE_DESCRIPTION: &str =
     "Search the web and retrieve readable text and links from HTTP(S) pages.";
 pub const HAS_PROMPT_EXTENSION: bool = true;
 pub const TOOL_COUNT: u32 = 1;
+
+/// Catalog and session descriptor for this feature.
+pub const FEATURE: beale_feature_api::Feature = beale_feature_api::Feature {
+    id: FEATURE_ID,
+    name: FEATURE_NAME,
+    description: FEATURE_DESCRIPTION,
+    prompt_extension: PROMPT_EXTENSION,
+    use_case: "Use to search the web or retrieve readable page text and links.",
+    tool_names: &[TOOL_NAME],
+    definitions: Some(feature_tools),
+    review: beale_feature_api::ToolReview::Required,
+    subagents: true,
+    migrations: &[],
+    startup: &[],
+};
+
+fn feature_tools() -> Vec<Value> {
+    vec![definition()]
+}
 pub const TOOL_NAME: &str = "webfetch";
 pub const PROMPT_EXTENSION: &str = include_str!("../FEATURE.md");
 

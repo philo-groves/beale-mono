@@ -2,6 +2,8 @@
 
 use beale_contracts::v1::{AuthMethod, GraphNodeModel, ProviderId, SessionGraphConfig};
 use serde_json::{Value, json};
+mod store;
+pub use store::{GraphCommit, GraphHandoffRow, GraphStore, MIGRATIONS, migrate};
 
 pub const FEATURE_ID: &str = "graphs";
 pub const FEATURE_NAME: &str = "Graphs";
@@ -10,6 +12,28 @@ pub const FEATURE_DESCRIPTION: &str =
 pub const HAS_PROMPT_EXTENSION: bool = true;
 pub const PROMPT_EXTENSION: &str = "Spawn bounded Scout, Reviewer, or Prover tasks, then continue your work while they run. Use graph_subagents_list to check status, graph_subagents_inspect to read a child's transcript and tool calls, graph_subagents_message to guide a child, and graph_subagents_kill to stop one. Children may inspect or message siblings in their parent group but cannot spawn or kill. Check all spawned children before ending your turn and synthesize their results yourself.";
 pub const TOOL_COUNT: u32 = 6;
+
+/// Catalog and session descriptor for this feature.
+pub const FEATURE: beale_feature_api::Feature = beale_feature_api::Feature {
+    id: FEATURE_ID,
+    name: FEATURE_NAME,
+    description: FEATURE_DESCRIPTION,
+    prompt_extension: PROMPT_EXTENSION,
+    use_case: "Use to delegate bounded research tasks to graph subagents.",
+    tool_names: &[
+        SPAWN_TOOL,
+        LIST_TOOL,
+        INSPECT_TOOL,
+        MESSAGE_TOOL,
+        KILL_TOOL,
+        HANDOFF_TOOL,
+    ],
+    definitions: None,
+    review: beale_feature_api::ToolReview::Exempt,
+    subagents: false,
+    migrations: MIGRATIONS,
+    startup: &[],
+};
 pub const MAX_CONCURRENT: u32 = 64;
 pub const SPAWN_TOOL: &str = "graph_subagents_spawn";
 pub const LIST_TOOL: &str = "graph_subagents_list";

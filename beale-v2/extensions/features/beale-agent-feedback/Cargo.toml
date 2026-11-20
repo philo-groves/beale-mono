@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+beale-feature-api = { path = "../../../apps/beale-app-server/beale-harness/beale-feature-api" }
 anyhow.workspace = true
 beale-storage = { path = "../../../apps/beale-app-server/beale-harness/beale-storage" }
 serde.workspace = true

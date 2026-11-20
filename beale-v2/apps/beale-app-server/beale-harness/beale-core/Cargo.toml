@@ -14,7 +14,7 @@ memories = ["beale-sessions/memories", "dep:beale-memories"]
 runbooks = ["beale-sessions/runbooks", "dep:beale-runbooks"]
 surfaces = ["beale-sessions/surfaces", "dep:beale-surfaces"]
 goal-mode = ["beale-sessions/goal-mode", "dep:beale-goals"]
-fleet = ["dep:beale-fleet", "dep:qrcodegen", "dep:reqwest"]
+fleet = ["beale-sessions/fleet", "dep:beale-fleet", "dep:qrcodegen", "dep:reqwest"]
 graphs = ["beale-sessions/graphs", "dep:beale-graphs"]
 tracking = ["dep:beale-tracking"]
 
