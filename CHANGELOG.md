@@ -6,7 +6,7 @@
 
 #### Fixed
 
-- V2 per-view sidenavs use a consistent, theme-aware text color for selected rows.
+- V2 per-view sidenavs use the same theme-aware color for selected row labels and their icons.
 - V2 Findings ledger lanes now fill the available workspace height instead of stopping above the window bottom.
 - V2 Surface Canvas tabs now slide into view when opened from the network.
 - V2 research header separators stay mounted and change visibility immediately, preventing neighboring tab text from sliding when a tab is hovered or selected.

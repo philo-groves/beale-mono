@@ -1,4 +1,4 @@
-use crate::design::{FadeText, SIDENAV_ACTIVE_TEXT};
+use crate::design::{FadeText, SIDENAV_ACTIVE_FOREGROUND};
 use beale_contracts::{
     AUTOMATIONS_CANCEL_PATH, AUTOMATIONS_PATH, PROTOBUF_CONTENT_TYPE,
     v1::{
@@ -280,7 +280,11 @@ fn list_row(job: &AutomationJob, future: bool, selected: bool, theme: ThemeStyle
             Color::TRANSPARENT
         })
         .hover(theme.color("#282828"))
-        .child(icon(&AUTOMATIONS, 15.0).color(theme.color("#9d9d9d")))
+        .child(icon(&AUTOMATIONS, 15.0).color(theme.color(if selected {
+            SIDENAV_ACTIVE_FOREGROUND
+        } else {
+            "#9d9d9d"
+        })))
         .child(
             text(label)
                 .grow(1.0)
@@ -288,7 +292,7 @@ fn list_row(job: &AutomationJob, future: bool, selected: bool, theme: ThemeStyle
                 .fade_truncate()
                 .font(ui_font(14.0, if selected { 550.0 } else { 400.0 }))
                 .color(theme.color(if selected {
-                    SIDENAV_ACTIVE_TEXT
+                    SIDENAV_ACTIVE_FOREGROUND
                 } else {
                     "#b8b8b8"
                 })),
@@ -335,8 +339,13 @@ fn run_row(run: &AutomationRun, active: bool, selected: bool, theme: ThemeStyle<
             }
         })
         .child(
-            icon(if active { &AUTOMATION_ACTIVE } else { &ARCHIVE }, 15.0)
-                .color(theme.color("#9d9d9d")),
+            icon(if active { &AUTOMATION_ACTIVE } else { &ARCHIVE }, 15.0).color(theme.color(
+                if selected {
+                    SIDENAV_ACTIVE_FOREGROUND
+                } else {
+                    "#9d9d9d"
+                },
+            )),
         )
         .child(
             text(run.title.clone())
@@ -345,7 +354,7 @@ fn run_row(run: &AutomationRun, active: bool, selected: bool, theme: ThemeStyle<
                 .fade_truncate()
                 .font(ui_font(14.0, if selected { 550.0 } else { 400.0 }))
                 .color(theme.color(if selected {
-                    SIDENAV_ACTIVE_TEXT
+                    SIDENAV_ACTIVE_FOREGROUND
                 } else {
                     "#b8b8b8"
                 })),

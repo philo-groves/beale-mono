@@ -1,4 +1,4 @@
-use crate::design::{FadeText, SIDENAV_ACTIVE_TEXT};
+use crate::design::{FadeText, SIDENAV_ACTIVE_FOREGROUND};
 use qrcodegen::{QrCode, QrCodeEcc};
 use rune::{Color, El, Icon, Pixels, ScrollSpec, TextEdit, col, el, icon, row, text, text_input};
 
@@ -323,7 +323,7 @@ pub(crate) fn sidenav(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
                     state.navigate_to(ViewLocation::Fleet(section, state.fleet.tab_for(section)));
                 })
                 .child(icon(section.glyph(), 16.0).color(theme.color(if active {
-                    "#f2f2f2"
+                    SIDENAV_ACTIVE_FOREGROUND
                 } else {
                     "#bdbdbd"
                 })))
@@ -331,7 +331,7 @@ pub(crate) fn sidenav(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
                     text(section.label())
                         .font(ui_font(14.0, if active { 550.0 } else { 400.0 }))
                         .color(theme.color(if active {
-                            SIDENAV_ACTIVE_TEXT
+                            SIDENAV_ACTIVE_FOREGROUND
                         } else {
                             "#c8c8c8"
                         })),

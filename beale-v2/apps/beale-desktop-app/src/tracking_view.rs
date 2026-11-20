@@ -239,6 +239,7 @@ fn subscription_chart(
 
 pub(crate) fn sidenav(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
     let connected = matches!(state.connection, ConnectionStatus::Connected { .. });
+    let foreground = theme.color(design::SIDENAV_ACTIVE_FOREGROUND);
     col()
         .key("tracking-sidenav")
         .role("navigation")
@@ -262,11 +263,8 @@ pub(crate) fn sidenav(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
                 .fill(theme.subtle_accent())
                 .hover(theme.color("#303030"))
                 .on_press(|state: &mut State| state.navigate_to(crate::ViewLocation::Tracking))
-                .child(icon(&SESSION_TOKENS, 16.0).color(theme.accent()))
-                .child(
-                    copy("Token Tracking", 14.0, 550.0, theme)
-                        .color(theme.color(design::SIDENAV_ACTIVE_TEXT)),
-                ),
+                .child(icon(&SESSION_TOKENS, 16.0).color(foreground))
+                .child(copy("Token Tracking", 14.0, 550.0, theme).color(foreground)),
         )
         .child(el().grow(1.0))
         .child(

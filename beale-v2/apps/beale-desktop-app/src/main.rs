@@ -4711,16 +4711,16 @@ fn settings_nav_button(spec: &SettingsSectionSpec, active: bool, theme: ThemeSty
         .on_press(move |s: &mut State| {
             s.show_section(section);
         })
-        .child(icon(spec.icon, 16.0).color(if active {
-            theme.accent()
+        .child(icon(spec.icon, 16.0).color(color(if active {
+            design::SIDENAV_ACTIVE_FOREGROUND
         } else {
-            color("#bdbdbd")
-        }))
+            "#bdbdbd"
+        })))
         .child(
             text(spec.label)
                 .font(ui_font(14.0, if active { 550.0 } else { 400.0 }))
                 .color(color(if active {
-                    design::SIDENAV_ACTIVE_TEXT
+                    design::SIDENAV_ACTIVE_FOREGROUND
                 } else {
                     "#c8c8c8"
                 })),
@@ -14394,21 +14394,23 @@ active_runbook_count: 0,
     }
 
     #[test]
-    fn active_sidenav_rows_use_the_theme_text_color() {
+    fn active_sidenav_rows_use_the_theme_text_color_for_labels_and_icons() {
         for theme in AppearanceTheme::ALL {
-            for (scene, key) in [
-                ("typography", "settings-appearance"),
-                ("features", "extensions-features"),
-                ("fleet", "fleet-app-servers"),
-                ("tracking", "tracking-tokens-nav"),
-                ("automations", "automation-job-future-example-job"),
+            for (scene, key, has_icon) in [
+                ("typography", "settings-appearance", true),
+                ("features", "extensions-features", true),
+                ("fleet", "fleet-app-servers", true),
+                ("tracking", "tracking-tokens-nav", true),
+                ("automations", "automation-job-future-example-job", true),
                 (
                     "session",
                     "home-session-10000000-0000-4000-8000-000000000001",
+                    false,
                 ),
                 (
                     "workspace",
                     "home-workspace-open-00000000-0000-4000-8000-000000000001",
+                    true,
                 ),
             ] {
                 let mut state = visual_preview::fixture(scene);
@@ -14427,6 +14429,15 @@ active_runbook_count: 0,
                     .find(|element| element.path.starts_with(&row_path) && element.text.is_some())
                     .unwrap();
                 assert_eq!(label.text_color, Some(expected), "{theme:?} {scene}");
+                if has_icon {
+                    let icon = elements
+                        .iter()
+                        .find(|element| {
+                            element.path.starts_with(&row_path) && element.role == "icon"
+                        })
+                        .unwrap();
+                    assert_eq!(icon.text_color, label.text_color, "{theme:?} {scene} icon");
+                }
             }
         }
     }

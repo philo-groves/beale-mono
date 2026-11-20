@@ -1,4 +1,4 @@
-use crate::design::{FadeText, SIDENAV_ACTIVE_TEXT};
+use crate::design::{FadeText, SIDENAV_ACTIVE_FOREGROUND};
 use rune::{Align, Color, El, Icon, ScrollSpec, Side, col, el, icon, row, text};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -107,12 +107,18 @@ fn primary_action(spec: &SidebarAction, state: &State, theme: ThemeStyle<'_>) ->
         } else {
             rune::Color::TRANSPARENT
         })
-        .child(icon(spec.icon, 16.0).color(color(if available { "#bdbdbd" } else { "#777777" })))
+        .child(icon(spec.icon, 16.0).color(color(if selected {
+            SIDENAV_ACTIVE_FOREGROUND
+        } else if available {
+            "#bdbdbd"
+        } else {
+            "#777777"
+        })))
         .child(
             text(spec.label)
                 .font(ui_font(14.0, if selected { 550.0 } else { 400.0 }))
                 .color(color(if selected {
-                    SIDENAV_ACTIVE_TEXT
+                    SIDENAV_ACTIVE_FOREGROUND
                 } else if available {
                     "#dddddd"
                 } else {
@@ -157,7 +163,7 @@ fn session_row(key: String, label: &str, italic: bool, active: bool, theme: Them
     let label_text = text(label.to_owned())
         .font(if italic { font.italic() } else { font })
         .color(color(if active {
-            SIDENAV_ACTIVE_TEXT
+            SIDENAV_ACTIVE_FOREGROUND
         } else {
             "#b8b8b8"
         }))
@@ -294,14 +300,18 @@ pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
                 .h(SIDENAV_ROW_HEIGHT)
                 .center_y()
                 .gap(10.0)
-                .child(icon(&FOLDER_OPEN, 15.0).color(color("#9d9d9d")))
+                .child(icon(&FOLDER_OPEN, 15.0).color(color(if selected {
+                    SIDENAV_ACTIVE_FOREGROUND
+                } else {
+                    "#9d9d9d"
+                })))
                 .child(
                     text(workspace.name.clone())
                         .grow(1.0)
                         .min_w(0.0)
                         .font(ui_font(14.0, if selected { 550.0 } else { 400.0 }))
                         .color(color(if selected {
-                            SIDENAV_ACTIVE_TEXT
+                            SIDENAV_ACTIVE_FOREGROUND
                         } else {
                             "#dddddd"
                         }))
