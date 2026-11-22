@@ -5,6 +5,7 @@ use beale_contracts::{
     FLEET_RESEARCH_TOOLS_PATH, FLEET_TOTP_PROVISION_PATH, FLEET_VIRTUAL_MACHINE_SETTINGS_PATH,
     FLEET_VIRTUAL_MACHINES_PATH, PROTOBUF_CONTENT_TYPE, PROTOCOL_MAJOR, PROTOCOL_MINOR,
     SERVICE_NAME,
+    research_tools::CATALOG,
     v1::{
         FleetAllowedResearchTool, FleetAppServerDescriptor, FleetPairingRequest,
         FleetPairingResponse, FleetResearchTool, FleetResearchToolsResponse,
@@ -647,22 +648,10 @@ fn valid_descriptor(descriptor: &FleetAppServerDescriptor) -> bool {
         && valid_text(&descriptor.os_name, 40)
         && valid_text(&descriptor.os_vendor, 40)
         && descriptor.resources.as_ref().is_none_or(valid_resources)
-        && descriptor.allowed_research_tools.len() <= 11
+        && descriptor.allowed_research_tools.len() <= CATALOG.len()
         && descriptor.allowed_research_tools.iter().all(|tool| {
-            matches!(
-                tool.id.as_str(),
-                "ripgrep"
-                    | "opengrep"
-                    | "git"
-                    | "radare2"
-                    | "ghidra"
-                    | "llvm"
-                    | "jadx"
-                    | "ipsw"
-                    | "python"
-                    | "java"
-                    | "node"
-            ) && valid_text(&tool.name, 80)
+            CATALOG.iter().any(|entry| entry.id == tool.id)
+                && valid_text(&tool.name, 80)
                 && (tool.allow_locally || tool.allow_in_vms)
         })
         && descriptor
@@ -1429,5 +1418,15 @@ mod tests {
         descriptor.allowed_research_tools.pop();
         descriptor.allowed_research_tools[0].id = "unknown".to_owned();
         assert!(!valid_descriptor(&descriptor));
+        descriptor.allowed_research_tools = CATALOG
+            .iter()
+            .map(|tool| FleetAllowedResearchTool {
+                id: tool.id.to_owned(),
+                name: tool.name.to_owned(),
+                allow_locally: true,
+                allow_in_vms: true,
+            })
+            .collect();
+        assert!(valid_descriptor(&descriptor));
     }
 }

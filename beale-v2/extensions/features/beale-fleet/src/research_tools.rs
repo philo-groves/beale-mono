@@ -1,95 +1,32 @@
 use crate::FleetStore;
-use beale_contracts::v1::{FleetAllowedResearchTool, FleetResearchTool};
+use beale_contracts::{
+    research_tools::{CATALOG, available_on},
+    v1::{FleetAllowedResearchTool, FleetResearchTool},
+};
 use beale_storage::HostDatabase;
 
 #[derive(Debug)]
 pub struct ResearchToolSettingsError;
 
-struct CatalogEntry {
-    id: &'static str,
-    name: &'static str,
-    category: &'static str,
-    description: &'static str,
-}
-
-const CATALOG: &[CatalogEntry] = &[
-    CatalogEntry {
-        id: "ripgrep",
-        name: "ripgrep",
-        category: "Source",
-        description: "Fast search across source and artifacts.",
-    },
-    CatalogEntry {
-        id: "opengrep",
-        name: "Opengrep",
-        category: "Source",
-        description: "Rule-based source scanning.",
-    },
-    CatalogEntry {
-        id: "git",
-        name: "Git",
-        category: "Source",
-        description: "Repository history and changes.",
-    },
-    CatalogEntry {
-        id: "radare2",
-        name: "radare2",
-        category: "Binary",
-        description: "Scriptable binary inspection and analysis.",
-    },
-    CatalogEntry {
-        id: "ghidra",
-        name: "Ghidra",
-        category: "Binary",
-        description: "Disassembly and decompilation.",
-    },
-    CatalogEntry {
-        id: "llvm",
-        name: "LLVM tools",
-        category: "Binary",
-        description: "Object, symbol, and disassembly utilities.",
-    },
-    CatalogEntry {
-        id: "jadx",
-        name: "JADX",
-        category: "Mobile",
-        description: "Android APK and DEX decompilation.",
-    },
-    CatalogEntry {
-        id: "ipsw",
-        name: "ipsw",
-        category: "Mobile",
-        description: "Apple firmware and binary inspection.",
-    },
-    CatalogEntry {
-        id: "python",
-        name: "Python 3",
-        category: "Runtimes",
-        description: "Runtime for research scripts.",
-    },
-    CatalogEntry {
-        id: "java",
-        name: "Java JDK",
-        category: "Runtimes",
-        description: "Runtime required by Java-based tools.",
-    },
-    CatalogEntry {
-        id: "node",
-        name: "Node.js",
-        category: "Runtimes",
-        description: "Runtime for JavaScript research tooling.",
-    },
-];
-
 pub(crate) fn contains(id: &str) -> bool {
-    CATALOG.iter().any(|entry| entry.id == id)
+    CATALOG
+        .iter()
+        .any(|entry| entry.id == id && available_on(entry.id, std::env::consts::OS))
 }
 
 pub(crate) fn catalog(
     mut settings: impl FnMut(&str) -> Result<(bool, bool), ()>,
 ) -> Result<Vec<FleetResearchTool>, ()> {
+    catalog_for_os(std::env::consts::OS, &mut settings)
+}
+
+fn catalog_for_os(
+    os: &str,
+    mut settings: impl FnMut(&str) -> Result<(bool, bool), ()>,
+) -> Result<Vec<FleetResearchTool>, ()> {
     CATALOG
         .iter()
+        .filter(|entry| available_on(entry.id, os))
         .map(|entry| {
             let (allow_locally, allow_in_vms) = settings(entry.id)?;
             Ok(FleetResearchTool {
@@ -151,6 +88,27 @@ pub fn prompt_note(tools: &[FleetAllowedResearchTool]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn platform_specific_tools_follow_host_os() {
+        let ids = |os| {
+            catalog_for_os(os, |_| Ok((false, false)))
+                .unwrap()
+                .into_iter()
+                .map(|tool| tool.id)
+                .collect::<Vec<_>>()
+        };
+        let macos = ids("macos");
+        let linux = ids("linux");
+        let windows = ids("windows");
+        for id in ["otool", "jtool2", "dig"] {
+            assert!(macos.contains(&id.to_owned()));
+            assert!(!windows.contains(&id.to_owned()));
+        }
+        assert!(!linux.contains(&"otool".to_owned()));
+        assert!(linux.contains(&"jtool2".to_owned()));
+        assert!(linux.contains(&"dig".to_owned()));
+    }
 
     #[test]
     fn prompt_note_lists_only_allowed_locations() {

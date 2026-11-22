@@ -204,81 +204,20 @@ impl FleetState {
         self.tool_hosts.push(ResearchToolHost {
             id: "local".into(),
             name: "Example research host".into(),
-            tools: [
-                (
-                    "ripgrep",
-                    "ripgrep",
-                    "Source",
-                    "Fast search across source and artifacts.",
-                ),
-                (
-                    "opengrep",
-                    "Opengrep",
-                    "Source",
-                    "Rule-based source scanning.",
-                ),
-                ("git", "Git", "Source", "Repository history and changes."),
-                (
-                    "radare2",
-                    "radare2",
-                    "Binary",
-                    "Scriptable binary inspection and analysis.",
-                ),
-                (
-                    "ghidra",
-                    "Ghidra",
-                    "Binary",
-                    "Disassembly and decompilation.",
-                ),
-                (
-                    "llvm",
-                    "LLVM tools",
-                    "Binary",
-                    "Object, symbol, and disassembly utilities.",
-                ),
-                (
-                    "jadx",
-                    "JADX",
-                    "Mobile",
-                    "Android APK and DEX decompilation.",
-                ),
-                (
-                    "ipsw",
-                    "ipsw",
-                    "Mobile",
-                    "Apple firmware and binary inspection.",
-                ),
-                (
-                    "python",
-                    "Python 3",
-                    "Runtimes",
-                    "Runtime for research scripts.",
-                ),
-                (
-                    "java",
-                    "Java JDK",
-                    "Runtimes",
-                    "Runtime required by Java-based tools.",
-                ),
-                (
-                    "node",
-                    "Node.js",
-                    "Runtimes",
-                    "Runtime for JavaScript research tooling.",
-                ),
-            ]
-            .into_iter()
-            .map(
-                |(id, name, category, description)| beale_contracts::v1::FleetResearchTool {
-                    id: id.into(),
-                    name: name.into(),
-                    category: category.into(),
-                    description: description.into(),
-                    allow_locally: id == "ripgrep",
-                    allow_in_vms: id == "ghidra",
-                },
-            )
-            .collect(),
+            tools: beale_contracts::research_tools::CATALOG
+                .iter()
+                .filter(|tool| {
+                    beale_contracts::research_tools::available_on(tool.id, std::env::consts::OS)
+                })
+                .map(|tool| beale_contracts::v1::FleetResearchTool {
+                    id: tool.id.into(),
+                    name: tool.name.into(),
+                    category: tool.category.into(),
+                    description: tool.description.into(),
+                    allow_locally: tool.id == "ripgrep",
+                    allow_in_vms: tool.id == "ghidra",
+                })
+                .collect(),
         });
     }
 

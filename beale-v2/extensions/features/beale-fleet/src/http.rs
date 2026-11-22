@@ -678,10 +678,11 @@ mod tests {
             StatusCode::BAD_REQUEST
         );
         let setting = FleetSetResearchToolSettingsRequest {
-            id: "ripgrep".to_owned(),
-            allow_locally: true,
-            allow_in_vms: false,
+            id: "subfinder".to_owned(),
+            allow_locally: false,
+            allow_in_vms: true,
         };
+        assert!(crate::allowed_tools(&db).unwrap().is_empty());
         assert_eq!(
             app.clone()
                 .oneshot(request(
@@ -733,14 +734,28 @@ mod tests {
             catalog
                 .tools
                 .iter()
-                .any(|tool| tool.id == "ripgrep" && tool.allow_locally && !tool.allow_in_vms)
+                .any(|tool| tool.id == "subfinder" && !tool.allow_locally && tool.allow_in_vms)
         );
-        assert!(
-            catalog
-                .tools
-                .iter()
-                .any(|tool| tool.id == "ghidra" && !tool.allow_locally && !tool.allow_in_vms)
-        );
+        for id in ["nmap", "httpx", "katana", "ffuf", "nuclei", "zap", "ghidra"] {
+            let tool = catalog.tools.iter().find(|tool| tool.id == id).unwrap();
+            assert!(!tool.allow_locally && !tool.allow_in_vms, "{id}");
+        }
+        for id in [
+            "jq",
+            "unfurl",
+            "syft",
+            "shellcheck",
+            "actionlint",
+            "lighthouse",
+            "html-validate",
+            "spectral",
+        ] {
+            assert!(!catalog.tools.iter().any(|tool| tool.id == id), "{id}");
+        }
+        let allowed = crate::allowed_tools(&db).unwrap();
+        assert_eq!(allowed.len(), 1);
+        assert_eq!(allowed[0].id, "subfinder");
+        assert!(!allowed[0].allow_locally && allowed[0].allow_in_vms);
         drop(db);
         std::fs::remove_dir_all(root).unwrap();
     }

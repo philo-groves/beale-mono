@@ -2,6 +2,7 @@
 
 pub mod findings;
 pub mod memories;
+pub mod research_tools;
 pub mod runbooks;
 
 pub mod v1 {

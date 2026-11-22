@@ -25,6 +25,8 @@
 
 #### Changed
 
+- V2 Fleet Research Tools adds subfinder, Nmap, httpx, Katana, ffuf, Nuclei, and OWASP ZAP for web vulnerability research. The new tools default to off for Local and VM approvals. Update connected desktops before enabling them on remote app-servers.
+- Fleet offers otool on macOS and jtool2 and dig on macOS and Linux. Each app-server filters its catalog and approved-tool list by host OS.
 - V2 Edit Graph Node uses the composer's two-tier Provider and Model picker for selecting each node's models.
 - V2 session composers start at one line and grow with the draft. The send button is centered at the right edge, and the bordered ribbon places the model selector beside the workspace selector when Graphs is disabled.
 - V2 top icon rail buttons open their per-view sidenav on hover while it is collapsed. The flyout overlays the current page and its items navigate directly.
