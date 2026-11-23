@@ -62,7 +62,7 @@ pub fn migrate(db: &HostDatabase) -> Result<()> {
 }
 
 /// Tool names whose successful results can support a validation.
-pub const EVIDENCE_TOOLS: [&str; 3] = ["read", "bash", "findings_verify"];
+pub const EVIDENCE_TOOLS: [&str; 4] = ["read", "bash", "powershell", "findings_verify"];
 
 /// A tool result from the current, not yet committed turn.
 pub struct EvidenceSource<'a> {
@@ -336,7 +336,7 @@ impl FindingStore for HostDatabase {
                 && !source.output.is_empty()
                 && source.output.len() <= 8_000_000
                 && EVIDENCE_TOOLS.contains(&source.name),
-            "only successful read, bash, or verified findings_verify output can validate a finding"
+            "only successful read, host command tool, or verified findings_verify output can validate a finding"
         );
         ensure!(
             !workspace_id.is_empty()
@@ -551,12 +551,12 @@ impl FindingStore for HostDatabase {
                     None => {
                         let saved = connection
                             .query_row(
-                                "SELECT call.output, call.agent_role, call.created_at_ms FROM session_tool_calls call JOIN sessions session ON session.id=call.session_id WHERE call.id=?1 AND session.workspace_id=?2 AND call.name IN ('read','bash','findings_verify') AND call.is_error=0 AND call.output<>''",
+                                "SELECT call.output, call.agent_role, call.created_at_ms FROM session_tool_calls call JOIN sessions session ON session.id=call.session_id WHERE call.id=?1 AND session.workspace_id=?2 AND call.name IN ('read','bash','powershell','findings_verify') AND call.is_error=0 AND call.output<>''",
                                 params![id, workspace_id],
                                 |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?)),
                             )
                             .optional()?
-                            .with_context(|| format!("validation evidence {id} must cite a durable successful read, bash, or verified findings_verify result in this workspace"))?;
+                            .with_context(|| format!("validation evidence {id} must cite a durable successful read, host command tool, or verified findings_verify result in this workspace"))?;
                         (format!("{:x}", Sha256::digest(saved.0.as_bytes())), saved.1, saved.2)
                     }
                 };

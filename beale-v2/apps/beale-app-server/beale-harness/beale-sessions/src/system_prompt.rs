@@ -8,10 +8,16 @@ use std::{
 };
 
 const NAME: &str = "SYSTEM.md";
+#[cfg(windows)]
+const DEFAULT: &str = include_str!("../SYSTEM.windows.md");
+#[cfg(not(windows))]
 const DEFAULT: &str = include_str!("../SYSTEM.default.md");
+#[cfg(windows)]
+const WINDOWS_COMMAND_GUIDANCE: &str = "On this Windows host, use the `powershell` base tool for PowerShell commands; `bash` is not a base tool.";
 const COMMENTARY_GUIDANCE: &str = "While working, write brief, user-visible progress commentary before tool work and when results change your plan. Keep it separate from private reasoning. Give a final answer when the task is complete.";
 // Migration-only snapshots; never included in model prompts.
 const LEGACY_DEFAULTS: &[&str] = &[
+    include_str!("../SYSTEM.default.md"),
     include_str!("../SYSTEM.legacy.md"),
     include_str!("../SYSTEM.files.legacy.md"),
     include_str!("../SYSTEM.webfetch.legacy.md"),
@@ -111,6 +117,11 @@ pub(crate) fn load(root: &Path, runtime_sections: &[&str]) -> Result<String> {
         prompt.push_str("\n\n");
         prompt.push_str(COMMENTARY_GUIDANCE);
     }
+    #[cfg(windows)]
+    if !prompt.contains(WINDOWS_COMMAND_GUIDANCE) {
+        prompt.push_str("\n\n");
+        prompt.push_str(WINDOWS_COMMAND_GUIDANCE);
+    }
     for section in runtime_sections {
         if section.trim().is_empty() {
             continue;
@@ -180,6 +191,8 @@ mod tests {
         let prompt = load(files.root(), &[]).unwrap();
         assert!(prompt.starts_with("# Example custom prompt"));
         assert_eq!(prompt.matches(COMMENTARY_GUIDANCE).count(), 1);
+        #[cfg(windows)]
+        assert_eq!(prompt.matches(WINDOWS_COMMAND_GUIDANCE).count(), 1);
         assert_eq!(load(files.root(), &[]).unwrap(), prompt);
         fs::remove_dir_all(files.root()).unwrap();
     }
@@ -207,6 +220,10 @@ mod tests {
 
     #[test]
     fn initializes_once_and_reloads_user_edits_without_substitution() {
+        #[cfg(windows)]
+        let command_guidance = format!("\n\n{WINDOWS_COMMAND_GUIDANCE}");
+        #[cfg(not(windows))]
+        let command_guidance = "";
         let root = std::env::temp_dir().join(format!("beale-system-example-{}", Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
         ensure_file(&root).unwrap();
@@ -216,7 +233,7 @@ mod tests {
         assert_eq!(
             prompt,
             format!(
-                "# Example\n\nLiteral {{{{workspace}}}} text.\n\n{COMMENTARY_GUIDANCE}\n\n## Active tools\n\nRead files."
+                "# Example\n\nLiteral {{{{workspace}}}} text.\n\n{COMMENTARY_GUIDANCE}{command_guidance}\n\n## Active tools\n\nRead files."
             )
         );
         assert_eq!(
@@ -226,7 +243,7 @@ mod tests {
         fs::write(root.join(NAME), "# Updated").unwrap();
         assert_eq!(
             load(&root, &[]).unwrap(),
-            format!("# Updated\n\n{COMMENTARY_GUIDANCE}")
+            format!("# Updated\n\n{COMMENTARY_GUIDANCE}{command_guidance}")
         );
         fs::remove_dir_all(root).unwrap();
     }

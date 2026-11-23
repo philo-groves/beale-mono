@@ -92,7 +92,7 @@ mod tests {
                 assert!(tools.insert(*name), "tool {name} is owned twice");
                 assert!(!matches!(
                     *name,
-                    "read" | "write" | "edit" | "bash" | "plugin_call"
+                    "read" | "write" | "edit" | "bash" | "powershell" | "plugin_call"
                 ));
             }
             if let Some(mut names) = feature.definition_names() {

@@ -32,7 +32,9 @@ pub(crate) fn unix_ms() -> i64 {
 /// Whether a tool call needs Auto-Review before it runs. Plugin calls are
 /// reviewed per selected server tool inside execution instead.
 pub(crate) fn requires_call_review(name: &str) -> bool {
-    matches!(name, "read" | "write" | "edit" | "bash") || super::features::reviews(name)
+    matches!(name, "read" | "write" | "edit")
+        || name == beale_tools::COMMAND_TOOL_NAME
+        || super::features::reviews(name)
 }
 
 /// Whether concurrent agents sharing a workspace must serialize this call.
@@ -374,7 +376,45 @@ impl ToolRuntime<'_> {
                 Err(error) => ToolResult::error(format!("Surface tool error: {error}")),
             };
         }
-        if matches!(name, "read" | "write" | "edit" | "bash") {
+        if matches!(name, "read" | "write" | "edit") || name == beale_tools::COMMAND_TOOL_NAME {
+            if name == beale_tools::COMMAND_TOOL_NAME
+                && let Some(machine) = arguments.get("machine")
+            {
+                let Some(machine) = machine.as_str().filter(|value| !value.is_empty()) else {
+                    return ToolResult::error("Tool error: invalid machine ID".to_owned());
+                };
+                let Some(command) = arguments.get("command").and_then(Value::as_str) else {
+                    return ToolResult::error("Tool error: invalid command".to_owned());
+                };
+                let timeout_seconds = match arguments.get("timeout_seconds") {
+                    None => beale_tools::DEFAULT_COMMAND_TIMEOUT_SECONDS,
+                    Some(value) => match value.as_u64() {
+                        Some(value) => value,
+                        None => {
+                            return ToolResult::error(
+                                "Tool error: invalid command timeout_seconds".to_owned(),
+                            );
+                        }
+                    },
+                };
+                return match until_stopped(
+                    beale_fleet::run_machine_command(
+                        &self.state.db,
+                        self.workspace_id,
+                        machine,
+                        command,
+                        self.workspace,
+                        timeout_seconds,
+                    ),
+                    stop,
+                )
+                .await
+                {
+                    Some(Ok(value)) => ToolResult::new(value.transcript(), !value.success),
+                    Some(Err(error)) => ToolResult::error(format!("Fleet command error: {error}")),
+                    None => ToolResult::error("Fleet command stopped by user.".to_owned()),
+                };
+            }
             return match until_stopped(
                 execute(
                     name,
@@ -467,7 +507,9 @@ impl ToolRuntime<'_> {
                 {
                     let review_args =
                         json!({"command":format!("# {language} runbook cell\n{source}")});
-                    let decision = self.review_call("bash", &review_args).await;
+                    let decision = self
+                        .review_call(beale_tools::COMMAND_TOOL_NAME, &review_args)
+                        .await;
                     if !decision.approved {
                         if review_failed(&decision) {
                             review_unavailable = true;
@@ -612,7 +654,7 @@ impl ToolRuntime<'_> {
         for _ in 0..beale_findings::VERIFY_RUNS {
             let started = std::time::Instant::now();
             let output = match until_stopped(
-                beale_tools::run_bash(&request.command, self.workspace, request.timeout_seconds),
+                beale_tools::run_command(&request.command, self.workspace, request.timeout_seconds),
                 stop,
             )
             .await
@@ -655,7 +697,7 @@ mod tests {
 
     #[test]
     fn review_policy_covers_base_and_feature_tools_but_not_orchestration() {
-        for name in ["read", "write", "edit", "bash"] {
+        for name in ["read", "write", "edit", beale_tools::COMMAND_TOOL_NAME] {
             assert!(requires_call_review(name), "{name}");
         }
         assert!(!requires_call_review("plugin_call"));
@@ -677,7 +719,12 @@ mod tests {
     #[test]
     fn only_reads_and_webfetch_skip_the_subagent_mutation_lock() {
         assert!(!takes_mutation_lock("read"));
-        for name in ["write", "edit", "bash", "plugin_call"] {
+        for name in [
+            "write",
+            "edit",
+            beale_tools::COMMAND_TOOL_NAME,
+            "plugin_call",
+        ] {
             assert!(takes_mutation_lock(name), "{name}");
         }
         #[cfg(feature = "webfetch")]

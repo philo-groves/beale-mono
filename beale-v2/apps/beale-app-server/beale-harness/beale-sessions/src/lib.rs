@@ -1892,7 +1892,7 @@ async fn run_runbook_cell(
             provider,
             mode,
             model: &latest.model,
-            name: "bash",
+            name: beale_tools::COMMAND_TOOL_NAME,
             arguments: &review_args,
             workspace_context: &review_context,
         },
@@ -2262,6 +2262,10 @@ mod tests {
         let result = model_tool_preview("read", id, "Example source", false, &files);
         assert!(result.contains("\"kind\":\"tool_call\",\"reference\":\"tool-example-001\""));
         assert!(result.ends_with("Example source"));
+        assert!(
+            model_tool_preview("powershell", id, "Example output", false, &files)
+                .contains("\"reference\":\"tool-example-001\"")
+        );
         assert_eq!(
             model_tool_preview("bash", id, "Denied", true, &files),
             "Denied"
@@ -2512,7 +2516,7 @@ mod tests {
 
     #[test]
     fn feature_and_base_tools_share_one_review_gate() {
-        for name in ["read", "write", "edit", "bash"] {
+        for name in ["read", "write", "edit", beale_tools::COMMAND_TOOL_NAME] {
             assert!(tool_runtime::requires_call_review(name), "{name}");
         }
         #[cfg(feature = "webfetch")]

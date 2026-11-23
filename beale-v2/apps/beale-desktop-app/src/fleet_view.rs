@@ -13,7 +13,7 @@ use crate::{
     form_controls::toggle_button,
     icons::{
         CHECK, FLEET, FLEET_APPLE, FLEET_LINUX, FLEET_QR, FLEET_VIRTUAL_MACHINE, FLEET_WINDOWS,
-        INFO, PLUS, VM_CLONE, VM_CLONE_FILLED, VM_RUN, VM_RUN_FILLED, WRENCH,
+        INFO, PLUS, VM_RUN, VM_RUN_FILLED, WRENCH,
     },
     modal_dialog, ui_font,
 };
@@ -472,7 +472,6 @@ fn virtual_machine_mutation(item: &VirtualMachineItem) -> VirtualMachineMutation
         all_workspaces: item.machine.all_workspaces,
         workspace_ids: item.machine.workspace_ids.clone(),
         can_run: item.machine.can_run,
-        can_clone: item.machine.can_clone,
     }
 }
 
@@ -980,62 +979,34 @@ fn server_card(server: &FleetServer, state: &State, text_width: f32, theme: Them
         )
 }
 
-#[derive(Clone, Copy)]
-enum VmAllowance {
-    Run,
-    Clone,
-}
-
-fn vm_allowance_button(
+fn vm_run_button(
     index: usize,
     item: &VirtualMachineItem,
-    allowance: VmAllowance,
     state: &State,
     theme: ThemeStyle<'_>,
 ) -> El {
-    let (key, name, active, outline, filled) = match allowance {
-        VmAllowance::Run => (
-            "run",
-            "Can Run",
-            item.machine.can_run,
-            &VM_RUN,
-            &VM_RUN_FILLED,
-        ),
-        VmAllowance::Clone => (
-            "clone",
-            "Can Clone",
-            item.machine.can_clone,
-            &VM_CLONE,
-            &VM_CLONE_FILLED,
-        ),
-    };
+    let active = item.machine.can_run;
     let mut button = el()
-        .key(format!("fleet-vm-{key}-{index}"))
+        .key(format!("fleet-vm-run-{index}"))
         .role("button")
         .label(format!(
-            "{} {name} allowance: {}",
+            "{} Can Run allowance: {}",
             item.machine.name,
             if active { "On" } else { "Off" }
         ))
-        .help(format!("{name}: {}", if active { "On" } else { "Off" }))
+        .help(format!("Can Run: {}", if active { "On" } else { "Off" }))
         .size(26.0, 26.0)
         .center()
         .radius(8.0)
         .continuous_corners()
         .hover(theme.color("#303030"))
         .child(
-            icon(if active { filled } else { outline }, 17.0).color(theme.color(if active {
-                "#f2f2f2"
-            } else {
-                "#bdbdbd"
-            })),
+            icon(if active { &VM_RUN_FILLED } else { &VM_RUN }, 17.0)
+                .color(theme.color(if active { "#f2f2f2" } else { "#bdbdbd" })),
         );
     if !state.fleet.vm_busy {
         let mut action = virtual_machine_mutation(item);
-        match allowance {
-            VmAllowance::Run => action.can_run = !active,
-            VmAllowance::Clone => action.can_clone = !active,
-        }
+        action.can_run = !active;
         button = button.on_press(move |state: &mut State| {
             start_virtual_machine_mutation(state, action.clone());
         });
@@ -1090,14 +1061,7 @@ fn virtual_machine_card(
             el().size(0.0, 0.0)
         })
         .child(el().grow(1.0))
-        .child(vm_allowance_button(
-            index,
-            item,
-            VmAllowance::Run,
-            state,
-            theme,
-        ))
-        .child(vm_allowance_button(index, item, VmAllowance::Clone, state, theme).mr(-5.0));
+        .child(vm_run_button(index, item, state, theme).mr(-5.0));
     col()
         .key(format!(
             "fleet-vm-card-{}-{}",
@@ -2124,14 +2088,12 @@ mod tests {
                 all_workspaces: true,
                 workspace_ids: Vec::new(),
                 can_run: false,
-                can_clone: false,
             },
         };
         let mut state = State::default();
         state.fleet.virtual_machines.push(item);
         assert!(vm_workspace_scope_items(&state, 0)[0].selected);
         assert!(!state.fleet.virtual_machines[0].machine.can_run);
-        assert!(!state.fleet.virtual_machines[0].machine.can_clone);
         let mut runtime = Runtime::new(
             state,
             |state, _| {
@@ -2156,7 +2118,7 @@ mod tests {
         assert!(runtime.find("fleet-vm-badge-0").is_some());
         assert!(runtime.find("fleet-vm-scope-0").is_some());
         assert!(runtime.find("fleet-vm-run-0").is_some());
-        assert!(runtime.find("fleet-vm-clone-0").is_some());
+        assert!(runtime.find("fleet-vm-clone-0").is_none());
         assert_eq!(
             FleetTab::Available.label(FleetSection::VirtualMachines),
             "Running"

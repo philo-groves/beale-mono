@@ -10,6 +10,7 @@ beale-feature-api = { path = "../beale-feature-api" }
 axum.workspace = true
 beale-contracts = { path = "../beale-contracts" }
 beale-storage = { path = "../beale-storage" }
+beale-tools = { path = "../beale-tools" }
 prost.workspace = true
 ring = "0.17"
 serde.workspace = true
@@ -19,6 +20,7 @@ tokio.workspace = true
 url.workspace = true
 uuid.workspace = true
 anyhow.workspace = true
+base64.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_UI_Shell"] }

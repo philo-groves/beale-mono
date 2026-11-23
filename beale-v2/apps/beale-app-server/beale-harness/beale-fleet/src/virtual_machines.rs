@@ -60,7 +60,6 @@ fn parse_hyper_v(bytes: &[u8]) -> Result<Vec<FleetVirtualMachine>, ()> {
             all_workspaces: true,
             workspace_ids: Vec::new(),
             can_run: false,
-            can_clone: false,
         });
     }
     machines.sort_by(|left, right| left.name.cmp(&right.name).then(left.id.cmp(&right.id)));

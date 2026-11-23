@@ -26,6 +26,9 @@
 
 #### Changed
 
+- V2 Windows agents can set `machine` on `powershell` to run a command in a Can Run-approved, running Hyper-V guest through operator-configured OpenSSH. The app-server rechecks VM discovery and workspace scope for each call; guest SSH settings and keys stay on the host.
+- V2 Windows sessions now offer `powershell` in place of `bash` and run commands through Windows PowerShell. Workspace import, Findings verification, Auto-Review, session activity, and stock prompts follow the host shell; Unix hosts continue to offer Bash.
+- V2 Fleet removes the Can Clone VM allowance from its cards and protocol. Protocol v2.28 requires updated app-servers for new desktops; Fleet migration 2 drops the saved clone setting while preserving Can Run and workspace scope.
 - V2 Goal Mode, Tracking, and Fleet are standard harness components and no longer appear in Features. Goal Mode remains selected per research prompt; its agent tool and guidance appear only during active goal turns. Existing saved feature toggles and workspace scopes for these components are ignored.
 - V2 Fleet Research Tools adds subfinder, Nmap, httpx, Katana, ffuf, Nuclei, and OWASP ZAP for web vulnerability research. The new tools default to off for Local and VM approvals. Update connected desktops before enabling them on remote app-servers.
 - Fleet offers otool on macOS and jtool2 and dig on macOS and Linux. Each app-server filters its catalog and approved-tool list by host OS.
@@ -128,7 +131,7 @@
 - Added the optional v2 Tracking dashboard with seven-day subscription remaining history and daily model usage charts for duration or reported tokens. Main and subagent model calls are recorded in app-server SQLite schema 27; protocol v1.48 adds an authenticated history read route. Existing usage is not backfilled.
 - Added a Graphs feature card, disabled by default, and a centered New Research graph dropdown beneath a workspace heading. The dotted-underlined workspace name opens an in-place selector. Simple Orchestra uses clickable Rune nodes for Main Agent, Scout, Reviewer, and Prover. Node forms allow one main model and multiple subagent models; Main has a fixed concurrency maximum of 1 while subagent limits are optional. No Graph shows a single editable Main Agent node with the same fixed maximum and no delegation. Orchestra settings are saved when the session begins.
 - Added an Automations sidebar with Active, Future, and Past run sections. Repeated first turns save a job titled from the session; Future details can skip one occurrence or cancel its series. The desktop updates run status while the view is open and opens completed runs in their sessions.
-- Fleet VM cards now save an enabled toggle, workspace scope, and separate Can Run and Can Clone allowances; both allowances default off.
+- Fleet VM cards now save an enabled toggle, workspace scope, and a Can Run allowance that defaults off.
 - Fleet now lists Hyper-V virtual machines detected by each reachable Windows app-server, with host, state, source, and generation in VM cards.
 - Fleet browser cards show their Source in the stat rows and a star for the host's preferred browser. Each app-server initially prefers its OS default browser when available and saves explicit choices in SQLite schema 20; protocol v1.40 carries the preference.
 - Fleet browser cards now offer enabled toggles and per-browser workspace selection; detected and manually added browsers default to enabled for all workspaces.
@@ -361,6 +364,7 @@
 
 #### Changed
 
+- Protocol 2.29 names the Windows base command tool `powershell`; update connected desktops and app-servers together. Existing stock Windows system prompts upgrade automatically; edited prompts receive runtime shell guidance. No database migration is required.
 - V2 Goal Mode, Fleet, and Tracking crates move into the app-server harness and remain compiled without default Cargo features. Host routes and sessions ignore their legacy Feature enablement and scope. Fleet and Tracking remain authenticated; Goal Mode adds `goal_status` only to active goal turns. No database migration is required.
 - V2 Findings validation evidence must now come from a successful `read`, `bash`, or verified `findings_verify` call made after the Candidate was recorded and, in Research Pipelines, by the Validation role or its subagents. Completion records a SHA-256 digest of each cited result, and saved tool calls record their completion time and agent role for the binding.
 - V2 host storage is owner-scoped. `beale-storage` keeps only host tables; Findings, Runbooks, Fleet, Tracking, Goal Mode, Memories (extraction queue), and Graphs own their tables, apply their own migrations at host start, and are absent from builds without the feature. Feature rows saved with a turn commit through turn extensions in the same transaction, and peer graph turns record their role on the host turn. Migration: this is a clean cut with no upgrade path; the app-server refuses a `state.sqlite` from an earlier v2 development build and leaves it unchanged, so move it aside or delete it before starting.
@@ -405,7 +409,7 @@
 - Protocol v1.47 adds per-role Max Concurrent values to graph session requests and details and limits Simple Orchestra's main role to one model and a fixed concurrency maximum of 1. SQLite schema 26 stores the graph configuration atomically with the first turn; existing graph selections retain their ID and model choices. Graphs starts disabled and checks workspace scope.
 - SQLite schema 24 stores OpenAI session replay context, including encrypted reasoning and compaction items, atomically with completed turns.
 - Protocol v1.44 adds automation run status to authenticated listing. SQLite schema 23 stores saved run options and occurrence history; existing jobs keep their schedule with default effort and Goal Mode options. The app-server executes due jobs in separate sessions, recovers interrupted runs, and skips older missed occurrences. Rebuild clients and hosts together.
-- Protocol v1.42 adds authenticated VM settings updates and returns host-saved scope and allowances in inventory. SQLite schema 21 stores the settings with Can Run and Can Clone off by default; rebuild connected clients and hosts together.
+- Authenticated VM settings updates return host-saved workspace scope and Can Run in inventory. Can Run defaults off; rebuild connected clients and hosts together.
 - Protocol v1.41 adds authenticated, read-only Hyper-V VM inventory on Windows hosts; other hosts return an empty inventory. Rebuild connected desktops and app-servers together.
 - Added a Windows notification-area icon for the v2 app-server using the Beale logo, with running status and a graceful Exit action.
 - Added protocol v1.35 workspace scope fields and authenticated Plugin and Feature scope updates; SQLite schema 16 persists selections and keeps a restricted scope restricted when a workspace is removed. Goal Mode checks its scope before starting or resuming and pauses active goals outside it.

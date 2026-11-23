@@ -253,7 +253,6 @@ async fn list_virtual_machines(
         machine.all_workspaces = settings.all_workspaces;
         machine.workspace_ids = settings.workspace_ids;
         machine.can_run = settings.can_run;
-        machine.can_clone = settings.can_clone;
     }
     let response = FleetVirtualMachinesResponse { virtual_machines };
     Ok((
@@ -312,7 +311,6 @@ fn save_virtual_machine_settings(
             all_workspaces: request.all_workspaces,
             workspace_ids: request.workspace_ids,
             can_run: request.can_run,
-            can_clone: request.can_clone,
         },
     )
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -745,7 +743,7 @@ mod tests {
     }
 
     #[test]
-    fn virtual_machine_settings_require_a_detected_id_and_persist_allowances() {
+    fn virtual_machine_settings_require_a_detected_id_and_persist_run_allowance() {
         let root = std::env::temp_dir().join(format!("beale-vm-example-{}", uuid::Uuid::new_v4()));
         let db = HostDatabase::open(&root).unwrap();
         crate::migrate(&db).unwrap();
@@ -760,7 +758,6 @@ mod tests {
             all_workspaces: true,
             workspace_ids: Vec::new(),
             can_run: false,
-            can_clone: false,
         }];
         assert_eq!(
             db.virtual_machine_settings(&id).unwrap(),
@@ -772,7 +769,6 @@ mod tests {
             all_workspaces: false,
             workspace_ids: vec![uuid::Uuid::nil().to_string()],
             can_run: true,
-            can_clone: false,
         };
         assert!(valid_virtual_machine_settings_request(&request));
         assert_eq!(
@@ -790,7 +786,7 @@ mod tests {
         let reopened = HostDatabase::open(&root).unwrap();
         crate::migrate(&reopened).unwrap();
         let saved = reopened.virtual_machine_settings(&id).unwrap();
-        assert!(saved.enabled && saved.can_run && !saved.can_clone);
+        assert!(saved.enabled && saved.can_run);
         assert!(!saved.all_workspaces);
         assert_eq!(saved.workspace_ids, request.workspace_ids);
         drop(reopened);

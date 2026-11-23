@@ -588,7 +588,19 @@ pub(crate) async fn run_one_turn(
     }
     let workspace = state.workspaces.directory(&request.workspace_id)?;
     let workspace_details = state.workspaces.details_for_host(&request.workspace_id)?;
-    let fleet_prompt_note = fleet_prompt_note(&state.db)?;
+    let mut fleet_prompt_note = fleet_prompt_note(&state.db)?;
+    if let Some(machines) = beale_fleet::machine_prompt_note(&state.db, &request.workspace_id)
+        .await
+        .map_err(|_| TurnError::Internal)?
+    {
+        match &mut fleet_prompt_note {
+            Some(note) => {
+                note.push_str("\n\n");
+                note.push_str(&machines);
+            }
+            None => fleet_prompt_note = Some(machines),
+        }
+    }
     let surface_tools_enabled = surface_feature_enabled(&state.db, &request.workspace_id)?;
     let memories_tools_enabled = memories_feature_enabled(&state.db, &request.workspace_id)?;
     #[cfg(not(feature = "memories"))]

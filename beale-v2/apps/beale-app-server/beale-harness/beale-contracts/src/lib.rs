@@ -1702,8 +1702,6 @@ pub mod v1 {
         pub workspace_ids: Vec<String>,
         #[prost(bool, tag = "9")]
         pub can_run: bool,
-        #[prost(bool, tag = "10")]
-        pub can_clone: bool,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1724,8 +1722,6 @@ pub mod v1 {
         pub workspace_ids: Vec<String>,
         #[prost(bool, tag = "5")]
         pub can_run: bool,
-        #[prost(bool, tag = "6")]
-        pub can_clone: bool,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1788,8 +1784,23 @@ mod fleet_allowed_tools_tests {
     }
 }
 
+#[cfg(test)]
+mod fleet_virtual_machine_tests {
+    use super::v1::{FleetSetVirtualMachineSettingsRequest, FleetVirtualMachine};
+    use prost::Message;
+
+    #[test]
+    fn removed_clone_tags_are_ignored_and_not_emitted() {
+        let machine = FleetVirtualMachine::decode([0x50, 0x01].as_slice()).unwrap();
+        assert!(machine.encode_to_vec().is_empty());
+        let request =
+            FleetSetVirtualMachineSettingsRequest::decode([0x30, 0x01].as_slice()).unwrap();
+        assert!(request.encode_to_vec().is_empty());
+    }
+}
+
 pub const PROTOCOL_MAJOR: u32 = 2;
-pub const PROTOCOL_MINOR: u32 = 27;
+pub const PROTOCOL_MINOR: u32 = 29;
 pub const SERVICE_NAME: &str = "beale-app-server";
 pub const HEALTH_PATH: &str = "/v1/health";
 pub const AUTH_STATUS_PATH: &str = "/v1/providers/status";

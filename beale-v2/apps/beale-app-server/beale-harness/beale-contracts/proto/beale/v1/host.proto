@@ -1024,7 +1024,7 @@ message FleetVirtualMachine {
   bool all_workspaces = 7;
   repeated string workspace_ids = 8;
   bool can_run = 9;
-  bool can_clone = 10;
+  reserved 10;
 }
 
 message FleetVirtualMachinesResponse {
@@ -1037,7 +1037,7 @@ message FleetSetVirtualMachineSettingsRequest {
   bool all_workspaces = 3;
   repeated string workspace_ids = 4;
   bool can_run = 5;
-  bool can_clone = 6;
+  reserved 6;
 }
 
 message FleetResearchTool {

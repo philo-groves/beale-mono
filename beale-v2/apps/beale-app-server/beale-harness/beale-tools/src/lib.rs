@@ -17,11 +17,17 @@ pub use redact::Redactor;
 
 pub const MAX_RESULT_BYTES: usize = 8_000_000;
 const MAX_INPUT_BYTES: usize = 8_000_000;
-pub const DEFAULT_BASH_TIMEOUT_SECONDS: u64 = 120;
-pub const MAX_BASH_TIMEOUT_SECONDS: u64 = 600;
-pub const MAX_BASH_COMMAND_BYTES: usize = 16_384;
+pub const DEFAULT_COMMAND_TIMEOUT_SECONDS: u64 = 120;
+pub const MAX_COMMAND_TIMEOUT_SECONDS: u64 = 600;
+pub const MAX_COMMAND_BYTES: usize = 16_384;
+pub const COMMAND_TOOL_NAME: &str = if cfg!(windows) { "powershell" } else { "bash" };
+const COMMAND_DESCRIPTION: &str = if cfg!(windows) {
+    "Run a PowerShell command on this host, or on an approved Hyper-V guest when machine is set to its Fleet VM ID. Guest commands start in the SSH user's directory. Set timeout_seconds for long operations; default 120 seconds."
+} else {
+    "Run a Bash command in the workspace with the current user's host privileges. Set timeout_seconds for long operations; default 120 seconds."
+};
 
-/// The bounded result of a contained bash command.
+/// The bounded result of a contained shell command.
 pub struct CommandOutput {
     pub success: bool,
     pub exit_code: Option<i32>,
@@ -39,36 +45,74 @@ impl CommandOutput {
     }
 }
 
-/// Runs a bash command in the workspace with the tool environment. A timeout,
+/// Runs the host platform's command shell in the workspace. A timeout,
 /// oversized output, or dropped future ends the command's whole process tree;
 /// background processes started by a command that exits normally keep running.
-pub async fn run_bash(
+pub async fn run_command(
     command: &str,
     workspace: &Path,
     timeout_seconds: u64,
 ) -> Result<CommandOutput> {
     ensure!(
-        (1..=MAX_BASH_TIMEOUT_SECONDS).contains(&timeout_seconds),
-        "invalid bash timeout_seconds"
+        (1..=MAX_COMMAND_TIMEOUT_SECONDS).contains(&timeout_seconds),
+        "invalid command timeout_seconds"
     );
     ensure!(
-        !command.trim().is_empty() && command.len() <= MAX_BASH_COMMAND_BYTES,
+        !command.trim().is_empty() && command.len() <= MAX_COMMAND_BYTES,
         "invalid command"
     );
-    let mut process = process::contained_command(bash_executable());
+    #[cfg(windows)]
+    let process = {
+        let system_root =
+            std::env::var_os("SystemRoot").context("Windows system root unavailable")?;
+        let executable = PathBuf::from(system_root)
+            .join("System32")
+            .join("WindowsPowerShell")
+            .join("v1.0")
+            .join("powershell.exe");
+        ensure!(executable.is_file(), "Windows PowerShell unavailable");
+        let mut process = process::contained_command(executable);
+        process.args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command"]);
+        process.arg(powershell_script(command));
+        process
+    };
+    #[cfg(not(windows))]
+    let process = {
+        let mut process = process::contained_command(bash_executable());
+        process.arg("-lc").arg(command);
+        process
+    };
+    run_contained_process(process, workspace, timeout_seconds).await
+}
+
+/// Script wrapper shared with the Windows guest command path.
+pub fn powershell_script(command: &str) -> String {
+    format!(
+        "$ErrorActionPreference = 'Stop'; [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false);\n{command}\nif ($null -ne $LASTEXITCODE) {{ exit $LASTEXITCODE }}"
+    )
+}
+
+/// Collect bounded output from a process made with `contained_command`.
+pub async fn run_contained_process(
+    mut process: Command,
+    workspace: &Path,
+    timeout_seconds: u64,
+) -> Result<CommandOutput> {
+    ensure!(
+        (1..=MAX_COMMAND_TIMEOUT_SECONDS).contains(&timeout_seconds),
+        "invalid command timeout_seconds"
+    );
     process
-        .arg("-lc")
-        .arg(command)
         .current_dir(workspace)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     #[cfg(windows)]
     enable_git_long_paths(&mut process);
-    let mut child = process.spawn().context("start bash")?;
+    let mut child = process.spawn().context("start command")?;
     let tree = process::ProcessTree::attach(&child);
-    let stdout = child.stdout.take().context("bash stdout unavailable")?;
-    let stderr = child.stderr.take().context("bash stderr unavailable")?;
+    let stdout = child.stdout.take().context("command stdout unavailable")?;
+    let stderr = child.stderr.take().context("command stderr unavailable")?;
     let collect = async {
         let mut out = Vec::new();
         let mut err = Vec::new();
@@ -81,20 +125,20 @@ pub async fn run_bash(
         while !out_done || !err_done {
             tokio::select! {
                 count = stdout.read(&mut out_buffer), if !out_done => {
-                    let count = count.context("read bash stdout")?;
+                    let count = count.context("read command stdout")?;
                     if count == 0 { out_done = true; } else { out.extend_from_slice(&out_buffer[..count]); }
                 }
                 count = stderr.read(&mut err_buffer), if !err_done => {
-                    let count = count.context("read bash stderr")?;
+                    let count = count.context("read command stderr")?;
                     if count == 0 { err_done = true; } else { err.extend_from_slice(&err_buffer[..count]); }
                 }
             }
             ensure!(
                 out.len().saturating_add(err.len()) <= MAX_RESULT_BYTES,
-                "bash output is too large"
+                "command output is too large"
             );
         }
-        let status = child.wait().await.context("wait for bash")?;
+        let status = child.wait().await.context("wait for command")?;
         Ok::<_, anyhow::Error>(CommandOutput {
             success: status.success(),
             exit_code: status.code(),
@@ -105,7 +149,7 @@ pub async fn run_bash(
     };
     let output = timeout(Duration::from_secs(timeout_seconds), collect)
         .await
-        .with_context(|| format!("bash timed out after {timeout_seconds} seconds"))??;
+        .with_context(|| format!("command timed out after {timeout_seconds} seconds"))??;
     tree.release();
     Ok(output)
 }
@@ -140,14 +184,14 @@ pub fn definitions() -> Vec<Value> {
         json!({"type":"function","name":"read","description":"Read a UTF-8 file. Use offset and limit to read a large file by line.","parameters":{"type":"object","properties":{"path":{"type":"string"},"offset":{"type":"integer","minimum":1},"limit":{"type":"integer","minimum":1,"maximum":2000}},"required":["path"],"additionalProperties":false}}),
         json!({"type":"function","name":"write","description":"Write a UTF-8 file, creating parent directories if needed.","parameters":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"],"additionalProperties":false}}),
         json!({"type":"function","name":"edit","description":"Replace exactly one occurrence of old_text in a UTF-8 file.","parameters":{"type":"object","properties":{"path":{"type":"string"},"old_text":{"type":"string"},"new_text":{"type":"string"}},"required":["path","old_text","new_text"],"additionalProperties":false}}),
-        json!({"type":"function","name":"bash","description":"Run a bash command in the workspace with the current user's host privileges. Set timeout_seconds for long operations such as repository cloning; default 120 seconds.","parameters":{"type":"object","properties":{"command":{"type":"string"},"timeout_seconds":{"type":"integer","minimum":1,"maximum":600}},"required":["command"],"additionalProperties":false}}),
+        json!({"type":"function","name":COMMAND_TOOL_NAME,"description":COMMAND_DESCRIPTION,"parameters":{"type":"object","properties":{"command":{"type":"string"},"timeout_seconds":{"type":"integer","minimum":1,"maximum":600},"machine":{"type":"string","description":"Optional approved Fleet VM ID on Windows. Omit to run on this host."}},"required":["command"],"additionalProperties":false}}),
     ]
 }
 
 pub fn summary(name: &str, args: &Value) -> String {
     let value = match name {
         "read" | "write" | "edit" => args.get("path").and_then(Value::as_str),
-        "bash" => args.get("command").and_then(Value::as_str),
+        name if name == COMMAND_TOOL_NAME => args.get("command").and_then(Value::as_str),
         _ => None,
     }
     .unwrap_or("");
@@ -156,7 +200,12 @@ pub fn summary(name: &str, args: &Value) -> String {
         "read" => format!("Read {short}"),
         "write" => format!("Write {short}"),
         "edit" => format!("Edit {short}"),
-        "bash" => format!("Run {short}"),
+        name if name == COMMAND_TOOL_NAME => {
+            args.get("machine").and_then(Value::as_str).map_or_else(
+                || format!("Run {short}"),
+                |machine| format!("Run on {machine}: {short}"),
+            )
+        }
         "plugin_call" => format!(
             "Plugin {}: {}",
             args.get("plugin").and_then(Value::as_str).unwrap_or(""),
@@ -261,7 +310,7 @@ pub async fn execute(
                 .len();
             ensure!(
                 size <= MAX_INPUT_BYTES as u64,
-                "file is too large; use bash to select a bounded range"
+                "file is too large; use the command tool to select a bounded range"
             );
             let content = tokio::fs::read_to_string(path).await.context("read file")?;
             let offset = args.get("offset").and_then(Value::as_u64).unwrap_or(1);
@@ -332,14 +381,18 @@ pub async fn execute(
                 .context("edit file")?;
             Ok(success(format!("Edited {}", required(args, "path")?)))
         }
-        "bash" => {
+        name if name == COMMAND_TOOL_NAME => {
+            ensure!(
+                args.get("machine").is_none(),
+                "machine requires Fleet dispatch"
+            );
             let command = required(args, "command")?;
             let timeout_seconds = args
                 .get("timeout_seconds")
-                .map_or(Ok(DEFAULT_BASH_TIMEOUT_SECONDS), |value| {
-                    value.as_u64().context("invalid bash timeout_seconds")
+                .map_or(Ok(DEFAULT_COMMAND_TIMEOUT_SECONDS), |value| {
+                    value.as_u64().context("invalid command timeout_seconds")
                 })?;
-            let output = run_bash(command, workspace, timeout_seconds).await?;
+            let output = run_command(command, workspace, timeout_seconds).await?;
             Ok(ToolOutcome {
                 output: output.transcript(),
                 is_error: !output.success,
@@ -377,7 +430,7 @@ pub fn model_preview(value: &str, files: &AgentFiles) -> String {
         tail_start += 1;
     }
     let location = match files.write(&format!("results/{}.txt", uuid::Uuid::new_v4()), value.as_bytes()) {
-        Ok(path) => format!("Full output: {}. Read it with read (line offset/limit), or use bash to select a bounded range.", serde_json::to_string(&path.to_string_lossy()).unwrap_or_default()),
+        Ok(path) => format!("Full output: {}. Read it with read (line offset/limit), or use {COMMAND_TOOL_NAME} to select a bounded range.", serde_json::to_string(&path.to_string_lossy()).unwrap_or_default()),
         Err(_) => "Could not save the full output to a temporary file. Full output remains in the session tool details.".to_owned(),
     };
     format!(
@@ -399,7 +452,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn bash_timeout_is_bounded_before_process_start() {
+    async fn command_timeout_is_bounded_before_process_start() {
         let definition = definitions().pop().unwrap();
         assert_eq!(
             definition["parameters"]["properties"]["timeout_seconds"]["maximum"],
@@ -407,7 +460,7 @@ mod tests {
         );
         for seconds in [0, 601] {
             let error = execute(
-                "bash",
+                COMMAND_TOOL_NAME,
                 &json!({"command":"printf example","timeout_seconds":seconds}),
                 Path::new("."),
                 Path::new("."),
@@ -421,11 +474,26 @@ mod tests {
 
     #[test]
     fn base_tools_and_extension_arguments_have_bounded_contracts() {
-        let names = definitions()
-            .into_iter()
+        let tools = definitions();
+        let names = tools
+            .iter()
             .filter_map(|item| item["name"].as_str().map(str::to_owned))
             .collect::<Vec<_>>();
-        assert_eq!(names, ["read", "write", "edit", "bash"]);
+        assert_eq!(names, ["read", "write", "edit", COMMAND_TOOL_NAME]);
+        assert_eq!(
+            COMMAND_TOOL_NAME,
+            if cfg!(windows) { "powershell" } else { "bash" }
+        );
+        assert!(
+            tools[3]["description"]
+                .as_str()
+                .unwrap()
+                .contains(if cfg!(windows) { "PowerShell" } else { "Bash" })
+        );
+        assert_eq!(
+            tools[3]["parameters"]["properties"]["machine"]["type"],
+            "string"
+        );
         assert!(
             serde_json::from_value::<PluginCallArgs>(
                 json!({"plugin":"example","server":"main","tool":"read","arguments":{}})
@@ -572,19 +640,15 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg_attr(
-        windows,
-        ignore = "requires Windows process access outside restricted sandbox"
-    )]
-    async fn bash_executes_in_workspace() {
-        let root = std::env::temp_dir().join(format!("beale-bash-example-{}", Uuid::new_v4()));
+    async fn command_executes_in_workspace() {
+        let root = std::env::temp_dir().join(format!("beale-command-example-{}", Uuid::new_v4()));
         let workspace = root.join("workspace");
         let host = root.join("host");
         tokio::fs::create_dir_all(&workspace).await.unwrap();
         tokio::fs::create_dir_all(&host).await.unwrap();
         let outcome = execute(
-            "bash",
-            &json!({"command":"printf example"}),
+            COMMAND_TOOL_NAME,
+            &json!({"command":if cfg!(windows) { "Write-Output example" } else { "printf example" }}),
             &workspace,
             &host,
         )
@@ -592,18 +656,52 @@ mod tests {
         .unwrap();
         assert!(!outcome.is_error, "{}", outcome.output);
         assert!(outcome.output.contains("example"));
-        let failed = execute("bash", &json!({"command":"exit 7"}), &workspace, &host)
+        let failed = execute(
+            COMMAND_TOOL_NAME,
+            &json!({"command":"exit 7"}),
+            &workspace,
+            &host,
+        )
+        .await
+        .unwrap();
+        assert!(failed.is_error);
+        #[cfg(windows)]
+        {
+            let failed_native = execute(
+                COMMAND_TOOL_NAME,
+                &json!({"command":"cmd.exe /c exit 7"}),
+                &workspace,
+                &host,
+            )
             .await
             .unwrap();
-        assert!(failed.is_error);
+            assert!(failed_native.is_error);
+        }
         tokio::fs::remove_dir_all(root).await.unwrap();
     }
 
     #[tokio::test]
-    async fn bash_does_not_inherit_credential_variables() {
-        let root = std::env::temp_dir().join(format!("beale-bash-env-{}", Uuid::new_v4()));
+    async fn machine_argument_cannot_fall_back_to_host_execution() {
+        let result = execute(
+            COMMAND_TOOL_NAME,
+            &json!({"command":"exit 0","machine":"hyper-v:00000000-0000-4000-8000-000000000001"}),
+            Path::new("."),
+            Path::new("."),
+        )
+        .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn command_does_not_inherit_credential_variables() {
+        let root = std::env::temp_dir().join(format!("beale-command-env-{}", Uuid::new_v4()));
         tokio::fs::create_dir_all(&root).await.unwrap();
-        let output = run_bash("env", &root, 30).await.unwrap();
+        let command = if cfg!(windows) {
+            r#"Get-ChildItem Env: | ForEach-Object { "$($_.Name)=$($_.Value)" }"#
+        } else {
+            "env"
+        };
+        let output = run_command(command, &root, 30).await.unwrap();
         assert!(output.success, "{}", output.stderr);
         for line in output.stdout.lines() {
             let name = line.split('=').next().unwrap_or_default();
@@ -616,10 +714,11 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(unix)]
     async fn bash_timeout_ends_background_descendants() {
         let root = std::env::temp_dir().join(format!("beale-bash-tree-{}", Uuid::new_v4()));
         tokio::fs::create_dir_all(&root).await.unwrap();
-        let timed_out = run_bash(
+        let timed_out = run_command(
             "sleep 30 >/dev/null 2>&1 & echo $! > child.pid; wait",
             &root,
             2,
@@ -630,7 +729,7 @@ mod tests {
         let pid = tokio::fs::read_to_string(root.join("child.pid"))
             .await
             .unwrap();
-        let check = run_bash(
+        let check = run_command(
             &format!(
                 "kill -0 {} 2>/dev/null && echo alive || echo gone",
                 pid.trim()
@@ -645,14 +744,15 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(unix)]
     async fn normal_exit_keeps_background_processes() {
         let root = std::env::temp_dir().join(format!("beale-bash-release-{}", Uuid::new_v4()));
         tokio::fs::create_dir_all(&root).await.unwrap();
-        let started = run_bash("sleep 30 >/dev/null 2>&1 & echo $!", &root, 10)
+        let started = run_command("sleep 30 >/dev/null 2>&1 & echo $!", &root, 10)
             .await
             .unwrap();
         let pid = started.stdout.trim().to_owned();
-        let check = run_bash(
+        let check = run_command(
             &format!(
                 "kill -0 {pid} 2>/dev/null && echo alive || echo gone; kill {pid} 2>/dev/null; true"
             ),

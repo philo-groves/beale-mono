@@ -105,7 +105,6 @@ pub(crate) struct VirtualMachineMutation {
     pub(crate) all_workspaces: bool,
     pub(crate) workspace_ids: Vec<String>,
     pub(crate) can_run: bool,
-    pub(crate) can_clone: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1120,7 +1119,6 @@ pub(crate) async fn mutate_virtual_machine(action: VirtualMachineMutation) -> Re
         all_workspaces: action.all_workspaces,
         workspace_ids: action.workspace_ids,
         can_run: action.can_run,
-        can_clone: action.can_clone,
     };
     let response = client
         .post(format!("{base}{FLEET_VIRTUAL_MACHINE_SETTINGS_PATH}"))

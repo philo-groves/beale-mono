@@ -42,7 +42,7 @@ pub const FEATURE: beale_feature_api::Feature = beale_feature_api::Feature {
     migrations: MIGRATIONS,
     startup: &[],
 };
-pub const PROMPT_EXTENSION: &str = "## Findings\n\nUse Candidate for a specific hypothesis. A finding may cover multiple surfaces; keep its summary concise. Record root_cause and attack_path as they become supported, and remediation when known. Complete Validated only after evidence establishes the behavior; name and describe the validation method, record its result and limitations, cite the exact Finding evidence reference returned by a successful workspace read, bash, or verified findings_verify result produced after the Candidate was recorded, and record counter_evidence when present. Evidence gathered before the Candidate existed cannot validate it. When a reproducible proof exists, use findings_verify: the host reruns the command twice in fresh processes and records whether a deterministic oracle (exit code or output text) held each time; the oracle text must come from the target's behavior, not the command itself. Verification is recorded on the finding but is not required for every validation. Complete Screened only after recording root_cause and all attack_path.reachability details, assigning integer impact_score and reachability_score values from 0 to 100 in the screened state, and checking validation quality, accepted risks or known issues, and scope/reportability. Set known_issue_review, scope_review, and validation_review on the screened state, not validated. Higher scores mean greater impact or easier reachability; they are assessments, not probabilities. Prepare a triage-facing, machine-agnostic PoC and report only after Screened. Draft finding or state details with findings_update, then use findings_complete_state; it reports missing fields. Rejected records a reason without discarding earlier state. A state object is not a completed status until its completion passes the predecessor check.";
+pub const PROMPT_EXTENSION: &str = "## Findings\n\nUse Candidate for a specific hypothesis. A finding may cover multiple surfaces; keep its summary concise. Record root_cause and attack_path as they become supported, and remediation when known. Complete Validated only after evidence establishes the behavior; name and describe the validation method, record its result and limitations, cite the exact Finding evidence reference returned by a successful workspace read, host command, or verified findings_verify result produced after the Candidate was recorded, and record counter_evidence when present. Evidence gathered before the Candidate existed cannot validate it. When a reproducible proof exists, use findings_verify: the host reruns the command twice in fresh processes and records whether a deterministic oracle (exit code or output text) held each time; the oracle text must come from the target's behavior, not the command itself. Verification is recorded on the finding but is not required for every validation. Complete Screened only after recording root_cause and all attack_path.reachability details, assigning integer impact_score and reachability_score values from 0 to 100 in the screened state, and checking validation quality, accepted risks or known issues, and scope/reportability. Set known_issue_review, scope_review, and validation_review on the screened state, not validated. Higher scores mean greater impact or easier reachability; they are assessments, not probabilities. Prepare a triage-facing, machine-agnostic PoC and report only after Screened. Draft finding or state details with findings_update, then use findings_complete_state; it reports missing fields. Rejected records a reason without discarding earlier state. A state object is not a completed status until its completion passes the predecessor check.";
 
 const QUERY: &str = "findings_query";
 const READ: &str = "findings_read";
@@ -112,7 +112,7 @@ pub fn definitions() -> Vec<Value> {
         json!({"type":"function","name":READ,"description":"Read a finding. Pass history_offset (starting at 0) to include one newest-first revision; omit it for the current record only.","parameters":{"type":"object","properties":{"id":{"type":"string"},"history_offset":{"type":"integer","minimum":0}},"required":["id"],"additionalProperties":false}}),
         json!({"type":"function","name":CREATE,"description":"Create a Candidate finding with a concise summary, concrete hypothesis, and optional surface IDs, root cause, attack path, and remediation.","parameters":{"type":"object","properties":{"title":{"type":"string"},"summary":{"type":"string"},"surface_ids":{"type":"array","items":{"type":"string"}},"root_cause":{"type":"object","properties":{"summary":{"type":"string"},"evidence_refs":{"type":"array","items":{"type":"object","properties":{"kind":{"type":"string","enum":["tool_call","artifact","surface","document","url","other"]},"reference":{"type":"string"},"note":{"type":"string"}},"required":["kind","reference"],"additionalProperties":false}}},"required":["summary","evidence_refs"],"additionalProperties":false},"attack_path":attack_path_schema,"remediation":{"type":"string"},"hypothesis":{"type":"string"}},"required":["title","summary","hypothesis"],"additionalProperties":false}}),
         json!({"type":"function","name":UPDATE,"description":"Revise finding metadata or one state object. Set state to finding, candidate, validated, screened, or reported. Supply a complete root_cause or attack_path object when setting it. State-specific fields are listed in patch; only fields belonging to the selected state are accepted. Reported PoC details require completed screening.","parameters":{"type":"object","properties":{"id":{"type":"string"},"expected_revision":{"type":"integer","minimum":1},"state":{"type":"string","enum":["finding","candidate","validated","screened","reported"]},"patch":patch_schema,"reason":{"type":"string"}},"required":["id","expected_revision","state","patch","reason"],"additionalProperties":false}}),
-        json!({"type":"function","name":COMPLETE,"description":"Complete Validated, Screened, or Reported in order. Returns missing state details when incomplete. Validation evidence must cite successful read, bash, or verified findings_verify calls in this workspace made after the Candidate was recorded. Screening requires root_cause, complete attack_path.reachability details, and impact_score and reachability_score integers from 0 to 100.","parameters":{"type":"object","properties":{"id":{"type":"string"},"expected_revision":{"type":"integer","minimum":1},"state":{"type":"string","enum":["validated","screened","reported"]}},"required":["id","expected_revision","state"],"additionalProperties":false}}),
+        json!({"type":"function","name":COMPLETE,"description":"Complete Validated, Screened, or Reported in order. Returns missing state details when incomplete. Validation evidence must cite successful read, host command, or verified findings_verify calls in this workspace made after the Candidate was recorded. Screening requires root_cause, complete attack_path.reachability details, and impact_score and reachability_score integers from 0 to 100.","parameters":{"type":"object","properties":{"id":{"type":"string"},"expected_revision":{"type":"integer","minimum":1},"state":{"type":"string","enum":["validated","screened","reported"]}},"required":["id","expected_revision","state"],"additionalProperties":false}}),
         json!({"type":"function","name":VERIFY,"description":"Rerun a reproducible proof command for a Candidate or Validated finding twice in fresh workspace processes with the current user's host privileges, and record whether the oracle held on every run. Oracle kinds: exit_code (value integer), exit_nonzero, stdout_contains, stderr_contains, output_contains (value text). Oracle text must not appear in the command. A verified result is citable as validation evidence.","parameters":{"type":"object","properties":{"id":{"type":"string"},"expected_revision":{"type":"integer","minimum":1},"command":{"type":"string"},"oracle":{"type":"object","properties":{"kind":{"type":"string","enum":["exit_code","exit_nonzero","stdout_contains","stderr_contains","output_contains"]},"value":{"type":["integer","string"]}},"required":["kind"],"additionalProperties":false},"timeout_seconds":{"type":"integer","minimum":1,"maximum":600}},"required":["id","expected_revision","command","oracle"],"additionalProperties":false}}),
         json!({"type":"function","name":REJECT,"description":"Reject a finding from its current state with a reason and optional typed evidence_refs, retaining prior state objects.","parameters":{"type":"object","properties":{"id":{"type":"string"},"expected_revision":{"type":"integer","minimum":1},"reason":{"type":"string"},"evidence_refs":{"type":"array","items":{"type":"object","properties":{"kind":{"type":"string","enum":["tool_call","artifact","surface","document","url","other"]},"reference":{"type":"string"},"note":{"type":"string"}},"required":["kind","reference"],"additionalProperties":false}}},"required":["id","expected_revision","reason"],"additionalProperties":false}}),
     ]
@@ -1887,6 +1887,33 @@ mod tests {
     }
 
     #[test]
+    fn successful_powershell_output_can_validate_a_finding() {
+        let (root, db, id) = evidence_fixture();
+        let created_at = db
+            .finding_get("workspace-example", &id)
+            .unwrap()
+            .unwrap()
+            .created_at_ms as i64;
+        let pending = [PendingSource {
+            id: "tool-evidence",
+            name: "powershell",
+            output: "Synthetic observed response",
+            is_error: false,
+            agent_role: "main",
+            created_at_ms: created_at + 1,
+        }];
+        let result = execute_with(
+            &db,
+            COMPLETE,
+            &json!({"id":id,"expected_revision":2,"state":"validated"}),
+            &pending,
+        );
+        assert!(result.is_ok(), "{result:?}");
+        drop(db);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn verification_requests_reject_oracles_copied_from_the_command() {
         let base = json!({"id":"F1","expected_revision":1,"command":"./example-proof --input example.test"});
         let with = |oracle: Value| {
@@ -1950,7 +1977,7 @@ mod tests {
         check_verifiable(&db, &context, &request).unwrap();
         let failed = vec![
             VerifyRun::observe(&request.oracle, Some(1), "", "example-report", 4),
-            VerifyRun::failed("bash timed out after 120 seconds", 120_000),
+            VerifyRun::failed("command timed out after 120 seconds", 120_000),
         ];
         let (output, verified) =
             record_verification(&db, &context, &request, "tool-unverified", "main", failed)

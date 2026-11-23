@@ -484,7 +484,11 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
     };
     let description = match state.permissions_tab {
         PermissionTab::AutoReview => {
-            "The configured small model reviews read, write, edit, and Bash calls before execution."
+            if cfg!(windows) {
+                "The configured small model reviews read, write, edit, and PowerShell calls before execution."
+            } else {
+                "The configured small model reviews read, write, edit, and Bash calls before execution."
+            }
         }
         PermissionTab::Guardian => {
             "After an Auto-Review denial, the lead model can review the same call once."

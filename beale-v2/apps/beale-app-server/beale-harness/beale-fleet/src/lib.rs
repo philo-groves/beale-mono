@@ -1,6 +1,7 @@
 //! Fleet feature metadata and authenticated host descriptor.
 
 mod browsers;
+mod execution;
 mod store;
 pub use store::{
     BrowserSettings, FleetStore, MIGRATIONS, ManualBrowserRow, VirtualMachineSettings, migrate,
@@ -9,6 +10,7 @@ mod http;
 mod research_tools;
 mod resources;
 mod virtual_machines;
+pub use execution::{machine_prompt_note, run_machine_command};
 pub use http::router;
 pub use research_tools::{allowed_tools, prompt_note};
 
@@ -24,7 +26,7 @@ pub const FEATURE: beale_feature_api::Feature = beale_feature_api::Feature {
     name: FEATURE_NAME,
     description: FEATURE_DESCRIPTION,
     prompt_extension: PROMPT_EXTENSION,
-    use_case: "Use approved research tools where allowed during this workspace's research.",
+    use_case: "Use approved research tools and running Hyper-V guests where allowed.",
     tool_names: &[],
     definitions: None,
     review: beale_feature_api::ToolReview::Exempt,

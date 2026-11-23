@@ -1673,7 +1673,7 @@ fn tool_series_kind(tool: &SessionToolSummary) -> Option<&'static str> {
         "read" => Some("read"),
         "write" => Some("write"),
         "edit" => Some("edit"),
-        "bash" => Some("bash"),
+        "bash" | "powershell" => Some("command"),
         "webfetch" => webfetch_input(tool).map(|(kind, _)| kind),
         "surface_query" => Some("surface_query"),
         "surface_read" => Some("surface_read"),
@@ -1935,7 +1935,7 @@ fn tool_single_label(tool: &SessionToolSummary, active: bool) -> String {
         "read" => ("Reading", "Read", "Read "),
         "write" => ("Writing", "Wrote", "Write "),
         "edit" => ("Editing", "Edited", "Edit "),
-        "bash" => ("Running", "Ran", "Run "),
+        "bash" | "powershell" => ("Running", "Ran", "Run "),
         _ => {
             return if active {
                 format!("{}…", tool.summary)
@@ -1978,7 +1978,7 @@ fn combined_tool_series_label(tools: &[&SessionToolSummary], active: bool) -> St
                 "read" => ("Reading", "Read", "file", "files"),
                 "write" => ("Writing", "Wrote", "file", "files"),
                 "edit" => ("Editing", "Edited", "file", "files"),
-                "bash" => ("Running", "Ran", "command", "commands"),
+                "command" => ("Running", "Ran", "command", "commands"),
                 "webfetch.query" => ("Web searching", "Web searched", "query", "queries"),
                 "webfetch.url" => ("Web viewing", "Web viewed", "page", "pages"),
                 "surface_query" => (
@@ -2155,7 +2155,7 @@ pub(crate) fn transcript_tool_series(
                 })
                 .child(
                     icon(
-                        if first.name == "bash" {
+                        if matches!(first.name.as_str(), "bash" | "powershell") {
                             &TERMINAL
                         } else {
                             &WRENCH
@@ -2222,7 +2222,7 @@ fn transcript_tool_view(
                 .on_press(move |state: &mut State| toggle_tool_detail(state, id.clone()))
                 .child(
                     icon(
-                        if tool.name == "bash" {
+                        if matches!(tool.name.as_str(), "bash" | "powershell") {
                             &TERMINAL
                         } else {
                             &WRENCH
@@ -3544,6 +3544,14 @@ mod tests {
                 "Run cargo check",
                 "Running cargo check",
                 "Ran cargo check",
+                "Running 2 commands",
+                "Ran 2 commands",
+            ),
+            (
+                "powershell",
+                "Run Get-Process",
+                "Running Get-Process",
+                "Ran Get-Process",
                 "Running 2 commands",
                 "Ran 2 commands",
             ),

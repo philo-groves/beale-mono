@@ -11,7 +11,7 @@ use beale_storage::{
 use std::collections::HashSet;
 
 /// Ordered schema versions for this feature's tables.
-pub const MIGRATIONS: &[&str] = &[V1];
+pub const MIGRATIONS: &[&str] = &[V1, V2];
 
 const V1: &str = "
 CREATE TABLE fleet_totp_secret (
@@ -58,6 +58,8 @@ CREATE TABLE fleet_research_tool_settings (
 );
 ";
 
+const V2: &str = "ALTER TABLE fleet_vm_settings DROP COLUMN can_clone;";
+
 /// Creates or upgrades this feature's tables.
 pub fn migrate(db: &HostDatabase) -> Result<()> {
     db.migrate_schema(crate::FEATURE_ID, MIGRATIONS)
@@ -83,7 +85,6 @@ pub struct VirtualMachineSettings {
     pub all_workspaces: bool,
     pub workspace_ids: Vec<String>,
     pub can_run: bool,
-    pub can_clone: bool,
 }
 
 impl Default for VirtualMachineSettings {
@@ -93,7 +94,6 @@ impl Default for VirtualMachineSettings {
             all_workspaces: true,
             workspace_ids: Vec::new(),
             can_run: false,
-            can_clone: false,
         }
     }
 }
@@ -302,11 +302,11 @@ impl FleetStore for HostDatabase {
 
     fn virtual_machine_settings(&self, id: &str) -> Result<VirtualMachineSettings> {
         self.with_connection(|connection| {
-            let Some((enabled, all_workspaces, can_run, can_clone)) = connection
+            let Some((enabled, all_workspaces, can_run)) = connection
                 .query_row(
-                    "SELECT enabled, all_workspaces, can_run, can_clone FROM fleet_vm_settings WHERE vm_id = ?1",
+                    "SELECT enabled, all_workspaces, can_run FROM fleet_vm_settings WHERE vm_id = ?1",
                     [id],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
                 )
                 .optional()?
             else {
@@ -321,7 +321,6 @@ impl FleetStore for HostDatabase {
                 all_workspaces,
                 workspace_ids: ids.collect::<rusqlite::Result<Vec<_>>>()?,
                 can_run,
-                can_clone,
             })
         })
     }
@@ -353,17 +352,16 @@ impl FleetStore for HostDatabase {
         self.with_connection(|connection| {
             let transaction = connection.transaction()?;
             transaction.execute(
-                "INSERT INTO fleet_vm_settings(vm_id, enabled, all_workspaces, can_run, can_clone)
-                 VALUES (?1, ?2, ?3, ?4, ?5)
+                "INSERT INTO fleet_vm_settings(vm_id, enabled, all_workspaces, can_run)
+                 VALUES (?1, ?2, ?3, ?4)
                  ON CONFLICT(vm_id) DO UPDATE SET enabled = excluded.enabled,
                      all_workspaces = excluded.all_workspaces,
-                     can_run = excluded.can_run, can_clone = excluded.can_clone",
+                     can_run = excluded.can_run",
                 params![
                     id,
                     settings.enabled,
                     settings.all_workspaces,
-                    settings.can_run,
-                    settings.can_clone
+                    settings.can_run
                 ],
             )?;
             transaction.execute(
@@ -438,7 +436,7 @@ mod tests {
     }
 
     #[test]
-    fn vm_allowances_default_off_and_persist_changes() {
+    fn vm_run_allowance_defaults_off_and_persists_changes() {
         let root = root();
         let migrated = open(&root);
         let id = "hyper-v:00000000-0000-4000-8000-000000000001";
@@ -451,7 +449,6 @@ mod tests {
             all_workspaces: false,
             workspace_ids: vec![uuid::Uuid::nil().to_string()],
             can_run: true,
-            can_clone: true,
         };
         migrated
             .set_virtual_machine_settings(id, &selected)
@@ -460,6 +457,46 @@ mod tests {
         let reopened = open(&root);
         assert_eq!(reopened.virtual_machine_settings(id).unwrap(), selected);
         drop(reopened);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn vm_settings_migration_removes_clone_allowance_and_preserves_run() {
+        let root = root();
+        let db = HostDatabase::open(&root).unwrap();
+        db.migrate_schema(crate::FEATURE_ID, &[V1]).unwrap();
+        let id = "hyper-v:00000000-0000-4000-8000-000000000001";
+        let workspace_id = uuid::Uuid::nil().to_string();
+        db.with_connection(|connection| {
+            connection.execute(
+                "INSERT INTO fleet_vm_settings(vm_id, enabled, all_workspaces, can_run, can_clone)
+                 VALUES (?1, 1, 0, 1, 1)",
+                [id],
+            )?;
+            connection.execute(
+                "INSERT INTO fleet_vm_workspace_scope(vm_id, workspace_id) VALUES (?1, ?2)",
+                params![id, &workspace_id],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        migrate(&db).unwrap();
+        assert_eq!(db.schema_version(crate::FEATURE_ID).unwrap(), 2);
+        let settings = db.virtual_machine_settings(id).unwrap();
+        assert!(settings.enabled && settings.can_run);
+        assert!(!settings.all_workspaces);
+        assert_eq!(settings.workspace_ids, vec![workspace_id]);
+        let clone_columns: i64 = db
+            .with_connection(|connection| {
+                Ok(connection.query_row(
+                    "SELECT count(*) FROM pragma_table_info('fleet_vm_settings') WHERE name = 'can_clone'",
+                    [],
+                    |row| row.get(0),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(clone_columns, 0);
+        drop(db);
         std::fs::remove_dir_all(root).unwrap();
     }
 
