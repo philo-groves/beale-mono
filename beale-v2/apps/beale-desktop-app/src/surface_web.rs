@@ -7,8 +7,8 @@ use std::collections::{HashMap, HashSet};
 const CELL_WIDTH: f32 = 360.0;
 const CELL_HEIGHT: f32 = 280.0;
 const WEB_CENTER_Y: f32 = 170.0;
-const VIEWPORT_TOP: f32 = 124.0;
-const VIEWPORT_BOTTOM: f32 = 72.0;
+const CONTENT_TOP_PADDING: f32 = 124.0;
+const CONTENT_BOTTOM_PADDING: f32 = 72.0;
 const SCROLL_KEY: &str = "workspace-surface-network-scroll";
 
 struct GraphLayout {
@@ -25,15 +25,35 @@ impl GraphLayout {
         let rows = count.div_ceil(columns);
         let world_width = columns as f32 * CELL_WIDTH;
         let world_height = rows as f32 * CELL_HEIGHT;
+        let available_height =
+            (viewport[1] - CONTENT_TOP_PADDING - CONTENT_BOTTOM_PADDING).max(120.0);
         Self {
             columns,
-            content_height: world_height.max(viewport[1]),
+            content_height: CONTENT_TOP_PADDING
+                + world_height.max(available_height)
+                + CONTENT_BOTTOM_PADDING,
             offset: [
                 (viewport[0] - world_width).max(0.0) / 2.0,
-                (viewport[1] - world_height).max(0.0) / 2.0,
+                CONTENT_TOP_PADDING + (available_height - world_height).max(0.0) / 2.0,
             ],
         }
     }
+}
+
+fn grid_guard(width: f32, page_height: f32, top: f32, height: f32, theme: ThemeStyle<'_>) -> El {
+    el().absolute(0.0, top)
+        .size(width, height)
+        .clip_rounded(0.0)
+        .fill(theme.color("#0d0d0d"))
+        .child(
+            canvas(crate::grid_background::dots(
+                width,
+                page_height,
+                theme.color("#303030").alpha(0.34),
+            ))
+            .absolute(0.0, -top)
+            .size(width, page_height),
+        )
 }
 
 fn detail(surface: &WorkspaceSurface) -> String {
@@ -59,7 +79,12 @@ fn marker(
 ) -> El {
     let surface = &state.workspace_surface_edits[index];
     let radius = if is_center { 8.0 } else { 6.0 };
-    let muted = theme.color("#969696");
+    let excluded = atlas::out_of_scope(surface);
+    let dot_color = if excluded {
+        theme.color("#e07676")
+    } else {
+        theme.color("#969696")
+    };
     el().key(format!("workspace-surface-web-node-{index}"))
         .role("button")
         .label(detail(surface))
@@ -68,10 +93,17 @@ fn marker(
         .size(24.0, 24.0)
         .center()
         .child(
-            el().size(radius * 2.0, radius * 2.0)
+            el().key(format!("workspace-surface-web-dot-{index}"))
+                .size(radius * 2.0, radius * 2.0)
                 .radius(radius)
-                .fill(muted.alpha(if is_center { 0.85 } else { 0.62 }))
-                .border(1.0, muted.alpha(0.6)),
+                .fill(dot_color.alpha(if is_center {
+                    0.85
+                } else if excluded {
+                    0.8
+                } else {
+                    0.62
+                }))
+                .border(1.0, dot_color.alpha(if excluded { 0.7 } else { 0.6 })),
         )
         .on_press_tx(move |state: &mut State, tx| {
             if let Some(source) = state.workspace_surface_connecting.take() {
@@ -133,23 +165,6 @@ fn title(state: &State, theme: ThemeStyle<'_>, index: usize, center_x: f32, top:
                 .min_h(32.0)
                 .px(8.0)
                 .center_y()
-                .radius(8.0)
-                .continuous_corners()
-                .border(
-                    1.0,
-                    if state.workspace_surface_hovered == Some(index) {
-                        theme.color("#969696").alpha(0.55)
-                    } else {
-                        Color::TRANSPARENT
-                    },
-                )
-                .on_hover_change(move |state: &mut State, inside, _| {
-                    if inside {
-                        state.workspace_surface_hovered = Some(index);
-                    } else if state.workspace_surface_hovered == Some(index) {
-                        state.workspace_surface_hovered = None;
-                    }
-                })
                 .on_press(move |state: &mut State| crate::surface_canvas::open(state, index))
                 .child(
                     rich(
@@ -197,7 +212,9 @@ pub(super) fn render(
             explorer,
         )
     } else {
-        (0..surfaces.len()).collect()
+        (0..surfaces.len())
+            .filter(|&index| explorer.show_out_of_scope || !atlas::out_of_scope(&surfaces[index]))
+            .collect()
     };
     let matching: HashSet<_> = matches.iter().copied().collect();
     let hierarchy = atlas::hierarchy(surfaces);
@@ -205,6 +222,9 @@ pub(super) fn render(
     for &index in &matching {
         let mut ancestor = hierarchy.parent[index];
         while let Some(parent) = ancestor {
+            if !explorer.show_out_of_scope && atlas::out_of_scope(&surfaces[parent]) {
+                break;
+            }
             if !branches.insert(parent) {
                 break;
             }
@@ -220,14 +240,14 @@ pub(super) fn render(
     let roots: Vec<_> = if let Some(index) = focused {
         vec![index]
     } else {
-        hierarchy
-            .roots
-            .iter()
-            .copied()
-            .filter(|index| branches.contains(index))
+        (0..surfaces.len())
+            .filter(|index| {
+                branches.contains(index)
+                    && hierarchy.parent[*index].is_none_or(|parent| !branches.contains(&parent))
+            })
             .collect()
     };
-    let viewport = [width, (height - VIEWPORT_TOP - VIEWPORT_BOTTOM).max(120.0)];
+    let viewport = [width, height];
     let layout = GraphLayout::new(roots.len(), viewport);
     let mut points = HashMap::new();
     let mut titles = Vec::new();
@@ -326,7 +346,7 @@ pub(super) fn render(
     let scroll_bar = scroll_watch.clone();
     let graph = el()
         .key("workspace-surface-network")
-        .absolute(0.0, VIEWPORT_TOP)
+        .absolute(0.0, 0.0)
         .size(viewport[0], viewport[1])
         .clip_rounded(0.0)
         .child(
@@ -352,6 +372,14 @@ pub(super) fn render(
                 })
                 .child(stage),
         )
+        .child(grid_guard(width, height, 0.0, CONTENT_TOP_PADDING, theme))
+        .child(grid_guard(
+            width,
+            height,
+            height - CONTENT_BOTTOM_PADDING,
+            CONTENT_BOTTOM_PADDING,
+            theme,
+        ))
         .child(scroll_bar.bar(theme));
     let mut page_el = el()
         .key("workspace-view-page")
@@ -473,7 +501,9 @@ pub(super) fn render(
                 .fill(theme.color("#0d0d0d"))
                 .border(1.0, theme.color("#2a2a2a").alpha(0.65))
                 .child(icon(&crate::icons::FILTER, 16.0).color(
-                    if state.workspace_surface_focus != Focus::All {
+                    if state.workspace_surface_focus != Focus::All
+                        || state.workspace_surface_explorer.show_out_of_scope
+                    {
                         theme.accent()
                     } else {
                         theme.color("#bdbdbd")

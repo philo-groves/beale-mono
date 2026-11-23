@@ -1227,7 +1227,7 @@ mod tests {
         let tabs = [
             "workspace-tab-surfaces",
             "workspace-tab-findings",
-            "workspace-tab-rules",
+            "workspace-tab-guidance",
         ];
         let positions = tabs.map(|key| runtime.presented(key).unwrap().0[0]);
         assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
@@ -1292,7 +1292,7 @@ mod tests {
                 (
                     "workspace-view-tabs",
                     "workspace-tab-surfaces",
-                    "workspace-tab-settings",
+                    "workspace-tab-identity",
                 ),
             ] {
                 let (group_rect, _) = runtime.presented(group).unwrap();
@@ -1313,8 +1313,8 @@ mod tests {
             ("findings-mode-ledger", "segmented-tab-icon-ledger"),
             ("findings-mode-plot", "segmented-tab-icon-plot"),
             ("workspace-tab-findings", "segmented-tab-icon-findings"),
-            ("workspace-tab-rules", "segmented-tab-icon-rules"),
-            ("workspace-tab-settings", "segmented-tab-icon-settings"),
+            ("workspace-tab-guidance", "segmented-tab-icon-guidance"),
+            ("workspace-tab-identity", "segmented-tab-icon-identity"),
         ] {
             let (button, _) = narrow.presented(button_key).unwrap();
             let (glyph, _) = narrow.presented(icon_key).unwrap();

@@ -690,6 +690,7 @@ struct State {
     workspace_create_error: String,
     workspace_id: Option<uuid::Uuid>,
     workspace_tab: workspace_view::WorkspaceTab,
+    workspace_guidance_view: workspace_view::GuidanceView,
     workspace_details: Option<WorkspaceDetails>,
     workspace_details_loading: bool,
     workspace_details_error: String,
@@ -707,7 +708,6 @@ struct State {
     workspace_surface_focus: workspace_surface_layout::Focus,
     workspace_surface_query: TextEdit,
     workspace_surface_explorer: workspace_surface_layout::Explorer,
-    workspace_surface_hovered: Option<usize>,
     workspace_surface_selected: Option<usize>,
     canvas_surface: surface_canvas::SurfaceCanvas,
     workspace_surface_connecting: Option<usize>,
@@ -980,6 +980,7 @@ impl Default for State {
             workspace_create_error: String::new(),
             workspace_id: None,
             workspace_tab: workspace_view::WorkspaceTab::default(),
+            workspace_guidance_view: workspace_view::GuidanceView::default(),
             workspace_details: None,
             workspace_details_loading: false,
             workspace_details_error: String::new(),
@@ -997,7 +998,6 @@ impl Default for State {
             workspace_surface_focus: workspace_surface_layout::Focus::All,
             workspace_surface_query: TextEdit::new(""),
             workspace_surface_explorer: workspace_surface_layout::Explorer::default(),
-            workspace_surface_hovered: None,
             workspace_surface_selected: None,
             canvas_surface: surface_canvas::SurfaceCanvas::default(),
             workspace_surface_connecting: None,
@@ -1337,6 +1337,7 @@ impl State {
                     self.research_workspace_view = Some((id, self.workspace_tab));
                 }
                 if self.workspace_id != Some(id) {
+                    self.workspace_guidance_view = workspace_view::GuidanceView::default();
                     if self.canvas_surface.active().is_some() {
                         self.canvas_open =
                             self.canvas_runbook.has_views() || self.canvas_subagent.is_some();
@@ -2126,7 +2127,6 @@ impl State {
                 self.workspace_surface_explorer = workspace_surface_layout::Explorer::default();
                 self.workspace_surface_graph_scroll =
                     SettingsScroll::for_key("workspace-surface-network-scroll");
-                self.workspace_surface_hovered = None;
                 surface_canvas::sync(self);
                 self.workspace_surface_connecting = None;
                 self.workspace_surface_relationship_target = None;
@@ -2159,7 +2159,7 @@ impl State {
         }
         self.workspace_save_busy = None;
         match result {
-            Ok(WorkspaceSaveResult::Foundation(saved)) => {
+            Ok(WorkspaceSaveResult::Foundation(saved, target)) => {
                 self.workspace_foundation_revision = saved.revision;
                 if let Some(details) = &mut self.workspace_details {
                     details.summary = saved.summary.clone();
@@ -2173,10 +2173,18 @@ impl State {
                     {
                         *item = summary.clone();
                     }
-                    self.workspace_name_edit = TextEdit::new(summary.name);
+                    if target == FoundationSaveTarget::Identity {
+                        self.workspace_name_edit = TextEdit::new(summary.name);
+                    }
                 }
-                self.workspace_guidance_edit = TextEdit::new(saved.guidance);
-                self.workspace_save_message = "Settings saved.".to_owned();
+                if target == FoundationSaveTarget::Agents {
+                    self.workspace_guidance_edit = TextEdit::new(saved.guidance);
+                }
+                self.workspace_save_message = match target {
+                    FoundationSaveTarget::Identity => "Identity saved.",
+                    FoundationSaveTarget::Agents => "AGENTS.md saved.",
+                }
+                .to_owned();
             }
             Ok(WorkspaceSaveResult::Surfaces(saved)) => {
                 self.workspace_surfaces_revision = saved.revision;
@@ -2887,10 +2895,42 @@ fn load_tool_detail_page(state: &mut State, id: String, offset: u64) {
     });
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FoundationSaveTarget {
+    Identity,
+    Agents,
+}
+
 enum WorkspaceSaveResult {
-    Foundation(WorkspaceFoundation),
+    Foundation(WorkspaceFoundation, FoundationSaveTarget),
     Surfaces(WorkspaceSurfaces),
     Rules(WorkspaceRules),
+}
+
+fn foundation_request(
+    state: &State,
+    target: FoundationSaveTarget,
+) -> UpdateWorkspaceFoundationRequest {
+    let details = state.workspace_details.as_ref().unwrap();
+    let current_name = details
+        .summary
+        .as_ref()
+        .map_or(state.workspace_name_edit.text.as_str(), |summary| {
+            summary.name.as_str()
+        });
+    UpdateWorkspaceFoundationRequest {
+        expected_revision: state.workspace_foundation_revision,
+        name: if target == FoundationSaveTarget::Identity {
+            state.workspace_name_edit.text.clone()
+        } else {
+            current_name.to_owned()
+        },
+        guidance: if target == FoundationSaveTarget::Agents {
+            state.workspace_guidance_edit.text.clone()
+        } else {
+            details.guidance.clone()
+        },
+    }
 }
 
 fn start_workspace_save(state: &mut State, tab: workspace_view::WorkspaceTab) {
@@ -2909,7 +2949,15 @@ fn start_workspace_save(state: &mut State, tab: workspace_view::WorkspaceTab) {
     ) {
         return;
     }
+    let foundation_target = if state.workspace_tab == workspace_view::WorkspaceTab::Rules
+        && state.workspace_guidance_view == workspace_view::GuidanceView::Agents
+    {
+        FoundationSaveTarget::Agents
+    } else {
+        FoundationSaveTarget::Identity
+    };
     if tab == workspace_view::WorkspaceTab::Foundation
+        && foundation_target == FoundationSaveTarget::Identity
         && state.workspace_name_edit.text.trim().is_empty()
     {
         state.workspace_save_error = "Workspace name is required.".to_owned();
@@ -2932,13 +2980,8 @@ fn start_workspace_save(state: &mut State, tab: workspace_view::WorkspaceTab) {
         state.workspace_save_error = "Desktop connection is not ready.".to_owned();
         return;
     };
-    let foundation = (tab == workspace_view::WorkspaceTab::Foundation).then(|| {
-        UpdateWorkspaceFoundationRequest {
-            expected_revision: state.workspace_foundation_revision,
-            name: state.workspace_name_edit.text.clone(),
-            guidance: state.workspace_guidance_edit.text.clone(),
-        }
-    });
+    let foundation = (tab == workspace_view::WorkspaceTab::Foundation)
+        .then(|| foundation_request(state, foundation_target));
     let surfaces =
         (tab == workspace_view::WorkspaceTab::Surfaces).then(|| UpdateWorkspaceSurfacesRequest {
             expected_revision: state.workspace_surfaces_revision,
@@ -2972,7 +3015,7 @@ fn start_workspace_save(state: &mut State, tab: workspace_view::WorkspaceTab) {
                 if let Some(request) = foundation {
                     workspaces::save_foundation(&client, addr, id, request)
                         .await
-                        .map(WorkspaceSaveResult::Foundation)
+                        .map(|saved| WorkspaceSaveResult::Foundation(saved, foundation_target))
                 } else if let Some(request) = surfaces {
                     workspaces::save_surfaces(&client, addr, id, request)
                         .await
@@ -3795,7 +3838,8 @@ fn choose_selection_menu_item(state: &mut State, menu: SelectionMenu, value: Str
         SelectionMenu::PluginWorkspaces { .. }
             | SelectionMenu::FeatureWorkspaces { .. }
             | SelectionMenu::VirtualMachineWorkspaces { .. }
-    ) {
+    ) && !(menu == SelectionMenu::SurfaceFilter && value == "show_out_of_scope")
+    {
         state.selection_menu = None;
     }
     match menu {
@@ -3978,10 +4022,12 @@ fn selection_menu_key(state: &mut State, event: &KeyEvent, tx: &mut Tx) -> bool 
                 Key::End => last,
                 _ => state.menu_cursor.min(last),
             };
-            tx.scroll_into_view_in(
-                "selection-menu-scroll",
-                format!("selection-menu-item-{}", state.menu_cursor),
-            );
+            if !(menu == SelectionMenu::SurfaceFilter && state.menu_cursor == 4) {
+                tx.scroll_into_view_in(
+                    "selection-menu-scroll",
+                    format!("selection-menu-item-{}", state.menu_cursor),
+                );
+            }
             true
         }
         Key::Enter => {
@@ -11763,7 +11809,7 @@ active_runbook_count: 0,
             if compact {
                 for (button, key) in [
                     (graph, "segmented-tab-icon-graph"),
-                    (inventory, "segmented-tab-icon-inventory"),
+                    (inventory, "segmented-tab-icon-list"),
                 ] {
                     let (glyph, _) = runtime.presented(key).unwrap();
                     assert_eq!(button[2], design::CONTROL_HEIGHT);
@@ -11845,16 +11891,60 @@ active_runbook_count: 0,
                 .is_empty()
         );
         assert!(runtime.find("workspace-surface-web-title-3").is_some());
-        let (x, y) = runtime.find("workspace-surface-web-title-0").unwrap();
-        runtime.pointer_move(x, y);
-        runtime.frame(1.0 / 60.0);
-        assert_eq!(runtime.state.workspace_surface_hovered, Some(0));
-        runtime.pointer_move(700.0, 700.0);
-        runtime.frame(1.0 / 60.0);
-        assert_eq!(runtime.state.workspace_surface_hovered, None);
         click(&mut runtime, "workspace-surface-web-title-0");
         assert_eq!(runtime.state.canvas_surface.active(), Some("S1"));
         assert!(runtime.state.canvas_open);
+    }
+
+    #[test]
+    fn excluded_surface_web_dots_use_the_title_color() {
+        let mut state = visual_preview::fixture("surfaces-web");
+        state.workspace_surface_explorer.show_out_of_scope = true;
+        state.workspace_surface_edits[1]
+            .definition
+            .as_mut()
+            .unwrap()
+            .scope = beale_contracts::v1::SurfaceScope::OutOfScope as i32;
+        let theme = state.appearance.style();
+        let red = theme.color("#e07676").alpha(0.8);
+        let muted = theme.color("#969696").alpha(0.85);
+        let mut runtime = Runtime::new(state, view, (1440.0, 960.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        for (key, expected) in [
+            ("workspace-surface-web-dot-0", muted),
+            ("workspace-surface-web-dot-1", red),
+        ] {
+            let dot = runtime
+                .elements()
+                .into_iter()
+                .find(|element| element.key.as_deref() == Some(key))
+                .unwrap();
+            assert_eq!(dot.fill, expected, "{key}");
+        }
+    }
+
+    #[test]
+    fn surface_web_keeps_visible_children_of_hidden_parents_reachable() {
+        let mut state = visual_preview::fixture("surfaces-web");
+        state.workspace_surface_edits[0]
+            .definition
+            .as_mut()
+            .unwrap()
+            .scope = beale_contracts::v1::SurfaceScope::OutOfScope as i32;
+        let mut runtime = Runtime::new(state, view, (1440.0, 960.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        assert!(runtime.find("workspace-surface-web-title-0").is_none());
+        assert!(runtime.find("workspace-surface-web-title-1").is_some());
+        let (x, y) = runtime.find("workspace-surface-filter-control").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
+        let (x, y) = runtime.find("workspace-surface-show-out-of-scope").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
+        assert!(runtime.find("workspace-surface-web-title-0").is_some());
+        assert!(runtime.find("workspace-surface-web-node-1").is_some());
     }
 
     #[test]
@@ -11875,6 +11965,12 @@ active_runbook_count: 0,
         assert!(runtime.find("workspace-surface-bound-bottom").is_none());
         assert!(runtime.find("workspace-surface-bound-left").is_none());
         assert!(runtime.find("workspace-surface-bound-top").is_none());
+        let (page, _) = runtime.presented("workspace-view-page").unwrap();
+        let (graph, _) = runtime.presented("workspace-surface-network").unwrap();
+        assert_eq!(graph, page, "the dot grid fills the main content area");
+        let (heading, _) = runtime.presented("workspace-view-title").unwrap();
+        let (first_web, _) = runtime.presented("workspace-surface-web-title-0").unwrap();
+        assert!(first_web[1] >= heading[1] + heading[3] + 12.0);
         let scroll = runtime.state.workspace_surface_graph_scroll.position();
         assert!(scroll.max[1] > 0.0);
         assert!(runtime.state.workspace_surface_graph_scroll.metrics().1 > 0.0);
@@ -11897,6 +11993,9 @@ active_runbook_count: 0,
             .presented("workspace-surface-network-scroll")
             .unwrap();
         assert!(title[1] >= viewport[1] && title[1] < viewport[1] + viewport[3]);
+        let (last_node, _) = runtime.presented("workspace-surface-web-node-9").unwrap();
+        let (footer, _) = runtime.presented("workspace-surface-actions").unwrap();
+        assert!(last_node[1] + last_node[3] + 12.0 <= footer[1]);
         runtime.pointer_down(track[0] + track[2] / 2.0, track[1] + 6.0);
         runtime.pointer_up(track[0] + track[2] / 2.0, track[1] + 6.0);
         runtime.frame(1.0);
@@ -12018,8 +12117,8 @@ active_runbook_count: 0,
         assert!(runtime.find("workspace-campaign-empty").is_none());
         for key in [
             "workspace-tab-surfaces",
-            "workspace-tab-settings",
-            "workspace-tab-rules",
+            "workspace-tab-identity",
+            "workspace-tab-guidance",
         ] {
             assert!(runtime.find(key).is_some(), "{key}");
             let (button, _) = runtime.presented(key).unwrap();
@@ -12028,8 +12127,8 @@ active_runbook_count: 0,
         }
         let tab_positions = [
             "workspace-tab-surfaces",
-            "workspace-tab-rules",
-            "workspace-tab-settings",
+            "workspace-tab-guidance",
+            "workspace-tab-identity",
         ]
         .map(|key| runtime.presented(key).unwrap().0[0]);
         assert!(tab_positions.windows(2).all(|pair| pair[0] < pair[1]));
@@ -12100,14 +12199,14 @@ active_runbook_count: 0,
                 "Example Workspace Findings",
             ),
             (
-                "workspace-tab-rules",
+                "workspace-tab-guidance",
                 "saved-workspace-rules-form",
-                "Example Workspace Rules",
+                "Example Workspace Guidance",
             ),
             (
-                "workspace-tab-settings",
+                "workspace-tab-identity",
                 "saved-workspace-details-form",
-                "Example Workspace Settings",
+                "Example Workspace Identity",
             ),
         ] {
             let (x, y) = loaded.find(tab).unwrap();
@@ -12309,7 +12408,25 @@ active_runbook_count: 0,
                         .find("saved-workspace-surface-delete-dialog")
                         .is_none()
                 );
-            } else if tab == "workspace-tab-rules" {
+            } else if tab == "workspace-tab-guidance" {
+                let (title, _) = loaded.presented("workspace-view-title").unwrap();
+                let (toggle, _) = loaded.presented("workspace-guidance-view-toggle").unwrap();
+                assert!(title[0] + title[2] < toggle[0]);
+                assert_eq!(
+                    loaded.state.workspace_guidance_view,
+                    workspace_view::GuidanceView::Rules
+                );
+                assert!(loaded.find("saved-workspace-guidance-input").is_none());
+                let (x, y) = loaded.find("workspace-guidance-agents").unwrap();
+                loaded.pointer_down(x, y);
+                loaded.pointer_up(x, y);
+                loaded.frame(1.0 / 60.0);
+                assert!(loaded.find("saved-workspace-guidance-input").is_some());
+                assert!(loaded.find("saved-workspace-rules-form").is_none());
+                let (x, y) = loaded.find("workspace-guidance-rules").unwrap();
+                loaded.pointer_down(x, y);
+                loaded.pointer_up(x, y);
+                loaded.frame(1.0 / 60.0);
                 assert!(loaded.find("saved-workspace-rule-editor").is_none());
                 assert!(loaded.find("saved-workspace-rule-input").is_none());
                 let (x, y) = loaded.find("saved-workspace-add-rule").unwrap();
@@ -12353,7 +12470,7 @@ active_runbook_count: 0,
         assert!(loaded.find("saved-workspace-name-value").is_some());
         assert!(loaded.find("saved-workspace-name-input").is_none());
         assert!(loaded.find("saved-workspace-directory-edit").is_none());
-        assert!(loaded.find("saved-workspace-guidance-input").is_some());
+        assert!(loaded.find("saved-workspace-guidance-input").is_none());
         assert!(loaded.find("saved-workspace-save-disabled").is_some());
         let (x, y) = loaded.find("saved-workspace-name-edit").unwrap();
         loaded.pointer_down(x, y);
@@ -12381,14 +12498,161 @@ active_runbook_count: 0,
         edited.state.finish_workspace_save(
             id,
             workspace_view::WorkspaceTab::Foundation,
-            Ok(WorkspaceSaveResult::Foundation(WorkspaceFoundation {
-                summary: Some(saved_summary),
-                guidance: "Use only example.test.\n".to_owned(),
-                revision: 2,
-            })),
+            Ok(WorkspaceSaveResult::Foundation(
+                WorkspaceFoundation {
+                    summary: Some(saved_summary),
+                    guidance: "Use only example.test.\n".to_owned(),
+                    revision: 2,
+                },
+                FoundationSaveTarget::Identity,
+            )),
         );
         assert_eq!(edited.state.workspace_foundation_revision, 2);
         assert_eq!(edited.state.workspaces[0].name, "Renamed Example Workspace");
+    }
+
+    #[test]
+    fn workspace_identity_and_agents_saves_keep_other_pending_edits() {
+        let id = uuid::Uuid::parse_str("00000000-0000-4000-8000-000000000020").unwrap();
+        let summary = WorkspaceSummary {
+            id: id.to_string(),
+            name: "Example Workspace".to_owned(),
+            directory: "/example/workspace".to_owned(),
+        };
+        let mut state = State {
+            workspace_id: Some(id),
+            workspaces: vec![summary.clone()],
+            workspace_details: Some(WorkspaceDetails {
+                summary: Some(summary.clone()),
+                guidance: "Saved instructions".to_owned(),
+                ..Default::default()
+            }),
+            workspace_foundation_revision: 1,
+            workspace_name_edit: TextEdit::new("Pending name"),
+            workspace_guidance_edit: TextEdit::new("Pending instructions"),
+            ..State::default()
+        };
+        let identity = foundation_request(&state, FoundationSaveTarget::Identity);
+        assert_eq!(identity.name, "Pending name");
+        assert_eq!(identity.guidance, "Saved instructions");
+        let agents = foundation_request(&state, FoundationSaveTarget::Agents);
+        assert_eq!(agents.name, "Example Workspace");
+        assert_eq!(agents.guidance, "Pending instructions");
+
+        state.workspace_save_busy = Some(workspace_view::WorkspaceTab::Foundation);
+        state.finish_workspace_save(
+            id,
+            workspace_view::WorkspaceTab::Foundation,
+            Ok(WorkspaceSaveResult::Foundation(
+                WorkspaceFoundation {
+                    summary: Some(summary.clone()),
+                    guidance: "Pending instructions".to_owned(),
+                    revision: 2,
+                },
+                FoundationSaveTarget::Agents,
+            )),
+        );
+        assert_eq!(state.workspace_name_edit.text, "Pending name");
+        assert_eq!(state.workspace_save_message, "AGENTS.md saved.");
+
+        state.workspace_guidance_edit = TextEdit::new("Another pending instruction");
+        state.workspace_save_busy = Some(workspace_view::WorkspaceTab::Foundation);
+        state.finish_workspace_save(
+            id,
+            workspace_view::WorkspaceTab::Foundation,
+            Ok(WorkspaceSaveResult::Foundation(
+                WorkspaceFoundation {
+                    summary: Some(WorkspaceSummary {
+                        name: "Pending name".to_owned(),
+                        ..summary
+                    }),
+                    guidance: "Pending instructions".to_owned(),
+                    revision: 3,
+                },
+                FoundationSaveTarget::Identity,
+            )),
+        );
+        assert_eq!(
+            state.workspace_guidance_edit.text,
+            "Another pending instruction"
+        );
+        assert_eq!(state.workspace_save_message, "Identity saved.");
+    }
+
+    #[test]
+    fn workspace_guidance_subviews_keep_their_own_save_state() {
+        let state = visual_preview::fixture("rules");
+        let mut runtime = Runtime::new(state, view, (1440.0, 900.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        let (rules, _) = runtime.presented("workspace-guidance-rules").unwrap();
+        let (agents, _) = runtime.presented("workspace-guidance-agents").unwrap();
+        let (toggle, _) = runtime.presented("workspace-guidance-view-toggle").unwrap();
+        let (add, _) = runtime.presented("saved-workspace-add-rule").unwrap();
+        assert!(rules[0] + rules[2] <= agents[0]);
+        assert!(toggle[0] + toggle[2] < add[0]);
+        assert!(
+            !runtime
+                .elements()
+                .iter()
+                .any(|element| element.text.as_deref() == Some("Workspace Rules"))
+        );
+        let click = |runtime: &mut Runtime<State>, key: &str| {
+            let (x, y) = runtime.find(key).unwrap();
+            runtime.pointer_down(x, y);
+            runtime.pointer_up(x, y);
+            runtime.frame(1.0);
+        };
+        assert!(runtime.find("saved-workspace-rules-form").is_some());
+        click(&mut runtime, "workspace-guidance-agents");
+        assert!(runtime.find("saved-workspace-guidance-form").is_some());
+        assert!(runtime.find("saved-workspace-guidance-input").is_some());
+        assert!(runtime.find("saved-workspace-rules-form").is_none());
+        assert!(runtime.find("saved-workspace-add-rule").is_none());
+        let (label, _) = runtime.presented("saved-workspace-guidance-label").unwrap();
+        let (description, _) = runtime
+            .presented("saved-workspace-guidance-description")
+            .unwrap();
+        let (input, _) = runtime.presented("saved-workspace-guidance-input").unwrap();
+        assert!(label[1] + label[3] <= description[1]);
+        assert!(description[1] + description[3] < input[1]);
+        runtime.update(|state, _| {
+            state.workspace_guidance_edit = TextEdit::new("Revised example instructions");
+        });
+        runtime.frame(0.0);
+        assert!(runtime.find("saved-workspace-save").is_some());
+        click(&mut runtime, "workspace-tab-identity");
+        assert!(runtime.find("saved-workspace-guidance-input").is_none());
+        assert!(runtime.find("saved-workspace-save-disabled").is_some());
+        click(&mut runtime, "workspace-tab-guidance");
+        assert!(runtime.find("saved-workspace-guidance-input").is_some());
+        assert!(runtime.find("saved-workspace-save").is_some());
+    }
+
+    #[test]
+    fn workspace_guidance_rules_are_flat_and_header_controls_fit_narrow_windows() {
+        let mut state = visual_preview::fixture("rules");
+        state
+            .workspace_rule_edits
+            .push("Keep example records separate.".to_owned());
+        let mut runtime = Runtime::new(state, view, (840.0, 600.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        let (page, _) = runtime.presented("workspace-view-page").unwrap();
+        let (list, _) = runtime.presented("saved-workspace-rules-form").unwrap();
+        let (first, _) = runtime.presented("saved-workspace-rule-0").unwrap();
+        let (divider, _) = runtime
+            .presented("saved-workspace-rule-separator-1")
+            .unwrap();
+        let (second, _) = runtime.presented("saved-workspace-rule-1").unwrap();
+        assert_eq!(list[0], page[0]);
+        assert_eq!(list[2], page[2]);
+        assert!(first[1] + first[3] <= divider[1]);
+        assert!(divider[1] + divider[3] <= second[1]);
+        let (toggle, _) = runtime.presented("workspace-guidance-view-toggle").unwrap();
+        let (add, _) = runtime.presented("saved-workspace-add-rule").unwrap();
+        let (tabs, _) = runtime.presented("workspace-view-tabs").unwrap();
+        assert!(toggle[0] + toggle[2] < add[0]);
+        assert!(add[0] + add[2] < tabs[0]);
+        assert!((toggle[1] + toggle[3] / 2.0 - add[1] - add[3] / 2.0).abs() < 1.0);
     }
 
     #[test]
@@ -12417,6 +12681,7 @@ active_runbook_count: 0,
     fn surface_connections_return_to_inventory_page_and_view_tabs_exit_focus() {
         for (width, height) in [(840.0, 600.0), (1440.0, 960.0)] {
             let mut state = visual_preview::fixture("surfaces-dense");
+            state.workspace_surface_explorer.show_out_of_scope = true;
             let template = state.workspace_surface_edits[0].clone();
             for i in 40..65 {
                 let mut record = template.clone();
@@ -12510,8 +12775,50 @@ active_runbook_count: 0,
     }
 
     #[test]
+    fn surface_list_has_readable_flat_rows_at_wide_and_narrow_widths() {
+        for (width, row_height) in [(1440.0, 76.0), (840.0, 84.0)] {
+            let state = visual_preview::fixture("surface-manage");
+            let mut runtime = Runtime::new(state, view, (width, 800.0), Env::new(true, 1.0));
+            runtime.frame(0.0);
+            if width > 1000.0 {
+                assert!(
+                    runtime
+                        .elements()
+                        .iter()
+                        .any(|element| element.text.as_deref() == Some("List"))
+                );
+            }
+            assert!(
+                !runtime
+                    .elements()
+                    .iter()
+                    .any(|element| element.text.as_deref() == Some("Surface / locator"))
+            );
+            let (first, _) = runtime.presented("workspace-surface-row-0").unwrap();
+            let (divider, _) = runtime
+                .presented("workspace-surface-list-separator-1")
+                .unwrap();
+            let (second, _) = runtime.presented("workspace-surface-row-1").unwrap();
+            let (name, _) = runtime
+                .presented("workspace-surface-inventory-name-0")
+                .unwrap();
+            let (meta, _) = runtime.presented("workspace-surface-list-meta-0").unwrap();
+            let (connections, _) = runtime
+                .presented("workspace-surface-neighborhood-0")
+                .unwrap();
+            assert_eq!(first[3], row_height);
+            assert!(first[1] + first[3] <= divider[1]);
+            assert!(divider[1] + divider[3] <= second[1]);
+            assert!(name[1] + name[3] <= meta[1]);
+            assert!(meta[0] + meta[2] <= connections[0]);
+            assert!(runtime.find("workspace-surface-list-separator-0").is_none());
+        }
+    }
+
+    #[test]
     fn surface_inventory_pages_searches_and_opens_recorded_neighborhoods() {
         let mut state = visual_preview::fixture("surfaces-dense");
+        state.workspace_surface_explorer.show_out_of_scope = true;
         let template = state.workspace_surface_edits[0].clone();
         for i in 40..620 {
             let mut record = template.clone();
@@ -12607,28 +12914,54 @@ active_runbook_count: 0,
         assert!(view_toggle[0] + view_toggle[2] < add[0]);
         assert!(add[0] + add[2] < workspace_tabs[0]);
         assert!(((view_toggle[1] + view_toggle[3] / 2.0) - (add[1] + add[3] / 2.0)).abs() < 1.0);
+        assert!(!runtime.state.workspace_surface_explorer.show_out_of_scope);
+        assert!(runtime.find("workspace-surface-web-node-4").is_none());
         click(&mut runtime, "workspace-surface-filter-control");
         assert_eq!(
             runtime.state.selection_menu,
             Some(SelectionMenu::SurfaceFilter)
         );
         let options = selection_menu_items(&runtime.state, SelectionMenu::SurfaceFilter);
-        assert_eq!(options.len(), 4);
+        assert_eq!(options.len(), 5);
         assert_eq!(options[1].label, "Needs review (3)");
+        assert_eq!(options[4].label, "Show excluded");
+        assert!(!options[4].selected);
         let (sort, _) = runtime.presented("workspace-surface-sort").unwrap();
         let (top_divider, _) = runtime
             .presented("workspace-surface-filter-top-divider")
             .unwrap();
         let (first_filter, _) = runtime.presented("selection-menu-item-0").unwrap();
         let (last_filter, _) = runtime.presented("selection-menu-item-3").unwrap();
+        let (scope_divider, _) = runtime
+            .presented("workspace-surface-filter-scope-divider")
+            .unwrap();
+        let (show_out_of_scope, _) = runtime
+            .presented("workspace-surface-show-out-of-scope")
+            .unwrap();
         let (bottom_divider, _) = runtime
             .presented("workspace-surface-filter-bottom-divider")
             .unwrap();
         let (search, _) = runtime.presented("workspace-surface-search").unwrap();
         assert!(sort[1] + sort[3] < top_divider[1]);
         assert!(top_divider[1] < first_filter[1]);
-        assert!(last_filter[1] + last_filter[3] < bottom_divider[1]);
+        assert!(last_filter[1] + last_filter[3] < scope_divider[1]);
+        assert!(scope_divider[1] < show_out_of_scope[1]);
+        assert!(show_out_of_scope[1] + show_out_of_scope[3] < bottom_divider[1]);
         assert!(bottom_divider[1] < search[1]);
+        click(&mut runtime, "workspace-surface-show-out-of-scope");
+        assert!(runtime.state.workspace_surface_explorer.show_out_of_scope);
+        assert_eq!(
+            runtime.state.selection_menu,
+            Some(SelectionMenu::SurfaceFilter)
+        );
+        assert!(runtime.find("workspace-surface-web-node-4").is_some());
+        click(&mut runtime, "workspace-surface-show-out-of-scope");
+        assert!(!runtime.state.workspace_surface_explorer.show_out_of_scope);
+        assert!(runtime.find("workspace-surface-web-node-4").is_none());
+        assert_eq!(
+            runtime.state.selection_menu,
+            Some(SelectionMenu::SurfaceFilter)
+        );
         click(&mut runtime, "selection-menu-item-1");
         assert_eq!(runtime.state.workspace_surface_focus, Focus::Review);
         assert!(runtime.presented("workspace-surface-web-title-0").is_none());
@@ -12656,6 +12989,16 @@ active_runbook_count: 0,
         assert!(runtime.find("saved-workspace-save").is_none());
 
         click(&mut runtime, "workspace-surface-filter-control");
+        click(&mut runtime, "selection-menu-item-3");
+        assert_eq!(runtime.state.workspace_surface_focus, Focus::Excluded);
+        assert!(runtime.state.workspace_surface_explorer.show_out_of_scope);
+        click(&mut runtime, "workspace-surface-filter-control");
+        click(&mut runtime, "workspace-surface-show-out-of-scope");
+        assert_eq!(runtime.state.workspace_surface_focus, Focus::All);
+        assert!(!runtime.state.workspace_surface_explorer.show_out_of_scope);
+        click(&mut runtime, "workspace-surface-filter-control");
+
+        click(&mut runtime, "workspace-surface-filter-control");
         click(&mut runtime, "workspace-surface-sort");
         assert_eq!(
             runtime.state.workspace_surface_explorer.sort,
@@ -12673,6 +13016,34 @@ active_runbook_count: 0,
         let (menu, _) = narrow.presented("selection-menu").unwrap();
         assert!(menu[0] >= 0.0 && menu[0] + menu[2] <= 840.0);
         assert!(menu[1] >= 0.0 && menu[1] + menu[3] <= 600.0);
+    }
+
+    #[test]
+    fn surface_inventory_hides_out_of_scope_until_enabled() {
+        let mut state = visual_preview::fixture("surfaces");
+        state.workspace_surface_explorer.view = Some(workspace_surface_layout::View::Inventory);
+        let mut runtime = Runtime::new(state, view, (1440.0, 960.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        assert!(runtime.find("workspace-surface-row-0").is_some());
+        assert!(runtime.find("workspace-surface-row-4").is_none());
+        assert!(runtime.find("workspace-surface-row-6").is_none());
+        assert!(
+            runtime
+                .elements()
+                .iter()
+                .any(|el| el.text.as_deref() == Some("6 / 8 surfaces"))
+        );
+        let (x, y) = runtime.find("workspace-surface-filter-control").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
+        for visible in [true, false] {
+            let (x, y) = runtime.find("workspace-surface-show-out-of-scope").unwrap();
+            runtime.pointer_down(x, y);
+            runtime.pointer_up(x, y);
+            runtime.frame(1.0);
+            assert_eq!(runtime.find("workspace-surface-row-4").is_some(), visible);
+        }
     }
 
     #[test]
@@ -14131,7 +14502,7 @@ active_runbook_count: 0,
         for (scene, keys) in [
             (
                 "findings",
-                ["workspace-view-tabs", "workspace-tab-settings"],
+                ["workspace-view-tabs", "workspace-tab-identity"],
             ),
             (
                 "custom",

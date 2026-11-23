@@ -26,9 +26,9 @@ use crate::{
     FormSpec, SelectionMenu, State, ThemeStyle, ViewLocation, form_button,
     form_controls::icon_action_button,
     form_label_font,
-    icons::{FINDINGS, PEN, PLUS, SAFETY, SETTINGS, TARGET, TRASH, WORKSPACE_SURFACES},
-    modal_dialog, selection_button, settings_form, settings_form_card, settings_form_with_action,
-    toggle_selection_menu, ui_font, view_title_font,
+    icons::{EVIDENCE, FINDINGS, PEN, PLUS, SAFETY, SETTINGS, TARGET, TRASH, WORKSPACE_SURFACES},
+    modal_dialog, selection_button, settings_form, settings_form_card, toggle_selection_menu,
+    ui_font, view_title_font,
     workspace_creation::{
         SurfaceKind as DraftKind, SurfaceScope as DraftScope, display_directory, field,
         row_with_control, value_with_actions,
@@ -58,8 +58,8 @@ impl WorkspaceTab {
             Self::Campaign => "Campaign",
             Self::Surfaces => "Surfaces",
             Self::Findings => "Findings",
-            Self::Rules => "Rules",
-            Self::Foundation => "Settings",
+            Self::Rules => "Guidance",
+            Self::Foundation => "Identity",
         }
     }
 
@@ -68,9 +68,84 @@ impl WorkspaceTab {
             Self::Campaign => "workspace-tab-campaign",
             Self::Surfaces => "workspace-tab-surfaces",
             Self::Findings => "workspace-tab-findings",
-            Self::Rules => "workspace-tab-rules",
-            Self::Foundation => "workspace-tab-settings",
+            Self::Rules => "workspace-tab-guidance",
+            Self::Foundation => "workspace-tab-identity",
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum GuidanceView {
+    Agents,
+    #[default]
+    Rules,
+}
+
+impl GuidanceView {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Agents => "AGENTS.md",
+            Self::Rules => "Rules",
+        }
+    }
+
+    fn key(self) -> &'static str {
+        match self {
+            Self::Agents => "workspace-guidance-agents",
+            Self::Rules => "workspace-guidance-rules",
+        }
+    }
+
+    fn icon(self) -> &'static Icon {
+        match self {
+            Self::Agents => &EVIDENCE,
+            Self::Rules => &SAFETY,
+        }
+    }
+}
+
+fn guidance_toggle(state: &State, labeled: bool, theme: ThemeStyle<'_>) -> El {
+    let mut tabs = crate::design::segmented_control(theme)
+        .key("workspace-guidance-view-toggle")
+        .label("Guidance views")
+        .min_w(guidance_toggle_width(labeled));
+    for view in [GuidanceView::Rules, GuidanceView::Agents] {
+        let button = if labeled {
+            crate::design::segmented_tab(
+                view.label(),
+                Some(view.icon()),
+                state.workspace_guidance_view == view,
+                true,
+                theme,
+            )
+        } else {
+            crate::design::segmented_icon_tab(
+                view.label(),
+                view.icon(),
+                state.workspace_guidance_view == view,
+                theme,
+            )
+        };
+        tabs = tabs.child(
+            button
+                .key(view.key())
+                .on_press_tx(move |state: &mut State, tx| {
+                    state.workspace_guidance_view = view;
+                    tx.scroll_to_y("workspace-scroll", 0.0);
+                }),
+        );
+    }
+    tabs
+}
+
+fn guidance_toggle_width(labeled: bool) -> f32 {
+    if labeled {
+        crate::design::segmented_group_width(&[
+            crate::design::segmented_tab_width("Rules", true),
+            crate::design::segmented_tab_width("AGENTS.md", true),
+        ])
+    } else {
+        crate::design::segmented_group_width(&[crate::design::CONTROL_HEIGHT; 2])
     }
 }
 
@@ -272,31 +347,6 @@ fn foundation(state: &State, details: &WorkspaceDetails, theme: ThemeStyle<'_>) 
         name_actions,
         theme,
     );
-    let guidance = if busy {
-        col()
-            .w_full()
-            .min_h(130.0)
-            .padding(10.0)
-            .radius(8.0)
-            .fill(theme.color("#282828"))
-            .child(
-                text(state.workspace_guidance_edit.text.clone())
-                    .w_full()
-                    .wrap()
-                    .font(ui_font(14.0, 400.0))
-                    .color(theme.color("#e2e2e2")),
-            )
-    } else {
-        text_input(&state.workspace_guidance_edit, ui_font(14.0, 400.0))
-            .key("saved-workspace-guidance-input")
-            .w_full()
-            .h(130.0)
-            .padding(10.0)
-            .radius(8.0)
-            .fill(theme.color("#282828"))
-            .color(theme.color("#e2e2e2"))
-            .on_edit(|state: &mut State| &mut state.workspace_guidance_edit)
-    };
     settings_form(
         FormSpec {
             key: "saved-workspace-details-form",
@@ -327,7 +377,42 @@ fn foundation(state: &State, details: &WorkspaceDetails, theme: ThemeStyle<'_>) 
                 read_only_value("None".to_owned(), 100.0, theme),
                 theme,
             ),
-            col()
+        ],
+        theme,
+    )
+}
+
+fn agents_guidance(state: &State, theme: ThemeStyle<'_>) -> El {
+    let guidance = if state.workspace_save_busy.is_some() {
+        col()
+            .w_full()
+            .min_h(130.0)
+            .padding(10.0)
+            .radius(8.0)
+            .fill(theme.color("#282828"))
+            .child(
+                text(state.workspace_guidance_edit.text.clone())
+                    .w_full()
+                    .wrap()
+                    .font(ui_font(14.0, 400.0))
+                    .color(theme.color("#e2e2e2")),
+            )
+    } else {
+        text_input(&state.workspace_guidance_edit, ui_font(14.0, 400.0))
+            .key("saved-workspace-guidance-input")
+            .w_full()
+            .h(130.0)
+            .padding(10.0)
+            .radius(8.0)
+            .fill(theme.color("#282828"))
+            .color(theme.color("#e2e2e2"))
+            .on_edit(|state: &mut State| &mut state.workspace_guidance_edit)
+    };
+    col()
+        .key("saved-workspace-guidance-form")
+        .w_full()
+        .child(settings_form_card(
+            [col()
                 .key("saved-workspace-guidance-row")
                 .w_full()
                 .py(12.0)
@@ -336,20 +421,21 @@ fn foundation(state: &State, details: &WorkspaceDetails, theme: ThemeStyle<'_>) 
                     col()
                         .gap(4.0)
                         .child(
-                            text("Workspace Guidance")
+                            text("AGENTS.md")
+                                .key("saved-workspace-guidance-label")
                                 .font(form_label_font())
                                 .color(theme.color("#e2e2e2")),
                         )
                         .child(
-                            text("AGENTS.md instructions for research in this workspace.")
+                            text("Instructions for research in this workspace.")
+                                .key("saved-workspace-guidance-description")
                                 .font(ui_font(14.0, 400.0))
                                 .color(theme.color("#969696")),
                         ),
                 )
-                .child(guidance),
-        ],
-        theme,
-    )
+                .child(guidance)],
+            theme,
+        ))
 }
 
 fn close_name_dialog(state: &mut State) {
@@ -964,26 +1050,19 @@ pub(crate) fn relationship_dialog(state: &State, theme: ThemeStyle<'_>) -> [El; 
     )
 }
 
-fn rules(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
-    let add = icon_action_button(
-        "saved-workspace-add-rule".to_owned(),
-        "Add a rule",
-        &PLUS,
-        theme,
-    );
-    let add = if state.workspace_save_busy.is_some() {
-        add
-    } else {
-        add.on_press(|state: &mut State| {
-            state.workspace_rule_input.clear();
-            state.workspace_rule_dialog_error.clear();
-            state.workspace_rule_dialog_open = true;
-        })
-    };
-    let mut list = col().w_full().py(12.0).gap(8.0);
+fn open_rule_dialog(state: &mut State) {
+    state.workspace_rule_input.clear();
+    state.workspace_rule_dialog_error.clear();
+    state.workspace_rule_dialog_open = true;
+}
+
+fn rules(state: &State, theme: ThemeStyle<'_>) -> El {
+    let mut list = col().key("saved-workspace-rules-form").w_full();
     if state.workspace_rule_edits.is_empty() {
         list = list.child(
             text("No workspace rules recorded.")
+                .px(20.0)
+                .py(12.0)
                 .font(ui_font(14.0, 400.0))
                 .color(theme.color("#969696")),
         );
@@ -1010,6 +1089,8 @@ fn rules(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
                 .w_full()
                 .center_y()
                 .gap(8.0)
+                .px(20.0)
+                .py(8.0)
                 .child(
                     text(rule.clone())
                         .grow(1.0)
@@ -1027,15 +1108,7 @@ fn rules(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
                 }),
         );
     }
-    vec![settings_form_with_action(
-        FormSpec {
-            key: "saved-workspace-rules-form",
-            heading: "Workspace Rules",
-        },
-        [list],
-        Some(add),
-        theme,
-    )]
+    list
 }
 
 fn close_rule_dialog(state: &mut State) {
@@ -1437,7 +1510,6 @@ fn confirm_surface_delete(state: &mut State) {
         }
         crate::surface_canvas::close(state, &removed.id);
         crate::surface_canvas::sync(state);
-        state.workspace_surface_hovered = None;
         state.workspace_surface_connecting = None;
         state.workspace_save_error.clear();
         state.workspace_save_message.clear();
@@ -1573,10 +1645,15 @@ pub(crate) fn render(
     let secondary_toggle_width = match state.workspace_tab {
         WorkspaceTab::Surfaces if surface_graph_open => surface_graph::view_toggle_width(true),
         WorkspaceTab::Findings => crate::findings_view::mode_toggle_width(true),
+        WorkspaceTab::Rules => guidance_toggle_width(true),
         _ => 0.0,
     };
+    let guidance_rules = state.workspace_tab == WorkspaceTab::Rules
+        && state.workspace_guidance_view == GuidanceView::Rules;
     let header_gaps = if surface_graph_open || state.workspace_tab == WorkspaceTab::Findings {
         48.0
+    } else if guidance_rules {
+        32.0
     } else if secondary_toggle_width > 0.0 {
         36.0
     } else {
@@ -1587,6 +1664,9 @@ pub(crate) fn render(
             crate::design::segmented_tab_width("Add Surface", true)
         }
         WorkspaceTab::Findings => crate::design::segmented_tab_width("Add Finding", true),
+        WorkspaceTab::Rules if guidance_rules => {
+            crate::design::segmented_tab_width("Add Rule", true)
+        }
         _ => 0.0,
     };
     let labeled =
@@ -1618,7 +1698,7 @@ pub(crate) fn render(
         .key("workspace-view-header")
         .w_full()
         .center_y()
-        .gap(12.0)
+        .gap(if guidance_rules { 8.0 } else { 12.0 })
         .child(
             row()
                 .key("workspace-title-squircle")
@@ -1629,7 +1709,7 @@ pub(crate) fn render(
                 .max_w(420.0)
                 .h(56.0)
                 .pl(18.0)
-                .pr(10.0)
+                .pr(if guidance_rules { 0.0 } else { 10.0 })
                 .center_y()
                 .child(
                     text(title)
@@ -1668,6 +1748,19 @@ pub(crate) fn render(
             crate::findings_view::open_create,
             true,
         ));
+    } else if state.workspace_tab == WorkspaceTab::Rules {
+        header = header.child(guidance_toggle(state, labeled, theme));
+        if state.workspace_guidance_view == GuidanceView::Rules {
+            header = header.child(header_add_button(
+                "saved-workspace-add-rule",
+                "Add Rule",
+                "Add Rule",
+                add_action_width,
+                theme,
+                open_rule_dialog,
+                state.workspace_save_busy.is_none(),
+            ));
+        }
     }
     let header = header.child(el().grow(1.0)).child(tabs);
     if surface_graph_open {
@@ -1707,7 +1800,10 @@ pub(crate) fn render(
         let forms = match state.workspace_tab {
             WorkspaceTab::Surfaces => Vec::new(),
             WorkspaceTab::Findings => Vec::new(),
-            WorkspaceTab::Rules => rules(state, theme),
+            WorkspaceTab::Rules => match state.workspace_guidance_view {
+                GuidanceView::Agents => vec![agents_guidance(state, theme)],
+                GuidanceView::Rules => vec![rules(state, theme)],
+            },
             WorkspaceTab::Foundation => vec![foundation(state, details, theme)],
             WorkspaceTab::Campaign => Vec::new(),
         };
@@ -1715,17 +1811,28 @@ pub(crate) fn render(
             page = page.child(form);
         }
         let dirty = match state.workspace_tab {
-            WorkspaceTab::Foundation => details.summary.as_ref().is_some_and(|summary| {
-                state.workspace_name_edit.text.trim() != summary.name
-                    || state.workspace_guidance_edit.text.trim_end() != details.guidance.trim_end()
-            }),
+            WorkspaceTab::Foundation => details
+                .summary
+                .as_ref()
+                .is_some_and(|summary| state.workspace_name_edit.text.trim() != summary.name),
             WorkspaceTab::Surfaces => state.workspace_surface_edits != details.surfaces,
             WorkspaceTab::Findings => false,
-            WorkspaceTab::Rules => state.workspace_rule_edits != details.rules,
+            WorkspaceTab::Rules => match state.workspace_guidance_view {
+                GuidanceView::Agents => {
+                    state.workspace_guidance_edit.text.trim_end() != details.guidance.trim_end()
+                }
+                GuidanceView::Rules => state.workspace_rule_edits != details.rules,
+            },
             WorkspaceTab::Campaign => false,
         };
-        let tab = state.workspace_tab;
-        let saving = state.workspace_save_busy == Some(tab);
+        let save_tab = if state.workspace_tab == WorkspaceTab::Rules
+            && state.workspace_guidance_view == GuidanceView::Agents
+        {
+            WorkspaceTab::Foundation
+        } else {
+            state.workspace_tab
+        };
+        let saving = state.workspace_save_busy == Some(save_tab);
         let save = form_button(if saving { "Saving…" } else { "Save Changes" }, theme).key(
             if dirty && !saving && !state.workspace_details_loading {
                 "saved-workspace-save"
@@ -1736,7 +1843,9 @@ pub(crate) fn render(
         if state.workspace_tab != WorkspaceTab::Surfaces {
             page = page.child(row().w_full().child(el().grow(1.0)).child(
                 if dirty && !saving && !state.workspace_details_loading {
-                    save.on_press(move |state: &mut State| crate::start_workspace_save(state, tab))
+                    save.on_press(move |state: &mut State| {
+                        crate::start_workspace_save(state, save_tab)
+                    })
                 } else {
                     save
                 },

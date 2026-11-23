@@ -28,6 +28,7 @@ pub(crate) struct Explorer {
     pub page_anchor: Option<String>,
     pub focus_path: Vec<String>,
     pub focus_scroll: Vec<f32>,
+    pub show_out_of_scope: bool,
     pub query: String,
     pub neighborhood: Option<String>,
     pub return_to: Option<ReturnTo>,
@@ -37,6 +38,7 @@ pub(crate) struct ReturnTo {
     pub view: View,
     pub sort: Sort,
     pub focus: Focus,
+    pub show_out_of_scope: bool,
     pub query: String,
     pub page: usize,
     pub page_anchor: Option<String>,
@@ -146,7 +148,8 @@ impl Analysis {
             .iter()
             .enumerate()
             .filter(|(i, s)| {
-                matches(s, focus, query)
+                (explorer.show_out_of_scope || !out_of_scope(s))
+                    && matches(s, focus, query)
                     && root.is_none_or(|root| root == *i || self.neighbors[root].contains(i))
             })
             .map(|(i, _)| i)
@@ -220,15 +223,19 @@ pub(crate) fn needs_review(surface: &WorkspaceSurface) -> bool {
     })
 }
 
+pub(crate) fn out_of_scope(surface: &WorkspaceSurface) -> bool {
+    surface
+        .definition
+        .as_ref()
+        .is_some_and(|definition| definition.scope == SurfaceScope::OutOfScope as i32)
+}
+
 pub(crate) fn matches(surface: &WorkspaceSurface, focus: Focus, query: &str) -> bool {
     let focused = match focus {
         Focus::All => true,
         Focus::Review => needs_review(surface),
         Focus::Unevidenced => evidence_count(surface) == 0,
-        Focus::Excluded => surface
-            .definition
-            .as_ref()
-            .is_some_and(|definition| definition.scope == SurfaceScope::OutOfScope as i32),
+        Focus::Excluded => out_of_scope(surface),
     };
     let query = query.trim().to_lowercase();
     focused
@@ -272,7 +279,6 @@ fn is_containment(link: &SurfaceRelationship) -> bool {
 pub(crate) struct Hierarchy {
     pub parent: Vec<Option<usize>>,
     pub children: Vec<Vec<usize>>,
-    pub roots: Vec<usize>,
 }
 
 pub(crate) fn hierarchy(surfaces: &[WorkspaceSurface]) -> Hierarchy {
@@ -295,14 +301,7 @@ pub(crate) fn hierarchy(surfaces: &[WorkspaceSurface]) -> Hierarchy {
             }
         }
     }
-    let roots = (0..surfaces.len())
-        .filter(|&index| parent[index].is_none())
-        .collect();
-    Hierarchy {
-        parent,
-        children,
-        roots,
-    }
+    Hierarchy { parent, children }
 }
 
 #[cfg(test)]
@@ -353,10 +352,20 @@ mod tests {
         assert_eq!(analysis.incoming, vec![1, 1, 0, 0]);
         assert_eq!(analysis.outgoing, vec![1, 1, 1, 0]);
         assert_eq!(analysis.boundary, vec![true, true, false, false]);
-        let explorer = Explorer {
+        let mut explorer = Explorer {
             neighborhood: Some("S1".into()),
             ..Default::default()
         };
+        assert_eq!(
+            analysis.matching(&surfaces, Focus::All, "", &explorer),
+            vec![0]
+        );
+        assert!(
+            analysis
+                .matching(&surfaces, Focus::Excluded, "", &explorer)
+                .is_empty()
+        );
+        explorer.show_out_of_scope = true;
         assert_eq!(
             analysis.matching(&surfaces, Focus::All, "", &explorer),
             vec![0, 1]

@@ -48,6 +48,7 @@ pub(crate) fn fixture(variant: &str) -> State {
         | "surfaces-review"
         | "surfaces-search"
         | "surfaces-dense"
+        | "surfaces-filter"
         | "surfaces-large"
         | "surfaces-web"
         | "surfaces-web-overflow"
@@ -76,6 +77,7 @@ pub(crate) fn fixture(variant: &str) -> State {
         "surface-add" | "surface-delete" | "relationship" => "surface-manage",
         "workspace-name" => "workspace",
         "workspace-rule" => "rules",
+        "guidance-agents" => "rules",
         "feature-detail" => "features",
         "plugin-add" | "plugin-detail" => "plugins",
         "fleet-connect" | "fleet-import" | "fleet-detail" => "fleet",
@@ -377,6 +379,7 @@ pub(crate) fn fixture(variant: &str) -> State {
             && let Some(definition) = &mut s.workspace_surface_edits[3].definition
         {
             definition.scope = SurfaceScope::OutOfScope as i32;
+            s.workspace_surface_explorer.show_out_of_scope = true;
         }
         if variant == "surfaces-web"
             && let Some(definition) = &mut s.workspace_surface_edits[0].definition
@@ -435,6 +438,9 @@ pub(crate) fn fixture(variant: &str) -> State {
                 s.workspace_surface_edits.push(extra);
             }
         }
+    }
+    if variant == "surfaces-filter" {
+        s.selection_menu = Some(SelectionMenu::SurfaceFilter);
     }
     if let Some(details) = &mut s.workspace_details {
         details.surfaces = s.workspace_surface_edits.clone();
@@ -787,6 +793,9 @@ pub(crate) fn fixture(variant: &str) -> State {
                 _ => workspace_view::WorkspaceTab::Rules,
             };
             s.workspace_findings.loaded = true;
+            if variant == "guidance-agents" {
+                s.workspace_guidance_view = workspace_view::GuidanceView::Agents;
+            }
             if name == "surface-manage" {
                 s.workspace_surface_explorer.view = Some(workspace_surface_layout::View::Inventory);
             }
@@ -1050,6 +1059,7 @@ pub(crate) fn fixture(variant: &str) -> State {
                 view: workspace_surface_layout::View::Inventory,
                 sort: workspace_surface_layout::Sort::Recorded,
                 focus: workspace_surface_layout::Focus::All,
+                show_out_of_scope: false,
                 query: String::new(),
                 page: 0,
                 page_anchor: None,

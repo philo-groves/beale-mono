@@ -28,13 +28,24 @@ fn scope_color(surface: &WorkspaceSurface, theme: ThemeStyle<'_>) -> Color {
 
 pub(super) fn filter_items(state: &State) -> Vec<crate::in_place_menu::MenuItem> {
     let surfaces = &state.workspace_surface_edits;
-    [
-        ("all", Focus::All, "All", surfaces.len()),
+    let included = |surface: &&WorkspaceSurface| {
+        state.workspace_surface_explorer.show_out_of_scope || !atlas::out_of_scope(surface)
+    };
+    let mut items: Vec<_> = [
+        (
+            "all",
+            Focus::All,
+            "All",
+            surfaces.iter().filter(included).count(),
+        ),
         (
             "review",
             Focus::Review,
             "Needs review",
-            surfaces.iter().filter(|s| atlas::needs_review(s)).count(),
+            surfaces
+                .iter()
+                .filter(|s| included(s) && atlas::needs_review(s))
+                .count(),
         ),
         (
             "unevidenced",
@@ -42,17 +53,14 @@ pub(super) fn filter_items(state: &State) -> Vec<crate::in_place_menu::MenuItem>
             "No refs",
             surfaces
                 .iter()
-                .filter(|s| atlas::evidence_count(s) == 0)
+                .filter(|s| included(s) && atlas::evidence_count(s) == 0)
                 .count(),
         ),
         (
             "excluded",
             Focus::Excluded,
             "Excluded",
-            surfaces
-                .iter()
-                .filter(|s| surface_scope(s) == SurfaceScope::OutOfScope as i32)
-                .count(),
+            surfaces.iter().filter(|s| atlas::out_of_scope(s)).count(),
         ),
     ]
     .into_iter()
@@ -64,10 +72,31 @@ pub(super) fn filter_items(state: &State) -> Vec<crate::in_place_menu::MenuItem>
             selected: state.workspace_surface_focus == focus,
         },
     )
-    .collect()
+    .collect();
+    items.push(crate::in_place_menu::MenuItem {
+        value: "show_out_of_scope".to_owned(),
+        label: "Show excluded".to_owned(),
+        detail: None,
+        selected: state.workspace_surface_explorer.show_out_of_scope,
+    });
+    items
 }
 
 pub(super) fn select_filter(state: &mut State, value: &str) {
+    if value == "show_out_of_scope" {
+        let show = !state.workspace_surface_explorer.show_out_of_scope;
+        if !show && state.workspace_surface_explorer.neighborhood.is_some() {
+            back_to_surfaces(state);
+        }
+        state.workspace_surface_explorer.show_out_of_scope = show;
+        if !show && state.workspace_surface_focus == Focus::Excluded {
+            state.workspace_surface_focus = Focus::All;
+        }
+        state.workspace_surface_explorer.focus_path.clear();
+        state.workspace_surface_explorer.focus_scroll.clear();
+        reset_page(state);
+        return;
+    }
     let focus = match value {
         "all" => Focus::All,
         "review" => Focus::Review,
@@ -77,6 +106,9 @@ pub(super) fn select_filter(state: &mut State, value: &str) {
     };
     if focus == Focus::All {
         back_to_surfaces(state);
+    }
+    if focus == Focus::Excluded {
+        state.workspace_surface_explorer.show_out_of_scope = true;
     }
     state.workspace_surface_focus = focus;
     state.workspace_surface_explorer.focus_path.clear();
@@ -113,7 +145,7 @@ pub(super) fn filter_menu(state: &State, theme: ThemeStyle<'_>) -> El {
         .scroll(ScrollSpec {
             stick_bottom: false,
         });
-    for (index, item) in filter_items(state).into_iter().enumerate() {
+    for (index, item) in filter_items(state).into_iter().take(4).enumerate() {
         let value = item.value;
         options = options.child(
             row()
@@ -156,6 +188,46 @@ pub(super) fn filter_menu(state: &State, theme: ThemeStyle<'_>) -> El {
                 }),
         );
     }
+    let show_out_of_scope = state.workspace_surface_explorer.show_out_of_scope;
+    let scope_toggle = row()
+        .key("workspace-surface-show-out-of-scope")
+        .role("checkbox")
+        .label(format!(
+            "Show excluded: {}",
+            if show_out_of_scope { "on" } else { "off" }
+        ))
+        .w_full()
+        .h(34.0)
+        .px(10.0)
+        .center_y()
+        .gap(8.0)
+        .radius(6.0)
+        .fill(if state.menu_cursor == 4 {
+            theme.color("#383838")
+        } else {
+            Color::TRANSPARENT
+        })
+        .hover(theme.color("#424242"))
+        .on_hover(|state: &mut State| state.menu_cursor = 4)
+        .on_press_tx(|state: &mut State, tx| {
+            crate::choose_selection_menu_item(
+                state,
+                SelectionMenu::SurfaceFilter,
+                "show_out_of_scope".to_owned(),
+                tx,
+            );
+        })
+        .child(
+            text("Show excluded")
+                .grow(1.0)
+                .font(ui_font(14.0, if show_out_of_scope { 550.0 } else { 400.0 }))
+                .color(theme.color("#eeeeee")),
+        )
+        .child(if show_out_of_scope {
+            icon(&crate::icons::CHECK, 14.0).color(theme.color("#c8c8c8"))
+        } else {
+            el().size(14.0, 14.0)
+        });
     let search_font = ui_font(12.0, 400.0);
     let search = text_input(&state.workspace_surface_query, search_font)
         .key("workspace-surface-search")
@@ -185,12 +257,14 @@ pub(super) fn filter_menu(state: &State, theme: ThemeStyle<'_>) -> El {
             .role("dialog")
             .label("Filter surfaces")
             .w(230.0)
-            .h(244.0)
+            .h(294.0)
             .padding(6.0)
             .gap(6.0)
             .child(sort)
             .child(divider().key("workspace-surface-filter-top-divider"))
             .child(options)
+            .child(divider().key("workspace-surface-filter-scope-divider"))
+            .child(scope_toggle)
             .child(divider().key("workspace-surface-filter-bottom-divider"))
             .child(search),
         theme.color("#242424"),
@@ -216,6 +290,7 @@ fn open_neighborhood(state: &mut State, index: usize) {
             view: explorer.view(state.workspace_surface_edits.len()),
             sort: explorer.sort,
             focus: state.workspace_surface_focus,
+            show_out_of_scope: explorer.show_out_of_scope,
             query: state.workspace_surface_query.text.clone(),
             page: if explorer.query == state.workspace_surface_query.text {
                 explorer.page
@@ -254,6 +329,7 @@ pub(super) fn back_to_surfaces(state: &mut State) {
         state.workspace_surface_explorer.query = previous.query.clone();
         state.workspace_surface_query = TextEdit::new(previous.query);
         state.workspace_surface_focus = previous.focus;
+        state.workspace_surface_explorer.show_out_of_scope = previous.show_out_of_scope;
     } else {
         state.workspace_surface_explorer.view = Some(atlas::View::Inventory);
         state.workspace_surface_focus = Focus::All;
@@ -285,7 +361,7 @@ pub(super) fn view_toggle(state: &State, labeled: bool, theme: ThemeStyle<'_>) -
         (atlas::View::Graph, "Graph", &WORKSPACE_SURFACES),
         (
             atlas::View::Inventory,
-            "Inventory",
+            "List",
             &crate::icons::SESSION_SIDENAV,
         ),
     ] {
@@ -307,7 +383,7 @@ pub(super) fn view_toggle_width(labeled: bool) -> f32 {
     if labeled {
         crate::design::segmented_group_width(&[
             crate::design::segmented_tab_width("Graph", true),
-            crate::design::segmented_tab_width("Inventory", true),
+            crate::design::segmented_tab_width("List", true),
         ])
     } else {
         crate::design::segmented_group_width(&[crate::design::CONTROL_HEIGHT; 2])
@@ -334,7 +410,15 @@ fn inventory(
         .scroll(ScrollSpec {
             stick_bottom: false,
         });
-    for &index in indices {
+    for (position, &index) in indices.iter().enumerate() {
+        if position > 0 {
+            list = list.child(
+                el().key(format!("workspace-surface-list-separator-{index}"))
+                    .w_full()
+                    .h(1.0)
+                    .fill(theme.color("#303030")),
+            );
+        }
         let surface = &state.workspace_surface_edits[index];
         let color = scope_color(surface, theme);
         let evidence = atlas::evidence_count(surface);
@@ -345,14 +429,18 @@ fn inventory(
         let mut info = col()
             .grow(1.0)
             .min_w(0.0)
-            .gap(4.0)
+            .gap(5.0)
             .child(
                 text(atlas::name(surface).to_owned())
                     .key(format!("workspace-surface-inventory-name-{index}"))
                     .w_full()
                     .fade_truncate()
-                    .font(ui_font(13.0, 550.0))
-                    .color(theme.color("#eeeeee")),
+                    .font(ui_font(14.0, 600.0))
+                    .color(if atlas::out_of_scope(surface) {
+                        theme.color("#e07676")
+                    } else {
+                        theme.color("#eeeeee")
+                    }),
             )
             .child(
                 text(format!(
@@ -360,10 +448,11 @@ fn inventory(
                     surface.id,
                     surface_value(surface)
                 ))
+                .key(format!("workspace-surface-list-meta-{index}"))
                 .w_full()
                 .fade_truncate()
-                .font(ui_font(10.0, 400.0))
-                .color(theme.color("#999999")),
+                .font(ui_font(12.0, 400.0))
+                .color(theme.color("#a4a4a4")),
             );
         if !wide {
             info = info.child(
@@ -376,16 +465,16 @@ fn inventory(
                 ))
                 .w_full()
                 .fade_truncate()
-                .font(ui_font(10.0, 400.0))
-                .color(color),
+                .font(ui_font(11.0, 400.0))
+                .color(theme.color("#999999")),
             );
         }
         let mut entry = row()
             .w_full()
             .min_w(0.0)
-            .h(if wide { 56.0 } else { 72.0 })
-            .px(10.0)
-            .gap(12.0)
+            .h(if wide { 76.0 } else { 84.0 })
+            .px(12.0)
+            .gap(14.0)
             .center_y()
             .key(format!("workspace-surface-row-{index}"))
             .role("button")
@@ -399,39 +488,62 @@ fn inventory(
             ))
             .hover(theme.color("#242424"))
             .on_press(move |state: &mut State| crate::surface_canvas::open(state, index))
-            .child(icon(surface_icon(surface_kind(surface)), 14.0).color(color))
+            .child(
+                el().size(34.0, 34.0)
+                    .center()
+                    .radius(9.0)
+                    .fill(theme.color("#242424"))
+                    .child(icon(surface_icon(surface_kind(surface)), 17.0).color(
+                        if atlas::out_of_scope(surface) {
+                            theme.color("#e07676")
+                        } else {
+                            theme.color("#bdbdbd")
+                        },
+                    )),
+            )
             .child(info);
         if wide {
             entry = entry
                 .child(
                     col()
-                        .w(112.0)
-                        .gap(4.0)
-                        .child(text(scope(surface)).font(ui_font(11.0, 500.0)).color(color))
+                        .w(116.0)
+                        .gap(5.0)
+                        .child(
+                            row()
+                                .self_start()
+                                .h(22.0)
+                                .px(8.0)
+                                .center_y()
+                                .radius(6.0)
+                                .fill(color.alpha(0.12))
+                                .child(
+                                    text(scope(surface)).font(ui_font(11.0, 550.0)).color(color),
+                                ),
+                        )
                         .child(
                             text(scope_state_label(surface_scope_state(surface)))
-                                .font(ui_font(10.0, 400.0))
+                                .font(ui_font(11.0, 400.0))
                                 .color(theme.color("#999999")),
                         ),
                 )
                 .child(
                     text(format!("{evidence} refs"))
-                        .w(50.0)
-                        .font(ui_font(11.0, 500.0))
+                        .w(66.0)
+                        .font(ui_font(12.0, 500.0))
                         .color(theme.color(if evidence == 0 { "#dca15f" } else { "#b8b8b8" })),
                 )
                 .child(
                     text(format!(
-                        "{} / {}",
+                        "{} in · {} out",
                         analysis.incoming[index], analysis.outgoing[index]
                     ))
-                    .w(70.0)
-                    .font(ui_font(11.0, 500.0))
+                    .w(92.0)
+                    .font(ui_font(12.0, 400.0))
                     .color(theme.color("#999999")),
                 );
         }
         entry = entry.child(
-            form_button("Connections", theme)
+            footer_button("Connections", theme)
                 .key(format!("workspace-surface-neighborhood-{index}"))
                 .label(format!(
                     "Show recorded neighborhood of {}",
@@ -473,43 +585,12 @@ fn inventory(
                     state.workspace_surface_delete_index = Some(index)
                 })
             });
-        list = list
-            .child(entry)
-            .child(el().w_full().h(1.0).fill(theme.color("#303030")));
+        list = list.child(entry);
     }
-    let mut heading = row()
-        .w_full()
-        .h(24.0)
-        .px(10.0)
-        .gap(12.0)
-        .center_y()
-        .child(el().w(14.0))
-        .child(
-            text("Surface / locator")
-                .grow(1.0)
-                .font(ui_font(10.0, 500.0))
-                .color(theme.color("#999999")),
-        );
-    if wide {
-        for (label, width) in [
-            ("Scope / review", 112.0),
-            ("Refs", 50.0),
-            ("In / out", 70.0),
-        ] {
-            heading = heading.child(
-                text(label)
-                    .w(width)
-                    .font(ui_font(10.0, 500.0))
-                    .color(theme.color("#999999")),
-            );
-        }
-    }
-    heading = heading.child(el().w(174.0));
     col()
         .key("workspace-surface-inventory")
         .size(width, height)
-        .child(heading)
-        .child(list.h((height - 24.0).max(1.0)).scroll_edge_fade(12.0))
+        .child(list.scroll_edge_fade(12.0))
 }
 
 pub(super) fn render(
@@ -646,7 +727,9 @@ pub(super) fn render(
                 .fill(theme.color("#0d0d0d"))
                 .border(1.0, theme.color("#2a2a2a").alpha(0.65))
                 .child(icon(&crate::icons::FILTER, 16.0).color(
-                    if state.workspace_surface_focus != Focus::All {
+                    if state.workspace_surface_focus != Focus::All
+                        || state.workspace_surface_explorer.show_out_of_scope
+                    {
                         theme.accent()
                     } else {
                         theme.color("#bdbdbd")

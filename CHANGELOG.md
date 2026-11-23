@@ -30,16 +30,19 @@
 
 #### Changed
 
-- V2 Surfaces Graph lays out all top-level webs in fixed-size regions, with the column count based on available content width. Overflow scrolls vertically with the shared content scrollbar; graph pagination is removed.
+- V2 Surfaces renames Inventory to List and refreshes its flat rows with larger text, scope badges, clearer connection counts, and quieter actions.
+- V2 Guidance puts Rules before AGENTS.md, moves Add Rule into the header, and shows flat rule rows separated by lines. The AGENTS.md label now sits inside its form card.
+- V2 workspace tabs are named Guidance and Identity. Guidance has AGENTS.md and Rules views beside its title; each view saves its own edits.
+- V2 Surfaces Graph lays out all top-level webs in fixed-size regions, with the column count based on available content width. Its dot grid and vertical scrollbar fill the main content area while padded webs clear the fixed header and footer; graph pagination is removed.
 - V2 Findings adds an Add Finding button after Ledger and Plot. Its form creates a Candidate finding with a title, summary, and hypothesis, then refreshes the view.
 - V2 collapsed sidenav dividers have 8 px of space above and 12 px below the line and hide while a hover flyout is open.
 - V2 workspace headers offer a New Research tab before a session exists; it opens a draft for the visible workspace and preserves that draft when switching back.
 - V2 Surfaces protocol 2.30 removes local mapping records, element promotion, mapping-based threat references, and their model tools and prompts. Threat scenarios attach directly to surfaces.
-- V2 Surfaces shows top-level icons, names, and muted IDs in centered wrapping labels above muted circle-and-line webs. Out-of-scope icons and names are red. Hovering a label outlines it; selecting it opens surface details. Selecting a child focuses its direct descendants with back navigation. The host enforces one parent per child and rejects containment cycles.
+- V2 Surfaces shows top-level icons, names, and muted IDs in centered wrapping labels above circle-and-line webs. Out-of-scope icons, names, and dots are red; other dots remain muted. Selecting a label opens surface details, and selecting a child focuses its direct descendants with back navigation. The host enforces one parent per child and rejects containment cycles.
 - V2 workspace titles align vertically with header controls, have no card fill, and sit closer to per-view toggles.
 - V2 Surfaces footer buttons use the main content background with a muted 1 px border.
 - V2 Surfaces removes the persistent graph and inventory status sentence, leaving contextual navigation actions when available.
-- V2 Surfaces places an Add Surface button with a plus icon and text beside Graph and Inventory in the header. Sorting, scope and review filters, and search stay in the footer Filter menu beside the matching/total surface count.
+- V2 Surfaces places an Add Surface button with a plus icon and text beside Graph and Inventory in the header. Sorting, scope and review filters, a separate Show excluded option, and search stay in the footer Filter menu beside the matching/total surface count. Excluded surfaces are hidden by default in Graph and Inventory.
 - V2 Surfaces places Graph and Inventory in a compactable toggle group beside the view title, with workspace view tabs aligned to the right.
 - V2 Findings places the Ledger and Plot selector beside the view title, adds icons with compact centered buttons for narrow windows, and removes the redundant heading and active count.
 - V2 workspace views show the workspace name and active view name together in the page title.
