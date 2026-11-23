@@ -308,12 +308,6 @@ mod tests {
     fn insights_button_opens_session_only_modal_and_closes_without_hover_dismissal() {
         let mut state = visual_preview::fixture("session-insights");
         state.session_insights_open = false;
-        state
-            .features
-            .iter_mut()
-            .find(|f| f.id == "tracking")
-            .unwrap()
-            .enabled = false;
         let mut runtime = Runtime::new(state, view, (1440.0, 960.0), Env::new(true, 1.0));
         runtime.frame(0.0);
         click(&mut runtime, "session-sidenav-chart-button");

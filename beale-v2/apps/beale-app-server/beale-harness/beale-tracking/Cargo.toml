@@ -1,0 +1,17 @@
+[package]
+name = "beale-tracking"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+beale-feature-api = { path = "../beale-feature-api" }
+axum.workspace = true
+beale-contracts = { path = "../beale-contracts" }
+beale-storage = { path = "../beale-storage" }
+prost.workspace = true
+anyhow.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

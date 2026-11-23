@@ -28,7 +28,6 @@ use beale_providers::{
     ProviderClient, codex_configured, login_xai_with_prompt, mode_name, provider_name,
 };
 use beale_storage::HostDatabase;
-#[cfg(feature = "tracking")]
 use beale_tracking::{SubscriptionUsageRow, TrackingStore};
 use prost::Message;
 use std::{
@@ -42,7 +41,6 @@ struct AuthState {
     token: String,
     store: Arc<CredentialStore>,
     /// Records subscription usage samples for Tracking.
-    #[cfg_attr(not(feature = "tracking"), allow(dead_code))]
     db: HostDatabase,
     login: Arc<Mutex<[LoginState; 5]>>,
     lead_lock: Arc<Mutex<()>>,
@@ -398,7 +396,6 @@ async fn provider_usage(
         })
         .collect();
     let value = ProviderUsageResponse { providers };
-    #[cfg(feature = "tracking")]
     {
         let points = value
             .providers

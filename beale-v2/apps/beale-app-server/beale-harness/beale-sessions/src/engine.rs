@@ -98,7 +98,6 @@ pub(crate) async fn until_stopped<F: Future>(
     }
 }
 
-#[cfg(feature = "goal-mode")]
 pub(crate) fn goal_signal_for_answer(
     answer: &str,
     signal: Option<beale_goals::Signal>,
@@ -110,7 +109,6 @@ pub(crate) fn goal_signal_for_answer(
     }
 }
 
-#[cfg(feature = "goal-mode")]
 pub(crate) async fn run_turn(
     state: SessionState,
     mut request: SubmitSessionTurnRequest,
@@ -170,36 +168,6 @@ pub(crate) async fn run_turn(
                 let (session, turns) = load_persisted(&state.db, parse_id(id)?)?;
                 return Ok(self::detail(&state.db, &session, &turns)?);
             }
-            if !state
-                .db
-                .feature_enabled(beale_goals::FEATURE_ID)
-                .map_err(|_| TurnError::Internal)?
-                || !state
-                    .db
-                    .extension_applies_to(
-                        "feature",
-                        beale_goals::FEATURE_ID,
-                        &detail
-                            .summary
-                            .as_ref()
-                            .ok_or(TurnError::Internal)?
-                            .workspace_id,
-                    )
-                    .map_err(|_| TurnError::Internal)?
-            {
-                let id = detail
-                    .summary
-                    .as_ref()
-                    .ok_or(TurnError::Internal)?
-                    .id
-                    .clone();
-                state
-                    .db
-                    .set_goal_status(&id, GoalStatus::Paused as i32)
-                    .map_err(|_| TurnError::Internal)?;
-                let (session, turns) = load_persisted(&state.db, parse_id(&id)?)?;
-                return Ok(self::detail(&state.db, &session, &turns)?);
-            }
             if let Some(tx) = &progress {
                 let _ = tx
                     .send(SessionStreamEvent {
@@ -233,39 +201,6 @@ pub(crate) async fn run_turn(
         }
         return Ok(detail);
     }
-}
-
-#[cfg(not(feature = "goal-mode"))]
-pub(crate) async fn run_turn(
-    state: SessionState,
-    request: SubmitSessionTurnRequest,
-    progress: Option<mpsc::Sender<SessionStreamEvent>>,
-    stop: Option<watch::Receiver<bool>>,
-) -> Result<SessionDetail, TurnError> {
-    if request.goal_mode {
-        return Err(TurnError::Invalid);
-    }
-    let lock = if request.session_id.is_empty() {
-        Arc::new(Mutex::new(()))
-    } else {
-        session_lock(&state, &request.session_id).await
-    };
-    let _guard = lock.try_lock().map_err(|_| TurnError::Conflict)?;
-    #[cfg(feature = "graphs")]
-    if peer_graph::applies(&state.db, &request)? {
-        return peer_graph::run(&state, request, progress, &lock, stop).await;
-    }
-    run_one_turn(
-        &state,
-        request,
-        progress,
-        false,
-        &lock,
-        stop,
-        #[cfg(feature = "graphs")]
-        None,
-    )
-    .await
 }
 
 /// Request fields resolved before any host state is read.
@@ -335,11 +270,8 @@ fn validate_request(request: &SubmitSessionTurnRequest) -> Result<ValidatedReque
 
 /// Runtime state that decides which dynamic features apply to a turn.
 struct DynamicFeatures<'a> {
-    #[cfg(feature = "fleet")]
     fleet_note: Option<&'a str>,
-    #[cfg(feature = "goal-mode")]
     goal_active: bool,
-    #[cfg(feature = "goal-mode")]
     goal_section: Option<&'a str>,
     #[cfg(feature = "graphs")]
     graph: Option<&'static dyn beale_graphs::GraphRuntime>,
@@ -377,13 +309,11 @@ async fn assemble_extensions(
     let mut child_tools = Vec::new();
     for feature in features::native_features() {
         let (enabled, tools, guidance): (bool, Vec<Value>, &str) = match feature.id {
-            #[cfg(feature = "fleet")]
             beale_fleet::FEATURE_ID => (
                 dynamic.fleet_note.is_some(),
                 Vec::new(),
                 dynamic.fleet_note.unwrap_or(""),
             ),
-            #[cfg(feature = "goal-mode")]
             beale_goals::FEATURE_ID => (
                 dynamic.goal_active,
                 vec![beale_goals::definition()],
@@ -516,12 +446,6 @@ pub(crate) async fn run_one_turn(
         return Err(TurnError::Invalid);
     }
     let graph_config = encoded_graph_config(&request);
-    #[cfg(not(feature = "goal-mode"))]
-    if request.goal_mode {
-        return Err(TurnError::Invalid);
-    }
-    #[cfg(not(feature = "goal-mode"))]
-    let _ = automatic;
     let (mut session, mut turns) = if request.session_id.is_empty() {
         let id = Uuid::new_v4();
         register_session_lock(state, &id.to_string(), lock).await;
@@ -556,9 +480,8 @@ pub(crate) async fn run_one_turn(
         .as_ref()
         .map_or(next_turn_number, |peer| peer.turn_number);
     let persisted_goal = saved_goal(&state.db, &session.id).map_err(|_| TurnError::Internal)?;
-    #[cfg(feature = "goal-mode")]
     let mut goal = persisted_goal;
-    #[cfg(all(feature = "graphs", feature = "goal-mode"))]
+    #[cfg(feature = "graphs")]
     if peer.as_ref().is_some_and(|peer| {
         !matches!(
             peer.role,
@@ -569,8 +492,6 @@ pub(crate) async fn run_one_turn(
     }) {
         goal = None;
     }
-    #[cfg(not(feature = "goal-mode"))]
-    let goal = persisted_goal;
     if let Some(saved) = &goal
         && (saved.turns_used < 0
             || saved.active_ms < 0
@@ -586,32 +507,7 @@ pub(crate) async fn run_one_turn(
     {
         return Err(TurnError::Internal);
     }
-    #[cfg(feature = "goal-mode")]
     {
-        let feature_enabled = state
-            .db
-            .feature_enabled(beale_goals::FEATURE_ID)
-            .map_err(|_| TurnError::Internal)?
-            && state
-                .db
-                .extension_applies_to("feature", beale_goals::FEATURE_ID, &session.workspace_id)
-                .map_err(|_| TurnError::Internal)?;
-        if request.goal_mode && !feature_enabled {
-            return Err(TurnError::Conflict);
-        }
-        if automatic && !feature_enabled {
-            state
-                .db
-                .set_goal_status(&session.id, GoalStatus::Paused as i32)
-                .map_err(|_| TurnError::Internal)?;
-            return Ok(detail(&state.db, &session, &turns)?);
-        }
-        if !feature_enabled
-            && let Some(goal) = goal.as_mut()
-            && goal.status == GoalStatus::Active as i32
-        {
-            goal.status = GoalStatus::Paused as i32;
-        }
         if request.goal_mode && !turns.is_empty() {
             return Err(TurnError::Invalid);
         }
@@ -627,7 +523,6 @@ pub(crate) async fn run_one_turn(
                 active_ms: 0,
             });
         } else if !automatic
-            && feature_enabled
             && let Some(goal) = goal.as_mut()
             && matches!(
                 GoalStatus::try_from(goal.status),
@@ -647,8 +542,6 @@ pub(crate) async fn run_one_turn(
     let goal_active = goal
         .as_ref()
         .is_some_and(|goal| goal.status == GoalStatus::Active as i32);
-    #[cfg(not(feature = "goal-mode"))]
-    let _ = goal_active;
     let mut messages = Vec::with_capacity(turns.len() * 2 + 1);
     for turn in &turns {
         messages.push(TextMessage {
@@ -695,8 +588,7 @@ pub(crate) async fn run_one_turn(
     }
     let workspace = state.workspaces.directory(&request.workspace_id)?;
     let workspace_details = state.workspaces.details_for_host(&request.workspace_id)?;
-    #[cfg(feature = "fleet")]
-    let fleet_prompt_note = fleet_prompt_note(&state.db, &request.workspace_id)?;
+    let fleet_prompt_note = fleet_prompt_note(&state.db)?;
     let surface_tools_enabled = surface_feature_enabled(&state.db, &request.workspace_id)?;
     let memories_tools_enabled = memories_feature_enabled(&state.db, &request.workspace_id)?;
     #[cfg(not(feature = "memories"))]
@@ -811,7 +703,6 @@ pub(crate) async fn run_one_turn(
         previous.push(json!({"role":"user","content":request.prompt}));
         input = previous;
     }
-    #[cfg(feature = "goal-mode")]
     let goal_section = goal.as_ref().filter(|_| goal_active).map(|goal| {
         beale_goals::system_section(
             beale_goals::Limits {
@@ -842,11 +733,8 @@ pub(crate) async fn run_one_turn(
         &request.workspace_id,
         &agent_files,
         &DynamicFeatures {
-            #[cfg(feature = "fleet")]
             fleet_note: fleet_prompt_note.as_deref(),
-            #[cfg(feature = "goal-mode")]
             goal_active,
-            #[cfg(feature = "goal-mode")]
             goal_section: goal_section.as_deref(),
             #[cfg(feature = "graphs")]
             graph: active_graph,
@@ -989,7 +877,6 @@ pub(crate) async fn run_one_turn(
         input.insert(0, json!({"role":"system","content":system}));
     }
     let mut openai_connection = OpenAiConnection::default();
-    #[cfg(feature = "goal-mode")]
     let mut goal_signal: Option<beale_goals::Signal> = None;
     let mut tool_rows = Vec::<ToolCallRow>::new();
     #[cfg(feature = "graphs")]
@@ -1436,7 +1323,6 @@ pub(crate) async fn run_one_turn(
             let review_unavailable = std::cell::Cell::new(false);
             let (output, is_error) = match gate {
                 tool_runtime::Gate::Run { reviewed } => match args {
-                    #[cfg(feature = "goal-mode")]
                     Ok(args) if call.name == beale_goals::TOOL_NAME && goal_active => {
                         if goal_signal.is_some() {
                             (
@@ -1795,7 +1681,6 @@ pub(crate) async fn run_one_turn(
             )
         };
     }
-    #[cfg(feature = "goal-mode")]
     if let Some(goal) = goal.as_mut().filter(|_| goal_active) {
         goal.turns_used = goal.turns_used.checked_add(1).ok_or(TurnError::Conflict)?;
         goal.active_ms = goal.active_ms.saturating_add(
@@ -1891,7 +1776,6 @@ pub(crate) async fn run_one_turn(
         last_message_at_ms: i64::try_from(session.last_message_at_ms)
             .map_err(|_| TurnError::Internal)?,
     };
-    #[cfg(feature = "goal-mode")]
     let goal_commit = goal.as_ref().map(beale_goals::GoalCommit);
     #[cfg(feature = "graphs")]
     let graph_commit = beale_graphs::GraphCommit {
@@ -1906,7 +1790,6 @@ pub(crate) async fn run_one_turn(
     let memory_commit = memories_tools_enabled.then_some(beale_memories::QueueMemoryJobs);
     // Which extensions apply depends on the compiled features.
     let candidates: Vec<Option<&dyn beale_storage::TurnExtension>> = vec![
-        #[cfg(feature = "goal-mode")]
         goal_commit
             .as_ref()
             .map(|commit| commit as &dyn beale_storage::TurnExtension),

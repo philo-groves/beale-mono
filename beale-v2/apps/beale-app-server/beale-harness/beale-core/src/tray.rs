@@ -1,7 +1,6 @@
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use std::{net::SocketAddr, ptr, thread};
 use tokio::sync::oneshot;
-#[cfg(feature = "fleet")]
 #[path = "tray_qr.rs"]
 mod qr;
 use windows_sys::Win32::{
@@ -26,7 +25,6 @@ use windows_sys::Win32::{
 
 const TRAY_MESSAGE: u32 = WM_APP + 1;
 const EXIT_COMMAND: usize = 1;
-#[cfg(feature = "fleet")]
 const QR_COMMAND: usize = 2;
 const CLASS_NAME: &str = "BealeAppServerTray";
 const ICON_BYTES: &[u8] = include_bytes!(concat!(
@@ -42,7 +40,7 @@ pub(super) struct TrayHandle {
 impl TrayHandle {
     pub(super) fn start(
         addr: SocketAddr,
-        #[cfg(feature = "fleet")] token: String,
+        token: String,
         exit: oneshot::Sender<()>,
     ) -> Result<Self> {
         let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
@@ -50,7 +48,6 @@ impl TrayHandle {
             .name("beale-app-server-tray".to_owned())
             .spawn(move || match TrayResources::new(addr) {
                 Ok(mut tray) => {
-                    #[cfg(feature = "fleet")]
                     qr::configure(addr, token);
                     // The hidden window has created this thread's message queue.
                     let thread_id = unsafe { GetCurrentThreadId() };
@@ -222,7 +219,6 @@ impl TrayResources {
 
 impl Drop for TrayResources {
     fn drop(&mut self) {
-        #[cfg(feature = "fleet")]
         qr::shutdown();
         // Shell, USER32, and the window class all use handles from this thread.
         unsafe {
@@ -257,7 +253,6 @@ unsafe extern "system" fn window_proc(
             unsafe { PostQuitMessage(EXIT_COMMAND as i32) };
             0
         }
-        #[cfg(feature = "fleet")]
         WM_COMMAND if wparam & 0xffff == QR_COMMAND => {
             qr::show();
             0
@@ -275,12 +270,10 @@ fn show_menu(window: HWND) {
         }
         let status = wide("Beale app-server is running");
         let exit = wide("Exit");
-        #[cfg(feature = "fleet")]
         let qr = wide("Show QR Code");
         let mut point: POINT = std::mem::zeroed();
         let mut ready = AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, status.as_ptr()) != 0
             && AppendMenuW(menu, MF_SEPARATOR, 0, ptr::null()) != 0;
-        #[cfg(feature = "fleet")]
         {
             ready = ready
                 && AppendMenuW(menu, MF_STRING, QR_COMMAND, qr.as_ptr()) != 0
@@ -353,7 +346,6 @@ mod tests {
         let (exit_tx, exit_rx) = oneshot::channel();
         let tray = TrayHandle::start(
             "127.0.0.1:43831".parse().unwrap(),
-            #[cfg(feature = "fleet")]
             "example-token".to_owned(),
             exit_tx,
         )
@@ -382,7 +374,6 @@ mod tests {
         drop(tray);
     }
 
-    #[cfg(feature = "fleet")]
     #[test]
     fn qr_menu_command_opens_a_window_on_the_tray_thread() {
         let _lock = TRAY_TEST_LOCK.lock().unwrap();

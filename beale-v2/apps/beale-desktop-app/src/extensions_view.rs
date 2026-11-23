@@ -149,111 +149,78 @@ pub(crate) struct FeatureEntry {
 }
 
 pub(crate) fn bundled_features() -> Vec<FeatureEntry> {
-    vec![FeatureEntry {
-        id: "goal-mode".to_owned(),
-        name: "Goal Mode".to_owned(),
-        description: "Keep working toward a New Research objective across turns, with optional turn and duration limits.".to_owned(),
-        enabled: false,
-        has_prompt_extension: true,
-        tool_count: 1,
-        workspace_ids: Vec::new(),
-        all_workspaces: true,
-    }, FeatureEntry {
-        id: beale_agent_feedback::FEATURE_ID.to_owned(),
-        name: beale_agent_feedback::FEATURE_NAME.to_owned(),
-        description: beale_agent_feedback::FEATURE_DESCRIPTION.to_owned(),
-        enabled: false,
-        has_prompt_extension: beale_agent_feedback::HAS_PROMPT_EXTENSION,
-        tool_count: beale_agent_feedback::TOOL_COUNT as usize,
-        workspace_ids: Vec::new(),
-        all_workspaces: true,
-    }, FeatureEntry {
-        id: beale_webfetch::FEATURE_ID.to_owned(),
-        name: beale_webfetch::FEATURE_NAME.to_owned(),
-        description: beale_webfetch::FEATURE_DESCRIPTION.to_owned(),
-        enabled: false,
-        has_prompt_extension: beale_webfetch::HAS_PROMPT_EXTENSION,
-        tool_count: beale_webfetch::TOOL_COUNT as usize,
-        workspace_ids: Vec::new(),
-        all_workspaces: true,
-    }, FeatureEntry {
-        id: beale_graphs::FEATURE_ID.to_owned(),
-        name: beale_graphs::FEATURE_NAME.to_owned(),
-        description: beale_graphs::FEATURE_DESCRIPTION.to_owned(),
-        enabled: false,
-        has_prompt_extension: false,
-        tool_count: 0,
-        workspace_ids: Vec::new(),
-        all_workspaces: true,
-    }, FeatureEntry {
-        id: "fleet".to_owned(),
-        name: "Fleet".to_owned(),
-        description: "Manage app-server connections and approved research tools.".to_owned(),
-        enabled: false,
-        has_prompt_extension: true,
-        tool_count: 0,
-        workspace_ids: Vec::new(),
-        all_workspaces: true,
-    }, FeatureEntry {
-        id: beale_findings::FEATURE_ID.to_owned(),
-        name: beale_findings::FEATURE_NAME.to_owned(),
-        description: beale_findings::FEATURE_DESCRIPTION.to_owned(),
-        enabled: false,
-        has_prompt_extension: beale_findings::HAS_PROMPT_EXTENSION,
-        tool_count: beale_findings::TOOL_COUNT as usize,
-        workspace_ids: Vec::new(),
-        all_workspaces: true,
-    }, FeatureEntry {
-        id: beale_memories::FEATURE_ID.to_owned(),
-        name: beale_memories::FEATURE_NAME.to_owned(),
-        description: beale_memories::FEATURE_DESCRIPTION.to_owned(),
-        enabled: false,
-        has_prompt_extension: beale_memories::HAS_PROMPT_EXTENSION,
-        tool_count: beale_memories::TOOL_COUNT as usize,
-        workspace_ids: Vec::new(),
-        all_workspaces: true,
-    }, FeatureEntry {
-        id: beale_surfaces::FEATURE_ID.to_owned(),
-        name: beale_surfaces::FEATURE_NAME.to_owned(),
-        description: beale_surfaces::FEATURE_DESCRIPTION.to_owned(),
-        enabled: false,
-        has_prompt_extension: false,
-        tool_count: beale_surfaces::TOOL_COUNT as usize,
-        workspace_ids: Vec::new(),
-        all_workspaces: true,
-    }, FeatureEntry {
-        id: beale_runbooks::FEATURE_ID.to_owned(),
-        name: beale_runbooks::FEATURE_NAME.to_owned(),
-        description: beale_runbooks::FEATURE_DESCRIPTION.to_owned(),
-        enabled: false,
-        has_prompt_extension: true,
-        tool_count: beale_runbooks::TOOL_COUNT as usize,
-        workspace_ids: Vec::new(),
-        all_workspaces: true,
-    }, FeatureEntry {
-        id: beale_tracking::FEATURE_ID.to_owned(),
-        name: beale_tracking::FEATURE_NAME.to_owned(),
-        description: beale_tracking::FEATURE_DESCRIPTION.to_owned(),
-        enabled: false,
-        has_prompt_extension: false,
-        tool_count: 0,
-        workspace_ids: Vec::new(),
-        all_workspaces: true,
-    }]
-}
-
-pub(crate) fn fleet_enabled(state: &State) -> bool {
-    state
-        .features
-        .iter()
-        .any(|feature| feature.id == "fleet" && feature.enabled)
-}
-
-pub(crate) fn tracking_enabled(state: &State) -> bool {
-    state
-        .features
-        .iter()
-        .any(|feature| feature.id == beale_tracking::FEATURE_ID && feature.enabled)
+    vec![
+        FeatureEntry {
+            id: beale_agent_feedback::FEATURE_ID.to_owned(),
+            name: beale_agent_feedback::FEATURE_NAME.to_owned(),
+            description: beale_agent_feedback::FEATURE_DESCRIPTION.to_owned(),
+            enabled: false,
+            has_prompt_extension: beale_agent_feedback::HAS_PROMPT_EXTENSION,
+            tool_count: beale_agent_feedback::TOOL_COUNT as usize,
+            workspace_ids: Vec::new(),
+            all_workspaces: true,
+        },
+        FeatureEntry {
+            id: beale_webfetch::FEATURE_ID.to_owned(),
+            name: beale_webfetch::FEATURE_NAME.to_owned(),
+            description: beale_webfetch::FEATURE_DESCRIPTION.to_owned(),
+            enabled: false,
+            has_prompt_extension: beale_webfetch::HAS_PROMPT_EXTENSION,
+            tool_count: beale_webfetch::TOOL_COUNT as usize,
+            workspace_ids: Vec::new(),
+            all_workspaces: true,
+        },
+        FeatureEntry {
+            id: beale_graphs::FEATURE_ID.to_owned(),
+            name: beale_graphs::FEATURE_NAME.to_owned(),
+            description: beale_graphs::FEATURE_DESCRIPTION.to_owned(),
+            enabled: false,
+            has_prompt_extension: false,
+            tool_count: 0,
+            workspace_ids: Vec::new(),
+            all_workspaces: true,
+        },
+        FeatureEntry {
+            id: beale_findings::FEATURE_ID.to_owned(),
+            name: beale_findings::FEATURE_NAME.to_owned(),
+            description: beale_findings::FEATURE_DESCRIPTION.to_owned(),
+            enabled: false,
+            has_prompt_extension: beale_findings::HAS_PROMPT_EXTENSION,
+            tool_count: beale_findings::TOOL_COUNT as usize,
+            workspace_ids: Vec::new(),
+            all_workspaces: true,
+        },
+        FeatureEntry {
+            id: beale_memories::FEATURE_ID.to_owned(),
+            name: beale_memories::FEATURE_NAME.to_owned(),
+            description: beale_memories::FEATURE_DESCRIPTION.to_owned(),
+            enabled: false,
+            has_prompt_extension: beale_memories::HAS_PROMPT_EXTENSION,
+            tool_count: beale_memories::TOOL_COUNT as usize,
+            workspace_ids: Vec::new(),
+            all_workspaces: true,
+        },
+        FeatureEntry {
+            id: beale_surfaces::FEATURE_ID.to_owned(),
+            name: beale_surfaces::FEATURE_NAME.to_owned(),
+            description: beale_surfaces::FEATURE_DESCRIPTION.to_owned(),
+            enabled: false,
+            has_prompt_extension: false,
+            tool_count: beale_surfaces::TOOL_COUNT as usize,
+            workspace_ids: Vec::new(),
+            all_workspaces: true,
+        },
+        FeatureEntry {
+            id: beale_runbooks::FEATURE_ID.to_owned(),
+            name: beale_runbooks::FEATURE_NAME.to_owned(),
+            description: beale_runbooks::FEATURE_DESCRIPTION.to_owned(),
+            enabled: false,
+            has_prompt_extension: true,
+            tool_count: beale_runbooks::TOOL_COUNT as usize,
+            workspace_ids: Vec::new(),
+            all_workspaces: true,
+        },
+    ]
 }
 
 pub(crate) fn surfaces_enabled(state: &State, workspace_id: &str) -> bool {
@@ -280,15 +247,6 @@ pub(crate) fn surfaces_enabled_for_creation(state: &State) -> bool {
 
 pub(crate) fn goal_mode_enabled(state: &State) -> bool {
     matches!(state.connection, ConnectionStatus::Connected { .. })
-        && state.features.iter().any(|feature| {
-            feature.id == "goal-mode"
-                && feature.enabled
-                && (feature.all_workspaces
-                    || state
-                        .new_research_workspace_id
-                        .as_ref()
-                        .is_some_and(|workspace_id| feature.workspace_ids.contains(workspace_id)))
-        })
 }
 
 pub(crate) fn graphs_enabled(state: &State) -> bool {
@@ -577,6 +535,7 @@ async fn load_features(client: &Client, addr: SocketAddr) -> Result<Vec<FeatureE
     response
         .features
         .into_iter()
+        .filter(|feature| !matches!(feature.id.as_str(), "goal-mode" | "fleet" | "tracking"))
         .map(feature_from_wire)
         .map(|feature| {
             let feature = feature?;
@@ -979,18 +938,6 @@ pub(crate) fn start_feature_load(state: &mut State) {
                     state.feature_error = error;
                 }
             }
-            if !goal_mode_enabled(state) {
-                state.new_research_goal_mode = false;
-                if state.selection_menu == Some(crate::SelectionMenu::GoalMode) {
-                    state.selection_menu = None;
-                }
-            }
-            if state.primary_view == crate::PrimaryView::Fleet && !fleet_enabled(state) {
-                state.navigate_to(ViewLocation::Home);
-            }
-            if state.primary_view == crate::PrimaryView::Tracking && !tracking_enabled(state) {
-                state.navigate_to(ViewLocation::Home);
-            }
             if let Some(id) = state.workspace_id
                 && ((state.workspace_tab == crate::workspace_view::WorkspaceTab::Surfaces
                     && !surfaces_enabled(state, &id.to_string()))
@@ -1048,20 +995,6 @@ fn start_feature_toggle(state: &mut State, id: String, enabled: bool) {
                         *saved = feature;
                     } else {
                         state.features.push(feature);
-                    }
-                    if !goal_mode_enabled(state) {
-                        state.new_research_goal_mode = false;
-                        if state.selection_menu == Some(crate::SelectionMenu::GoalMode) {
-                            state.selection_menu = None;
-                        }
-                    }
-                    if state.primary_view == crate::PrimaryView::Fleet && !fleet_enabled(state) {
-                        state.navigate_to(ViewLocation::Home);
-                    }
-                    if state.primary_view == crate::PrimaryView::Tracking
-                        && !tracking_enabled(state)
-                    {
-                        state.navigate_to(ViewLocation::Home);
                     }
                     if let Some(id) = state.workspace_id
                         && ((state.workspace_tab == crate::workspace_view::WorkspaceTab::Surfaces
@@ -1164,9 +1097,6 @@ pub(crate) fn start_workspace_scope_save(
                     if let Some(feature) = state.features.iter_mut().find(|entry| entry.id == id) {
                         feature.workspace_ids = ids;
                         feature.all_workspaces = all;
-                    }
-                    if !goal_mode_enabled(state) {
-                        state.new_research_goal_mode = false;
                     }
                 }
                 Err(error) if is_plugin => state.plugin_error = error,
@@ -1382,10 +1312,6 @@ fn feature_rows(state: &State) -> impl Iterator<Item = (usize, &FeatureEntry)> {
             FeatureTab::Available => !feature.enabled,
             FeatureTab::Enabled => feature.enabled,
         })
-}
-
-fn feature_has_sidebar_view(id: &str) -> bool {
-    id == "fleet" || id == beale_tracking::FEATURE_ID
 }
 
 fn workspace_scope(state: &State, menu: SelectionMenu) -> Option<(bool, &[String])> {
@@ -1854,16 +1780,8 @@ fn feature_card(
                     .font(ui_font(13.0, 500.0))
                     .color(theme.color("#f2f2f2")),
                 ),
-            stat_row(
-                "Sidebar View",
-                if feature_has_sidebar_view(&feature.id) {
-                    "Yes"
-                } else {
-                    "No"
-                },
-                theme,
-            )
-            .key(format!("feature-sidebar-view-{}", feature.id)),
+            stat_row("Sidebar View", "No", theme)
+                .key(format!("feature-sidebar-view-{}", feature.id)),
             stat_row("Tools", feature.tool_count, theme)
                 .key(format!("feature-tools-{}", feature.id)),
         ],
@@ -1935,26 +1853,24 @@ fn feature_card(
                 .pt(12.0)
                 .center_y()
                 .child(action)
-                .child(
-                    if feature.enabled && feature.id != beale_tracking::FEATURE_ID {
-                        let menu = SelectionMenu::FeatureWorkspaces { index };
-                        workspace_scope_button(
-                            workspace_scope_label(
-                                state,
-                                feature.all_workspaces,
-                                &feature.workspace_ids,
-                            ),
-                            state.selection_menu == Some(menu),
-                            move |state| crate::toggle_selection_menu(state, menu),
-                            theme,
-                        )
-                        .key(format!("feature-scope-{index}"))
-                        .ml(5.0)
-                        .max_w(160.0)
-                    } else {
-                        el().size(0.0, 0.0)
-                    },
-                )
+                .child(if feature.enabled {
+                    let menu = SelectionMenu::FeatureWorkspaces { index };
+                    workspace_scope_button(
+                        workspace_scope_label(
+                            state,
+                            feature.all_workspaces,
+                            &feature.workspace_ids,
+                        ),
+                        state.selection_menu == Some(menu),
+                        move |state| crate::toggle_selection_menu(state, menu),
+                        theme,
+                    )
+                    .key(format!("feature-scope-{index}"))
+                    .ml(5.0)
+                    .max_w(160.0)
+                } else {
+                    el().size(0.0, 0.0)
+                })
                 .child(el().grow(1.0))
                 .child(
                     el().key(format!("feature-details-{}", feature.id))
@@ -2442,7 +2358,6 @@ mod tests {
         assert!(!feature.enabled);
         assert!(feature.has_prompt_extension);
         assert!(feature.all_workspaces);
-        assert!(!feature_has_sidebar_view(&feature.id));
     }
 
     #[test]
@@ -2467,13 +2382,12 @@ mod tests {
     }
 
     #[test]
-    fn sidebar_view_capability_matches_feature_navigation() {
-        let destinations = bundled_features()
-            .into_iter()
-            .filter(|feature| feature_has_sidebar_view(&feature.id))
-            .map(|feature| feature.id)
-            .collect::<Vec<_>>();
-        assert_eq!(destinations, ["fleet", beale_tracking::FEATURE_ID]);
+    fn standard_harness_components_are_not_optional_features() {
+        assert!(
+            bundled_features()
+                .iter()
+                .all(|feature| !matches!(feature.id.as_str(), "goal-mode" | "fleet" | "tracking"))
+        );
     }
 
     #[test]

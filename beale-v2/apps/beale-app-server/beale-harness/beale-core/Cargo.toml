@@ -7,16 +7,13 @@ license.workspace = true
 
 [features]
 webfetch = ["beale-sessions/webfetch", "dep:beale-webfetch"]
-default = ["goal-mode", "fleet", "graphs", "tracking", "surfaces", "findings", "memories", "runbooks", "agent-feedback", "webfetch"]
+default = ["graphs", "surfaces", "findings", "memories", "runbooks", "agent-feedback", "webfetch"]
 agent-feedback = ["beale-sessions/agent-feedback", "dep:beale-agent-feedback"]
 findings = ["beale-sessions/findings", "dep:beale-findings"]
 memories = ["beale-sessions/memories", "dep:beale-memories"]
 runbooks = ["beale-sessions/runbooks", "dep:beale-runbooks"]
 surfaces = ["beale-sessions/surfaces", "dep:beale-surfaces"]
-goal-mode = ["beale-sessions/goal-mode", "dep:beale-goals"]
-fleet = ["beale-sessions/fleet", "dep:beale-fleet", "dep:qrcodegen", "dep:reqwest"]
 graphs = ["beale-sessions/graphs", "dep:beale-graphs"]
-tracking = ["dep:beale-tracking"]
 
 [dependencies]
 beale-webfetch = { path = "../../../../extensions/features/beale-webfetch", optional = true }
@@ -26,13 +23,13 @@ beale-contracts = { path = "../beale-contracts" }
 beale-agent-feedback = { path = "../../../../extensions/features/beale-agent-feedback", optional = true }
 beale-extender = { path = "../beale-extender" }
 beale-host-log = { path = "../beale-host-log" }
-beale-fleet = { path = "../../../../extensions/features/beale-fleet", optional = true }
+beale-fleet = { path = "../beale-fleet" }
 beale-findings = { path = "../../../../extensions/features/beale-findings", optional = true }
 beale-memories = { path = "../../../../extensions/features/beale-memories", optional = true }
 beale-graphs = { path = "../../../../extensions/features/beale-graphs", optional = true }
-beale-goals = { path = "../../../../extensions/features/beale-goals", optional = true }
+beale-goals = { path = "../beale-goals" }
 beale-runbooks = { path = "../../../../extensions/features/beale-runbooks", optional = true }
-beale-tracking = { path = "../../../../extensions/features/beale-tracking", optional = true }
+beale-tracking = { path = "../beale-tracking" }
 beale-surfaces = { path = "../../../../extensions/features/beale-surfaces", optional = true }
 beale-providers = { path = "../beale-providers" }
 beale-safety = { path = "../beale-safety" }
@@ -49,5 +46,5 @@ tower = "0.5"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
-qrcodegen = { version = "1.8", optional = true }
-reqwest = { workspace = true, optional = true }
+qrcodegen = "1.8"
+reqwest.workspace = true

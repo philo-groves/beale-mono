@@ -5,8 +5,6 @@ use axum::{
     http::{HeaderMap, StatusCode, header},
     routing::{get, post},
 };
-#[cfg(feature = "goal-mode")]
-use beale_contracts::v1::GoalStatus;
 use beale_contracts::{
     FEATURE_DETAILS_PATH, FEATURE_SCOPE_PATH, FEATURE_SET_ENABLED_PATH, FEATURES_PATH,
     PROTOBUF_CONTENT_TYPE,
@@ -15,8 +13,6 @@ use beale_contracts::{
         SetExtensionWorkspaceScopeRequest, SetFeatureEnabledRequest,
     },
 };
-#[cfg(feature = "goal-mode")]
-use beale_goals::GoalStore;
 use beale_storage::HostDatabase;
 use prost::Message;
 
@@ -31,13 +27,10 @@ struct FeatureSpec {
 }
 
 /// Catalog display order; features missing from this build are skipped.
-const CATALOG_ORDER: [&str; 10] = [
+const CATALOG_ORDER: [&str; 7] = [
     "webfetch",
     "beale-agent-feedback",
-    "goal-mode",
-    "fleet",
     "graphs",
-    "tracking",
     "surfaces",
     "beale-findings",
     "beale-memories",
@@ -46,10 +39,7 @@ const CATALOG_ORDER: [&str; 10] = [
 
 /// The host catalog, read from each compiled feature's descriptor.
 fn feature_specs() -> Vec<FeatureSpec> {
-    #[allow(unused_mut)]
     let mut features = beale_sessions::features::native_features();
-    #[cfg(feature = "tracking")]
-    features.push(&beale_tracking::FEATURE);
     features.sort_by_key(|feature| {
         CATALOG_ORDER
             .iter()
@@ -58,6 +48,7 @@ fn feature_specs() -> Vec<FeatureSpec> {
     });
     features
         .into_iter()
+        .filter(|feature| !matches!(feature.id, "goal-mode" | "fleet" | "tracking"))
         .map(|feature| FeatureSpec {
             id: feature.id,
             name: feature.name,
@@ -208,13 +199,6 @@ async fn set_enabled(
         .db
         .set_feature_enabled(spec.id, request.enabled)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    #[cfg(feature = "goal-mode")]
-    if !request.enabled && spec.id == "goal-mode" {
-        state
-            .db
-            .pause_active_goals(GoalStatus::Active as i32, GoalStatus::Paused as i32)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    }
     let scope = state
         .db
         .extension_scope("feature", spec.id)
@@ -243,9 +227,6 @@ async fn set_scope(
     let request =
         SetExtensionWorkspaceScopeRequest::decode(body).map_err(|_| StatusCode::BAD_REQUEST)?;
     let spec = feature_spec(&request.id).ok_or(StatusCode::NOT_FOUND)?;
-    if spec.id == "tracking" && (!request.all_workspaces || !request.workspace_ids.is_empty()) {
-        return Err(StatusCode::BAD_REQUEST);
-    }
     if !state
         .db
         .feature_enabled(spec.id)
@@ -262,17 +243,6 @@ async fn set_scope(
             &request.workspace_ids,
         )
         .map_err(|_| StatusCode::BAD_REQUEST)?;
-    #[cfg(feature = "goal-mode")]
-    if !request.all_workspaces && spec.id == "goal-mode" {
-        state
-            .db
-            .pause_active_goals_outside_feature_scope(
-                spec.id,
-                GoalStatus::Active as i32,
-                GoalStatus::Paused as i32,
-            )
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    }
     let scope = state
         .db
         .extension_scope("feature", spec.id)
@@ -317,27 +287,26 @@ mod tests {
         }
         legacy!("webfetch", beale_webfetch);
         legacy!("agent-feedback", beale_agent_feedback);
-        legacy!("goal-mode", beale_goals);
-        legacy!("fleet", beale_fleet);
         legacy!("graphs", beale_graphs);
-        legacy!("tracking", beale_tracking);
+        for descriptor in [
+            &beale_goals::FEATURE,
+            &beale_fleet::FEATURE,
+            &beale_tracking::FEATURE,
+        ] {
+            assert_eq!(descriptor.tool_count(), descriptor.tool_names.len() as u32);
+        }
+        assert_eq!(beale_goals::FEATURE.tool_names, &["goal_status"]);
+        assert!(beale_fleet::FEATURE.tool_names.is_empty());
+        assert!(beale_tracking::FEATURE.tool_names.is_empty());
         legacy!("surfaces", beale_surfaces);
         legacy!("findings", beale_findings);
         legacy!("memories", beale_memories);
         legacy!("runbooks", beale_runbooks);
     }
 
-    #[cfg(any(feature = "goal-mode", feature = "fleet", feature = "webfetch"))]
     use axum::{body::Body, http::Request};
-    #[cfg(feature = "goal-mode")]
-    use beale_goals::FEATURE_ID;
-    #[cfg(feature = "goal-mode")]
-    use beale_goals::{GoalCommit, GoalRow};
-    #[cfg(any(feature = "goal-mode", feature = "webfetch"))]
+    #[cfg(feature = "webfetch")]
     use beale_storage::WorkspaceRow;
-    #[cfg(feature = "goal-mode")]
-    use beale_storage::{SessionRow, TurnActivity, TurnMetadata, TurnRow};
-    #[cfg(any(feature = "goal-mode", feature = "fleet", feature = "webfetch"))]
     use tower::ServiceExt;
 
     #[cfg(not(feature = "webfetch"))]
@@ -360,12 +329,10 @@ mod tests {
         }
     }
 
-    #[cfg(any(feature = "goal-mode", feature = "webfetch"))]
+    #[cfg(feature = "webfetch")]
     #[tokio::test]
     async fn feature_is_off_by_default_and_toggle_is_authenticated() {
         for id in [
-            #[cfg(feature = "goal-mode")]
-            beale_goals::FEATURE_ID,
             #[cfg(feature = "webfetch")]
             beale_webfetch::FEATURE_ID,
         ] {
@@ -467,13 +434,6 @@ mod tests {
             let spec = feature_spec(id).unwrap();
             assert_eq!(details.tool_names, spec.tool_names);
             assert_eq!(details.prompt_extension, spec.prompt_extension);
-            #[cfg(feature = "goal-mode")]
-            if id == beale_goals::FEATURE_ID {
-                assert!(
-                    beale_goals::system_section(beale_goals::Limits::default(), 0, 0)
-                        .starts_with(&details.prompt_extension)
-                );
-            }
             let denied = app
                 .clone()
                 .oneshot(
@@ -562,95 +522,14 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "goal-mode")]
     #[tokio::test]
-    async fn disabling_goal_mode_pauses_saved_active_goals() {
+    async fn standard_harness_components_are_not_catalog_features() {
         let root =
-            std::env::temp_dir().join(format!("beale-feature-example-{}", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("beale-standard-example-{}", uuid::Uuid::new_v4()));
         let db = HostDatabase::open(&root).unwrap();
         beale_sessions::features::migrate(&db).unwrap();
-        db.set_feature_enabled(FEATURE_ID, true).unwrap();
-        let session = SessionRow {
-            id: uuid::Uuid::new_v4().to_string(),
-            workspace_id: uuid::Uuid::new_v4().to_string(),
-            title: "Example objective".to_owned(),
-            created_at_ms: 1,
-            last_message_at_ms: 1,
-        };
-        let turn = TurnRow {
-            number: 1,
-            provider: 1,
-            method: 1,
-            model: "model-example".to_owned(),
-            prompt: "Example objective".to_owned(),
-            answer: "Example progress".to_owned(),
-            duration_ms: 1,
-            internal_prompt: false,
-        };
-        let goal = GoalRow {
-            session_id: session.id.clone(),
-            objective: turn.prompt.clone(),
-            status: GoalStatus::Active as i32,
-            turns_used: 1,
-            required_state: String::new(),
-            max_turns: 0,
-            max_duration_minutes: 0,
-            active_ms: 1,
-        };
-        db.append_turn_with_metadata(
-            &session,
-            &turn,
-            true,
-            TurnActivity {
-                tools: &[],
-                reasoning: &[],
-                commentary: &[],
-            },
-            None,
-            TurnMetadata {
-                extensions: &[&GoalCommit(&goal)],
-                ..TurnMetadata::default()
-            },
-        )
-        .unwrap();
         let app = router("example-token".to_owned(), db.clone());
         let response = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(FEATURE_SET_ENABLED_PATH)
-                    .header("authorization", "Bearer example-token")
-                    .header("content-type", PROTOBUF_CONTENT_TYPE)
-                    .body(Body::from(
-                        SetFeatureEnabledRequest {
-                            id: FEATURE_ID.to_owned(),
-                            enabled: false,
-                        }
-                        .encode_to_vec(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        assert!(!db.feature_enabled(FEATURE_ID).unwrap());
-        assert_eq!(
-            db.goal(&session.id).unwrap().unwrap().status,
-            GoalStatus::Paused as i32
-        );
-        drop(db);
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[cfg(feature = "fleet")]
-    #[tokio::test]
-    async fn fleet_starts_disabled_and_enablement_persists() {
-        let root =
-            std::env::temp_dir().join(format!("beale-fleet-example-{}", uuid::Uuid::new_v4()));
-        let db = HostDatabase::open(&root).unwrap();
-        beale_sessions::features::migrate(&db).unwrap();
-        let app = router("example-token".to_owned(), db.clone());
-        let catalog = app
             .clone()
             .oneshot(
                 Request::builder()
@@ -661,68 +540,67 @@ mod tests {
             )
             .await
             .unwrap();
-        let bytes = axum::body::to_bytes(catalog.into_body(), 4_096)
-            .await
-            .unwrap();
-        let catalog = ListFeaturesResponse::decode(bytes).unwrap();
-        let fleet = catalog
-            .features
-            .iter()
-            .find(|feature| feature.id == beale_fleet::FEATURE_ID)
-            .unwrap();
-        assert!(!fleet.enabled);
-        assert!(fleet.has_prompt_extension);
-        assert_eq!(fleet.tool_count, 0);
-        let details = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(FEATURE_DETAILS_PATH)
-                    .header("authorization", "Bearer example-token")
-                    .header("content-type", PROTOBUF_CONTENT_TYPE)
-                    .body(Body::from(
-                        GetFeatureDetailsRequest {
-                            id: beale_fleet::FEATURE_ID.to_owned(),
-                        }
-                        .encode_to_vec(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let details = FeatureDetailsResponse::decode(
-            axum::body::to_bytes(details.into_body(), 4_096)
+        let catalog = ListFeaturesResponse::decode(
+            axum::body::to_bytes(response.into_body(), 4_096)
                 .await
                 .unwrap(),
         )
         .unwrap();
-        assert_eq!(details.id, beale_fleet::FEATURE_ID);
-        assert_eq!(details.prompt_extension, beale_fleet::PROMPT_EXTENSION);
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(FEATURE_SET_ENABLED_PATH)
-                    .header("authorization", "Bearer example-token")
-                    .header("content-type", PROTOBUF_CONTENT_TYPE)
-                    .body(Body::from(
-                        SetFeatureEnabledRequest {
-                            id: beale_fleet::FEATURE_ID.to_owned(),
-                            enabled: true,
-                        }
-                        .encode_to_vec(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
+        for id in ["goal-mode", "fleet", "tracking"] {
+            assert!(!catalog.features.iter().any(|feature| feature.id == id));
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(FEATURE_SET_ENABLED_PATH)
+                        .header("authorization", "Bearer example-token")
+                        .header("content-type", PROTOBUF_CONTENT_TYPE)
+                        .body(Body::from(
+                            SetFeatureEnabledRequest {
+                                id: id.to_owned(),
+                                enabled: false,
+                            }
+                            .encode_to_vec(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+            for (path, body) in [
+                (
+                    FEATURE_DETAILS_PATH,
+                    GetFeatureDetailsRequest { id: id.to_owned() }.encode_to_vec(),
+                ),
+                (
+                    FEATURE_SCOPE_PATH,
+                    SetExtensionWorkspaceScopeRequest {
+                        id: id.to_owned(),
+                        workspace_ids: Vec::new(),
+                        all_workspaces: true,
+                    }
+                    .encode_to_vec(),
+                ),
+            ] {
+                let response = app
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .method("POST")
+                            .uri(path)
+                            .header("authorization", "Bearer example-token")
+                            .header("content-type", PROTOBUF_CONTENT_TYPE)
+                            .body(Body::from(body))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::NOT_FOUND);
+            }
+        }
+        drop(app);
         drop(db);
-        let reopened = HostDatabase::open(&root).unwrap();
-        beale_sessions::features::migrate(&reopened).unwrap();
-        assert!(reopened.feature_enabled(beale_fleet::FEATURE_ID).unwrap());
-        drop(reopened);
         std::fs::remove_dir_all(root).unwrap();
     }
 }

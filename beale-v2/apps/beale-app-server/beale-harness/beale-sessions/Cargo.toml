@@ -7,10 +7,8 @@ license.workspace = true
 
 [features]
 webfetch = ["dep:beale-webfetch"]
-fleet = ["dep:beale-fleet"]
-default = ["goal-mode"]
+default = []
 agent-feedback = ["dep:beale-agent-feedback"]
-goal-mode = ["dep:beale-goals"]
 graphs = ["dep:beale-graphs"]
 surfaces = ["dep:beale-surfaces"]
 findings = ["dep:beale-findings"]
@@ -21,13 +19,13 @@ runbooks = ["dep:beale-runbooks"]
 beale-feature-api = { path = "../beale-feature-api" }
 beale-host-log = { path = "../beale-host-log" }
 beale-webfetch = { path = "../../../../extensions/features/beale-webfetch", optional = true }
-beale-fleet = { path = "../../../../extensions/features/beale-fleet", optional = true }
+beale-fleet = { path = "../beale-fleet" }
 anyhow.workspace = true
 axum.workspace = true
 beale-contracts = { path = "../beale-contracts" }
 beale-agent-feedback = { path = "../../../../extensions/features/beale-agent-feedback", optional = true }
 beale-extender = { path = "../beale-extender" }
-beale-goals = { path = "../../../../extensions/features/beale-goals", optional = true }
+beale-goals = { path = "../beale-goals" }
 beale-graphs = { path = "../../../../extensions/features/beale-graphs", optional = true }
 beale-findings = { path = "../../../../extensions/features/beale-findings", optional = true }
 beale-memories = { path = "../../../../extensions/features/beale-memories", optional = true }

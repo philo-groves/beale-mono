@@ -107,12 +107,11 @@ async fn serve() -> Result<()> {
     beale_host_log::info!("app-server listening on {}", listener.local_addr()?);
     let store = CredentialStore::new()?;
     let token = store.control_token()?;
-    #[cfg(all(windows, feature = "fleet"))]
+    #[cfg(windows)]
     let tray_token = token.clone();
     let workspaces = beale_workspaces::WorkspaceStore::new()?;
     let db = beale_storage::HostDatabase::open(workspaces.root())?;
     beale_sessions::features::migrate(&db)?;
-    #[cfg(feature = "tracking")]
     beale_sessions::features::migrate_features(&db, &[&beale_tracking::FEATURE])?;
     let plugin_data_root = workspaces.root().to_path_buf();
     let plugins = beale_extender::PluginRuntime::new(db.clone(), plugin_data_root)?;
@@ -135,9 +134,7 @@ async fn serve() -> Result<()> {
     ));
     #[cfg(feature = "runbooks")]
     let app = app.merge(beale_runbooks::router(token.clone(), db.clone()));
-    #[cfg(feature = "tracking")]
     let app = app.merge(beale_tracking::router(token.clone(), db.clone()));
-    #[cfg(feature = "fleet")]
     let app = app.merge(beale_fleet::router(
         token.clone(),
         db.clone(),
@@ -152,10 +149,8 @@ async fn serve() -> Result<()> {
         .merge(auth::router(token, store, db));
     #[cfg(windows)]
     let (tray_exit_tx, tray_exit_rx) = tokio::sync::oneshot::channel();
-    #[cfg(all(windows, feature = "fleet"))]
+    #[cfg(windows)]
     let _tray = tray::TrayHandle::start(addr, tray_token, tray_exit_tx)?;
-    #[cfg(all(windows, not(feature = "fleet")))]
-    let _tray = tray::TrayHandle::start(addr, tray_exit_tx)?;
     #[cfg(feature = "memories")]
     let memory_worker = beale_sessions::start_memory_worker(workspaces.clone(), plugins.clone())?;
     let scheduler = beale_sessions::start_automation_scheduler_with_runtime(workspaces, plugins)?;

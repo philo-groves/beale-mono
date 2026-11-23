@@ -28,7 +28,6 @@ use beale_contracts::{
     },
 };
 use beale_extender::PluginRuntime;
-#[cfg(feature = "goal-mode")]
 use beale_goals::{GoalRow, GoalStore};
 #[cfg(feature = "graphs")]
 use beale_graphs::GraphStore;
@@ -96,32 +95,12 @@ pub mod features;
 mod memory_worker;
 
 /// Goal Mode state saved for a session; always empty without Goal Mode.
-#[cfg(feature = "goal-mode")]
 fn saved_goal(db: &HostDatabase, session_id: &str) -> anyhow::Result<Option<GoalRow>> {
     db.goal(session_id)
 }
 
 /// Inert stand-in for Goal Mode state in builds without the feature, so
 /// shared session code can treat an absent goal uniformly.
-#[cfg(not(feature = "goal-mode"))]
-#[derive(Clone)]
-#[allow(dead_code)]
-struct GoalRow {
-    session_id: String,
-    objective: String,
-    status: i32,
-    turns_used: i64,
-    required_state: String,
-    max_turns: i64,
-    max_duration_minutes: i64,
-    active_ms: i64,
-}
-
-#[cfg(not(feature = "goal-mode"))]
-fn saved_goal(_db: &HostDatabase, _session_id: &str) -> anyhow::Result<Option<GoalRow>> {
-    Ok(None)
-}
-
 /// Graph records read by shared session code. Builds without Graphs have no
 /// graph tables, so every session reads as an ordinary session.
 #[cfg(feature = "graphs")]
@@ -255,16 +234,7 @@ fn webfetch_feature_enabled(db: &HostDatabase, workspace_id: &str) -> Result<boo
     feature_applies(db, beale_webfetch::FEATURE_ID, workspace_id)
 }
 
-#[cfg(feature = "fleet")]
-fn fleet_feature_enabled(db: &HostDatabase, workspace_id: &str) -> Result<bool, StatusCode> {
-    feature_applies(db, beale_fleet::FEATURE_ID, workspace_id)
-}
-
-#[cfg(feature = "fleet")]
-fn fleet_prompt_note(db: &HostDatabase, workspace_id: &str) -> Result<Option<String>, StatusCode> {
-    if !fleet_feature_enabled(db, workspace_id)? {
-        return Ok(None);
-    }
+fn fleet_prompt_note(db: &HostDatabase) -> Result<Option<String>, StatusCode> {
     let allowed = beale_fleet::allowed_tools(db).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(beale_fleet::prompt_note(&allowed))
 }
@@ -588,7 +558,7 @@ mod peer_graph;
 mod quick_chat;
 mod system_prompt;
 mod tool_runtime;
-#[cfg(all(test, feature = "goal-mode"))]
+#[cfg(test)]
 use engine::goal_signal_for_answer;
 #[cfg(test)]
 use engine::reasoning_effort_name;
@@ -2161,39 +2131,25 @@ mod tests {
     use super::*;
     use axum::body::to_bytes;
     use axum::{body::Body, http::Request};
-    #[cfg(feature = "fleet")]
     use beale_fleet::FleetStore;
-    #[cfg(any(feature = "agent-feedback", feature = "webfetch", feature = "fleet"))]
+    #[cfg(any(feature = "agent-feedback", feature = "webfetch"))]
     use beale_storage::WorkspaceRow;
 
-    #[cfg(feature = "fleet")]
     #[test]
-    fn fleet_prompt_lists_only_allowed_tools_in_scope() {
+    fn fleet_prompt_lists_only_allowed_tools() {
         let root =
             std::env::temp_dir().join(format!("beale-fleet-prompt-example-{}", Uuid::new_v4()));
         let db = HostDatabase::open(&root).unwrap();
         crate::features::migrate(&db).unwrap();
-        let workspace = "workspace-example-a";
-        db.replace_workspaces(&[WorkspaceRow {
-            id: workspace.to_owned(),
-            name: "Example A".to_owned(),
-            directory: "example-a".to_owned(),
-        }])
-        .unwrap();
+        assert_eq!(fleet_prompt_note(&db).unwrap(), None);
         db.set_research_tool_settings("ripgrep", true, false)
             .unwrap();
-        assert_eq!(fleet_prompt_note(&db, workspace).unwrap(), None);
-        db.set_feature_enabled(beale_fleet::FEATURE_ID, true)
-            .unwrap();
         assert!(
-            fleet_prompt_note(&db, workspace)
+            fleet_prompt_note(&db)
                 .unwrap()
                 .unwrap()
                 .contains("ripgrep (locally)")
         );
-        db.set_extension_scope("feature", beale_fleet::FEATURE_ID, false, &[])
-            .unwrap();
-        assert_eq!(fleet_prompt_note(&db, workspace).unwrap(), None);
         drop(db);
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -2370,8 +2326,6 @@ mod tests {
         ));
     }
 
-    #[cfg(feature = "goal-mode")]
-    #[cfg(feature = "goal-mode")]
     #[test]
     fn omitted_goal_status_continues_without_an_explicit_limit() {
         assert!(matches!(
@@ -2556,7 +2510,6 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
-    #[cfg(feature = "goal-mode")]
     #[test]
     fn feature_and_base_tools_share_one_review_gate() {
         for name in ["read", "write", "edit", "bash"] {
@@ -2586,7 +2539,6 @@ mod tests {
         }
         #[cfg(feature = "runbooks")]
         assert!(tool_runtime::requires_call_review(beale_runbooks::RUN));
-        #[cfg(feature = "goal-mode")]
         assert!(tool_runtime::requires_call_review(beale_goals::TOOL_NAME));
         let unreviewed: Vec<&str> = vec![
             #[cfg(feature = "agent-feedback")]
@@ -2611,15 +2563,12 @@ mod tests {
     #[cfg(all(
         feature = "agent-feedback",
         feature = "webfetch",
-        feature = "fleet",
         feature = "surfaces",
         feature = "findings",
         feature = "memories",
         feature = "runbooks",
-        feature = "graphs",
-        feature = "goal-mode"
+        feature = "graphs"
     ))]
-    #[cfg(feature = "goal-mode")]
     #[test]
     fn built_in_tool_counts_include_optional_features() {
         let base = beale_tools::definitions().len();
@@ -3142,7 +3091,6 @@ mod tests {
         assert_eq!(decoded.prompt, request.prompt);
     }
 
-    #[cfg(feature = "goal-mode")]
     #[test]
     fn goal_continuation_keeps_model_context_and_hides_its_internal_prompt() {
         let root = std::env::temp_dir().join(format!("beale-goal-example-{}", Uuid::new_v4()));
@@ -3232,7 +3180,6 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
-    #[cfg(feature = "goal-mode")]
     #[test]
     fn goal_history_can_advance_beyond_the_ordinary_session_limit() {
         let root =

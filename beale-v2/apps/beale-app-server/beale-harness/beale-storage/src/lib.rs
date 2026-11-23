@@ -2952,18 +2952,23 @@ mod tests {
         ])
         .unwrap();
         assert!(
-            db.extension_scope("feature", "goal-mode")
+            db.extension_scope("feature", "example-feature")
                 .unwrap()
                 .all_workspaces
         );
-        db.set_extension_scope("feature", "goal-mode", false, &["workspace-a".to_owned()])
-            .unwrap();
+        db.set_extension_scope(
+            "feature",
+            "example-feature",
+            false,
+            &["workspace-a".to_owned()],
+        )
+        .unwrap();
         assert!(
-            db.extension_applies_to("feature", "goal-mode", "workspace-a")
+            db.extension_applies_to("feature", "example-feature", "workspace-a")
                 .unwrap()
         );
         assert!(
-            !db.extension_applies_to("feature", "goal-mode", "workspace-b")
+            !db.extension_applies_to("feature", "example-feature", "workspace-b")
                 .unwrap()
         );
         for workspace_id in ["workspace-a", "workspace-b"] {
@@ -2996,7 +3001,7 @@ mod tests {
             .unwrap();
         }
         assert!(
-            db.set_extension_scope("feature", "goal-mode", false, &["missing".to_owned()])
+            db.set_extension_scope("feature", "example-feature", false, &["missing".to_owned()])
                 .is_err()
         );
         db.replace_workspaces(&[WorkspaceRow {
@@ -3007,19 +3012,21 @@ mod tests {
         .unwrap();
         drop(db);
         let reopened = HostDatabase::open(&root).unwrap();
-        let scope = reopened.extension_scope("feature", "goal-mode").unwrap();
+        let scope = reopened
+            .extension_scope("feature", "example-feature")
+            .unwrap();
         assert!(!scope.all_workspaces && scope.workspace_ids.is_empty());
         assert!(
             !reopened
-                .extension_applies_to("feature", "goal-mode", "workspace-b")
+                .extension_applies_to("feature", "example-feature", "workspace-b")
                 .unwrap()
         );
         reopened
-            .set_extension_scope("feature", "goal-mode", true, &[])
+            .set_extension_scope("feature", "example-feature", true, &[])
             .unwrap();
         assert!(
             reopened
-                .extension_applies_to("feature", "goal-mode", "workspace-b")
+                .extension_applies_to("feature", "example-feature", "workspace-b")
                 .unwrap()
         );
         drop(reopened);

@@ -18,7 +18,7 @@ pub const FEATURE_DESCRIPTION: &str = "Manage app-server connections over Tailsc
 pub const HAS_PROMPT_EXTENSION: bool = true;
 pub const TOOL_COUNT: u32 = 0;
 
-/// Catalog and session descriptor for this feature.
+/// Harness descriptor for Fleet session guidance.
 pub const FEATURE: beale_feature_api::Feature = beale_feature_api::Feature {
     id: FEATURE_ID,
     name: FEATURE_NAME,

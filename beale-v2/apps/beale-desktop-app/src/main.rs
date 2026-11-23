@@ -1289,13 +1289,7 @@ impl State {
                 self.primary_view = PrimaryView::Automations;
                 self.automations.loaded = false;
             }
-            ViewLocation::Tracking => {
-                self.primary_view = if extensions_view::tracking_enabled(self) {
-                    PrimaryView::Tracking
-                } else {
-                    PrimaryView::Home
-                };
-            }
+            ViewLocation::Tracking => self.primary_view = PrimaryView::Tracking,
             ViewLocation::NewResearch => {
                 if self.primary_view == PrimaryView::Workspace {
                     self.research_workspace_view =
@@ -1355,15 +1349,9 @@ impl State {
                 self.feature_tab = feature_tab;
             }
             ViewLocation::Fleet(section, tab) => {
-                self.primary_view = if extensions_view::fleet_enabled(self) {
-                    PrimaryView::Fleet
-                } else {
-                    PrimaryView::Home
-                };
-                if self.primary_view == PrimaryView::Fleet {
-                    self.fleet_section = section;
-                    self.fleet.select_tab(section, tab);
-                }
+                self.primary_view = PrimaryView::Fleet;
+                self.fleet_section = section;
+                self.fleet.select_tab(section, tab);
             }
             ViewLocation::Providers(provider) => {
                 self.primary_view = PrimaryView::Settings;
@@ -4626,23 +4614,21 @@ fn rail(state: &State, theme: ThemeStyle<'_>) -> El {
             &SETTINGS,
             theme,
         ));
-    if extensions_view::tracking_enabled(state) {
-        rail = rail
-            .child(
-                el().key("navigation-conditional-divider")
-                    .w(26.0)
-                    .h(1.0)
-                    .fill(theme.color(NAVIGATION_DIVIDER_COLOR)),
-            )
-            .child(nav_button(
-                state,
-                PrimaryView::Tracking,
-                "nav-tracking",
-                "Tracking",
-                &TRACKING,
-                theme,
-            ));
-    }
+    rail = rail
+        .child(
+            el().key("navigation-conditional-divider")
+                .w(26.0)
+                .h(1.0)
+                .fill(theme.color(NAVIGATION_DIVIDER_COLOR)),
+        )
+        .child(nav_button(
+            state,
+            PrimaryView::Tracking,
+            "nav-tracking",
+            "Tracking",
+            &TRACKING,
+            theme,
+        ));
     rail = rail.child(el().grow(1.0));
     let mut has_usage = false;
     for provider in [Provider::OpenAi, Provider::Xai] {
@@ -4653,17 +4639,15 @@ fn rail(state: &State, theme: ThemeStyle<'_>) -> El {
             has_usage = true;
         }
     }
-    if extensions_view::fleet_enabled(state) {
-        if has_usage {
-            rail = rail.child(
-                el().key("fleet-usage-divider")
-                    .w(26.0)
-                    .h(1.0)
-                    .fill(theme.color(NAVIGATION_DIVIDER_COLOR)),
-            );
-        }
-        rail = rail.child(fleet_indicator(state, theme));
+    if has_usage {
+        rail = rail.child(
+            el().key("fleet-usage-divider")
+                .w(26.0)
+                .h(1.0)
+                .fill(theme.color(NAVIGATION_DIVIDER_COLOR)),
+        );
     }
+    rail = rail.child(fleet_indicator(state, theme));
     rail.pb(10.0)
 }
 
@@ -7531,24 +7515,18 @@ mod tests {
     }
 
     #[test]
-    fn tracking_rail_destination_follows_feature_toggle() {
+    fn tracking_rail_destination_is_always_available() {
         let state = State {
             primary_view: PrimaryView::Home,
             ..State::default()
         };
         let mut runtime = Runtime::new(state, view, (1040.0, 720.0), Env::new(true, 1.0));
         runtime.frame(0.0);
-        assert!(runtime.find("nav-tracking").is_none());
+        assert!(runtime.find("nav-tracking").is_some());
         let mut state = State {
             primary_view: PrimaryView::Tracking,
             ..State::default()
         };
-        state
-            .features
-            .iter_mut()
-            .find(|feature| feature.id == "tracking")
-            .unwrap()
-            .enabled = true;
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -9716,7 +9694,6 @@ mod tests {
             major: 1,
             minor: 30,
         };
-        state.features[0].enabled = true;
         let mut runtime = Runtime::new(state, view, (840.0, 600.0), Env::new(true, 1.0));
         runtime.frame(0.0);
         assert!(!runtime.state.new_research_goal_mode);
@@ -13984,17 +13961,11 @@ active_runbook_count: 0,
 
     #[test]
     fn collapsed_rail_hover_shows_the_matching_sidenav_without_moving_content() {
-        let mut state = State {
+        let state = State {
             primary_view: PrimaryView::Home,
             sidenav_visible: false,
             ..State::default()
         };
-        state
-            .features
-            .iter_mut()
-            .find(|feature| feature.id == "tracking")
-            .unwrap()
-            .enabled = true;
         let mut runtime = Runtime::new(state, view, (1040.0, 720.0), Env::new(true, 1.0));
         runtime.on_key = Some(selection_menu_key);
         runtime.frame(0.0);
@@ -14567,7 +14538,7 @@ active_runbook_count: 0,
             connection: ConnectionStatus::Connected { major: 2, minor: 0 },
             ..State::default()
         };
-        let mut disabled = Runtime::new(
+        let mut standard = Runtime::new(
             State {
                 primary_view: PrimaryView::Home,
                 ..State::default()
@@ -14576,26 +14547,14 @@ active_runbook_count: 0,
             (1040.0, 720.0),
             Env::new(true, 1.0),
         );
-        disabled.frame(0.0);
-        assert!(disabled.find("fleet-status").is_none());
-        assert!(disabled.find("fleet-usage-divider").is_none());
-        assert!(disabled.find("navigation-conditional-divider").is_none());
-        state
-            .features
-            .iter_mut()
-            .find(|feature| feature.id == "fleet")
-            .unwrap()
-            .enabled = true;
-        let mut no_usage_state = State {
+        standard.frame(0.0);
+        assert!(standard.find("fleet-status").is_some());
+        assert!(standard.find("fleet-usage-divider").is_none());
+        assert!(standard.find("navigation-conditional-divider").is_some());
+        let no_usage_state = State {
             primary_view: PrimaryView::Home,
             ..State::default()
         };
-        no_usage_state
-            .features
-            .iter_mut()
-            .find(|feature| feature.id == "fleet")
-            .unwrap()
-            .enabled = true;
         let mut no_usage = Runtime::new(no_usage_state, view, (1040.0, 720.0), Env::new(true, 1.0));
         no_usage.frame(0.0);
         let (fleet_without_usage, _) = no_usage.presented("fleet-status").unwrap();
@@ -14636,7 +14595,7 @@ active_runbook_count: 0,
         assert_eq!([glyph[0] - ring[0], glyph[1] - ring[1]], [10.0, 10.0]);
         assert!(runtime.find("nav-fleet").is_none());
         assert!(runtime.find("fleet-usage-divider").is_some());
-        assert!(runtime.find("navigation-conditional-divider").is_none());
+        assert!(runtime.find("navigation-conditional-divider").is_some());
         assert!(runtime.find("fleet-status-ring").is_some());
         assert!(runtime.find("fleet-status-icon").is_some());
 
@@ -14697,18 +14656,12 @@ active_runbook_count: 0,
 
         runtime.update(|state, _| {
             state.navigate_to(ViewLocation::Fleet(state.fleet_section, state.fleet.tab));
-            state
-                .features
-                .iter_mut()
-                .find(|feature| feature.id == "fleet")
-                .unwrap()
-                .enabled = false;
             state.navigate_to(ViewLocation::Home);
         });
         runtime.frame(0.0);
-        assert!(runtime.find("fleet-status").is_none());
+        assert!(runtime.find("fleet-status").is_some());
         runtime.state.go_back();
-        assert_eq!(runtime.state.primary_view, PrimaryView::Home);
+        assert_eq!(runtime.state.primary_view, PrimaryView::Fleet);
     }
 
     #[test]
@@ -14733,17 +14686,11 @@ active_runbook_count: 0,
             ),
         ] {
             assert_eq!(fleet_ring_status(&status), expected);
-            let mut state = State {
+            let state = State {
                 primary_view: PrimaryView::Home,
                 connection: status,
                 ..State::default()
             };
-            state
-                .features
-                .iter_mut()
-                .find(|feature| feature.id == "fleet")
-                .unwrap()
-                .enabled = true;
             let expected_color = state.appearance.style().color(expected.1);
             let mut runtime = Runtime::new(state, view, (1040.0, 720.0), Env::new(true, 1.0));
             runtime.frame(0.0);
@@ -14766,16 +14713,10 @@ active_runbook_count: 0,
 
     #[test]
     fn fleet_add_menu_opens_the_manual_form() {
-        let mut state = State {
+        let state = State {
             primary_view: PrimaryView::Fleet,
             ..State::default()
         };
-        state
-            .features
-            .iter_mut()
-            .find(|feature| feature.id == "fleet")
-            .unwrap()
-            .enabled = true;
         let mut runtime = Runtime::new(state, view, (1040.0, 720.0), Env::new(true, 1.0));
         runtime.frame(0.0);
         let (x, y) = runtime.find("fleet-add-server").unwrap();
@@ -15000,26 +14941,12 @@ active_runbook_count: 0,
         assert!(runtime.find("feature-tab-all").is_some());
         assert!(runtime.find("feature-tab-available").is_some());
         assert!(runtime.find("feature-tab-enabled").is_some());
-        assert!(runtime.find("feature-item-goal-mode").is_some());
+        assert!(runtime.find("feature-item-goal-mode").is_none());
         assert!(runtime.find("feature-item-graphs").is_some());
         assert!(runtime.find("feature-toggle-graphs").is_some());
-        assert!(runtime.find("feature-item-fleet").is_some());
-        assert!(runtime.find("feature-toggle-fleet").is_some());
-        assert!(runtime.find("feature-tools-fleet").is_some());
-        assert!(runtime.find("feature-sidebar-view-fleet").is_some());
-        assert!(runtime.find("feature-toggle-goal-mode").is_some());
-        assert!(runtime.find("feature-prompt-extension-goal-mode").is_some());
-        assert!(runtime.find("feature-sidebar-view-goal-mode").is_some());
-        assert!(runtime.find("feature-tools-goal-mode").is_some());
-        let (prompt, _) = runtime
-            .presented("feature-prompt-extension-goal-mode")
-            .unwrap();
-        let (sidebar, _) = runtime.presented("feature-sidebar-view-goal-mode").unwrap();
-        let (tools, _) = runtime.presented("feature-tools-goal-mode").unwrap();
-        assert!(prompt[1] + prompt[3] <= sidebar[1]);
-        assert!(sidebar[1] + sidebar[3] <= tools[1]);
-        assert!(runtime.state.features[0].has_prompt_extension);
-        assert_eq!(runtime.state.features[0].tool_count, 1);
+        assert!(runtime.find("feature-item-fleet").is_none());
+        assert!(runtime.find("feature-item-tracking").is_none());
+        assert!(runtime.find("feature-item-webfetch").is_some());
         let (x, y) = runtime.find("feature-tab-enabled").unwrap();
         runtime.pointer_down(x, y);
         runtime.pointer_up(x, y);
@@ -15082,22 +15009,22 @@ active_runbook_count: 0,
         runtime.pointer_down(x, y);
         runtime.pointer_up(x, y);
         runtime.frame(1.0);
-        let (x, y) = runtime.find("feature-details-goal-mode").unwrap();
+        let (x, y) = runtime.find("feature-details-webfetch").unwrap();
         runtime.pointer_down(x, y);
         runtime.pointer_up(x, y);
         runtime.frame(0.0);
         assert_eq!(
             runtime.state.feature_details_id.as_deref(),
-            Some("goal-mode")
+            Some("webfetch")
         );
         assert!(runtime.find("feature-details-dialog").is_some());
         runtime.update(|state, _| {
             state.feature_details = Some(beale_contracts::v1::FeatureDetailsResponse {
-                id: "goal-mode".to_owned(),
-                name: "Goal Mode".to_owned(),
+                id: "webfetch".to_owned(),
+                name: "Webfetch".to_owned(),
                 description: "Example feature".to_owned(),
                 prompt_extension: "Example prompt extension".to_owned(),
-                tool_names: vec!["goal_status".to_owned()],
+                tool_names: vec!["webfetch".to_owned()],
             });
             state.feature_details_error.clear();
         });

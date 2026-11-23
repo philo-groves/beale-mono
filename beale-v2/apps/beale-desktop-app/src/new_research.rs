@@ -3285,12 +3285,6 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
                     format!("Goal waiting for: {}", goal.required_state),
                     "#dca15f",
                 )),
-                Ok(GoalStatus::Paused) if !crate::extensions_view::goal_mode_enabled(state) => {
-                    Some((
-                        "Goal Mode is disabled. Enable it in Features to continue.".to_owned(),
-                        "#dca15f",
-                    ))
-                }
                 Ok(GoalStatus::Paused)
                     if goal.max_turns != 0 && goal.turns_used >= goal.max_turns =>
                 {

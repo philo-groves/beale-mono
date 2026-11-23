@@ -1,7 +1,6 @@
 //! Goals persistence in the shared host database.
 //!
-//! This feature owns these tables and applies [`MIGRATIONS`] under its feature
-//! ID; builds without the feature never create them.
+//! Goal Mode owns these tables and applies [`MIGRATIONS`] under its schema ID.
 
 use anyhow::{Result, ensure};
 use beale_storage::{
@@ -9,7 +8,7 @@ use beale_storage::{
     rusqlite::{OptionalExtension, Transaction, params},
 };
 
-/// Ordered schema versions for this feature's tables.
+/// Ordered schema versions for Goal Mode tables.
 pub const MIGRATIONS: &[&str] = &[V1];
 
 const V1: &str = "
@@ -25,7 +24,7 @@ CREATE TABLE session_goals (
 );
 ";
 
-/// Creates or upgrades this feature's tables.
+/// Creates or upgrades Goal Mode tables.
 pub fn migrate(db: &HostDatabase) -> Result<()> {
     db.migrate_schema(crate::FEATURE_ID, MIGRATIONS)
 }
@@ -46,13 +45,6 @@ pub struct GoalRow {
 pub trait GoalStore {
     fn goal(&self, session_id: &str) -> Result<Option<GoalRow>>;
     fn set_goal_status(&self, session_id: &str, status: i32) -> Result<()>;
-    fn pause_active_goals(&self, active: i32, paused: i32) -> Result<()>;
-    fn pause_active_goals_outside_feature_scope(
-        &self,
-        feature_id: &str,
-        active: i32,
-        paused: i32,
-    ) -> Result<()>;
 }
 
 impl GoalStore for HostDatabase {
@@ -80,37 +72,6 @@ impl GoalStore for HostDatabase {
             connection.execute(
                 "UPDATE session_goals SET status = ?1 WHERE session_id = ?2",
                 params![status, session_id],
-            )?;
-            Ok(())
-        })
-    }
-
-    fn pause_active_goals(&self, active: i32, paused: i32) -> Result<()> {
-        self.with_connection(|connection| {
-            connection.execute(
-                "UPDATE session_goals SET status = ?1 WHERE status = ?2",
-                params![paused, active],
-            )?;
-            Ok(())
-        })
-    }
-
-    fn pause_active_goals_outside_feature_scope(
-        &self,
-        feature_id: &str,
-        active: i32,
-        paused: i32,
-    ) -> Result<()> {
-        self.with_connection(|connection| {
-            connection.execute(
-                "UPDATE session_goals SET status = ?1 WHERE status = ?2 AND session_id IN (
-                    SELECT sessions.id FROM sessions
-                    WHERE sessions.workspace_id NOT IN (
-                        SELECT workspace_id FROM extension_workspace_scope
-                        WHERE kind = 'feature' AND extension_id = ?3
-                    )
-                 )",
-                params![paused, active, feature_id],
             )?;
             Ok(())
         })
@@ -196,7 +157,7 @@ mod tests {
     }
 
     #[test]
-    fn goals_commit_with_turns_and_pause_outside_the_feature_scope() {
+    fn goals_commit_with_turns_and_update_status() {
         let root = root();
         let db = HostDatabase::open(&root).unwrap();
         migrate(&db).unwrap();
@@ -218,19 +179,9 @@ mod tests {
         for workspace_id in ["workspace-a", "workspace-b"] {
             commit(&db, workspace_id, &goal(&format!("session-{workspace_id}"))).unwrap();
         }
-        db.set_extension_scope(
-            "feature",
-            crate::FEATURE_ID,
-            false,
-            &["workspace-a".to_owned()],
-        )
-        .unwrap();
-        db.pause_active_goals_outside_feature_scope(crate::FEATURE_ID, 1, 4)
-            .unwrap();
-        assert_eq!(db.goal("session-workspace-a").unwrap().unwrap().status, 1);
-        assert_eq!(db.goal("session-workspace-b").unwrap().unwrap().status, 4);
-        db.pause_active_goals(1, 4).unwrap();
+        db.set_goal_status("session-workspace-a", 4).unwrap();
         assert_eq!(db.goal("session-workspace-a").unwrap().unwrap().status, 4);
+        assert_eq!(db.goal("session-workspace-b").unwrap().unwrap().status, 1);
         drop(db);
         std::fs::remove_dir_all(root).unwrap();
     }

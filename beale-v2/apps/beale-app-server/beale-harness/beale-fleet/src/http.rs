@@ -152,7 +152,7 @@ fn require_fleet_access(state: &HttpState, headers: &HeaderMap) -> Result<(), St
     if !authorized(headers, &state.token) {
         return Err(StatusCode::UNAUTHORIZED);
     }
-    enabled(state)
+    Ok(())
 }
 
 fn protobuf_request(headers: &HeaderMap) -> Result<(), StatusCode> {
@@ -473,18 +473,6 @@ fn authorized(headers: &HeaderMap, token: &str) -> bool {
             == 0
 }
 
-fn enabled(state: &HttpState) -> Result<(), StatusCode> {
-    if state
-        .db
-        .feature_enabled(crate::FEATURE_ID)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    {
-        Ok(())
-    } else {
-        Err(StatusCode::FORBIDDEN)
-    }
-}
-
 async fn provision(
     State(state): State<HttpState>,
     headers: HeaderMap,
@@ -492,7 +480,6 @@ async fn provision(
     if !authorized(&headers, &state.token) {
         return Err(StatusCode::UNAUTHORIZED);
     }
-    enabled(&state)?;
     let mut candidate = [0_u8; 20];
     SystemRandom::new()
         .fill(&mut candidate)
@@ -521,7 +508,6 @@ async fn pair(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<([(header::HeaderName, &'static str); 2], Vec<u8>), StatusCode> {
-    enabled(&state)?;
     if headers
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
@@ -561,7 +547,6 @@ async fn descriptor(
     if !authorized(&headers, &state.token) {
         return Err(StatusCode::UNAUTHORIZED);
     }
-    enabled(&state)?;
     let (os_name, os_vendor) = match std::env::consts::OS {
         "windows" => ("Windows", "Microsoft"),
         "macos" => ("macOS", "Apple"),
@@ -656,9 +641,8 @@ mod tests {
                 .await
                 .unwrap()
                 .status(),
-            StatusCode::FORBIDDEN
+            StatusCode::OK
         );
-        db.set_feature_enabled(crate::FEATURE_ID, true).unwrap();
         let unknown = FleetSetResearchToolSettingsRequest {
             id: "unknown".to_owned(),
             allow_locally: true,
@@ -844,7 +828,7 @@ mod tests {
                 .await
                 .unwrap()
                 .status(),
-            StatusCode::FORBIDDEN
+            StatusCode::OK
         );
         assert_eq!(
             app.clone()
@@ -860,7 +844,7 @@ mod tests {
                 .await
                 .unwrap()
                 .status(),
-            StatusCode::FORBIDDEN
+            StatusCode::OK
         );
         assert_eq!(
             app.clone()
@@ -886,9 +870,8 @@ mod tests {
                 .await
                 .unwrap()
                 .status(),
-            StatusCode::FORBIDDEN
+            StatusCode::BAD_REQUEST
         );
-        db.set_feature_enabled(crate::FEATURE_ID, true).unwrap();
         assert_eq!(
             app.clone()
                 .oneshot(request(
@@ -1124,7 +1107,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn descriptor_requires_auth_and_fleet_enablement() {
+    async fn descriptor_requires_auth_and_is_always_available() {
         let root =
             std::env::temp_dir().join(format!("beale-fleet-example-{}", uuid::Uuid::new_v4()));
         let db = HostDatabase::open(&root).unwrap();
@@ -1147,7 +1130,7 @@ mod tests {
         );
         assert_eq!(
             app.clone().oneshot(request()).await.unwrap().status(),
-            StatusCode::FORBIDDEN
+            StatusCode::OK
         );
         let provision_request = |with_token| {
             let mut builder = Request::builder().uri(FLEET_TOTP_PROVISION_PATH);
@@ -1170,10 +1153,9 @@ mod tests {
                 .await
                 .unwrap()
                 .status(),
-            StatusCode::FORBIDDEN
+            StatusCode::OK
         );
-        assert!(db.fleet_totp_secret().unwrap().is_none());
-        db.set_feature_enabled(crate::FEATURE_ID, true).unwrap();
+        assert!(db.fleet_totp_secret().unwrap().is_some());
         db.set_research_tool_settings("ripgrep", true, false)
             .unwrap();
         db.set_research_tool_settings("ghidra", false, true)

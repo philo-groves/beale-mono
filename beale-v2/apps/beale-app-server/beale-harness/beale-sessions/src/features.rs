@@ -9,7 +9,6 @@ use beale_storage::HostDatabase;
 /// Session-capable native features in this build, in extension-catalog order.
 pub fn native_features() -> Vec<&'static Feature> {
     vec![
-        #[cfg(feature = "fleet")]
         &beale_fleet::FEATURE,
         #[cfg(feature = "webfetch")]
         &beale_webfetch::FEATURE,
@@ -23,7 +22,6 @@ pub fn native_features() -> Vec<&'static Feature> {
         &beale_agent_feedback::FEATURE,
         #[cfg(feature = "runbooks")]
         &beale_runbooks::FEATURE,
-        #[cfg(feature = "goal-mode")]
         &beale_goals::FEATURE,
         #[cfg(feature = "graphs")]
         &beale_graphs::FEATURE,
@@ -51,6 +49,9 @@ pub fn migrate_features(db: &HostDatabase, features: &[&Feature]) -> anyhow::Res
 
 /// Whether a compiled feature is enabled and scoped to the workspace.
 pub(crate) fn applies(db: &HostDatabase, id: &str, workspace_id: &str) -> anyhow::Result<bool> {
+    if id == beale_goals::FEATURE_ID || id == beale_fleet::FEATURE_ID {
+        return Ok(true);
+    }
     Ok(native_features().iter().any(|feature| feature.id == id)
         && db.feature_enabled(id)?
         && db.extension_applies_to("feature", id, workspace_id)?)
@@ -131,6 +132,20 @@ mod tests {
         let root = std::env::temp_dir().join(format!("beale-features-{}", uuid::Uuid::new_v4()));
         let db = HostDatabase::open(&root).unwrap();
         assert!(!applies(&db, "example-unknown-feature", "workspace-example").unwrap());
+        drop(db);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn standard_harness_components_ignore_legacy_feature_state() {
+        let root =
+            std::env::temp_dir().join(format!("beale-standard-features-{}", uuid::Uuid::new_v4()));
+        let db = HostDatabase::open(&root).unwrap();
+        for id in [beale_goals::FEATURE_ID, beale_fleet::FEATURE_ID] {
+            db.set_feature_enabled(id, false).unwrap();
+            db.set_extension_scope("feature", id, false, &[]).unwrap();
+            assert!(applies(&db, id, "workspace-example").unwrap());
+        }
         drop(db);
         std::fs::remove_dir_all(root).unwrap();
     }

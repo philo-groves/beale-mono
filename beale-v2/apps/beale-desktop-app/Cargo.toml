@@ -13,7 +13,7 @@ beale-graphs = { path = "../../extensions/features/beale-graphs" }
 beale-findings = { path = "../../extensions/features/beale-findings" }
 beale-memories = { path = "../../extensions/features/beale-memories" }
 beale-runbooks = { path = "../../extensions/features/beale-runbooks" }
-beale-tracking = { path = "../../extensions/features/beale-tracking" }
+beale-tracking = { path = "../beale-app-server/beale-harness/beale-tracking" }
 beale-surfaces = { path = "../../extensions/features/beale-surfaces" }
 chrono = "0.4"
 beale-contracts = { path = "../beale-app-server/beale-harness/beale-contracts" }

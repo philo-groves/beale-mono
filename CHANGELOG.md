@@ -25,6 +25,7 @@
 
 #### Changed
 
+- V2 Goal Mode, Tracking, and Fleet are standard harness components and no longer appear in Features. Goal Mode remains selected per research prompt; its agent tool and guidance appear only during active goal turns. Existing saved feature toggles and workspace scopes for these components are ignored.
 - V2 Fleet Research Tools adds subfinder, Nmap, httpx, Katana, ffuf, Nuclei, and OWASP ZAP for web vulnerability research. The new tools default to off for Local and VM approvals. Update connected desktops before enabling them on remote app-servers.
 - Fleet offers otool on macOS and jtool2 and dig on macOS and Linux. Each app-server filters its catalog and approved-tool list by host OS.
 - V2 Edit Graph Node uses the composer's two-tier Provider and Model picker for selecting each node's models.
@@ -359,6 +360,7 @@
 
 #### Changed
 
+- V2 Goal Mode, Fleet, and Tracking crates move into the app-server harness and remain compiled without default Cargo features. Host routes and sessions ignore their legacy Feature enablement and scope. Fleet and Tracking remain authenticated; Goal Mode adds `goal_status` only to active goal turns. No database migration is required.
 - V2 Findings validation evidence must now come from a successful `read`, `bash`, or verified `findings_verify` call made after the Candidate was recorded and, in Research Pipelines, by the Validation role or its subagents. Completion records a SHA-256 digest of each cited result, and saved tool calls record their completion time and agent role for the binding.
 - V2 host storage is owner-scoped. `beale-storage` keeps only host tables; Findings, Runbooks, Fleet, Tracking, Goal Mode, Memories (extraction queue), and Graphs own their tables, apply their own migrations at host start, and are absent from builds without the feature. Feature rows saved with a turn commit through turn extensions in the same transaction, and peer graph turns record their role on the host turn. Migration: this is a clean cut with no upgrade path; the app-server refuses a `state.sqlite` from an earlier v2 development build and leaves it unchanged, so move it aside or delete it before starting.
 - V2 native features export one `beale-feature-api` descriptor (identity, guidance, tool names, review policy, and subagent availability). The host feature catalog, session extension catalog, subagent tool lists, and Auto-Review policy read these descriptors instead of restating per-feature details. Existing feature constants remain for clients.

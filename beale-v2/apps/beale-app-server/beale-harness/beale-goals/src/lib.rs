@@ -12,7 +12,7 @@ pub const FEATURE_DESCRIPTION: &str = "Keep working toward a New Research object
 pub const HAS_PROMPT_EXTENSION: bool = true;
 pub const TOOL_COUNT: u32 = 1;
 
-/// Catalog and session descriptor for this feature.
+/// Harness descriptor for Goal Mode sessions.
 pub const FEATURE: beale_feature_api::Feature = beale_feature_api::Feature {
     id: FEATURE_ID,
     name: FEATURE_NAME,

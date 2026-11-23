@@ -23,7 +23,7 @@ pub const FEATURE_DESCRIPTION: &str =
 pub const HAS_PROMPT_EXTENSION: bool = false;
 pub const TOOL_COUNT: u32 = 0;
 
-/// Catalog and session descriptor for this feature.
+/// Host descriptor for Tracking schema migrations.
 pub const FEATURE: beale_feature_api::Feature = beale_feature_api::Feature {
     id: FEATURE_ID,
     name: FEATURE_NAME,
@@ -103,13 +103,6 @@ async fn history(
 ) -> Result<([(header::HeaderName, &'static str); 1], Vec<u8>), StatusCode> {
     if !authorized(&headers, &state.token) {
         return Err(StatusCode::UNAUTHORIZED);
-    }
-    if !state
-        .db
-        .feature_enabled(FEATURE_ID)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    {
-        return Err(StatusCode::NOT_FOUND);
     }
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -210,7 +203,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn history_requires_auth_and_enabled_feature() {
+    async fn history_requires_auth_and_is_always_available() {
         let root = std::env::temp_dir().join(format!(
             "beale-tracking-example-{}-{}",
             std::process::id(),
@@ -236,13 +229,7 @@ mod tests {
             header::AUTHORIZATION,
             "Bearer example-token".parse().unwrap(),
         );
-        assert_eq!(
-            history(State(state.clone()), headers.clone())
-                .await
-                .unwrap_err(),
-            StatusCode::NOT_FOUND
-        );
-        db.set_feature_enabled(FEATURE_ID, true).unwrap();
+        assert!(history(State(state.clone()), headers.clone()).await.is_ok());
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
