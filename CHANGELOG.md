@@ -6,6 +6,7 @@
 
 #### Fixed
 
+- V2 Home shows "No tasks yet." in the sidebar when Tasks is selected.
 - V2 per-view sidenavs use the same theme-aware color for selected row labels and their icons.
 - V2 Findings ledger lanes now fill the available workspace height instead of stopping above the window bottom.
 - V2 Surface Canvas tabs now slide into view when opened from the network.

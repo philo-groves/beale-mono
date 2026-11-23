@@ -75,10 +75,12 @@ const NEW_WORKSPACE: SidebarAction = SidebarAction {
 
 struct HomeSidebarSpec {
     empty_workspaces: &'static str,
+    empty_tasks: &'static str,
 }
 
 const HOME_SIDEBAR: HomeSidebarSpec = HomeSidebarSpec {
     empty_workspaces: "No workspaces yet",
+    empty_tasks: "No tasks yet.",
 };
 
 fn primary_action(spec: &SidebarAction, state: &State, theme: ThemeStyle<'_>) -> El {
@@ -529,6 +531,15 @@ pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
             }
             collection = collection.child(group);
         }
+    } else {
+        collection = collection.child(
+            row().h(collection_header_height).center_y().pl(8.0).child(
+                text(HOME_SIDEBAR.empty_tasks)
+                    .key("home-tasks-empty")
+                    .font(ui_font(13.0, 400.0))
+                    .color(color("#969696")),
+            ),
+        );
     }
     if state.home_collection == HomeCollection::Workspaces && !state.workspace_list_error.is_empty()
     {

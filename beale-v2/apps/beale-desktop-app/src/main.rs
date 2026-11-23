@@ -9600,6 +9600,11 @@ mod tests {
         assert!(runtime.find(&workspace_key).is_none());
         assert!(runtime.find("home-add-workspace").is_none());
         assert!(runtime.find("home-search-workspaces").is_none());
+        assert!(runtime.find("home-tasks-empty").is_some());
+        assert!(runtime.elements().iter().any(|element| {
+            element.key.as_deref() == Some("home-tasks-empty")
+                && element.text.as_deref() == Some("No tasks yet.")
+        }));
         assert!(runtime.find("home-new-research").is_some());
         let (x, y) = runtime.find("home-collection-control").unwrap();
         runtime.pointer_down(x, y);
@@ -9615,6 +9620,7 @@ mod tests {
         );
         assert!(runtime.find(&workspace_key).is_some());
         assert!(runtime.find("home-add-workspace").is_some());
+        assert!(runtime.find("home-tasks-empty").is_none());
     }
 
     #[test]
