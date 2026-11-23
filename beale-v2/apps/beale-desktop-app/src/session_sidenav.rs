@@ -84,9 +84,7 @@ fn activates_sidenav(name: &str) -> bool {
             | "runbook_run"
             | "surface_add"
             | "surface_save"
-            | "surface_mapping_edit"
             | "surface_threat_model_edit"
-            | "surface_promote_element"
             | "graph_delegate"
             | "graph_subagents_spawn"
     )

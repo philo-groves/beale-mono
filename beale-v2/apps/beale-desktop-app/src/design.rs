@@ -69,14 +69,12 @@ const TAB_GROUP_GAP: f32 = 2.0;
 pub(crate) fn segmented_group_width(tab_widths: &[f32]) -> f32 {
     tab_widths.iter().sum::<f32>()
         + TAB_GROUP_PADDING * 2.0
-        + 2.0
         + TAB_GROUP_GAP * tab_widths.len().saturating_sub(1) as f32
 }
 
 pub(crate) fn segmented_tab_width(label: &str, has_icon: bool) -> f32 {
     let text_width = rune::text::measure(label, &[], ui_font(13.0, 550.0), None).0;
     text_width
-        + 2.0
         + if has_icon {
             TAB_ICON_PADDING * 2.0 + TAB_ICON_SIZE + TAB_ICON_GAP
         } else {
@@ -179,7 +177,9 @@ pub(crate) fn segmented_tab(
     if let Some(glyph) = glyph {
         tab = tab.child(icon(glyph, TAB_ICON_SIZE).color(foreground));
     }
-    tab = tab.child(text(label).font(ui_font(13.0, 550.0)).color(foreground));
+    if !label.is_empty() {
+        tab = tab.child(text(label).font(ui_font(13.0, 550.0)).color(foreground));
+    }
     if selected {
         tab = tab.shadow(
             1.0,
@@ -197,6 +197,31 @@ pub(crate) fn segmented_tab(
         tab = tab.opacity(0.5);
     }
     tab
+}
+
+pub(crate) fn segmented_icon_tab(
+    label: &'static str,
+    glyph: &'static Icon,
+    selected: bool,
+    theme: ThemeStyle<'_>,
+) -> El {
+    segmented_tab("", None, selected, true, theme)
+        .label(format!(
+            "{label}{}",
+            if selected { ", selected" } else { "" }
+        ))
+        .w(CONTROL_HEIGHT)
+        .px(0.0)
+        .help(label)
+        .child(
+            icon(glyph, TAB_ICON_SIZE)
+                .key(format!("segmented-tab-icon-{}", label.to_lowercase()))
+                .color(if selected {
+                    theme.accent()
+                } else {
+                    theme.color("#969696")
+                }),
+        )
 }
 
 impl ThemeStyle<'_> {

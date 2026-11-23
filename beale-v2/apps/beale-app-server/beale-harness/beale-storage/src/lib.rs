@@ -1162,7 +1162,6 @@ impl HostDatabase {
                  OR (name = 'graph_handoff' AND is_error = 0)
                  OR (is_error = 0 AND name IN ('memory_create', 'memory_save', 'lead_create',
                      'finding_create', 'findings_create', 'claim_create', 'runbook_create', 'runbook_edit', 'surface_add', 'surface_save',
-                     'surface_mapping_edit', 'surface_promote_element',
                      'surface_threat_model_edit'))))",
                     [id],
                     |row| row.get(0),

@@ -440,7 +440,6 @@ mod tests {
                             label: "depends on".to_owned(),
                             type_id: String::new(),
                             evidence_refs: Vec::new(),
-                            source_element_id: String::new(),
                         }],
                         ..Default::default()
                     },

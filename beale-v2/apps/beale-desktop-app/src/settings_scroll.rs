@@ -61,6 +61,10 @@ impl SettingsScroll {
     pub(crate) fn overflow_opacity(&self) -> &Live<f32> {
         &self.opacity
     }
+
+    pub(crate) fn offset_y(&self) -> f32 {
+        self.position.get().offset[1]
+    }
 }
 
 impl SettingsScroll {

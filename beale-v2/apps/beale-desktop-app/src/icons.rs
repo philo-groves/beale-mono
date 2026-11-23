@@ -39,6 +39,12 @@ pub(crate) static SEARCH: Icon = Icon {
     body: r#"<circle fill="none" stroke="currentColor" stroke-width="2" cx="11" cy="11" r="8"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="m21 21-4.35-4.35"/>"#,
 };
 
+pub(crate) static FILTER: Icon = Icon {
+    name: "beale-filter",
+    view: 24.0,
+    body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M4 5h16l-6.5 7.5V19l-3 1v-7.5z"/>"#,
+};
+
 pub(crate) static PLUS: Icon = Icon {
     name: "lucide-plus",
     view: 24.0,
@@ -427,9 +433,9 @@ pub(crate) static SETTINGS_FILLED: Icon = Icon {
 mod tests {
     use super::{
         AUTOMATION_ACTIVE, AUTOMATION_SCHEDULE, AUTOMATIONS_FILLED, CANVAS, CANVAS_FILLED,
-        EXTENSIONS_FILLED, FINDINGS, FLEET_APPLE, FLEET_LINUX, FLEET_WINDOWS, HOME_FILLED,
-        PLUGIN_META, RUNBOOK, SESSION_CACHE_RATE, SESSION_TOKENS, SETTINGS_FILLED,
-        WORKSPACE_SURFACES,
+        EXTENSIONS_FILLED, FILTER, FINDINGS, FLEET_APPLE, FLEET_LINUX, FLEET_WINDOWS, HOME_FILLED,
+        PLUGIN_META, RUNBOOK, SESSION_CACHE_RATE, SESSION_SIDENAV, SESSION_TOKENS, SETTINGS_FILLED,
+        TRACKING, WORKSPACE_SURFACES,
     };
 
     #[test]
@@ -475,7 +481,13 @@ mod tests {
 
     #[test]
     fn workspace_view_icons_rasterize_at_button_size() {
-        for mark in [&WORKSPACE_SURFACES, &FINDINGS] {
+        for mark in [
+            &WORKSPACE_SURFACES,
+            &FINDINGS,
+            &SESSION_SIDENAV,
+            &TRACKING,
+            &FILTER,
+        ] {
             let coverage = rune::text::icon_coverage(mark, 17);
             assert!(coverage.iter().filter(|&&pixel| pixel > 0).count() > 20);
         }

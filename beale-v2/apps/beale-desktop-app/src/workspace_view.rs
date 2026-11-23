@@ -1,5 +1,19 @@
 #[path = "surface_graph.rs"]
 mod surface_graph;
+#[path = "surface_web.rs"]
+mod surface_web;
+
+pub(crate) fn surface_filter_items(state: &State) -> Vec<crate::in_place_menu::MenuItem> {
+    surface_graph::filter_items(state)
+}
+
+pub(crate) fn select_surface_filter(state: &mut State, value: &str) {
+    surface_graph::select_filter(state, value);
+}
+
+pub(crate) fn surface_filter_menu(state: &State, theme: ThemeStyle<'_>) -> El {
+    surface_graph::filter_menu(state, theme)
+}
 
 use crate::design::FadeText;
 use beale_contracts::v1::{
@@ -92,28 +106,11 @@ fn tab_button(
     let button = if labeled {
         crate::design::segmented_tab(tab.label(), Some(tab_icon(tab)), selected, true, theme)
     } else {
-        // Icon-only fallback for narrow pages keeps the same control and names itself on hover.
-        crate::design::segmented_tab("", None, selected, true, theme)
-            .label(format!(
-                "{}{}",
-                tab.label(),
-                if selected { ", selected" } else { "" }
-            ))
-            .w(crate::design::CONTROL_HEIGHT)
-            .px(0.0)
-            .help(tab.label())
-            .child(
-                icon(tab_icon(tab), crate::design::TAB_ICON_SIZE).color(if selected {
-                    theme.accent()
-                } else {
-                    theme.color("#969696")
-                }),
-            )
+        crate::design::segmented_icon_tab(tab.label(), tab_icon(tab), selected, theme)
     };
     button
         .key(tab.key())
         .on_press_tx(move |state: &mut State, tx| {
-            state.workspace_surface_management_open = false;
             state.navigate_to(ViewLocation::Workspace(id, tab));
             tx.scroll_to_y("workspace-scroll", 0.0);
         })
@@ -208,18 +205,6 @@ fn surface_revision(surface: &WorkspaceSurface) -> u64 {
 
 fn surface_updated_at(surface: &WorkspaceSurface) -> u64 {
     surface.lineage.last().map_or(0, |event| event.at_ms)
-}
-
-fn surface_creator_label(surface: &WorkspaceSurface) -> &'static str {
-    if surface
-        .lineage
-        .first()
-        .is_some_and(|event| matches!(event.actor.as_str(), "agent" | "ai_import"))
-    {
-        "Agent"
-    } else {
-        "User"
-    }
 }
 
 fn approve_surface_scope(state: &mut State, index: usize) {
@@ -835,7 +820,12 @@ fn commit_relationship(state: &mut State) {
             "Enter a relationship label of at most 80 characters.".to_owned();
         return;
     }
-    let type_id = state.workspace_surface_relationship_type_id.text.trim();
+    let supplied_type_id = state.workspace_surface_relationship_type_id.text.trim();
+    let type_id = if supplied_type_id.is_empty() && label.eq_ignore_ascii_case("contains") {
+        "contains"
+    } else {
+        supplied_type_id
+    };
     if type_id.len() > 64
         || !type_id.bytes().all(|byte| {
             byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'.' || byte == b'_'
@@ -853,6 +843,23 @@ fn commit_relationship(state: &mut State) {
         close_relationship_dialog(state);
         return;
     };
+    if type_id == "contains" {
+        let hierarchy = crate::workspace_surface_layout::hierarchy(&state.workspace_surface_edits);
+        if hierarchy.parent[target].is_some() {
+            state.workspace_surface_relationship_error =
+                "This surface already has a parent.".to_owned();
+            return;
+        }
+        let mut ancestor = Some(source);
+        while let Some(index) = ancestor {
+            if index == target {
+                state.workspace_surface_relationship_error =
+                    "A surface cannot contain its ancestor.".to_owned();
+                return;
+            }
+            ancestor = hierarchy.parent[index];
+        }
+    }
     let Some(surface) = state.workspace_surface_edits.get_mut(source) else {
         close_relationship_dialog(state);
         return;
@@ -871,7 +878,6 @@ fn commit_relationship(state: &mut State) {
         label: label.to_owned(),
         type_id: type_id.to_owned(),
         evidence_refs: Vec::new(),
-        source_element_id: String::new(),
     });
     close_relationship_dialog(state);
 }
@@ -956,177 +962,6 @@ pub(crate) fn relationship_dialog(state: &State, theme: ThemeStyle<'_>) -> [El; 
         theme,
         close_relationship_dialog,
     )
-}
-
-fn surfaces(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
-    let mut forms = vec![
-        row()
-            .key("workspace-surface-management-header")
-            .w_full()
-            .center_y()
-            .child(
-                text("Manage Surfaces")
-                    .font(ui_font(16.0, 600.0))
-                    .color(theme.color("#ededed")),
-            )
-            .child(el().grow(1.0))
-            .child(
-                form_button("Back to Graph", theme)
-                    .key("workspace-surface-management-back")
-                    .on_press(|state: &mut State| state.workspace_surface_management_open = false),
-            ),
-    ];
-    forms.extend(
-        [SurfaceScope::InScope, SurfaceScope::OutOfScope]
-            .into_iter()
-            .map(|scope| {
-                let mut list = col().w_full().py(12.0).gap(8.0);
-                let mut count = 0;
-                for (index, surface) in state.workspace_surface_edits.iter().enumerate() {
-                    if surface_scope(surface) != scope as i32 {
-                        continue;
-                    }
-                    count += 1;
-                    let kind = match SurfaceKind::try_from(surface_kind(surface)) {
-                        Ok(SurfaceKind::Repository) => "Repository",
-                        Ok(SurfaceKind::Documentation) => "Documentation",
-                        Ok(SurfaceKind::Binary) => "Binary",
-                        Ok(SurfaceKind::Service) => "Service",
-                        Ok(SurfaceKind::Domain) => "Domain",
-                        _ => "Other",
-                    };
-                    let creator = surface_creator_label(surface);
-                    let mut label = format!(
-                        "{} · {kind} · {} · {creator} · {}",
-                        surface.id,
-                        surface_value(surface),
-                        scope_state_label(surface_scope_state(surface))
-                    );
-                    if let Some(definition) = &surface.definition
-                        && !definition.type_id.is_empty()
-                    {
-                        label.push_str(&format!(" · {}", definition.type_id));
-                    }
-                    if let Some(definition) = &surface.definition
-                        && !definition.out_of_scope_reason.is_empty()
-                    {
-                        label.push_str(&format!(" · {}", definition.out_of_scope_reason));
-                    }
-                    let edit = icon_action_button(
-                        format!("saved-workspace-surface-edit-{index}"),
-                        "Edit surface",
-                        &PEN,
-                        theme,
-                    );
-                    let remove = icon_action_button(
-                        format!("saved-workspace-surface-remove-{index}"),
-                        "Remove surface",
-                        &TRASH,
-                        theme,
-                    );
-                    let edit = if state.workspace_save_busy.is_some() {
-                        edit
-                    } else {
-                        edit.on_press(move |state: &mut State| {
-                            let surface = &state.workspace_surface_edits[index];
-                            let scope = if surface_scope(surface) == SurfaceScope::InScope as i32 {
-                                DraftScope::InScope
-                            } else {
-                                DraftScope::OutOfScope
-                            };
-                            open_surface_editor(state, Some(index), scope);
-                        })
-                    };
-                    list = list.child(
-                        row()
-                            .key(format!("saved-workspace-surface-{index}"))
-                            .w_full()
-                            .center_y()
-                            .gap(8.0)
-                            .child(
-                                text(label)
-                                    .grow(1.0)
-                                    .min_w(0.0)
-                                    .wrap()
-                                    .font(ui_font(14.0, 400.0))
-                                    .color(theme.color("#e2e2e2")),
-                            )
-                            .child(edit)
-                            .child(
-                                if surface_scope_state(surface)
-                                    != SurfaceScopeState::Approved as i32
-                                {
-                                    form_button("Approve", theme)
-                                        .key(format!("saved-workspace-surface-approve-{index}"))
-                                        .on_press(move |state: &mut State| {
-                                            approve_surface_scope(state, index)
-                                        })
-                                } else {
-                                    el()
-                                },
-                            )
-                            .child(if state.workspace_save_busy.is_some() {
-                                remove
-                            } else {
-                                remove.on_press(move |state: &mut State| {
-                                    state.workspace_surface_delete_index = Some(index);
-                                })
-                            }),
-                    );
-                }
-                if count == 0 {
-                    list = list.child(
-                        text("No surfaces listed.")
-                            .font(ui_font(14.0, 400.0))
-                            .color(theme.color("#969696")),
-                    );
-                }
-                let draft_scope = if scope == SurfaceScope::InScope {
-                    DraftScope::InScope
-                } else {
-                    DraftScope::OutOfScope
-                };
-                let add_button = el()
-                    .key(if scope == SurfaceScope::InScope {
-                        "saved-workspace-add-in-scope-surface"
-                    } else {
-                        "saved-workspace-add-out-of-scope-surface"
-                    })
-                    .role("button")
-                    .label("Add a surface")
-                    .size(26.0, 26.0)
-                    .center()
-                    .radius(8.0)
-                    .continuous_corners()
-                    .hover(theme.color("#303030"))
-                    .child(icon(&PLUS, 16.0).color(theme.color("#bdbdbd")));
-                let add_button = if state.workspace_save_busy.is_some() {
-                    add_button
-                } else {
-                    add_button.on_press(move |state: &mut State| {
-                        open_surface_editor(state, None, draft_scope);
-                    })
-                };
-                settings_form_with_action(
-                    FormSpec {
-                        key: if scope == SurfaceScope::InScope {
-                            "saved-workspace-in-scope-surfaces"
-                        } else {
-                            "saved-workspace-out-of-scope-surfaces"
-                        },
-                        heading: if scope == SurfaceScope::InScope {
-                            "In-Scope Surfaces"
-                        } else {
-                            "Out-of-Scope Surfaces"
-                        },
-                    },
-                    [list],
-                    Some(add_button),
-                    theme,
-                )
-            }),
-    );
-    forms
 }
 
 fn rules(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
@@ -1386,8 +1221,22 @@ fn commit_surface(state: &mut State) {
         {
             temporary_number += 1;
         }
+        let new_id = format!("M{temporary_number}");
+        if let Some(parent_id) = state.workspace_surface_explorer.focus_path.last()
+            && let Some(parent) = state
+                .workspace_surface_edits
+                .iter_mut()
+                .find(|surface| &surface.id == parent_id)
+        {
+            parent.relationships.push(SurfaceRelationship {
+                target_id: new_id.clone(),
+                label: "contains".to_owned(),
+                type_id: "contains".to_owned(),
+                ..Default::default()
+            });
+        }
         state.workspace_surface_edits.push(WorkspaceSurface {
-            id: format!("M{temporary_number}"),
+            id: new_id,
             definition: Some(definition),
             ..Default::default()
         });
@@ -1404,8 +1253,36 @@ pub(crate) fn surface_dialog(state: &State, scope: DraftScope, theme: ThemeStyle
         theme,
     )
     .key("saved-workspace-surface-kind-control");
+    let mut scope_picker = row().gap(6.0);
+    for (choice, label, key) in [
+        (DraftScope::InScope, "In scope", "surface-scope-in"),
+        (DraftScope::OutOfScope, "Out of scope", "surface-scope-out"),
+    ] {
+        scope_picker = scope_picker.child(
+            form_button(label, theme)
+                .key(key)
+                .label(format!(
+                    "{label}{}",
+                    if scope == choice { ", selected" } else { "" }
+                ))
+                .fill(theme.color(if scope == choice {
+                    "#303030"
+                } else {
+                    "#191919"
+                }))
+                .on_press(move |state: &mut State| {
+                    state.workspace_surface_dialog_scope = Some(choice)
+                }),
+        );
+    }
     let form = settings_form_card(
         [
+            row_with_control(
+                "Scope",
+                "Recorded authorization boundary.",
+                scope_picker,
+                theme,
+            ),
             row_with_control("Type", "Kind of target or source material.", kind, theme),
             row_with_control(
                 "Surface",
@@ -1535,11 +1412,7 @@ pub(crate) fn surface_dialog(state: &State, scope: DraftScope, theme: ThemeStyle
                 (false, DraftScope::OutOfScope) => "Add an Out-of-Scope Surface",
             },
             width: 540.0,
-            focus_return: if scope == DraftScope::InScope {
-                "saved-workspace-add-in-scope-surface"
-            } else {
-                "saved-workspace-add-out-of-scope-surface"
-            },
+            focus_return: "saved-workspace-add-in-scope-surface",
         },
         body,
         actions,
@@ -1632,6 +1505,42 @@ pub(crate) fn surface_delete_dialog(state: &State, theme: ThemeStyle<'_>) -> [El
     )
 }
 
+fn header_add_button(
+    key: &'static str,
+    label: &'static str,
+    help: &'static str,
+    width: f32,
+    theme: ThemeStyle<'_>,
+    action: fn(&mut State),
+    enabled: bool,
+) -> El {
+    let button = row()
+        .key(key)
+        .role("button")
+        .label(help)
+        .help(help)
+        .size(width, 36.0)
+        .center()
+        .gap(crate::design::TAB_ICON_GAP)
+        .radius(12.0)
+        .continuous_corners()
+        .fill(theme.color("#0d0d0d"))
+        .border(1.0, theme.color("#2a2a2a").alpha(0.65))
+        .hover(theme.color("#303030"))
+        .child(icon(&PLUS, crate::design::TAB_ICON_SIZE).color(theme.color("#bdbdbd")))
+        .child(
+            text(label)
+                .font(ui_font(13.0, 550.0))
+                .color(theme.color("#bdbdbd")),
+        );
+    let button = if enabled {
+        button.on_press(action)
+    } else {
+        button
+    };
+    el().size(width, 40.0).self_start().center().child(button)
+}
+
 pub(crate) fn render(
     state: &State,
     theme: ThemeStyle<'_>,
@@ -1646,6 +1555,8 @@ pub(crate) fn render(
         .iter()
         .find(|workspace| workspace.id == id.to_string())
         .map_or("Workspace", |workspace| workspace.name.as_str());
+    let title = format!("{name} {}", state.workspace_tab.label());
+    let surface_graph_open = graph_open(state);
     let visible_tabs: Vec<WorkspaceTab> = WorkspaceTab::ALL
         .into_iter()
         .filter(|tab| match tab {
@@ -1659,7 +1570,28 @@ pub(crate) fn render(
         })
         .collect();
     let labeled_width = labeled_tabs_width(&visible_tabs);
-    let labeled = page_width - labeled_width - 12.0 >= TITLE_MIN_WIDTH_BESIDE_LABELS;
+    let secondary_toggle_width = match state.workspace_tab {
+        WorkspaceTab::Surfaces if surface_graph_open => surface_graph::view_toggle_width(true),
+        WorkspaceTab::Findings => crate::findings_view::mode_toggle_width(true),
+        _ => 0.0,
+    };
+    let header_gaps = if surface_graph_open || state.workspace_tab == WorkspaceTab::Findings {
+        48.0
+    } else if secondary_toggle_width > 0.0 {
+        36.0
+    } else {
+        24.0
+    };
+    let add_action_width = match state.workspace_tab {
+        WorkspaceTab::Surfaces if surface_graph_open => {
+            crate::design::segmented_tab_width("Add Surface", true)
+        }
+        WorkspaceTab::Findings => crate::design::segmented_tab_width("Add Finding", true),
+        _ => 0.0,
+    };
+    let labeled =
+        page_width - labeled_width - secondary_toggle_width - add_action_width - header_gaps
+            >= TITLE_MIN_WIDTH_BESIDE_LABELS;
     let tabs_width = if labeled {
         labeled_width
     } else {
@@ -1682,7 +1614,7 @@ pub(crate) fn render(
             theme,
         ));
     }
-    let header = row()
+    let mut header = row()
         .key("workspace-view-header")
         .w_full()
         .center_y()
@@ -1691,28 +1623,54 @@ pub(crate) fn render(
             row()
                 .key("workspace-title-squircle")
                 .shrink()
-                .help(name)
+                .help(&title)
                 .ml(-18.0)
                 .min_w(0.0)
                 .max_w(420.0)
                 .h(56.0)
-                .px(18.0)
+                .pl(18.0)
+                .pr(10.0)
                 .center_y()
-                .radius(16.0)
-                .continuous_corners()
-                .fill(theme.color("#0d0d0d"))
                 .child(
-                    text(name)
+                    text(title)
                         .key("workspace-view-title")
+                        .offset(0.0, -8.0)
                         .min_w(0.0)
                         .fade_truncate()
                         .font(view_title_font())
                         .color(theme.color("#f2f2f2")),
                 ),
-        )
-        .child(el().grow(1.0))
-        .child(tabs);
-    if graph_open(state) {
+        );
+    if surface_graph_open {
+        header = header.child(surface_graph::view_toggle(state, labeled, theme));
+        let help = if state.workspace_surface_explorer.focus_path.is_empty() {
+            "Add Surface"
+        } else {
+            "Add Child Surface"
+        };
+        header = header.child(header_add_button(
+            "saved-workspace-add-in-scope-surface",
+            "Add Surface",
+            help,
+            add_action_width,
+            theme,
+            |state| open_surface_editor(state, None, DraftScope::InScope),
+            state.workspace_save_busy.is_none(),
+        ));
+    } else if state.workspace_tab == WorkspaceTab::Findings {
+        header = header.child(crate::findings_view::mode_toggle(state, labeled, theme));
+        header = header.child(header_add_button(
+            "workspace-add-finding",
+            "Add Finding",
+            "Add Finding",
+            add_action_width,
+            theme,
+            crate::findings_view::open_create,
+            true,
+        ));
+    }
+    let header = header.child(el().grow(1.0)).child(tabs);
+    if surface_graph_open {
         return network(state, theme, page_width, resource_height, header);
     }
     let mut page = col()
@@ -1747,7 +1705,7 @@ pub(crate) fn render(
     });
     if let Some(details) = details {
         let forms = match state.workspace_tab {
-            WorkspaceTab::Surfaces => surfaces(state, theme),
+            WorkspaceTab::Surfaces => Vec::new(),
             WorkspaceTab::Findings => Vec::new(),
             WorkspaceTab::Rules => rules(state, theme),
             WorkspaceTab::Foundation => vec![foundation(state, details, theme)],
@@ -1775,8 +1733,7 @@ pub(crate) fn render(
                 "saved-workspace-save-disabled"
             },
         );
-        if state.workspace_tab != WorkspaceTab::Surfaces || state.workspace_surface_management_open
-        {
+        if state.workspace_tab != WorkspaceTab::Surfaces {
             page = page.child(row().w_full().child(el().grow(1.0)).child(
                 if dirty && !saving && !state.workspace_details_loading {
                     save.on_press(move |state: &mut State| crate::start_workspace_save(state, tab))
@@ -1847,7 +1804,6 @@ pub(crate) fn graph_open(state: &State) -> bool {
         && state
             .workspace_id
             .is_some_and(|id| crate::extensions_view::surfaces_enabled(state, &id.to_string()))
-        && !state.workspace_surface_management_open
         && state.workspace_id.is_some_and(|id| {
             state.workspace_details.as_ref().is_some_and(|details| {
                 details

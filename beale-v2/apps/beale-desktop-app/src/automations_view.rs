@@ -14,12 +14,44 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::{
     AUTH_HANDLE, ConnectionStatus, PrimaryView, SelectionMenu, State, ThemeStyle, ViewLocation,
     form_button,
-    icons::{ARCHIVE, AUTOMATION_ACTIVE, AUTOMATION_SCHEDULE, AUTOMATIONS, SEARCH},
-    start_session_load, ui_font,
+    icons::{
+        ARCHIVE, AUTOMATION_ACTIVE, AUTOMATION_SCHEDULE, AUTOMATIONS, CHEVRON_DOWN, CHEVRON_UP,
+        SEARCH,
+    },
+    start_session_load, toggle_selection_menu, ui_font,
 };
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum AutomationList {
+    #[default]
+    Future,
+    Past,
+    Active,
+}
+
+impl AutomationList {
+    pub(crate) const ALL: [Self; 3] = [Self::Future, Self::Past, Self::Active];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Future => "Future",
+            Self::Past => "Past",
+            Self::Active => "Active",
+        }
+    }
+
+    pub(crate) fn key(self) -> &'static str {
+        match self {
+            Self::Future => "future",
+            Self::Past => "past",
+            Self::Active => "active",
+        }
+    }
+}
 
 #[derive(Default)]
 pub(crate) struct AutomationState {
+    pub(crate) list: AutomationList,
     pub(crate) jobs: Vec<AutomationJob>,
     pub(crate) runs: Vec<AutomationRun>,
     pub(crate) selected_id: Option<String>,
@@ -361,22 +393,6 @@ fn run_row(run: &AutomationRun, active: bool, selected: bool, theme: ThemeStyle<
         )
 }
 
-fn section_header(label: &str, glyph: &'static rune::Icon, theme: ThemeStyle<'_>) -> El {
-    row()
-        .key(format!("automations-{label}-label"))
-        .h(30.0)
-        .px(4.0)
-        .mt(10.0)
-        .center_y()
-        .gap(10.0)
-        .child(icon(glyph, 15.0).color(theme.color("#9d9d9d")))
-        .child(
-            text(label.to_owned())
-                .font(ui_font(14.0, 500.0))
-                .color(theme.color("#b8b8b8")),
-        )
-}
-
 fn section_toggle(
     key: &'static str,
     expanded: bool,
@@ -426,15 +442,19 @@ pub(crate) fn sidenav(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
         .iter()
         .filter(|run| run.status != AutomationRunStatus::Active as i32)
         .collect();
-    list = list.child(section_header("Active", &AUTOMATION_ACTIVE, theme));
-    if active.is_empty() {
+    if state.automations.list == AutomationList::Active && active.is_empty() {
         list = list.child(empty_section("Active", theme));
     }
-    for run in active.iter().take(if state.automations.active_expanded {
-        usize::MAX
-    } else {
-        5
-    }) {
+    for run in active
+        .iter()
+        .take(if state.automations.list != AutomationList::Active {
+            0
+        } else if state.automations.active_expanded {
+            usize::MAX
+        } else {
+            5
+        })
+    {
         list = list.child(run_row(
             run,
             true,
@@ -442,7 +462,7 @@ pub(crate) fn sidenav(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
             theme,
         ));
     }
-    if active.len() > 5 {
+    if state.automations.list == AutomationList::Active && active.len() > 5 {
         list = list.child(section_toggle(
             "automations-active-toggle",
             state.automations.active_expanded,
@@ -450,15 +470,19 @@ pub(crate) fn sidenav(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
             |state| state.automations.active_expanded = !state.automations.active_expanded,
         ));
     }
-    list = list.child(section_header("Future", &AUTOMATIONS, theme));
-    if future.is_empty() {
+    if state.automations.list == AutomationList::Future && future.is_empty() {
         list = list.child(empty_section("Future", theme));
     }
-    for job in future.iter().take(if state.automations.future_expanded {
-        usize::MAX
-    } else {
-        5
-    }) {
+    for job in future
+        .iter()
+        .take(if state.automations.list != AutomationList::Future {
+            0
+        } else if state.automations.future_expanded {
+            usize::MAX
+        } else {
+            5
+        })
+    {
         list = list.child(list_row(
             job,
             true,
@@ -466,7 +490,7 @@ pub(crate) fn sidenav(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
             theme,
         ));
     }
-    if future.len() > 5 {
+    if state.automations.list == AutomationList::Future && future.len() > 5 {
         list = list.child(section_toggle(
             "automations-future-toggle",
             state.automations.future_expanded,
@@ -474,15 +498,19 @@ pub(crate) fn sidenav(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
             |state| state.automations.future_expanded = !state.automations.future_expanded,
         ));
     }
-    list = list.child(section_header("Past", &ARCHIVE, theme));
-    if past.is_empty() {
+    if state.automations.list == AutomationList::Past && past.is_empty() {
         list = list.child(empty_section("Past", theme));
     }
-    for run in past.iter().take(if state.automations.past_expanded {
-        usize::MAX
-    } else {
-        5
-    }) {
+    for run in past
+        .iter()
+        .take(if state.automations.list != AutomationList::Past {
+            0
+        } else if state.automations.past_expanded {
+            usize::MAX
+        } else {
+            5
+        })
+    {
         list = list.child(run_row(
             run,
             false,
@@ -490,7 +518,7 @@ pub(crate) fn sidenav(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
             theme,
         ));
     }
-    if past.len() > 5 {
+    if state.automations.list == AutomationList::Past && past.len() > 5 {
         list = list.child(section_toggle(
             "automations-past-toggle",
             state.automations.past_expanded,
@@ -534,11 +562,46 @@ pub(crate) fn sidenav(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
                 .mt(12.0)
                 .center_y()
                 .child(
-                    text("Runs")
-                        .key("automations-runs-label")
-                        .ml(8.0)
-                        .font(ui_font(13.0, 400.0))
-                        .color(theme.color("#b8b8b8")),
+                    row()
+                        .key("automations-list-control")
+                        .role("button")
+                        .label(format!(
+                            "Choose automation list: {}",
+                            state.automations.list.label()
+                        ))
+                        .h(26.0)
+                        .px(8.0)
+                        .center_y()
+                        .gap(6.0)
+                        .radius(8.0)
+                        .continuous_corners()
+                        .fill(
+                            if state.selection_menu == Some(SelectionMenu::AutomationList) {
+                                theme.color("#303030")
+                            } else {
+                                Color::TRANSPARENT
+                            },
+                        )
+                        .hover(theme.color("#414141"))
+                        .child(
+                            text(state.automations.list.label())
+                                .font(ui_font(13.0, 400.0))
+                                .color(theme.color("#969696")),
+                        )
+                        .child(
+                            icon(
+                                if state.selection_menu == Some(SelectionMenu::AutomationList) {
+                                    &CHEVRON_UP
+                                } else {
+                                    &CHEVRON_DOWN
+                                },
+                                13.0,
+                            )
+                            .color(theme.color("#969696")),
+                        )
+                        .on_press(|state| {
+                            toggle_selection_menu(state, SelectionMenu::AutomationList)
+                        }),
                 )
                 .child(el().grow(1.0))
                 .child(

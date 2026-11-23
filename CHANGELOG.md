@@ -6,6 +6,10 @@
 
 #### Fixed
 
+- V2 header sidebar and history icons use the rail icons' muted color; unavailable history actions remain dimmed.
+- V2 segmented button groups now have even left and right padding, including compact workspace and Findings controls.
+- V2 surface connection views have a dedicated Back control that restores the originating view, filters, sort, and page. Graph and Inventory tabs exit the neighborhood filter.
+- V2 Fleet shows its sidenav on hover when the sidebar is collapsed, matching the other navigation icons.
 - V2 Home shows "No tasks yet." in the sidebar when Tasks is selected.
 - V2 per-view sidenavs use the same theme-aware color for selected row labels and their icons.
 - V2 Findings ledger lanes now fill the available workspace height instead of stopping above the window bottom.
@@ -26,6 +30,24 @@
 
 #### Changed
 
+- V2 Surfaces Graph lays out all top-level webs in fixed-size regions, with the column count based on available content width. Overflow scrolls vertically with the shared content scrollbar; graph pagination is removed.
+- V2 Findings adds an Add Finding button after Ledger and Plot. Its form creates a Candidate finding with a title, summary, and hypothesis, then refreshes the view.
+- V2 collapsed sidenav dividers have 8 px of space above and 12 px below the line and hide while a hover flyout is open.
+- V2 workspace headers offer a New Research tab before a session exists; it opens a draft for the visible workspace and preserves that draft when switching back.
+- V2 Surfaces protocol 2.30 removes local mapping records, element promotion, mapping-based threat references, and their model tools and prompts. Threat scenarios attach directly to surfaces.
+- V2 Surfaces shows top-level icons, names, and muted IDs in centered wrapping labels above muted circle-and-line webs. Out-of-scope icons and names are red. Hovering a label outlines it; selecting it opens surface details. Selecting a child focuses its direct descendants with back navigation. The host enforces one parent per child and rejects containment cycles.
+- V2 workspace titles align vertically with header controls, have no card fill, and sit closer to per-view toggles.
+- V2 Surfaces footer buttons use the main content background with a muted 1 px border.
+- V2 Surfaces removes the persistent graph and inventory status sentence, leaving contextual navigation actions when available.
+- V2 Surfaces places an Add Surface button with a plus icon and text beside Graph and Inventory in the header. Sorting, scope and review filters, and search stay in the footer Filter menu beside the matching/total surface count.
+- V2 Surfaces places Graph and Inventory in a compactable toggle group beside the view title, with workspace view tabs aligned to the right.
+- V2 Findings places the Ledger and Plot selector beside the view title, adds icons with compact centered buttons for narrow windows, and removes the redundant heading and active count.
+- V2 workspace views show the workspace name and active view name together in the page title.
+- V2 Inventory now includes surface editing and deletion, replacing the separate Manage Surfaces screen. Add surface offers an explicit scope selector, and Map is labeled Connections.
+- V2 Surfaces adds a paged, sortable inventory for large scopes, surface webs, direct-neighborhood navigation, compound search, and filters that isolate matching records. Directional connection counts, definition/link evidence counts, exclusion boundaries, and drawn-link totals replace update activity bars.
+- V2 icon rail places Tracking directly below Automations, without a divider between them.
+- V2 Automations sidebar switches between Future, Past, and Active lists through a selector above the runs.
+- V2 sidebar toggle and history buttons in the left header use more rounded corners.
 - V2 Windows agents can set `machine` on `powershell` to run a command in a Can Run-approved, running Hyper-V guest through operator-configured OpenSSH. The app-server rechecks VM discovery and workspace scope for each call; guest SSH settings and keys stay on the host.
 - V2 Windows sessions now offer `powershell` in place of `bash` and run commands through Windows PowerShell. Workspace import, Findings verification, Auto-Review, session activity, and stock prompts follow the host shell; Unix hosts continue to offer Bash.
 - V2 Fleet removes the Can Clone VM allowance from its cards and protocol. Protocol v2.28 requires updated app-servers for new desktops; Fleet migration 2 drops the saved clone setting while preserving Can Run and workspace scope.
@@ -348,6 +370,7 @@
 
 #### Added
 
+- Protocol 2.31 adds an authenticated, workspace-scoped Findings create endpoint for operator-entered Candidates. Creation uses the same host validation and durable history as the Findings tool; update connected desktops and app-servers together.
 - V2 Findings adds `findings_verify`, which reruns a declared proof command twice in fresh workspace processes and records whether a host-evaluated oracle (exit code, exit nonzero, or stdout/stderr text) held on every run. Oracle text that appears in the command is rejected. The verification, run digests, and requesting role are saved on the finding; a verified call can be cited as validation evidence. Summaries gain `verified`. Verification is recorded but not required to complete validation.
 - Fleet exposes an authenticated Research Tools catalog and saves Local and VM approval choices independently per app-server. Protocol 2.27 adds the filtered allowance list to the authenticated descriptor for peer inspection. Applicable research prompts list allowed tools and locations only when at least one is approved. SQLite schema 48 defaults every approval off; installation uses existing reviewed execution tools.
 - Protocol 2.24 adds CPU, memory, and app-server data-volume capacity and availability to the authenticated Fleet descriptor. Rebuild the host and desktop together; resource figures are not saved with desktop connections.

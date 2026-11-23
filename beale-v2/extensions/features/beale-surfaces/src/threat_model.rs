@@ -1,8 +1,8 @@
 use super::{THREAT_MODEL_EDIT, THREAT_MODEL_GET, evidence_json, evidence_refs, required};
 use anyhow::{Context, Result, bail, ensure};
 use beale_contracts::v1::{
-    SurfaceThreatDisposition, SurfaceThreatMapRef, SurfaceThreatMapRefKind, SurfaceThreatScenario,
-    UpdateWorkspaceSurfaceThreatModelRequest, WorkspaceSurfaceMapping, WorkspaceSurfaceThreatModel,
+    SurfaceThreatDisposition, SurfaceThreatScenario, UpdateWorkspaceSurfaceThreatModelRequest,
+    WorkspaceSurfaceThreatModel,
 };
 use beale_workspaces::WorkspaceStore;
 use serde_json::{Map, Value, json};
@@ -14,19 +14,6 @@ fn fields<'a>(value: &'a Value, allowed: &[&str]) -> Result<&'a Map<String, Valu
         "unknown threat model field"
     );
     Ok(object)
-}
-
-fn map_ref(value: &Value) -> Result<SurfaceThreatMapRef> {
-    fields(value, &["kind", "id"])?;
-    let kind = match required(value, "kind")? {
-        "element" => SurfaceThreatMapRefKind::Element,
-        "flow" => SurfaceThreatMapRefKind::Flow,
-        _ => bail!("invalid map reference kind"),
-    };
-    Ok(SurfaceThreatMapRef {
-        kind: kind as i32,
-        id: required(value, "id")?.to_owned(),
-    })
 }
 
 fn string_array(value: &Value, key: &str) -> Result<Vec<String>> {
@@ -49,7 +36,6 @@ fn scenario(value: &Value, id: String) -> Result<SurfaceThreatScenario> {
         &[
             "id",
             "title",
-            "map_refs",
             "attacker_position",
             "preconditions",
             "suspected_failure",
@@ -72,17 +58,9 @@ fn scenario(value: &Value, id: String) -> Result<SurfaceThreatScenario> {
         "dismissed" => SurfaceThreatDisposition::Dismissed,
         _ => bail!("invalid disposition"),
     };
-    let map_refs = object
-        .get("map_refs")
-        .and_then(Value::as_array)
-        .context("map_refs must be an array")?
-        .iter()
-        .map(map_ref)
-        .collect::<Result<Vec<_>>>()?;
     Ok(SurfaceThreatScenario {
         id,
         title: required(value, "title")?.to_owned(),
-        map_refs,
         attacker_position: required(value, "attacker_position")?.to_owned(),
         preconditions: string_array(value, "preconditions")?,
         suspected_failure: required(value, "suspected_failure")?.to_owned(),
@@ -105,32 +83,7 @@ fn scenario(value: &Value, id: String) -> Result<SurfaceThreatScenario> {
     })
 }
 
-fn ref_json(reference: &SurfaceThreatMapRef) -> Value {
-    let kind = if reference.kind == SurfaceThreatMapRefKind::Element as i32 {
-        "element"
-    } else {
-        "flow"
-    };
-    json!({"kind":kind,"id":reference.id})
-}
-
-fn ref_exists(reference: &SurfaceThreatMapRef, mapping: &WorkspaceSurfaceMapping) -> bool {
-    match SurfaceThreatMapRefKind::try_from(reference.kind) {
-        Ok(SurfaceThreatMapRefKind::Element) => {
-            mapping.elements.iter().any(|item| item.id == reference.id)
-        }
-        Ok(SurfaceThreatMapRefKind::Flow) => {
-            mapping.flows.iter().any(|item| item.id == reference.id)
-        }
-        _ => false,
-    }
-}
-
-fn page(
-    model: &WorkspaceSurfaceThreatModel,
-    mapping: &WorkspaceSurfaceMapping,
-    args: &Value,
-) -> Result<Value> {
+fn page(model: &WorkspaceSurfaceThreatModel, args: &Value) -> Result<Value> {
     fields(args, &["surface_id", "offset", "limit"])?;
     let offset = args
         .get("offset")
@@ -147,8 +100,7 @@ fn page(
     let scenarios = model.scenarios.iter().skip(offset).take(limit as usize).map(|item| {
         let disposition = if item.disposition == SurfaceThreatDisposition::Dismissed as i32 { "dismissed" } else { "open" };
         json!({
-            "id":item.id,"title":item.title,"map_refs":item.map_refs.iter().map(ref_json).collect::<Vec<_>>(),
-            "stale_map_refs":item.map_refs.iter().filter(|reference| !ref_exists(reference, mapping)).map(ref_json).collect::<Vec<_>>(),
+            "id":item.id,"title":item.title,
             "attacker_position":item.attacker_position,"preconditions":item.preconditions,
             "suspected_failure":item.suspected_failure,"invariant_at_risk":item.invariant_at_risk,
             "potential_impact":item.potential_impact,"validation_question":item.validation_question,
@@ -159,9 +111,6 @@ fn page(
     }).collect::<Vec<_>>();
     Ok(json!({
         "surface_id":model.surface_id,"revision":model.revision,
-        "reviewed_mapping_revision":model.reviewed_mapping_revision,
-        "current_mapping_revision":mapping.revision,
-        "mapping_review_needed":model.reviewed_mapping_revision < mapping.revision,
         "total_scenarios":model.scenarios.len(),"scenarios":scenarios,
     }))
 }
@@ -176,27 +125,13 @@ pub(super) fn execute(
     let mut model = store
         .threat_model_for_host(workspace_id, surface_id)
         .map_err(|status| anyhow::anyhow!("threat model read failed: {status}"))?;
-    let mapping = store
-        .mapping_for_host(workspace_id, surface_id)
-        .map_err(|status| anyhow::anyhow!("mapping read failed: {status}"))?;
     match name {
-        THREAT_MODEL_GET => Ok(page(&model, &mapping, args)?.to_string()),
+        THREAT_MODEL_GET => Ok(page(&model, args)?.to_string()),
         THREAT_MODEL_EDIT => {
-            fields(
-                args,
-                &["surface_id", "scenario", "remove_id", "review_mapping"],
-            )?;
-            let review = args
-                .get("review_mapping")
-                .map(|value| value.as_bool().context("invalid review_mapping"))
-                .transpose()?
-                .unwrap_or(false);
+            fields(args, &["surface_id", "scenario", "remove_id"])?;
             let changes = usize::from(args.get("scenario").is_some())
                 + usize::from(args.get("remove_id").is_some());
-            ensure!(
-                changes <= 1 && (changes == 1 || review),
-                "supply one scenario or removal, optionally with review_mapping, or review_mapping alone"
-            );
+            ensure!(changes == 1, "supply one scenario or removal");
             let changed_id = if let Some(value) = args.get("scenario") {
                 let id = value
                     .get("id")
@@ -224,22 +159,17 @@ pub(super) fn execute(
             } else {
                 String::new()
             };
-            if review {
-                model.reviewed_mapping_revision = mapping.revision;
-            }
             let saved = store
                 .update_threat_model_for_agent(
                     workspace_id,
                     surface_id,
                     UpdateWorkspaceSurfaceThreatModelRequest {
                         expected_revision: model.revision,
-                        reviewed_mapping_revision: model.reviewed_mapping_revision,
                         scenarios: model.scenarios,
                     },
                 )
                 .map_err(|status| anyhow::anyhow!("threat model update failed: {status}"))?;
-            Ok(json!({"surface_id":saved.surface_id,"revision":saved.revision,"changed_id":changed_id,
-                "reviewed_mapping_revision":saved.reviewed_mapping_revision}).to_string())
+            Ok(json!({"surface_id":saved.surface_id,"revision":saved.revision,"changed_id":changed_id}).to_string())
         }
         _ => bail!("unknown threat model tool"),
     }

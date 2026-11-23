@@ -44,8 +44,16 @@ pub(crate) fn fixture(variant: &str) -> State {
         | "session-insights-main"
         | "session-insights-subagents"
         | "session-insights-no-subagents" => "session",
-        "surfaces-empty" | "surfaces-review" | "surfaces-search" | "surfaces-dense"
-        | "surfaces-large" => "surfaces",
+        "surfaces-empty"
+        | "surfaces-review"
+        | "surfaces-search"
+        | "surfaces-dense"
+        | "surfaces-large"
+        | "surfaces-web"
+        | "surfaces-web-overflow"
+        | "surfaces-web-scope"
+        | "surfaces-web-focused"
+        | "surface-connections" => "surfaces",
         "archive-empty" => "archive",
         "archive-chats-empty" => "archive-chats",
         "tracking-selected"
@@ -73,6 +81,7 @@ pub(crate) fn fixture(variant: &str) -> State {
         "fleet-connect" | "fleet-import" | "fleet-detail" => "fleet",
         "safety-rule" => "safety",
         "finding-detail"
+        | "finding-create"
         | "findings-plot"
         | "findings-plot-empty"
         | "findings-plot-unrated"
@@ -359,6 +368,73 @@ pub(crate) fn fixture(variant: &str) -> State {
                 type_id: type_id.into(),
                 ..Default::default()
             });
+    }
+    if matches!(
+        variant,
+        "surfaces-web" | "surfaces-web-overflow" | "surfaces-web-scope" | "surfaces-web-focused"
+    ) {
+        if variant == "surfaces-web-scope"
+            && let Some(definition) = &mut s.workspace_surface_edits[3].definition
+        {
+            definition.scope = SurfaceScope::OutOfScope as i32;
+        }
+        if variant == "surfaces-web"
+            && let Some(definition) = &mut s.workspace_surface_edits[0].definition
+        {
+            definition.name = "Example organization security research guidelines".into();
+        }
+        for link in &mut s.workspace_surface_edits[0].relationships {
+            link.label = "contains".into();
+            link.type_id = "contains".into();
+        }
+        s.workspace_surface_edits[3]
+            .relationships
+            .push(SurfaceRelationship {
+                target_id: "S5".into(),
+                label: "contains".into(),
+                type_id: "contains".into(),
+                ..Default::default()
+            });
+        for link in &mut s.workspace_surface_edits[5].relationships {
+            link.label = "contains".into();
+            link.type_id = "contains".into();
+        }
+        s.workspace_surface_edits[0]
+            .relationships
+            .push(SurfaceRelationship {
+                target_id: "S4".into(),
+                label: "depends on".into(),
+                type_id: "depends_on".into(),
+                ..Default::default()
+            });
+        if variant == "surfaces-web-focused" {
+            let mut nested = s.workspace_surface_edits[7].clone();
+            nested.id = "S9".into();
+            nested.relationships.clear();
+            if let Some(definition) = &mut nested.definition {
+                definition.name = "Nested example".into();
+            }
+            s.workspace_surface_edits.push(nested);
+            s.workspace_surface_edits[1]
+                .relationships
+                .push(SurfaceRelationship {
+                    target_id: "S9".into(),
+                    label: "contains".into(),
+                    type_id: "contains".into(),
+                    ..Default::default()
+                });
+        }
+        if variant == "surfaces-web-overflow" {
+            for (id, name) in [("S10", "Example web four"), ("S11", "Example web five")] {
+                let mut extra = s.workspace_surface_edits[3].clone();
+                extra.id = id.into();
+                extra.relationships.clear();
+                if let Some(definition) = &mut extra.definition {
+                    definition.name = name.into();
+                }
+                s.workspace_surface_edits.push(extra);
+            }
+        }
     }
     if let Some(details) = &mut s.workspace_details {
         details.surfaces = s.workspace_surface_edits.clone();
@@ -711,7 +787,9 @@ pub(crate) fn fixture(variant: &str) -> State {
                 _ => workspace_view::WorkspaceTab::Rules,
             };
             s.workspace_findings.loaded = true;
-            s.workspace_surface_management_open = name == "surface-manage";
+            if name == "surface-manage" {
+                s.workspace_surface_explorer.view = Some(workspace_surface_layout::View::Inventory);
+            }
             if name == "surface-detail" {
                 crate::surface_canvas::open(&mut s, 0);
             }
@@ -958,9 +1036,24 @@ pub(crate) fn fixture(variant: &str) -> State {
         }
     }
     match variant {
+        "surfaces-web-focused" => {
+            s.workspace_surface_explorer.focus_path = vec!["S2".into()];
+        }
         "surfaces-empty" => {
             s.workspace_surface_edits.clear();
             s.workspace_details.as_mut().unwrap().surfaces.clear();
+        }
+        "surface-connections" => {
+            s.workspace_surface_explorer.neighborhood = Some("S1".into());
+            s.workspace_surface_explorer.view = Some(workspace_surface_layout::View::Graph);
+            s.workspace_surface_explorer.return_to = Some(workspace_surface_layout::ReturnTo {
+                view: workspace_surface_layout::View::Inventory,
+                sort: workspace_surface_layout::Sort::Recorded,
+                focus: workspace_surface_layout::Focus::All,
+                query: String::new(),
+                page: 0,
+                page_anchor: None,
+            });
         }
         "surfaces-review" => s.workspace_surface_focus = workspace_surface_layout::Focus::Review,
         "surfaces-search" => s.workspace_surface_query = TextEdit::new("archive"),
@@ -1088,6 +1181,7 @@ pub(crate) fn fixture(variant: &str) -> State {
             );
         }
         "finding-detail" => s.workspace_findings.preview_detail(),
+        "finding-create" => findings_view::open_create(&mut s),
         _ => {}
     }
     if variant == "home-collapsed" {

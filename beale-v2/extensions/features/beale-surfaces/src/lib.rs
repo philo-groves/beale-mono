@@ -8,14 +8,14 @@ use beale_contracts::v1::{
 use beale_workspaces::WorkspaceStore;
 use serde_json::{Value, json};
 
-mod mapping;
 mod threat_model;
 
 pub const FEATURE_ID: &str = "surfaces";
 pub const FEATURE_NAME: &str = "Surfaces";
-pub const FEATURE_DESCRIPTION: &str = "Map local surface details, track relationships between surfaces, and promote independently researchable elements.";
+pub const FEATURE_DESCRIPTION: &str =
+    "Record surfaces and their parent-child and other relationships.";
 pub const HAS_PROMPT_EXTENSION: bool = false;
-pub const TOOL_COUNT: u32 = 6;
+pub const TOOL_COUNT: u32 = 4;
 
 /// Catalog and session descriptor for this feature.
 pub const FEATURE: beale_feature_api::Feature = beale_feature_api::Feature {
@@ -24,7 +24,7 @@ pub const FEATURE: beale_feature_api::Feature = beale_feature_api::Feature {
     description: FEATURE_DESCRIPTION,
     prompt_extension: PROMPT_EXTENSION,
     use_case: "Use to inspect or maintain the workspace surface map and relationships.",
-    tool_names: &[QUERY, READ, SAVE, MAPPING_EDIT, PROMOTE, THREAT_MODEL_EDIT],
+    tool_names: &[QUERY, READ, SAVE, THREAT_MODEL_EDIT],
     definitions: Some(definitions),
     review: beale_feature_api::ToolReview::Required,
     subagents: false,
@@ -37,9 +37,6 @@ pub const ADD: &str = "surface_add";
 pub const EDIT: &str = "surface_edit";
 pub const GET: &str = "surface_get";
 pub const QUERY: &str = "surface_query";
-pub const MAPPING_GET: &str = "surface_mapping_get";
-pub const MAPPING_EDIT: &str = "surface_mapping_edit";
-pub const PROMOTE: &str = "surface_promote_element";
 pub const THREAT_MODEL_GET: &str = "surface_threat_model_get";
 pub const THREAT_MODEL_EDIT: &str = "surface_threat_model_edit";
 pub const READ: &str = "surface_read";
@@ -49,29 +46,18 @@ pub fn definitions() -> Vec<Value> {
     let evidence = json!({"type":"object","properties":{"kind":{"type":"string"},"reference":{"type":"string"},"note":{"type":"string"}},"required":["kind","reference"],"additionalProperties":false});
     let locator = json!({"type":"object","properties":{"kind":{"type":"string","description":"Use repository_path or freeform for code.module, code.package, and code.file; use url, git_url, or freeform for repository. Other surface types accept their matching locator kinds."},"value":{"type":"string"}},"required":["kind","value"],"additionalProperties":false});
     let definition = json!({"type":"object","properties":{"type_id":{"type":"string","description":"Built-in types: repository, code.module, code.package, code.file, documentation, binary, service, api.endpoint, domain, host, container, configuration, other. Extensions use kit.* or custom.*. Use code.module for a module, not module."},"name":{"type":"string"},"locator":locator,"scope":{"type":"string","enum":["in_scope","out_of_scope"]},"description":{"type":"string"},"out_of_scope_reason":{"type":"string"},"evidence_refs":{"type":"array","items":evidence}},"additionalProperties":false});
-    let mut promote_definition = definition.clone();
-    promote_definition["required"] = json!(["type_id", "scope"]);
-    let relationship = json!({"type":"object","properties":{"target_id":{"type":"string"},"label":{"type":"string"},"type_id":{"type":"string"},"source_element_id":{"type":"string"},"evidence_refs":{"type":"array","items":evidence}},"required":["target_id","label"],"additionalProperties":false});
-    let map_element = json!({"type":"object","properties":{"id":{"type":"string"},"category":{"type":"string","enum":["component","interface","behavior","state","control"]},"type_id":{"type":"string"},"name":{"type":"string"},"locator":locator,"observation":{"type":"string"},"basis":{"type":"string","enum":["observed","reported","inferred"]},"observed_at_ms":{"type":"integer"},"evidence_refs":{"type":"array","items":evidence}},"required":["category","type_id","name","observation","basis","evidence_refs"],"additionalProperties":false});
-    let map_flow = json!({"type":"object","properties":{"id":{"type":"string"},"from_element_id":{"type":"string"},"to_element_id":{"type":"string"},"kind":{"type":"string","enum":["call","data","control","event"]},"observation":{"type":"string"},"basis":{"type":"string","enum":["observed","reported","inferred"]},"evidence_refs":{"type":"array","items":evidence}},"required":["from_element_id","to_element_id","kind","observation","basis","evidence_refs"],"additionalProperties":false});
-    let map_gap = json!({"type":"object","properties":{"id":{"type":"string"},"element_id":{"type":"string"},"question":{"type":"string"},"reason":{"type":"string","enum":["not_examined","unavailable","ambiguous"]},"evidence_refs":{"type":"array","items":evidence}},"required":["question","reason"],"additionalProperties":false});
-    let map_ref = json!({"type":"object","properties":{"kind":{"type":"string","enum":["element","flow"]},"id":{"type":"string"}},"required":["kind","id"],"additionalProperties":false});
-    let scenario = json!({"type":"object","properties":{"id":{"type":"string"},"title":{"type":"string"},"map_refs":{"type":"array","items":map_ref},"attacker_position":{"type":"string"},"preconditions":{"type":"array","items":{"type":"string"}},"suspected_failure":{"type":"string"},"invariant_at_risk":{"type":"string"},"potential_impact":{"type":"string"},"validation_question":{"type":"string"},"evidence_refs":{"type":"array","items":evidence},"disposition":{"type":"string","enum":["open","dismissed"]},"disposition_reason":{"type":"string"},"related_claim_ids":{"type":"array","items":{"type":"string"}}},"required":["title","map_refs","attacker_position","preconditions","suspected_failure","invariant_at_risk","potential_impact","validation_question"],"additionalProperties":false});
+    let relationship = json!({"type":"object","properties":{"target_id":{"type":"string"},"label":{"type":"string"},"type_id":{"type":"string"},"evidence_refs":{"type":"array","items":evidence}},"required":["target_id","label"],"additionalProperties":false});
+    let scenario = json!({"type":"object","properties":{"id":{"type":"string"},"title":{"type":"string"},"attacker_position":{"type":"string"},"preconditions":{"type":"array","items":{"type":"string"}},"suspected_failure":{"type":"string"},"invariant_at_risk":{"type":"string"},"potential_impact":{"type":"string"},"validation_question":{"type":"string"},"evidence_refs":{"type":"array","items":evidence},"disposition":{"type":"string","enum":["open","dismissed"]},"disposition_reason":{"type":"string"},"related_claim_ids":{"type":"array","items":{"type":"string"}}},"required":["title","attacker_position","preconditions","suspected_failure","invariant_at_risk","potential_impact","validation_question"],"additionalProperties":false});
     vec![
         json!({"type":"function","name":QUERY,"description":"Query surfaces in this workspace by type, scope, or text. Returns at most 50 surfaces.","parameters":{"type":"object","properties":{"type_id":{"type":"string"},"scope":{"type":"string","enum":["in_scope","out_of_scope"]},"text":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":50}},"additionalProperties":false}}),
-        json!({"type":"function","name":READ,"description":"Read one surface section: record and lineage, local mapping, or threat model. Choose mapping_section to page elements, flows, or gaps.","parameters":{"type":"object","properties":{"surface_id":{"type":"string"},"section":{"type":"string","enum":["record","mapping","threat_model"]},"mapping_section":{"type":"string","enum":["elements","flows","gaps"]},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":50}},"required":["surface_id","section"],"additionalProperties":false}}),
-        json!({"type":"function","name":SAVE,"description":"Create or revise a surface definition and inter-surface relationships. Create requires type_id, locator, and scope; revise requires id and workspace_surfaces_revision from surface_read. Evidence references are candidate context, not proof of authorization.","parameters":{"type":"object","properties":{"operation":{"type":"string","enum":["create","revise"]},"id":{"type":"string"},"expected_revision":{"type":"integer","minimum":1},"definition":definition,"relationships":{"type":"array","items":relationship}},"required":["operation"],"additionalProperties":false}}),
-        json!({"type":"function","name":MAPPING_EDIT,"description":"Add or replace one local element, flow, or gap, or remove one by ID. Supply one operation. Flows connect elements in this mapping only.","parameters":{"type":"object","properties":{"surface_id":{"type":"string"},"element":map_element,"flow":map_flow,"gap":map_gap,"remove":{"type":"object","properties":{"kind":{"type":"string","enum":["element","flow","gap"]},"id":{"type":"string"}},"required":["kind","id"],"additionalProperties":false}},"required":["surface_id"],"additionalProperties":false}}),
-        json!({"type":"function","name":PROMOTE,"description":"Promote a mapped element when it needs its own scope or internal map. The host creates the surface and anchored relationship; the original element stays as a concise marker.","parameters":{"type":"object","properties":{"surface_id":{"type":"string"},"element_id":{"type":"string"},"definition":promote_definition},"required":["surface_id","element_id","definition"],"additionalProperties":false}}),
-        json!({"type":"function","name":THREAT_MODEL_EDIT,"description":"Add or replace one plausible local failure, remove one, or mark the current map reviewed. A scenario or removal can be combined with review_mapping=true. Anchor scenarios to this surface's map; record investigation results as Knowledge claims.","parameters":{"type":"object","properties":{"surface_id":{"type":"string"},"scenario":scenario,"remove_id":{"type":"string"},"review_mapping":{"type":"boolean"}},"required":["surface_id"],"additionalProperties":false}}),
+        json!({"type":"function","name":READ,"description":"Read one surface record and lineage, or its threat scenarios.","parameters":{"type":"object","properties":{"surface_id":{"type":"string"},"section":{"type":"string","enum":["record","threat_model"]},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":50}},"required":["surface_id","section"],"additionalProperties":false}}),
+        json!({"type":"function","name":SAVE,"description":"Create or revise a surface and its relationships. Set parent_id to place a child beneath exactly one parent; omit it for a top-level surface. Create requires type_id, locator, and scope; revise requires id and workspace_surfaces_revision from surface_read.","parameters":{"type":"object","properties":{"operation":{"type":"string","enum":["create","revise"]},"id":{"type":"string"},"expected_revision":{"type":"integer","minimum":1},"parent_id":{"type":"string"},"definition":definition,"relationships":{"type":"array","items":relationship}},"required":["operation"],"additionalProperties":false}}),
+        json!({"type":"function","name":THREAT_MODEL_EDIT,"description":"Add or replace a plausible failure for this surface, or remove a scenario. Record investigation results as Knowledge claims.","parameters":{"type":"object","properties":{"surface_id":{"type":"string"},"scenario":scenario,"remove_id":{"type":"string"}},"required":["surface_id"],"additionalProperties":false}}),
     ]
 }
 
 pub fn is_tool(name: &str) -> bool {
-    matches!(
-        name,
-        QUERY | READ | SAVE | MAPPING_EDIT | PROMOTE | THREAT_MODEL_EDIT
-    )
+    matches!(name, QUERY | READ | SAVE | THREAT_MODEL_EDIT)
 }
 
 fn summary_value(value: &str) -> String {
@@ -98,28 +84,14 @@ pub fn summary(store: &WorkspaceStore, workspace_id: &str, name: &str, args: &Va
                 |value| format!("Surface query: {value}"),
             );
     }
-    let supplied_name = matches!(name, SAVE | PROMOTE)
+    let selected_name = (name == SAVE)
         .then(|| args.get("definition")?.get("name")?.as_str())
         .flatten()
         .map(summary_value)
         .filter(|value| !value.is_empty());
-    let selected_name = supplied_name.or_else(|| {
-        if name != PROMOTE {
-            return None;
-        }
-        let surface_id = args.get("surface_id")?.as_str()?;
-        let element_id = args.get("element_id")?.as_str()?;
-        store
-            .mapping_for_host(workspace_id, surface_id)
-            .ok()?
-            .elements
-            .into_iter()
-            .find(|element| element.id == element_id)
-            .map(|element| summary_value(&element.name))
-    });
     let id = match name {
         SAVE => args.get("id"),
-        READ | MAPPING_EDIT | PROMOTE | THREAT_MODEL_EDIT => args.get("surface_id"),
+        READ | THREAT_MODEL_EDIT => args.get("surface_id"),
         _ => None,
     }
     .and_then(Value::as_str);
@@ -257,7 +229,7 @@ fn relationships(
             ensure!(
                 item.keys().all(|key| matches!(
                     key.as_str(),
-                    "target_id" | "label" | "type_id" | "evidence_refs" | "source_element_id"
+                    "target_id" | "label" | "type_id" | "evidence_refs"
                 )),
                 "unknown relationship field"
             );
@@ -278,11 +250,6 @@ fn relationships(
                     .unwrap_or("")
                     .to_owned(),
                 evidence_refs: evidence_refs(item.get("evidence_refs"), Vec::new())?,
-                source_element_id: item
-                    .get("source_element_id")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_owned(),
             })
         })
         .collect()
@@ -311,7 +278,7 @@ fn surface_json(surface: &WorkspaceSurface, include_lineage: bool) -> Value {
     } else {
         Vec::new()
     };
-    json!({"id":surface.id,"definition":definition,"relationships":surface.relationships.iter().map(|item| json!({"target_id":item.target_id,"label":item.label,"type_id":item.type_id,"source_element_id":item.source_element_id,"evidence_refs":item.evidence_refs.iter().map(evidence_json).collect::<Vec<_>>()})).collect::<Vec<_>>(),"lineage":lineage})
+    json!({"id":surface.id,"definition":definition,"relationships":surface.relationships.iter().map(|item| json!({"target_id":item.target_id,"label":item.label,"type_id":item.type_id,"evidence_refs":item.evidence_refs.iter().map(evidence_json).collect::<Vec<_>>()})).collect::<Vec<_>>(),"lineage":lineage})
 }
 
 pub fn execute(
@@ -325,10 +292,9 @@ pub fn execute(
     if name == READ {
         let fields = args.as_object().context("arguments must be an object")?;
         ensure!(
-            fields.keys().all(|key| matches!(
-                key.as_str(),
-                "surface_id" | "section" | "mapping_section" | "offset" | "limit"
-            )),
+            fields
+                .keys()
+                .all(|key| matches!(key.as_str(), "surface_id" | "section" | "offset" | "limit")),
             "unknown surface_read field"
         );
         let surface_id = required(args, "surface_id")?;
@@ -355,24 +321,7 @@ pub fn execute(
                 );
                 Ok(result.to_string())
             }
-            "mapping" => {
-                let mut input = json!({"surface_id":surface_id});
-                if let Some(section) = fields.get("mapping_section") {
-                    input["section"] = section.clone();
-                }
-                if let Some(offset) = fields.get("offset") {
-                    input["offset"] = offset.clone();
-                }
-                if let Some(limit) = fields.get("limit") {
-                    input["limit"] = limit.clone();
-                }
-                mapping::execute(store, workspace_id, MAPPING_GET, &input, review_approved)
-            }
             "threat_model" => {
-                ensure!(
-                    !fields.contains_key("mapping_section"),
-                    "mapping_section applies only to mapping reads"
-                );
                 let mut input = json!({"surface_id":surface_id});
                 if let Some(offset) = fields.get("offset") {
                     input["offset"] = offset.clone();
@@ -384,9 +333,6 @@ pub fn execute(
             }
             _ => bail!("invalid surface section"),
         };
-    }
-    if matches!(name, MAPPING_GET | MAPPING_EDIT | PROMOTE) {
-        return mapping::execute(store, workspace_id, name, args, review_approved);
     }
     if matches!(name, THREAT_MODEL_GET | THREAT_MODEL_EDIT) {
         return threat_model::execute(store, workspace_id, name, args);
@@ -439,12 +385,21 @@ pub fn execute(
             Ok(json!({"revision":current.revision,"surfaces":matches}).to_string())
         }
         ADD | EDIT | SAVE => {
+            let requested_parent = args
+                .get("parent_id")
+                .map(|value| value.as_str().context("parent_id must be a string"))
+                .transpose()?;
             let create = if name == SAVE {
                 let fields = args.as_object().context("arguments must be an object")?;
                 ensure!(
                     fields.keys().all(|key| matches!(
                         key.as_str(),
-                        "operation" | "id" | "expected_revision" | "definition" | "relationships"
+                        "operation"
+                            | "id"
+                            | "expected_revision"
+                            | "parent_id"
+                            | "definition"
+                            | "relationships"
                     )),
                     "unknown surface_save field"
                 );
@@ -468,7 +423,8 @@ pub fn execute(
                         );
                         ensure!(
                             fields.contains_key("definition")
-                                || fields.contains_key("relationships"),
+                                || fields.contains_key("relationships")
+                                || fields.contains_key("parent_id"),
                             "revise requires a change"
                         );
                         false
@@ -500,8 +456,21 @@ pub fn execute(
                 if let Some(hint) = beale_workspaces::surface_definition_hint(&definition) {
                     bail!("{hint}");
                 }
+                let new_id = "draft-new-surface";
+                if let Some(parent_id) = requested_parent.filter(|id| !id.is_empty()) {
+                    let parent = inputs
+                        .iter_mut()
+                        .find(|item| item.id == parent_id)
+                        .context("parent surface not found")?;
+                    parent.relationships.push(SurfaceRelationship {
+                        target_id: new_id.to_owned(),
+                        label: "contains".to_owned(),
+                        type_id: "contains".to_owned(),
+                        ..Default::default()
+                    });
+                }
                 inputs.push(WorkspaceSurfaceInput {
-                    id: String::new(),
+                    id: new_id.to_owned(),
                     definition: Some(definition),
                     relationships: relationships(args.get("relationships"), Vec::new())?,
                 });
@@ -525,6 +494,26 @@ pub fn execute(
                     args.get("relationships"),
                     std::mem::take(&mut item.relationships),
                 )?;
+                if let Some(parent_id) = requested_parent {
+                    ensure!(parent_id != id, "a surface cannot parent itself");
+                    for surface in &mut inputs {
+                        surface
+                            .relationships
+                            .retain(|link| link.type_id != "contains" || link.target_id != id);
+                    }
+                    if !parent_id.is_empty() {
+                        let parent = inputs
+                            .iter_mut()
+                            .find(|item| item.id == parent_id)
+                            .context("parent surface not found")?;
+                        parent.relationships.push(SurfaceRelationship {
+                            target_id: id.to_owned(),
+                            label: "contains".to_owned(),
+                            type_id: "contains".to_owned(),
+                            ..Default::default()
+                        });
+                    }
+                }
             }
             let saved = store
                 .update_surfaces_for_agent(workspace_id, current.revision, inputs)
@@ -577,9 +566,9 @@ mod tests {
         assert_eq!(tools[2]["name"], SAVE);
         assert_eq!(tools[2]["parameters"]["required"], json!(["operation"]));
         assert!(
-            tools[2]["parameters"]["properties"]["definition"]["properties"]
+            tools[2]["parameters"]["properties"]
                 .get("parent_id")
-                .is_none()
+                .is_some()
         );
         assert!(
             tools[2]["parameters"]["properties"]["definition"]["properties"]
@@ -592,127 +581,9 @@ mod tests {
                 .is_some()
         );
         assert_eq!(tools.len(), TOOL_COUNT as usize);
-        assert_eq!(
-            tools[4]["parameters"]["properties"]["definition"]["required"],
-            json!(["type_id", "scope"])
-        );
-        assert_eq!(tools[5]["name"], THREAT_MODEL_EDIT);
+        assert_eq!(tools[3]["name"], THREAT_MODEL_EDIT);
         assert!(!is_tool(GET));
-        assert!(!is_tool(MAPPING_GET));
         assert!(!is_tool(THREAT_MODEL_GET));
-    }
-
-    #[tokio::test]
-    async fn threat_model_tools_track_local_scenarios_and_map_review() {
-        let base =
-            std::env::temp_dir().join(format!("beale-threat-tools-example-{}", Uuid::new_v4()));
-        std::fs::create_dir_all(&base).unwrap();
-        let store = WorkspaceStore::at(base.join("host")).unwrap();
-        let token = "ab".repeat(32);
-        let request = CreateWorkspaceRequest {
-            name: "Example Workspace".to_owned(),
-            directory: base.join("workspace").to_string_lossy().into_owned(),
-            rules: vec!["Stay within recorded scope.".to_owned()],
-            ..Default::default()
-        };
-        let response = beale_workspaces::router(token.clone(), store.clone())
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(WORKSPACES_PATH)
-                    .header("authorization", format!("Bearer {token}"))
-                    .header("content-type", "application/x-protobuf")
-                    .body(Body::from(request.encode_to_vec()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let workspace =
-            WorkspaceSummary::decode(to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
-        let added: Value = serde_json::from_str(&execute(&store, &workspace.id, SAVE,
-            &json!({"operation":"create","definition":{"type_id":"repository","locator":{"kind":"freeform","value":"example repository"},"scope":"in_scope"}}), false).unwrap()).unwrap();
-        assert_eq!(added["id"], "S1");
-        assert_eq!(added["workspace_surfaces_revision"], 2);
-        let mapped: Value = serde_json::from_str(&execute(&store, &workspace.id, MAPPING_EDIT,
-            &json!({"surface_id":"S1","element":{"category":"interface","type_id":"web.http_route","name":"Example route","observation":"Accepts example requests.","basis":"observed","evidence_refs":[{"kind":"artifact","reference":"artifact-example-001"}]}}), false).unwrap()).unwrap();
-        assert_eq!(mapped["changed_id"], "E1");
-        let scenario = json!({"title":"Example authorization bypass","map_refs":[{"kind":"element","id":"E1"}],
-            "attacker_position":"Unauthenticated client","preconditions":["Route is reachable"],
-            "suspected_failure":"The route may omit authorization checks.",
-            "invariant_at_risk":"Only authorized users may read records.",
-            "potential_impact":"Unauthorized record disclosure.",
-            "validation_question":"Does a request without a session return records?"});
-        let saved: Value = serde_json::from_str(
-            &execute(
-                &store,
-                &workspace.id,
-                THREAT_MODEL_EDIT,
-                &json!({"surface_id":"S1","scenario":scenario,"review_mapping":true}),
-                false,
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(saved["changed_id"], "T1");
-        assert_eq!(saved["reviewed_mapping_revision"], 2);
-        let read: Value = serde_json::from_str(
-            &execute(
-                &store,
-                &workspace.id,
-                READ,
-                &json!({"surface_id":"S1","section":"threat_model"}),
-                false,
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(read["scenarios"][0]["id"], "T1");
-        assert_eq!(read["mapping_review_needed"], false);
-        let reviewed: Value = serde_json::from_str(
-            &execute(
-                &store,
-                &workspace.id,
-                THREAT_MODEL_EDIT,
-                &json!({"surface_id":"S1","review_mapping":true}),
-                false,
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(reviewed["reviewed_mapping_revision"], 2);
-        execute(
-            &store,
-            &workspace.id,
-            MAPPING_EDIT,
-            &json!({"surface_id":"S1","remove":{"kind":"element","id":"E1"}}),
-            false,
-        )
-        .unwrap();
-        let stale: Value = serde_json::from_str(
-            &execute(
-                &store,
-                &workspace.id,
-                READ,
-                &json!({"surface_id":"S1","section":"threat_model"}),
-                false,
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(stale["mapping_review_needed"], true);
-        assert_eq!(stale["scenarios"][0]["stale_map_refs"][0]["id"], "E1");
-        assert!(
-            execute(
-                &store,
-                &workspace.id,
-                THREAT_MODEL_EDIT,
-                &json!({"surface_id":"S1","scenario":{"id":"T9"}}),
-                false
-            )
-            .is_err()
-        );
-        drop(store);
-        std::fs::remove_dir_all(base).unwrap();
     }
 
     #[tokio::test]
@@ -795,15 +666,6 @@ mod tests {
             summary(
                 &store,
                 &workspace.id,
-                MAPPING_EDIT,
-                &json!({"surface_id":"S1"})
-            ),
-            "Surface name: Example repository"
-        );
-        assert_eq!(
-            summary(
-                &store,
-                &workspace.id,
                 THREAT_MODEL_EDIT,
                 &json!({"surface_id":"S1"})
             ),
@@ -869,53 +731,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(queried["surfaces"].as_array().unwrap().len(), 1);
-        let mapped: Value = serde_json::from_str(&execute(&store, &workspace.id, MAPPING_EDIT, &json!({"surface_id":"S1","element":{"category":"interface","type_id":"code.export","name":"Parse input","locator":{"kind":"source_symbol","value":"src/parser.rs::parse_input"},"observation":"Accepts untrusted input.","basis":"observed","evidence_refs":[{"kind":"artifact","reference":"artifact-example-001"}]}}), false).unwrap()).unwrap();
-        assert_eq!(
-            summary(
-                &store,
-                &workspace.id,
-                PROMOTE,
-                &json!({"surface_id":"S1","element_id":"E1","definition":{"type_id":"code.file","scope":"in_scope"}})
-            ),
-            "Surface name: Parse input"
-        );
-        assert_eq!(
-            summary(
-                &store,
-                &workspace.id,
-                PROMOTE,
-                &json!({"surface_id":"S1","element_id":"E1","definition":{"name":"Named surface"}})
-            ),
-            "Surface name: Named surface"
-        );
-        assert_eq!(mapped["changed_id"], "E1");
-        assert_eq!(mapped["revision"], 2);
-        let read: Value = serde_json::from_str(
-            &execute(
-                &store,
-                &workspace.id,
-                READ,
-                &json!({"surface_id":"S1","section":"mapping","mapping_section":"elements"}),
-                false,
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(read["elements"][0]["basis"], "observed");
-        assert!(execute(&store, &workspace.id, MAPPING_EDIT, &json!({"surface_id":"S1","flow":{"from_element_id":"E1","to_element_id":"E99","kind":"call","observation":"Calls a missing element.","basis":"inferred","evidence_refs":[{"kind":"artifact","reference":"artifact-example-001"}]}}), false).is_err());
-        let promoted: Value = serde_json::from_str(&execute(&store, &workspace.id, PROMOTE, &json!({"surface_id":"S1","element_id":"E1","definition":{"type_id":"service","scope":"in_scope"}}), true).unwrap()).unwrap();
-        assert_eq!(promoted["id"], "S2");
-        assert_eq!(promoted["definition"]["scope_state"], "approved");
-        let source: Value = serde_json::from_str(
-            &execute(&store, &workspace.id, GET, &json!({"id":"S1"}), false).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(
-            source["surface"]["relationships"][0]["source_element_id"],
-            "E1"
-        );
-        assert!(execute(&store, &workspace.id, EDIT, &json!({"id":"S1","relationships":[{"target_id":"S2","label":"has part","type_id":"has_part","source_element_id":"E99"}]}), true).is_err());
-        assert!(execute(&store, &workspace.id, PROMOTE, &json!({"surface_id":"S1","element_id":"E1","definition":{"type_id":"service","scope":"in_scope"}}), true).is_err());
         assert!(
             execute(
                 &store,
@@ -925,6 +740,45 @@ mod tests {
                 false,
             )
             .is_err()
+        );
+        let child: Value = serde_json::from_str(&execute(
+            &store, &workspace.id, SAVE,
+            &json!({"operation":"create","parent_id":"S1","definition":{"type_id":"repository","name":"Example child","locator":{"kind":"freeform","value":"example child"},"scope":"in_scope"}}),
+            false,
+        ).unwrap()).unwrap();
+        assert_eq!(child["id"], "S2");
+        let parent: Value = serde_json::from_str(
+            &execute(
+                &store,
+                &workspace.id,
+                READ,
+                &json!({"surface_id":"S1","section":"record"}),
+                false,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(parent["surface"]["relationships"][0]["target_id"], "S2");
+        assert_eq!(parent["surface"]["relationships"][0]["type_id"], "contains");
+        let scenario: Value = serde_json::from_str(&execute(
+            &store, &workspace.id, THREAT_MODEL_EDIT,
+            &json!({"surface_id":"S2","scenario":{"title":"Example trust-boundary failure","attacker_position":"Remote client","preconditions":[],"suspected_failure":"Example validation gap","invariant_at_risk":"Example invariant","potential_impact":"Example impact","validation_question":"Can the boundary be bypassed?"}}), false,
+        ).unwrap()).unwrap();
+        assert_eq!(scenario["changed_id"], "T1");
+        let model: Value = serde_json::from_str(
+            &execute(
+                &store,
+                &workspace.id,
+                READ,
+                &json!({"surface_id":"S2","section":"threat_model"}),
+                false,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            model["scenarios"][0]["title"],
+            "Example trust-boundary failure"
         );
         drop(store);
         std::fs::remove_dir_all(base).unwrap();

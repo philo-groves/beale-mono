@@ -7,16 +7,15 @@ use axum::{
 };
 use beale_contracts::{
     WORKSPACE_CAMPAIGN_PATH, WORKSPACE_DETAILS_PATH, WORKSPACE_FOUNDATION_PATH,
-    WORKSPACE_RULES_PATH, WORKSPACE_SURFACE_MAPPING_PATH, WORKSPACE_SURFACE_THREAT_MODEL_PATH,
-    WORKSPACE_SURFACES_PATH, WORKSPACES_PATH,
+    WORKSPACE_RULES_PATH, WORKSPACE_SURFACE_THREAT_MODEL_PATH, WORKSPACE_SURFACES_PATH,
+    WORKSPACES_PATH,
     v1::{
         CreateWorkspaceRequest, ListWorkspacesResponse, SurfaceChange, SurfaceDefinition,
         SurfaceEvidence, SurfaceLocator, SurfaceRelationship, SurfaceRevision, SurfaceScope,
         SurfaceScopeState, UpdateWorkspaceFoundationRequest, UpdateWorkspaceRulesRequest,
-        UpdateWorkspaceSurfaceMappingRequest, UpdateWorkspaceSurfaceThreatModelRequest,
-        UpdateWorkspaceSurfacesRequest, WorkspaceCampaign, WorkspaceDetails, WorkspaceFoundation,
-        WorkspaceRules, WorkspaceSummary, WorkspaceSurface, WorkspaceSurfaceInput,
-        WorkspaceSurfaceMapping, WorkspaceSurfaceThreatModel, WorkspaceSurfaces,
+        UpdateWorkspaceSurfaceThreatModelRequest, UpdateWorkspaceSurfacesRequest,
+        WorkspaceCampaign, WorkspaceDetails, WorkspaceFoundation, WorkspaceRules, WorkspaceSummary,
+        WorkspaceSurface, WorkspaceSurfaceInput, WorkspaceSurfaceThreatModel, WorkspaceSurfaces,
     },
 };
 use beale_storage::{HostDatabase, WorkspaceRow};
@@ -34,7 +33,6 @@ use uuid::Uuid;
 
 mod http;
 mod import;
-mod mapping;
 mod threat_model;
 use http::{authorized, checked_body, response};
 
@@ -176,8 +174,6 @@ struct StoredRelationship {
     type_id: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     evidence_refs: Vec<StoredEvidence>,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    source_element_id: String,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -315,24 +311,6 @@ impl WorkspaceStore {
         self.surfaces(id).map_err(|error| error.status())
     }
 
-    pub fn mapping_for_host(
-        &self,
-        id: &str,
-        surface_id: &str,
-    ) -> Result<WorkspaceSurfaceMapping, StatusCode> {
-        self.mapping(id, surface_id).map_err(|error| error.status())
-    }
-
-    pub fn update_mapping_for_agent(
-        &self,
-        id: &str,
-        surface_id: &str,
-        request: UpdateWorkspaceSurfaceMappingRequest,
-    ) -> Result<WorkspaceSurfaceMapping, StatusCode> {
-        self.update_mapping(id, surface_id, request)
-            .map_err(|error| error.status())
-    }
-
     pub fn threat_model_for_host(
         &self,
         id: &str,
@@ -349,17 +327,6 @@ impl WorkspaceStore {
         request: UpdateWorkspaceSurfaceThreatModelRequest,
     ) -> Result<WorkspaceSurfaceThreatModel, StatusCode> {
         self.update_threat_model(id, surface_id, request)
-            .map_err(|error| error.status())
-    }
-
-    pub fn promote_element_for_agent(
-        &self,
-        id: &str,
-        surface_id: &str,
-        element_id: &str,
-        definition: SurfaceDefinition,
-    ) -> Result<WorkspaceSurface, StatusCode> {
-        self.promote_element(id, surface_id, element_id, definition)
             .map_err(|error| error.status())
     }
 
@@ -449,8 +416,6 @@ impl WorkspaceStore {
         {
             return Err(WorkspaceError::Internal("invalid workspace manifest"));
         }
-        mapping::validate_surface_anchors(&manifest.surfaces, directory)
-            .map_err(|_| WorkspaceError::Internal("invalid surface relationship anchor"))?;
         let guidance = Self::guidance(&entry)?;
         sync_rules_file(directory, &manifest.rules)?;
         let surfaces = manifest
@@ -502,8 +467,6 @@ impl WorkspaceStore {
         {
             return Err(WorkspaceError::Internal("invalid workspace manifest"));
         }
-        mapping::validate_surface_anchors(&manifest.surfaces, Path::new(&entry.directory))
-            .map_err(|_| WorkspaceError::Internal("invalid surface relationship anchor"))?;
         for surface in manifest.surfaces.iter().chain(&manifest.retired_surfaces) {
             surface_dto(surface.clone())?;
         }
@@ -548,67 +511,6 @@ impl WorkspaceStore {
         })
     }
 
-    fn mapping(
-        &self,
-        id: &str,
-        surface_id: &str,
-    ) -> Result<WorkspaceSurfaceMapping, WorkspaceError> {
-        let entry = self.entry(id)?;
-        let manifest = Self::manifest(&entry)?;
-        if !manifest
-            .surfaces
-            .iter()
-            .chain(&manifest.retired_surfaces)
-            .any(|item| item.id == surface_id)
-        {
-            return Err(WorkspaceError::NotFound);
-        }
-        Ok(
-            mapping::read_mapping(Path::new(&entry.directory), surface_id)?
-                .as_ref()
-                .map_or_else(
-                    || WorkspaceSurfaceMapping {
-                        surface_id: surface_id.to_owned(),
-                        revision: 1,
-                        next_element_number: 1,
-                        next_flow_number: 1,
-                        next_gap_number: 1,
-                        ..Default::default()
-                    },
-                    mapping::mapping_dto,
-                ),
-        )
-    }
-
-    fn update_mapping(
-        &self,
-        id: &str,
-        surface_id: &str,
-        request: UpdateWorkspaceSurfaceMappingRequest,
-    ) -> Result<WorkspaceSurfaceMapping, WorkspaceError> {
-        let _guard = self
-            .write_lock
-            .lock()
-            .map_err(|_| WorkspaceError::Internal("workspace write lock"))?;
-        let entry = self.entry(id)?;
-        let manifest = Self::manifest(&entry)?;
-        if !manifest.surfaces.iter().any(|item| item.id == surface_id) {
-            return Err(WorkspaceError::NotFound);
-        }
-        let directory = Path::new(&entry.directory);
-        let previous_mapping = mapping::read_mapping(directory, surface_id)?;
-        let previous = previous_mapping.as_ref();
-        let revision = previous.map_or(1, |item| item.revision);
-        if request.expected_revision != revision {
-            return Err(WorkspaceError::Conflict);
-        }
-        let next_revision = revision.checked_add(1).ok_or(WorkspaceError::Invalid)?;
-        let mapping = mapping::validate_mapping(surface_id, next_revision, request, previous)?;
-        mapping::validate_relationship_anchors(&manifest.surfaces, &mapping)?;
-        mapping::write_mapping(directory, &mapping)?;
-        Ok(mapping::mapping_dto(&mapping))
-    }
-
     fn threat_model(
         &self,
         id: &str,
@@ -625,17 +527,7 @@ impl WorkspaceStore {
             return Err(WorkspaceError::NotFound);
         }
         let directory = Path::new(&entry.directory);
-        let mapping = mapping::read_mapping(directory, surface_id)?
-            .as_ref()
-            .map_or_else(
-                || WorkspaceSurfaceMapping {
-                    surface_id: surface_id.to_owned(),
-                    revision: 1,
-                    ..Default::default()
-                },
-                mapping::mapping_dto,
-            );
-        Ok(threat_model::read(directory, surface_id, &mapping)?
+        Ok(threat_model::read(directory, surface_id)?
             .as_ref()
             .map_or_else(
                 || WorkspaceSurfaceThreatModel {
@@ -664,121 +556,15 @@ impl WorkspaceStore {
             return Err(WorkspaceError::NotFound);
         }
         let directory = Path::new(&entry.directory);
-        let mapping = mapping::read_mapping(directory, surface_id)?
-            .as_ref()
-            .map_or_else(
-                || WorkspaceSurfaceMapping {
-                    surface_id: surface_id.to_owned(),
-                    revision: 1,
-                    ..Default::default()
-                },
-                mapping::mapping_dto,
-            );
-        let previous = threat_model::read(directory, surface_id, &mapping)?;
+        let previous = threat_model::read(directory, surface_id)?;
         let revision = previous.as_ref().map_or(1, |item| item.revision);
         if request.expected_revision != revision {
             return Err(WorkspaceError::Conflict);
         }
         let next_revision = revision.checked_add(1).ok_or(WorkspaceError::Invalid)?;
-        let model = threat_model::validate(
-            surface_id,
-            next_revision,
-            request,
-            previous.as_ref(),
-            &mapping,
-        )?;
+        let model = threat_model::validate(surface_id, next_revision, request, previous.as_ref())?;
         threat_model::write(directory, &model)?;
         Ok(threat_model::dto(&model))
-    }
-
-    fn promote_element(
-        &self,
-        id: &str,
-        surface_id: &str,
-        element_id: &str,
-        definition: SurfaceDefinition,
-    ) -> Result<WorkspaceSurface, WorkspaceError> {
-        let _guard = self
-            .write_lock
-            .lock()
-            .map_err(|_| WorkspaceError::Internal("workspace write lock"))?;
-        let entry = self.entry(id)?;
-        let mut manifest = Self::manifest(&entry)?;
-        let source = manifest
-            .surfaces
-            .iter()
-            .find(|item| item.id == surface_id)
-            .ok_or(WorkspaceError::NotFound)?;
-        let source_mapping = mapping::read_mapping(Path::new(&entry.directory), surface_id)?
-            .ok_or(WorkspaceError::Invalid)?;
-        let element = source_mapping
-            .elements
-            .iter()
-            .find(|item| item.id == element_id)
-            .ok_or(WorkspaceError::Invalid)?;
-        let evidence_refs = element
-            .evidence_refs
-            .iter()
-            .cloned()
-            .map(evidence_dto)
-            .collect();
-        if source
-            .relationships
-            .iter()
-            .any(|relationship| relationship.source_element_id == element_id)
-        {
-            return Err(WorkspaceError::Invalid);
-        }
-        let new_id = format!("S{}", manifest.next_surface_number);
-        let mut inputs = manifest
-            .surfaces
-            .iter()
-            .cloned()
-            .map(surface_dto)
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
-            .map(|surface| WorkspaceSurfaceInput {
-                id: surface.id,
-                definition: surface.definition,
-                relationships: surface.relationships,
-            })
-            .collect::<Vec<_>>();
-        let source_input = inputs
-            .iter_mut()
-            .find(|item| item.id == surface_id)
-            .ok_or(WorkspaceError::NotFound)?;
-        source_input.relationships.push(SurfaceRelationship {
-            target_id: new_id.clone(),
-            label: "has part".to_owned(),
-            type_id: "has_part".to_owned(),
-            evidence_refs,
-            source_element_id: element_id.to_owned(),
-        });
-        inputs.push(WorkspaceSurfaceInput {
-            id: String::new(),
-            definition: Some(definition),
-            relationships: Vec::new(),
-        });
-        let (mut surfaces, next_surface_number) = validate_surface_update_with_counter(
-            inputs,
-            &manifest.surfaces,
-            manifest.next_surface_number,
-        )?;
-        mapping::validate_surface_anchors(&surfaces, Path::new(&entry.directory))?;
-        stamp_lineage(&mut surfaces, &manifest.surfaces, "agent")?;
-        manifest.surfaces = surfaces;
-        manifest.next_surface_number = next_surface_number;
-        manifest.surfaces_revision = manifest
-            .surfaces_revision
-            .checked_add(1)
-            .ok_or(WorkspaceError::Invalid)?;
-        write_manifest(Path::new(&entry.directory), &manifest)?;
-        manifest
-            .surfaces
-            .into_iter()
-            .find(|item| item.id == new_id)
-            .ok_or(WorkspaceError::Internal("promoted surface missing"))
-            .and_then(surface_dto)
     }
 
     fn rules(&self, id: &str) -> Result<WorkspaceRules, WorkspaceError> {
@@ -885,7 +671,6 @@ impl WorkspaceStore {
             return Err(WorkspaceError::Invalid);
         }
         stamp_lineage(&mut surfaces, &manifest.surfaces, actor)?;
-        mapping::validate_surface_anchors(&surfaces, Path::new(&entry.directory))?;
         for old in &manifest.surfaces {
             if !surfaces.iter().any(|item| item.id == old.id) {
                 manifest.retired_surfaces.push(retire_surface(old, actor)?);
@@ -1087,7 +872,6 @@ fn surface_dto(surface: StoredSurface) -> Result<WorkspaceSurface, WorkspaceErro
                     .into_iter()
                     .map(evidence_dto)
                     .collect(),
-                source_element_id: relationship.source_element_id,
             })
             .collect(),
         lineage: surface
@@ -1126,7 +910,6 @@ fn surface_snapshot(
         "revision",
         "lineage",
         "legacyIds",
-        "mappingProgress",
         "threatModelingProgress",
         "analysisProgress",
     ] {
@@ -1586,7 +1369,6 @@ fn normalize_manifest(mut manifest: StoredManifest) -> Result<StoredManifest, Wo
                     label: "contains".to_owned(),
                     type_id: "contains".to_owned(),
                     evidence_refs: Vec::new(),
-                    source_element_id: String::new(),
                 });
             }
         }
@@ -1689,6 +1471,9 @@ fn normalize_manifest(mut manifest: StoredManifest) -> Result<StoredManifest, Wo
             return Err(WorkspaceError::Internal("invalid surface relationship"));
         }
     }
+    if !valid_surface_hierarchy(&manifest.surfaces) {
+        return Err(WorkspaceError::Internal("invalid surface hierarchy"));
+    }
     for surface in &manifest.retired_surfaces {
         if surface
             .lineage
@@ -1782,7 +1567,6 @@ fn validate_surface_update_with_counter(
                     label: relationship.label.trim().to_owned(),
                     type_id: relationship.type_id.trim().to_owned(),
                     evidence_refs: validate_evidence_refs(relationship.evidence_refs)?,
-                    source_element_id: relationship.source_element_id,
                 })
             })
             .collect::<Result<Vec<_>, WorkspaceError>>()?;
@@ -1826,7 +1610,36 @@ fn validate_surface_update_with_counter(
             }
         }
     }
+    if !valid_surface_hierarchy(&result) {
+        return Err(WorkspaceError::Invalid);
+    }
     Ok((result, next_surface_number))
+}
+
+fn valid_surface_hierarchy(surfaces: &[StoredSurface]) -> bool {
+    let mut parents = std::collections::HashMap::new();
+    for surface in surfaces {
+        for link in &surface.relationships {
+            if link.type_id == "contains"
+                && parents
+                    .insert(link.target_id.as_str(), surface.id.as_str())
+                    .is_some()
+            {
+                return false;
+            }
+        }
+    }
+    surfaces.iter().all(|surface| {
+        let mut seen = HashSet::new();
+        let mut current = surface.id.as_str();
+        while let Some(&parent) = parents.get(current) {
+            if !seen.insert(current) {
+                return false;
+            }
+            current = parent;
+        }
+        true
+    })
 }
 
 #[cfg(test)]
@@ -2029,10 +1842,6 @@ pub fn router(token: String, store: WorkspaceStore) -> Router {
         )
         .route(WORKSPACE_SURFACES_PATH, get(surfaces).put(update_surfaces))
         .route(
-            WORKSPACE_SURFACE_MAPPING_PATH,
-            get(surface_mapping).put(update_surface_mapping),
-        )
-        .route(
             WORKSPACE_SURFACE_THREAT_MODEL_PATH,
             get(surface_threat_model).put(update_surface_threat_model),
         )
@@ -2171,42 +1980,6 @@ async fn update_surfaces(
         error.report();
         error.status()
     })?;
-    Ok(response(result))
-}
-
-async fn surface_mapping(
-    State(state): State<WorkspaceState>,
-    RoutePath((id, surface_id)): RoutePath<(String, String)>,
-    headers: HeaderMap,
-) -> Result<impl axum::response::IntoResponse, StatusCode> {
-    if !authorized(&headers, &state.token) {
-        return Err(StatusCode::UNAUTHORIZED);
-    }
-    let result = state.store.mapping(&id, &surface_id).map_err(|error| {
-        error.report();
-        error.status()
-    })?;
-    Ok(response(result))
-}
-
-async fn update_surface_mapping(
-    State(state): State<WorkspaceState>,
-    RoutePath((id, surface_id)): RoutePath<(String, String)>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Result<impl axum::response::IntoResponse, StatusCode> {
-    if !authorized(&headers, &state.token) {
-        return Err(StatusCode::UNAUTHORIZED);
-    }
-    let request: UpdateWorkspaceSurfaceMappingRequest = checked_body(&headers, &body)?;
-    let _guard = state.write_lock.lock().await;
-    let result = state
-        .store
-        .update_mapping(&id, &surface_id, request)
-        .map_err(|error| {
-            error.report();
-            error.status()
-        })?;
     Ok(response(result))
 }
 
@@ -2445,158 +2218,28 @@ mod tests {
     }
 
     #[test]
-    fn mapping_is_local_persistent_and_promotion_is_atomic() {
-        use beale_contracts::v1::{
-            SurfaceMapBasis, SurfaceMapCategory, SurfaceMapElement, SurfaceMapFlow,
-            SurfaceMapFlowKind, SurfaceMapGap, SurfaceMapGapReason,
+    fn containment_has_one_parent_and_no_cycles() {
+        let mut root = example_input("root.example.test", SurfaceScope::InScope);
+        root.id = "draft-root".to_owned();
+        let mut child = example_input("child.example.test", SurfaceScope::InScope);
+        child.id = "draft-child".to_owned();
+        let mut another = example_input("another.example.test", SurfaceScope::InScope);
+        another.id = "draft-another".to_owned();
+        let contains = |target: &str| SurfaceRelationship {
+            target_id: target.to_owned(),
+            label: "contains".to_owned(),
+            type_id: "contains".to_owned(),
+            ..Default::default()
         };
-
-        let base = std::env::temp_dir().join(format!("beale-map-example-{}", Uuid::new_v4()));
-        fs::create_dir_all(&base).unwrap();
-        let store = WorkspaceStore::at(base.join("host")).unwrap();
-        let workspace = store
-            .create(example_request(&base.join("workspace")))
-            .unwrap();
-        let empty = store.mapping(&workspace.id, "S1").unwrap();
-        assert_eq!(empty.revision, 1);
-        let evidence = vec![SurfaceEvidence {
-            kind: "artifact".to_owned(),
-            reference: "artifact-example-001".to_owned(),
-            note: String::new(),
-        }];
-        let element = |id: &str, name: &str| SurfaceMapElement {
-            id: id.to_owned(),
-            category: SurfaceMapCategory::Interface as i32,
-            type_id: "web.http_route".to_owned(),
-            name: name.to_owned(),
-            locator: Some(SurfaceLocator {
-                kind: "http_route".to_owned(),
-                value: format!("GET /{name}"),
-            }),
-            observation: format!("The {name} route accepts requests."),
-            basis: SurfaceMapBasis::Observed as i32,
-            observed_at_ms: 1,
-            evidence_refs: evidence.clone(),
-        };
-        let request = UpdateWorkspaceSurfaceMappingRequest {
-            expected_revision: 1,
-            elements: vec![element("E1", "login"), element("E2", "session")],
-            flows: vec![SurfaceMapFlow {
-                id: "F1".to_owned(),
-                from_element_id: "E1".to_owned(),
-                to_element_id: "E2".to_owned(),
-                kind: SurfaceMapFlowKind::Data as i32,
-                observation: "The route reads session state.".to_owned(),
-                basis: SurfaceMapBasis::Observed as i32,
-                evidence_refs: evidence.clone(),
-            }],
-            gaps: vec![SurfaceMapGap {
-                id: "G1".to_owned(),
-                element_id: "E2".to_owned(),
-                question: "How long does session state remain valid?".to_owned(),
-                reason: SurfaceMapGapReason::NotExamined as i32,
-                evidence_refs: Vec::new(),
-            }],
-        };
-        assert_eq!(
-            store
-                .update_mapping(&workspace.id, "S1", request.clone())
-                .unwrap()
-                .revision,
-            2
-        );
-        assert!(matches!(
-            store.update_mapping(&workspace.id, "S1", request.clone()),
-            Err(WorkspaceError::Conflict)
-        ));
-        let mut invalid = request.clone();
-        invalid.expected_revision = 2;
-        invalid.flows[0].to_element_id = "E99".to_owned();
-        assert!(matches!(
-            store.update_mapping(&workspace.id, "S1", invalid),
-            Err(WorkspaceError::Invalid)
-        ));
-        let mut reduced = store.mapping(&workspace.id, "S1").unwrap();
-        reduced.elements.remove(1);
-        reduced.flows.clear();
-        reduced.gaps.clear();
-        let saved = store
-            .update_mapping(
-                &workspace.id,
-                "S1",
-                UpdateWorkspaceSurfaceMappingRequest {
-                    expected_revision: reduced.revision,
-                    elements: reduced.elements.clone(),
-                    flows: reduced.flows,
-                    gaps: reduced.gaps,
-                },
-            )
-            .unwrap();
-        assert_eq!(saved.next_element_number, 3);
-        let saved = store
-            .update_mapping(
-                &workspace.id,
-                "S1",
-                UpdateWorkspaceSurfaceMappingRequest {
-                    expected_revision: saved.revision,
-                    elements: vec![saved.elements[0].clone(), element("E3", "logout")],
-                    ..Default::default()
-                },
-            )
-            .unwrap();
-        assert_eq!(saved.next_element_number, 4);
-        let manifest: serde_json::Value = serde_json::from_slice(
-            &fs::read(base.join("workspace").join("workspace.json")).unwrap(),
-        )
-        .unwrap();
-        assert!(manifest.get("surfaceMappings").is_none());
+        root.relationships.push(contains("draft-child"));
         assert!(
-            base.join("workspace/.beale/surface-mappings/S1.json")
-                .is_file()
+            validate_surface_update(vec![root.clone(), child.clone(), another.clone()], &[])
+                .is_ok()
         );
-        let promoted = store
-            .promote_element(
-                &workspace.id,
-                "S1",
-                "E1",
-                SurfaceDefinition {
-                    type_id: "service".to_owned(),
-                    name: "Login route".to_owned(),
-                    locator: Some(SurfaceLocator {
-                        kind: "freeform".to_owned(),
-                        value: "GET /login".to_owned(),
-                    }),
-                    scope: SurfaceScope::InScope as i32,
-                    scope_state: SurfaceScopeState::Candidate as i32,
-                    evidence_refs: evidence.clone(),
-                    ..Default::default()
-                },
-            )
-            .unwrap();
-        assert_eq!(promoted.id, "S3");
-        let surfaces = store.surfaces(&workspace.id).unwrap();
-        assert_eq!(surfaces.surfaces[0].relationships[0].target_id, "S3");
-        assert_eq!(
-            surfaces.surfaces[0].relationships[0].source_element_id,
-            "E1"
-        );
-        let mut invalid = request;
-        invalid.expected_revision = 4;
-        invalid.elements.remove(0);
-        invalid.flows.clear();
-        assert!(matches!(
-            store.update_mapping(&workspace.id, "S1", invalid),
-            Err(WorkspaceError::Invalid)
-        ));
-        drop(store);
-        let reopened = WorkspaceStore::at(base.join("host")).unwrap();
-        assert_eq!(
-            reopened.mapping(&workspace.id, "S1").unwrap().elements[1].id,
-            "E3"
-        );
-        assert_eq!(reopened.surfaces(&workspace.id).unwrap().surfaces.len(), 3);
-        drop(reopened);
-        fs::remove_dir_all(base).unwrap();
+        another.relationships.push(contains("draft-child"));
+        assert!(validate_surface_update(vec![root.clone(), child.clone(), another], &[]).is_err());
+        child.relationships.push(contains("draft-root"));
+        assert!(validate_surface_update(vec![root, child], &[]).is_err());
     }
 
     #[test]
@@ -2612,7 +2255,6 @@ mod tests {
                 reference: "artifact-example-001".to_owned(),
                 note: String::new(),
             }],
-            source_element_id: String::new(),
         });
         let mut target = example_input("api.example.test", SurfaceScope::InScope);
         target.id = "draft-target".to_owned();
@@ -2630,7 +2272,7 @@ mod tests {
         let value = serde_json::json!({
             "schemaVersion":5,"workspaceId":"workspace-example","name":"Example Workspace","directories":[],"nextSurfaceNumber":3,"rules":[],
             "surfaces":[
-                {"id":"S1","kind":"repository","scope":"in_scope","scopeState":"approved","value":"example repository","createdBy":"user","mappingProgress":75,"relationships":[],"definition":{"typeId":"repository","name":"Example repository","locator":{"kind":"freeform","value":"example repository"},"summary":"Research code","source":"operator"}},
+                {"id":"S1","kind":"repository","scope":"in_scope","scopeState":"approved","value":"example repository","createdBy":"user","relationships":[],"definition":{"typeId":"repository","name":"Example repository","locator":{"kind":"freeform","value":"example repository"},"summary":"Research code","source":"operator"}},
                 {"id":"S2","kind":"other","scope":"in_scope","value":"src/parser","createdBy":"user","relationships":[],"definition":{"typeId":"code.module","name":"Parser","locator":{"kind":"repository_path","value":"src/parser"},"parentId":"S1","context":"Parses inputs","source":"operator"}}
             ]
         });
@@ -2657,7 +2299,6 @@ mod tests {
                 .get("parentId")
                 .is_none()
         );
-        assert!(serialized["surfaces"][0].get("mappingProgress").is_none());
     }
 
     #[test]
@@ -2775,277 +2416,6 @@ mod tests {
         let summary =
             WorkspaceSummary::decode(to_bytes(result.into_body(), 4096).await.unwrap()).unwrap();
         assert_eq!(summary.name, "Example Workspace");
-        fs::remove_dir_all(base).unwrap();
-    }
-
-    #[tokio::test]
-    async fn mapping_route_authenticates_and_checks_revision() {
-        use beale_contracts::v1::{SurfaceMapBasis, SurfaceMapCategory, SurfaceMapElement};
-
-        let base = std::env::temp_dir().join(format!("beale-map-route-example-{}", Uuid::new_v4()));
-        fs::create_dir_all(&base).unwrap();
-        let store = WorkspaceStore::at(base.join("host")).unwrap();
-        let workspace = store
-            .create(example_request(&base.join("workspace")))
-            .unwrap();
-        let token = "ab".repeat(32);
-        let app = router(token.clone(), store.clone());
-        let path = WORKSPACE_SURFACE_MAPPING_PATH
-            .replace("{id}", &workspace.id)
-            .replace("{surface_id}", "S1");
-        let request = |method: &str, authorized: bool, body: Vec<u8>| {
-            let mut builder = Request::builder()
-                .method(method)
-                .uri(&path)
-                .header(axum::http::header::CONTENT_TYPE, PROTOBUF_CONTENT_TYPE);
-            if authorized {
-                builder =
-                    builder.header(axum::http::header::AUTHORIZATION, format!("Bearer {token}"));
-            }
-            builder.body(Body::from(body)).unwrap()
-        };
-        assert_eq!(
-            app.clone()
-                .oneshot(request("GET", false, Vec::new()))
-                .await
-                .unwrap()
-                .status(),
-            StatusCode::UNAUTHORIZED
-        );
-        let result = app
-            .clone()
-            .oneshot(request("GET", true, Vec::new()))
-            .await
-            .unwrap();
-        assert_eq!(result.status(), StatusCode::OK);
-        let mapping =
-            WorkspaceSurfaceMapping::decode(to_bytes(result.into_body(), 4096).await.unwrap())
-                .unwrap();
-        assert_eq!(mapping.revision, 1);
-        let update = UpdateWorkspaceSurfaceMappingRequest {
-            expected_revision: 1,
-            elements: vec![SurfaceMapElement {
-                id: "E1".to_owned(),
-                category: SurfaceMapCategory::Interface as i32,
-                type_id: "web.http_route".to_owned(),
-                name: "Example route".to_owned(),
-                observation: "Accepts example requests.".to_owned(),
-                basis: SurfaceMapBasis::Observed as i32,
-                observed_at_ms: 1,
-                evidence_refs: vec![SurfaceEvidence {
-                    kind: "artifact".to_owned(),
-                    reference: "artifact-example-001".to_owned(),
-                    note: String::new(),
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-        let result = app
-            .clone()
-            .oneshot(request("PUT", true, update.encode_to_vec()))
-            .await
-            .unwrap();
-        assert_eq!(result.status(), StatusCode::OK);
-        let saved =
-            WorkspaceSurfaceMapping::decode(to_bytes(result.into_body(), 4096).await.unwrap())
-                .unwrap();
-        assert_eq!(saved.revision, 2);
-        assert_eq!(saved.elements[0].id, "E1");
-        assert_eq!(
-            app.clone()
-                .oneshot(request("PUT", true, update.encode_to_vec()))
-                .await
-                .unwrap()
-                .status(),
-            StatusCode::CONFLICT
-        );
-        drop(app);
-        drop(store);
-        fs::remove_dir_all(base).unwrap();
-    }
-
-    #[tokio::test]
-    async fn threat_model_validates_local_refs_preserves_stale_refs_and_routes() {
-        use beale_contracts::v1::{
-            SurfaceMapBasis, SurfaceMapCategory, SurfaceMapElement, SurfaceThreatDisposition,
-            SurfaceThreatMapRef, SurfaceThreatMapRefKind, SurfaceThreatScenario,
-        };
-        let base = std::env::temp_dir().join(format!("beale-threat-example-{}", Uuid::new_v4()));
-        fs::create_dir_all(&base).unwrap();
-        let store = WorkspaceStore::at(base.join("host")).unwrap();
-        let workspace = store
-            .create(example_request(&base.join("workspace")))
-            .unwrap();
-        let element = SurfaceMapElement {
-            id: "E1".to_owned(),
-            category: SurfaceMapCategory::Interface as i32,
-            type_id: "web.http_route".to_owned(),
-            name: "Example route".to_owned(),
-            observation: "Accepts example requests.".to_owned(),
-            basis: SurfaceMapBasis::Observed as i32,
-            observed_at_ms: 1,
-            evidence_refs: vec![SurfaceEvidence {
-                kind: "artifact".to_owned(),
-                reference: "artifact-example-001".to_owned(),
-                note: String::new(),
-            }],
-            ..Default::default()
-        };
-        store
-            .update_mapping(
-                &workspace.id,
-                "S1",
-                UpdateWorkspaceSurfaceMappingRequest {
-                    expected_revision: 1,
-                    elements: vec![element],
-                    ..Default::default()
-                },
-            )
-            .unwrap();
-        let scenario = SurfaceThreatScenario {
-            id: "T1".to_owned(),
-            title: "Example authorization bypass".to_owned(),
-            map_refs: vec![SurfaceThreatMapRef {
-                kind: SurfaceThreatMapRefKind::Element as i32,
-                id: "E1".to_owned(),
-            }],
-            attacker_position: "Unauthenticated client".to_owned(),
-            preconditions: vec!["Route is reachable".to_owned()],
-            suspected_failure: "The route may omit authorization checks.".to_owned(),
-            invariant_at_risk: "Only authorized users may read records.".to_owned(),
-            potential_impact: "Unauthorized record disclosure.".to_owned(),
-            validation_question: "Does a request without a session return records?".to_owned(),
-            disposition: SurfaceThreatDisposition::Open as i32,
-            ..Default::default()
-        };
-        let mut invalid = scenario.clone();
-        invalid.map_refs[0].id = "E9".to_owned();
-        assert!(matches!(
-            store.update_threat_model(
-                &workspace.id,
-                "S1",
-                UpdateWorkspaceSurfaceThreatModelRequest {
-                    expected_revision: 1,
-                    reviewed_mapping_revision: 2,
-                    scenarios: vec![invalid],
-                }
-            ),
-            Err(WorkspaceError::Invalid)
-        ));
-        let request = UpdateWorkspaceSurfaceThreatModelRequest {
-            expected_revision: 1,
-            reviewed_mapping_revision: 2,
-            scenarios: vec![scenario],
-        };
-        let saved = store
-            .update_threat_model(&workspace.id, "S1", request.clone())
-            .unwrap();
-        assert_eq!(saved.revision, 2);
-        assert_eq!(saved.next_scenario_number, 2);
-        assert!(matches!(
-            store.update_threat_model(&workspace.id, "S1", request),
-            Err(WorkspaceError::Conflict)
-        ));
-        store
-            .update_mapping(
-                &workspace.id,
-                "S1",
-                UpdateWorkspaceSurfaceMappingRequest {
-                    expected_revision: 2,
-                    ..Default::default()
-                },
-            )
-            .unwrap();
-        let stale = store.threat_model(&workspace.id, "S1").unwrap();
-        assert_eq!(stale.scenarios[0].map_refs[0].id, "E1");
-        let mut dismissed = stale.scenarios[0].clone();
-        dismissed.disposition = SurfaceThreatDisposition::Dismissed as i32;
-        assert!(matches!(
-            store.update_threat_model(
-                &workspace.id,
-                "S1",
-                UpdateWorkspaceSurfaceThreatModelRequest {
-                    expected_revision: 2,
-                    reviewed_mapping_revision: 2,
-                    scenarios: vec![dismissed.clone()],
-                }
-            ),
-            Err(WorkspaceError::Invalid)
-        ));
-        dismissed.disposition_reason = "The route enforces authorization.".to_owned();
-        let saved = store
-            .update_threat_model(
-                &workspace.id,
-                "S1",
-                UpdateWorkspaceSurfaceThreatModelRequest {
-                    expected_revision: 2,
-                    reviewed_mapping_revision: 3,
-                    scenarios: vec![dismissed],
-                },
-            )
-            .unwrap();
-        assert_eq!(saved.revision, 3);
-        assert!(
-            base.join("workspace/.beale/surface-threat-models/S1.json")
-                .is_file()
-        );
-        let token = "ab".repeat(32);
-        let app = router(token.clone(), store.clone());
-        let path = WORKSPACE_SURFACE_THREAT_MODEL_PATH
-            .replace("{id}", &workspace.id)
-            .replace("{surface_id}", "S1");
-        let request = |authorized: bool| {
-            let mut builder = Request::builder().method("GET").uri(&path);
-            if authorized {
-                builder = builder.header("authorization", format!("Bearer {token}"));
-            }
-            builder.body(Body::empty()).unwrap()
-        };
-        assert_eq!(
-            app.clone().oneshot(request(false)).await.unwrap().status(),
-            StatusCode::UNAUTHORIZED
-        );
-        let response = app.oneshot(request(true)).await.unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        let routed = WorkspaceSurfaceThreatModel::decode(
-            to_bytes(response.into_body(), 4096).await.unwrap(),
-        )
-        .unwrap();
-        assert_eq!(
-            routed.scenarios[0].disposition_reason,
-            "The route enforces authorization."
-        );
-        let update = UpdateWorkspaceSurfaceThreatModelRequest {
-            expected_revision: routed.revision,
-            reviewed_mapping_revision: routed.reviewed_mapping_revision,
-            scenarios: routed.scenarios,
-        };
-        let app = router(token.clone(), store.clone());
-        let put = || {
-            Request::builder()
-                .method("PUT")
-                .uri(&path)
-                .header("authorization", format!("Bearer {token}"))
-                .header("content-type", PROTOBUF_CONTENT_TYPE)
-                .body(Body::from(update.encode_to_vec()))
-                .unwrap()
-        };
-        assert_eq!(
-            app.clone().oneshot(put()).await.unwrap().status(),
-            StatusCode::OK
-        );
-        assert_eq!(
-            app.oneshot(put()).await.unwrap().status(),
-            StatusCode::CONFLICT
-        );
-        drop(store);
-        let reopened = WorkspaceStore::at(base.join("host")).unwrap();
-        assert_eq!(
-            reopened.threat_model(&workspace.id, "S1").unwrap().revision,
-            4
-        );
-        drop(reopened);
         fs::remove_dir_all(base).unwrap();
     }
 }

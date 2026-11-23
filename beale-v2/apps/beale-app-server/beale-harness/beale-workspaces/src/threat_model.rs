@@ -2,8 +2,8 @@ use super::{
     StoredEvidence, WorkspaceError, evidence_dto, valid_text, validate_evidence_refs, write_new,
 };
 use beale_contracts::v1::{
-    SurfaceThreatDisposition, SurfaceThreatMapRef, SurfaceThreatMapRefKind, SurfaceThreatScenario,
-    UpdateWorkspaceSurfaceThreatModelRequest, WorkspaceSurfaceMapping, WorkspaceSurfaceThreatModel,
+    SurfaceThreatDisposition, SurfaceThreatScenario, UpdateWorkspaceSurfaceThreatModelRequest,
+    WorkspaceSurfaceThreatModel,
 };
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, fs, path::Path};
@@ -17,7 +17,6 @@ pub(super) struct StoredThreatModel {
     schema_version: u32,
     pub surface_id: String,
     pub revision: u64,
-    pub reviewed_mapping_revision: u64,
     scenarios: Vec<StoredScenario>,
     pub next_scenario_number: u64,
 }
@@ -27,7 +26,6 @@ pub(super) struct StoredThreatModel {
 struct StoredScenario {
     id: String,
     title: String,
-    map_refs: Vec<StoredMapRef>,
     attacker_position: String,
     preconditions: Vec<String>,
     suspected_failure: String,
@@ -40,31 +38,16 @@ struct StoredScenario {
     related_claim_ids: Vec<String>,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
-struct StoredMapRef {
-    kind: i32,
-    id: String,
-}
-
 pub(super) fn dto(model: &StoredThreatModel) -> WorkspaceSurfaceThreatModel {
     WorkspaceSurfaceThreatModel {
         surface_id: model.surface_id.clone(),
         revision: model.revision,
-        reviewed_mapping_revision: model.reviewed_mapping_revision,
         scenarios: model
             .scenarios
             .iter()
             .map(|item| SurfaceThreatScenario {
                 id: item.id.clone(),
                 title: item.title.clone(),
-                map_refs: item
-                    .map_refs
-                    .iter()
-                    .map(|reference| SurfaceThreatMapRef {
-                        kind: reference.kind,
-                        id: reference.id.clone(),
-                    })
-                    .collect(),
                 attacker_position: item.attacker_position.clone(),
                 preconditions: item.preconditions.clone(),
                 suspected_failure: item.suspected_failure.clone(),
@@ -95,29 +78,13 @@ fn valid_id(id: &str, prefix: char) -> bool {
     })
 }
 
-fn ref_exists(reference: &SurfaceThreatMapRef, mapping: &WorkspaceSurfaceMapping) -> bool {
-    match SurfaceThreatMapRefKind::try_from(reference.kind) {
-        Ok(SurfaceThreatMapRefKind::Element) => {
-            mapping.elements.iter().any(|item| item.id == reference.id)
-        }
-        Ok(SurfaceThreatMapRefKind::Flow) => {
-            mapping.flows.iter().any(|item| item.id == reference.id)
-        }
-        _ => false,
-    }
-}
-
 pub(super) fn validate(
     surface_id: &str,
     revision: u64,
     request: UpdateWorkspaceSurfaceThreatModelRequest,
     previous: Option<&StoredThreatModel>,
-    mapping: &WorkspaceSurfaceMapping,
 ) -> Result<StoredThreatModel, WorkspaceError> {
-    if revision < 2
-        || request.reviewed_mapping_revision > mapping.revision
-        || request.scenarios.len() > 256
-    {
+    if revision < 2 || request.scenarios.len() > 256 {
         return Err(WorkspaceError::Invalid);
     }
     let mut ids = HashSet::new();
@@ -128,8 +95,6 @@ pub(super) fn validate(
             if !valid_id(&item.id, 'T')
                 || !ids.insert(item.id.clone())
                 || !valid_text(&item.title, 200, false)
-                || item.map_refs.is_empty()
-                || item.map_refs.len() > 32
                 || !valid_text(&item.attacker_position, 1_000, true)
                 || item.preconditions.len() > 16
                 || item
@@ -157,43 +122,9 @@ pub(super) fn validate(
             {
                 return Err(WorkspaceError::Invalid);
             }
-            let prior = previous.and_then(|model| {
-                model
-                    .scenarios
-                    .iter()
-                    .find(|scenario| scenario.id == item.id)
-            });
-            let mut refs = HashSet::new();
-            for reference in &item.map_refs {
-                let prefix = match SurfaceThreatMapRefKind::try_from(reference.kind) {
-                    Ok(SurfaceThreatMapRefKind::Element) => 'E',
-                    Ok(SurfaceThreatMapRefKind::Flow) => 'F',
-                    _ => return Err(WorkspaceError::Invalid),
-                };
-                if !valid_id(&reference.id, prefix)
-                    || !refs.insert((reference.kind, reference.id.as_str()))
-                    || (!ref_exists(reference, mapping)
-                        && !prior.is_some_and(|scenario| {
-                            scenario
-                                .map_refs
-                                .iter()
-                                .any(|old| old.kind == reference.kind && old.id == reference.id)
-                        }))
-                {
-                    return Err(WorkspaceError::Invalid);
-                }
-            }
             Ok(StoredScenario {
                 id: item.id,
                 title: item.title.trim().to_owned(),
-                map_refs: item
-                    .map_refs
-                    .into_iter()
-                    .map(|reference| StoredMapRef {
-                        kind: reference.kind,
-                        id: reference.id,
-                    })
-                    .collect(),
                 attacker_position: item.attacker_position.trim().to_owned(),
                 preconditions: item
                     .preconditions
@@ -223,7 +154,6 @@ pub(super) fn validate(
         schema_version: 1,
         surface_id: surface_id.to_owned(),
         revision,
-        reviewed_mapping_revision: request.reviewed_mapping_revision,
         scenarios,
         next_scenario_number,
     })
@@ -242,7 +172,6 @@ fn model_path(directory: &Path, surface_id: &str) -> Result<std::path::PathBuf, 
 pub(super) fn read(
     directory: &Path,
     surface_id: &str,
-    mapping: &WorkspaceSurfaceMapping,
 ) -> Result<Option<StoredThreatModel>, WorkspaceError> {
     let path = model_path(directory, surface_id)?;
     let metadata = fs::symlink_metadata(directory.join(".beale"))
@@ -289,11 +218,9 @@ pub(super) fn read(
         model.revision,
         UpdateWorkspaceSurfaceThreatModelRequest {
             expected_revision: model.revision - 1,
-            reviewed_mapping_revision: loaded.reviewed_mapping_revision,
             scenarios: loaded.scenarios,
         },
         Some(&model),
-        mapping,
     )
     .map_err(|_| WorkspaceError::Internal("invalid threat model"))?;
     if model.next_scenario_number != validated.next_scenario_number {

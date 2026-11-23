@@ -6,6 +6,12 @@ use crate::{
 use rune::{El, Icon, Spring, Transition, el, icon, row, text};
 
 pub(crate) fn workspace(state: &State) -> Option<(uuid::Uuid, WorkspaceTab)> {
+    if state.primary_view == PrimaryView::Workspace {
+        return state.workspace_id.map(|id| (id, state.workspace_tab));
+    }
+    if state.primary_view != PrimaryView::NewResearch {
+        return None;
+    }
     let id = state
         .active_session
         .as_ref()
@@ -17,13 +23,6 @@ pub(crate) fn workspace(state: &State) -> Option<(uuid::Uuid, WorkspaceTab)> {
                 .map(|workspace| workspace.id.as_str())
         })?;
     let id = uuid::Uuid::parse_str(id).ok()?;
-    if state.primary_view != PrimaryView::NewResearch
-        && !(state.primary_view == PrimaryView::Workspace
-            && state.workspace_id == Some(id)
-            && state.research_workspace_view.is_some())
-    {
-        return None;
-    }
     let tab = state
         .research_workspace_view
         .filter(|(workspace, _)| *workspace == id)
@@ -240,13 +239,21 @@ pub(crate) fn tabs(state: &State, theme: ThemeStyle<'_>, window_width: f32) -> O
         .find(|workspace| workspace.id == id.to_string())
         .map_or("Workspace", |workspace| workspace.name.as_str());
     let in_workspace = state.primary_view == PrimaryView::Workspace;
-    let started = state.active_session.is_some()
-        || state.session_busy
-        || state.session_loading_id.is_some()
-        || state.session_pending_prompt.is_some();
+    let workspace_id = id.to_string();
+    let active_here = state
+        .active_session
+        .as_ref()
+        .and_then(|detail| detail.summary.as_ref())
+        .is_some_and(|summary| summary.workspace_id == workspace_id);
+    let pending_here = state.new_research_workspace_id.as_deref() == Some(&workspace_id)
+        && (state.session_busy
+            || state.session_loading_id.is_some()
+            || state.session_pending_prompt.is_some());
+    let started = active_here || (state.active_session.is_none() && pending_here);
     let graph_id = state
         .active_session
         .as_ref()
+        .filter(|_| active_here)
         .map(|session| session.graph_id.as_str())
         .unwrap_or(&state.new_research_graph_id);
     let peer_graph = started
@@ -442,7 +449,18 @@ pub(crate) fn tabs(state: &State, theme: ThemeStyle<'_>, window_width: f32) -> O
                     .font(ui_font(13.0, 400.0))
                     .color(theme.color("#aaaaaa"))
             }))
-            .on_press(|state: &mut State| state.navigate_to(ViewLocation::NewResearch)),
+            .on_press(move |state: &mut State| {
+                if state.primary_view == PrimaryView::Workspace
+                    && !started
+                    && (state.active_session.is_some()
+                        || state.new_research_workspace_id.as_deref()
+                            != Some(workspace_id.as_str()))
+                {
+                    state.start_new_research_in_workspace(workspace_id.clone());
+                } else {
+                    state.navigate_to(ViewLocation::NewResearch);
+                }
+            }),
         );
     }
     Some(tabs)
@@ -572,6 +590,72 @@ mod tests {
                 Some("Synthetic prompt")
             );
         }
+    }
+
+    #[test]
+    fn workspace_header_offers_new_research_before_a_session_exists() {
+        let mut state = visual_preview::fixture("surfaces");
+        let id = state.workspace_id.unwrap();
+        state.new_research_workspace_id = None;
+        state.research_workspace_view = None;
+        state.new_research_prompt = TextEdit::new("Old example draft");
+        let mut runtime = Runtime::new(state, view, (1040.0, 720.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        assert!(runtime.find("header-view-tab").is_some());
+        assert!(runtime.find("header-session-tab").is_some());
+        assert!(
+            runtime
+                .elements()
+                .iter()
+                .any(|item| item.text.as_deref() == Some("New Research"))
+        );
+
+        click(&mut runtime, "header-session-tab");
+        assert_eq!(runtime.state.primary_view, PrimaryView::NewResearch);
+        assert_eq!(
+            runtime.state.new_research_workspace_id.as_deref(),
+            Some(id.to_string().as_str())
+        );
+        assert!(runtime.state.new_research_prompt.text.is_empty());
+        runtime.state.new_research_prompt = TextEdit::new("New example draft");
+        click(&mut runtime, "header-view-tab");
+        assert_eq!(
+            runtime.state.view_location(),
+            ViewLocation::Workspace(id, WorkspaceTab::Surfaces)
+        );
+        click(&mut runtime, "header-session-tab");
+        assert_eq!(runtime.state.new_research_prompt.text, "New example draft");
+    }
+
+    #[test]
+    fn workspace_header_uses_open_workspace_when_another_session_is_active() {
+        let mut state = visual_preview::fixture("session");
+        let other_id = uuid::Uuid::parse_str("00000000-0000-4000-8000-000000000002").unwrap();
+        let mut other = state.workspaces[0].clone();
+        other.id = other_id.to_string();
+        other.name = "Example second workspace".to_owned();
+        state.workspaces.push(other);
+        state.primary_view = PrimaryView::Workspace;
+        state.workspace_id = Some(other_id);
+        state.workspace_tab = WorkspaceTab::Rules;
+        let mut runtime = Runtime::new(state, view, (1040.0, 720.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        assert_eq!(
+            workspace(&runtime.state),
+            Some((other_id, WorkspaceTab::Rules))
+        );
+        assert!(
+            runtime
+                .elements()
+                .iter()
+                .any(|item| item.text.as_deref() == Some("New Research"))
+        );
+        click(&mut runtime, "header-session-tab");
+        assert!(runtime.state.active_session.is_none());
+        assert_eq!(
+            runtime.state.new_research_workspace_id.as_deref(),
+            Some(other_id.to_string().as_str())
+        );
     }
 
     #[test]

@@ -1,14 +1,14 @@
 #[path = "findings_plot.rs"]
 mod plot;
 
-use crate::design::FadeText;
-use crate::icons::{EVIDENCE, WORKSPACE_SURFACES};
+use crate::icons::{EVIDENCE, SESSION_SIDENAV, TRACKING, WORKSPACE_SURFACES};
 use crate::settings_scroll::SettingsScroll;
 use beale_contracts::findings::{
-    self, Finding, GetRequest, GetResponse, QueryPage, QueryRequest, Status, Summary,
+    self, CreateRequest, CreateResponse, Finding, GetRequest, GetResponse, QueryPage, QueryRequest,
+    Status, Summary,
 };
 use reqwest::{Client, StatusCode};
-use rune::{Color, El, ScrollSpec, col, el, icon, row, text};
+use rune::{Color, El, ScrollSpec, TextEdit, col, el, icon, row, text, text_input};
 use std::net::SocketAddr;
 
 use crate::{State, ThemeStyle, form_button, ui_font};
@@ -52,6 +52,13 @@ pub(crate) struct FindingsBoard {
     detail_error: String,
     detail_generation: u64,
     rejected_expanded: bool,
+    create_open: bool,
+    create_busy: bool,
+    create_generation: u64,
+    create_title: TextEdit,
+    create_summary: TextEdit,
+    create_hypothesis: TextEdit,
+    create_error: String,
 }
 
 impl FindingsBoard {
@@ -90,9 +97,11 @@ impl FindingsBoard {
     pub(crate) fn reset(&mut self) {
         let generation = self.generation.wrapping_add(1);
         let detail_generation = self.detail_generation.wrapping_add(1);
+        let create_generation = self.create_generation.wrapping_add(1);
         *self = Self::default();
         self.generation = generation;
         self.detail_generation = detail_generation;
+        self.create_generation = create_generation;
     }
 
     fn finish_load(&mut self, generation: u64, result: Result<Vec<Summary>, String>) {
@@ -284,6 +293,129 @@ pub(crate) fn close_record(state: &mut State) {
     state.workspace_findings.selected = None;
     state.workspace_findings.detail_loading = false;
     state.workspace_findings.detail_error.clear();
+}
+
+pub(crate) fn open_create(state: &mut State) {
+    close_record(state);
+    let board = &mut state.workspace_findings;
+    board.create_generation = board.create_generation.wrapping_add(1);
+    board.create_open = true;
+    board.create_busy = false;
+    board.create_title = TextEdit::new("");
+    board.create_summary = TextEdit::new("");
+    board.create_hypothesis = TextEdit::new("");
+    board.create_error.clear();
+}
+
+fn close_create(state: &mut State) {
+    let board = &mut state.workspace_findings;
+    if board.create_busy {
+        return;
+    }
+    board.create_generation = board.create_generation.wrapping_add(1);
+    board.create_open = false;
+    board.create_error.clear();
+}
+
+async fn post_create(
+    client: &Client,
+    addr: SocketAddr,
+    request: &CreateRequest,
+) -> Result<CreateResponse, String> {
+    let token = crate::provider_auth::authenticated_token(client, addr).await?;
+    let response = client
+        .post(format!("http://{addr}{}", findings::CREATE_PATH))
+        .bearer_auth(token)
+        .json(request)
+        .send()
+        .await
+        .map_err(|_| "Could not add finding.".to_owned())?;
+    if response.status() == StatusCode::FORBIDDEN {
+        return Err("Findings is not enabled for this workspace.".to_owned());
+    }
+    if response.status() != StatusCode::OK {
+        return Err(format!("Could not add finding ({}).", response.status()));
+    }
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|_| "Could not read created finding.".to_owned())?;
+    if bytes.len() > 16_384 {
+        return Err("Created finding response is too large.".to_owned());
+    }
+    let created: CreateResponse = serde_json::from_slice(&bytes)
+        .map_err(|_| "Invalid created finding response.".to_owned())?;
+    if created.record.id.is_empty() || created.record.status != Status::Candidate {
+        return Err("Invalid created finding response.".to_owned());
+    }
+    Ok(created)
+}
+
+fn start_create(state: &mut State) {
+    let Some(workspace_id) = state.workspace_id else {
+        return;
+    };
+    let board = &mut state.workspace_findings;
+    if !board.create_open || board.create_busy {
+        return;
+    }
+    let title = board.create_title.text.trim().to_owned();
+    let summary = board.create_summary.text.trim().to_owned();
+    let hypothesis = board.create_hypothesis.text.trim().to_owned();
+    if title.is_empty()
+        || title.len() > 200
+        || summary.is_empty()
+        || summary.len() > 4_000
+        || hypothesis.is_empty()
+        || hypothesis.len() > 4_000
+    {
+        board.create_error =
+            "Enter a title (up to 200 characters), summary, and hypothesis (up to 4,000 characters each)."
+                .to_owned();
+        return;
+    }
+    let request = CreateRequest {
+        workspace_id: workspace_id.to_string(),
+        title,
+        summary,
+        hypothesis,
+    };
+    board.create_error.clear();
+    board.create_busy = true;
+    let generation = board.create_generation;
+    let Some(handle) = crate::AUTH_HANDLE.get().cloned() else {
+        board.create_busy = false;
+        board.create_error = "Desktop connection is not ready.".to_owned();
+        return;
+    };
+    std::thread::spawn(move || {
+        let result = (|| {
+            let addr = crate::connection::configured_addr()
+                .map_err(|_| "Invalid local app-server address".to_owned())?;
+            let client = crate::workspaces::client()?;
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|_| "Could not initialize Findings connection".to_owned())?;
+            runtime.block_on(post_create(&client, addr, &request))
+        })();
+        handle.update(move |state, _| {
+            if state.workspace_id != Some(workspace_id)
+                || state.workspace_findings.create_generation != generation
+                || !state.workspace_findings.create_open
+            {
+                return;
+            }
+            state.workspace_findings.create_busy = false;
+            match result {
+                Ok(_) => {
+                    close_create(state);
+                    start_load(state, workspace_id);
+                }
+                Err(error) => state.workspace_findings.create_error = error,
+            }
+        });
+    });
 }
 
 const LANES: [(Status, &str, &str); 4] = [
@@ -539,6 +671,65 @@ fn lane(
         )
 }
 
+pub(crate) fn mode_toggle(state: &State, labeled: bool, theme: ThemeStyle<'_>) -> El {
+    let board = &state.workspace_findings;
+    let ledger = if labeled {
+        crate::design::segmented_tab(
+            "Ledger",
+            Some(&SESSION_SIDENAV),
+            board.mode == FindingsMode::Ledger,
+            true,
+            theme,
+        )
+    } else {
+        crate::design::segmented_icon_tab(
+            "Ledger",
+            &SESSION_SIDENAV,
+            board.mode == FindingsMode::Ledger,
+            theme,
+        )
+    };
+    let plot = if labeled {
+        crate::design::segmented_tab(
+            "Plot",
+            Some(&TRACKING),
+            board.mode == FindingsMode::Plot,
+            true,
+            theme,
+        )
+    } else {
+        crate::design::segmented_icon_tab(
+            "Plot",
+            &TRACKING,
+            board.mode == FindingsMode::Plot,
+            theme,
+        )
+    };
+    crate::design::segmented_control(theme)
+        .key("findings-view-toggle")
+        .min_w(mode_toggle_width(labeled))
+        .child(
+            ledger
+                .key("findings-mode-ledger")
+                .on_press(|state: &mut State| state.workspace_findings.mode = FindingsMode::Ledger),
+        )
+        .child(
+            plot.key("findings-mode-plot")
+                .on_press(|state: &mut State| state.workspace_findings.mode = FindingsMode::Plot),
+        )
+}
+
+pub(crate) fn mode_toggle_width(labeled: bool) -> f32 {
+    if labeled {
+        crate::design::segmented_group_width(&[
+            crate::design::segmented_tab_width("Ledger", true),
+            crate::design::segmented_tab_width("Plot", true),
+        ])
+    } else {
+        crate::design::segmented_group_width(&[crate::design::CONTROL_HEIGHT; 2])
+    }
+}
+
 pub(crate) fn render(
     state: &State,
     theme: ThemeStyle<'_>,
@@ -546,11 +737,6 @@ pub(crate) fn render(
     page_height: f32,
 ) -> El {
     let board = &state.workspace_findings;
-    let active = board
-        .records
-        .iter()
-        .filter(|item| item.status != Status::Rejected)
-        .count();
     let rejected: Vec<_> = board
         .records
         .iter()
@@ -560,62 +746,7 @@ pub(crate) fn render(
         .key("workspace-findings-view")
         .w_full()
         .min_w(0.0)
-        .gap(15.0)
-        .child(
-            row()
-                .w_full()
-                .center_y()
-                .gap(10.0)
-                .child(
-                    text("Findings")
-                        .min_w(0.0)
-                        .fade_truncate()
-                        .font(ui_font(21.0, 600.0))
-                        .color(theme.color("#ededed")),
-                )
-                .child(
-                    text(if board.loading {
-                        format!("{active} active · updating…")
-                    } else {
-                        format!("{active} active")
-                    })
-                    .fade_truncate()
-                    .min_w(0.0)
-                    .font(ui_font(12.0, 400.0))
-                    .color(theme.color("#969696")),
-                )
-                .child(el().grow(1.0))
-                .child(
-                    crate::design::segmented_control(theme)
-                        .key("findings-view-toggle")
-                        .child(
-                            crate::design::segmented_tab(
-                                "Ledger",
-                                None,
-                                board.mode == FindingsMode::Ledger,
-                                true,
-                                theme,
-                            )
-                            .key("findings-mode-ledger")
-                            .on_press(|state: &mut State| {
-                                state.workspace_findings.mode = FindingsMode::Ledger
-                            }),
-                        )
-                        .child(
-                            crate::design::segmented_tab(
-                                "Plot",
-                                None,
-                                board.mode == FindingsMode::Plot,
-                                true,
-                                theme,
-                            )
-                            .key("findings-mode-plot")
-                            .on_press(|state: &mut State| {
-                                state.workspace_findings.mode = FindingsMode::Plot
-                            }),
-                        ),
-                ),
-        );
+        .gap(15.0);
     if !board.error.is_empty() {
         page = page
             .child(
@@ -650,8 +781,7 @@ pub(crate) fn render(
             1
         };
         let width = ((page_width - (columns - 1) as f32) / columns as f32).max(180.0);
-        let reserved =
-            25.0 + 24.0 + 56.0 + 14.0 + 42.0 + 15.0 + if rejected.is_empty() { 0.0 } else { 53.0 };
+        let reserved = 25.0 + 24.0 + 56.0 + 14.0 + if rejected.is_empty() { 0.0 } else { 53.0 };
         let available = (page_height - reserved).max(280.0);
         let rows = 4 / columns;
         let lane_height = ((available - (rows - 1) as f32) / rows as f32).max(280.0);
@@ -760,8 +890,131 @@ fn detail_line(label: &str, value: &str, theme: ThemeStyle<'_>) -> El {
         )
 }
 
+fn create_field(
+    edit: &TextEdit,
+    label: &'static str,
+    key: &'static str,
+    placeholder: &'static str,
+    single_line: bool,
+    theme: ThemeStyle<'_>,
+    update: impl for<'a> Fn(&'a mut State) -> &'a mut TextEdit + 'static,
+) -> El {
+    let mut input = text_input(edit, ui_font(14.0, 400.0))
+        .key(key)
+        .role("textbox")
+        .label(label)
+        .clip_rounded(8.0)
+        .w_full()
+        .h(if single_line { 36.0 } else { 84.0 })
+        .px(10.0)
+        .py(8.0)
+        .radius(8.0)
+        .continuous_corners()
+        .fill(theme.color("#282828"))
+        .color(theme.color("#e2e2e2"))
+        .placeholder(placeholder, theme.color("#888888"))
+        .on_edit(update);
+    if single_line {
+        input = input.single_line();
+    }
+    col()
+        .w_full()
+        .gap(6.0)
+        .child(
+            text(label)
+                .font(ui_font(13.0, 550.0))
+                .color(theme.color("#bdbdbd")),
+        )
+        .child(input)
+}
+
+fn create_dialog(state: &State, theme: ThemeStyle<'_>) -> [El; 2] {
+    let board = &state.workspace_findings;
+    let mut body = col()
+        .w_full()
+        .max_h(560.0)
+        .gap(14.0)
+        .scroll(ScrollSpec {
+            stick_bottom: false,
+        })
+        .child(create_field(
+            &board.create_title,
+            "Title",
+            "finding-create-title",
+            "Short finding title",
+            true,
+            theme,
+            |state| &mut state.workspace_findings.create_title,
+        ))
+        .child(create_field(
+            &board.create_summary,
+            "Summary",
+            "finding-create-summary",
+            "What has been observed or proposed?",
+            false,
+            theme,
+            |state| &mut state.workspace_findings.create_summary,
+        ))
+        .child(create_field(
+            &board.create_hypothesis,
+            "Candidate hypothesis",
+            "finding-create-hypothesis",
+            "What should research test?",
+            false,
+            theme,
+            |state| &mut state.workspace_findings.create_hypothesis,
+        ));
+    if !board.create_error.is_empty() {
+        body = body.child(
+            text(board.create_error.clone())
+                .key("finding-create-error")
+                .wrap()
+                .font(ui_font(13.0, 400.0))
+                .color(theme.color("#e07676")),
+        );
+    }
+    let add = form_button(
+        if board.create_busy {
+            "Adding…"
+        } else {
+            "Add Finding"
+        },
+        theme,
+    )
+    .key("finding-create-submit");
+    let actions = row()
+        .w_full()
+        .gap(8.0)
+        .child(el().grow(1.0))
+        .child(
+            form_button("Cancel", theme)
+                .key("finding-create-cancel")
+                .on_press(close_create),
+        )
+        .child(if board.create_busy {
+            add
+        } else {
+            add.on_press(start_create)
+        });
+    crate::modal_dialog::render(
+        crate::modal_dialog::DialogSpec {
+            key: "finding-create-dialog",
+            title: "Add a Finding",
+            width: 560.0,
+            focus_return: "workspace-add-finding",
+        },
+        body,
+        actions,
+        theme,
+        close_create,
+    )
+}
+
 pub(crate) fn dialog(state: &State, theme: ThemeStyle<'_>) -> Option<[El; 2]> {
     let board = &state.workspace_findings;
+    if board.create_open {
+        return Some(create_dialog(state, theme));
+    }
     let id = board.selected_id.as_deref()?;
     let mut body = col()
         .w_full()
@@ -978,6 +1231,32 @@ mod tests {
         ];
         let positions = tabs.map(|key| runtime.presented(key).unwrap().0[0]);
         assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+        let (header, _) = runtime.presented("workspace-view-header").unwrap();
+        let (title, _) = runtime.presented("workspace-title-squircle").unwrap();
+        let (title_text, _) = runtime.presented("workspace-view-title").unwrap();
+        let (add, _) = runtime.presented("workspace-add-finding").unwrap();
+        let (toggle, _) = runtime.presented("findings-view-toggle").unwrap();
+        let (workspace_tabs, _) = runtime.presented("workspace-view-tabs").unwrap();
+        let (findings_page, _) = runtime.presented("workspace-findings-view").unwrap();
+        assert!((0.0..=24.0).contains(&(toggle[0] - title[0] - title[2])));
+        assert!((0.0..=24.0).contains(&(toggle[0] - title_text[0] - title_text[2])));
+        assert!(toggle[0] + toggle[2] < add[0]);
+        assert!(((add[1] + add[3] / 2.0) - (toggle[1] + toggle[3] / 2.0)).abs() < 1.0);
+        assert!((title_text[1] + title_text[3] / 2.0 - toggle[1] - toggle[3] / 2.0).abs() < 2.0);
+        assert!(add[0] + add[2] < workspace_tabs[0]);
+        assert!(toggle[1] >= header[1] && toggle[1] + toggle[3] <= header[1] + header[3]);
+        assert!(findings_page[1] >= header[1] + header[3]);
+        assert!(!runtime.elements().iter().any(|element| {
+            element.text.as_deref() == Some("Findings")
+                && element.rect[0] < toggle[0]
+                && element.rect[1] >= findings_page[1]
+        }));
+        assert!(!runtime.elements().iter().any(|element| {
+            element
+                .text
+                .as_deref()
+                .is_some_and(|value| value.contains(" active"))
+        }));
         for lane in ["candidate", "validated", "screened", "reported"] {
             assert!(runtime.find(&format!("findings-lane-{lane}")).is_some());
             assert!(
@@ -999,6 +1278,95 @@ mod tests {
         runtime.pointer_up(x, y);
         runtime.frame(1.0 / 60.0);
         assert!(runtime.find("finding-row-F5").is_some());
+    }
+
+    #[test]
+    fn compact_findings_and_workspace_tabs_center_their_icons() {
+        let assert_balanced_padding = |runtime: &Runtime<State>| {
+            for (group, first, last) in [
+                (
+                    "findings-view-toggle",
+                    "findings-mode-ledger",
+                    "findings-mode-plot",
+                ),
+                (
+                    "workspace-view-tabs",
+                    "workspace-tab-surfaces",
+                    "workspace-tab-settings",
+                ),
+            ] {
+                let (group_rect, _) = runtime.presented(group).unwrap();
+                let (first_rect, _) = runtime.presented(first).unwrap();
+                let (last_rect, _) = runtime.presented(last).unwrap();
+                let left = first_rect[0] - group_rect[0];
+                let right = group_rect[0] + group_rect[2] - last_rect[0] - last_rect[2];
+                assert!(
+                    (left - right).abs() < 1.0,
+                    "{group} has uneven padding: left={left}, right={right}"
+                );
+            }
+        };
+        let state = crate::visual_preview::fixture("findings");
+        let mut narrow = Runtime::new(state, crate::view, (840.0, 800.0), Env::new(true, 1.0));
+        narrow.frame(0.0);
+        for (button_key, icon_key) in [
+            ("findings-mode-ledger", "segmented-tab-icon-ledger"),
+            ("findings-mode-plot", "segmented-tab-icon-plot"),
+            ("workspace-tab-findings", "segmented-tab-icon-findings"),
+            ("workspace-tab-rules", "segmented-tab-icon-rules"),
+            ("workspace-tab-settings", "segmented-tab-icon-settings"),
+        ] {
+            let (button, _) = narrow.presented(button_key).unwrap();
+            let (glyph, _) = narrow.presented(icon_key).unwrap();
+            assert_eq!(button[2], crate::design::CONTROL_HEIGHT, "{button_key}");
+            let button_center = button[0] + button[2] / 2.0;
+            let glyph_center = glyph[0] + glyph[2] / 2.0;
+            assert!(
+                (button_center - glyph_center).abs() < 1.0,
+                "{button_key} icon is off center: {button:?}, {glyph:?}"
+            );
+        }
+        let (toggle, _) = narrow.presented("findings-view-toggle").unwrap();
+        let (add, _) = narrow.presented("workspace-add-finding").unwrap();
+        let (title, _) = narrow.presented("workspace-title-squircle").unwrap();
+        let (title_text, _) = narrow.presented("workspace-view-title").unwrap();
+        let (tabs, _) = narrow.presented("workspace-view-tabs").unwrap();
+        assert!((0.0..=24.0).contains(&(toggle[0] - title[0] - title[2])));
+        assert!((0.0..=24.0).contains(&(toggle[0] - title_text[0] - title_text[2])));
+        assert!(toggle[0] + toggle[2] < add[0]);
+        assert!(((add[1] + add[3] / 2.0) - (toggle[1] + toggle[3] / 2.0)).abs() < 1.0);
+        assert!((title_text[1] + title_text[3] / 2.0 - toggle[1] - toggle[3] / 2.0).abs() < 2.0);
+        assert!(add[0] + add[2] < tabs[0]);
+        assert_balanced_padding(&narrow);
+
+        let state = crate::visual_preview::fixture("findings");
+        let mut wide = Runtime::new(state, crate::view, (1440.0, 800.0), Env::new(true, 1.0));
+        wide.frame(0.0);
+        assert_balanced_padding(&wide);
+        for key in ["findings-mode-ledger", "findings-mode-plot"] {
+            let (button, _) = wide.presented(key).unwrap();
+            assert!(button[2] > crate::design::CONTROL_HEIGHT, "{key}");
+        }
+    }
+
+    #[test]
+    fn add_finding_header_opens_candidate_form_and_checks_required_fields() {
+        let state = crate::visual_preview::fixture("findings");
+        let mut runtime = Runtime::new(state, crate::view, (1440.0, 800.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        let click = |runtime: &mut Runtime<State>, key: &str| {
+            let (x, y) = runtime.find(key).unwrap();
+            runtime.pointer_down(x, y);
+            runtime.pointer_up(x, y);
+            runtime.frame(1.0);
+        };
+        click(&mut runtime, "workspace-add-finding");
+        assert!(runtime.find("finding-create-dialog").is_some());
+        click(&mut runtime, "finding-create-submit");
+        assert!(runtime.find("finding-create-error").is_some());
+        assert!(!runtime.state.workspace_findings.create_busy);
+        click(&mut runtime, "finding-create-cancel");
+        assert!(runtime.find("finding-create-dialog").is_none());
     }
 
     #[test]
@@ -1167,7 +1535,6 @@ mod tests {
                 runtime.frame(0.0);
                 let (page, _) = runtime.presented("workspace-findings-view").unwrap();
                 for key in [
-                    "findings-view-toggle",
                     "findings-plot",
                     "findings-plot-legend",
                     "findings-plot-stage-candidate",
@@ -1183,6 +1550,9 @@ mod tests {
                         "{key} overflows {width}, large={large}: {bounds:?}, page={page:?}"
                     );
                 }
+                let (toggle, _) = runtime.presented("findings-view-toggle").unwrap();
+                let (tabs, _) = runtime.presented("workspace-view-tabs").unwrap();
+                assert!(toggle[0] + toggle[2] <= tabs[0]);
                 let (low, _) = runtime.presented("finding-point-0-0").unwrap();
                 let (high, _) = runtime.presented("finding-point-100-100").unwrap();
                 assert!(high[0] > low[0] && high[1] < low[1]);

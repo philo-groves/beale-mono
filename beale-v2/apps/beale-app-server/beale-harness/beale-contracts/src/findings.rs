@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 pub const QUERY_PATH: &str = "/v1/findings/query";
 pub const GET_PATH: &str = "/v1/findings/get";
+pub const CREATE_PATH: &str = "/v1/findings/create";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -345,6 +346,20 @@ pub struct GetResponse {
     pub record: Finding,
     pub history_total: usize,
     pub next_history_offset: Option<u32>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateRequest {
+    pub workspace_id: String,
+    pub title: String,
+    pub summary: String,
+    pub hypothesis: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateResponse {
+    pub record: Summary,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

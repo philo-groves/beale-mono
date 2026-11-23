@@ -1,11 +1,188 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 
-use beale_contracts::v1::{SurfaceScope, SurfaceScopeState, WorkspaceSurface};
+use beale_contracts::v1::{SurfaceRelationship, SurfaceScope, SurfaceScopeState, WorkspaceSurface};
 
-pub(crate) const NODE_MAX_WIDTH: f32 = 232.0;
-pub(crate) const NODE_HEIGHT: f32 = 148.0;
-pub(crate) const COLUMN_GAP: f32 = 116.0;
-pub(crate) const ROW_GAP: f32 = 72.0;
+pub(crate) const GRAPH_DEFAULT_MAX: usize = 24;
+pub(crate) const INVENTORY_PAGE_SIZE: usize = 50;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum View {
+    Graph,
+    Inventory,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Sort {
+    #[default]
+    Recorded,
+    Name,
+    Type,
+    Connections,
+}
+
+#[derive(Default)]
+pub(crate) struct Explorer {
+    pub view: Option<View>,
+    pub sort: Sort,
+    pub page: usize,
+    pub page_anchor: Option<String>,
+    pub focus_path: Vec<String>,
+    pub focus_scroll: Vec<f32>,
+    pub query: String,
+    pub neighborhood: Option<String>,
+    pub return_to: Option<ReturnTo>,
+}
+
+pub(crate) struct ReturnTo {
+    pub view: View,
+    pub sort: Sort,
+    pub focus: Focus,
+    pub query: String,
+    pub page: usize,
+    pub page_anchor: Option<String>,
+}
+
+impl Explorer {
+    pub fn view(&self, count: usize) -> View {
+        self.view.unwrap_or(if count > GRAPH_DEFAULT_MAX {
+            View::Inventory
+        } else {
+            View::Graph
+        })
+    }
+}
+
+pub(crate) fn name(surface: &WorkspaceSurface) -> &str {
+    surface
+        .definition
+        .as_ref()
+        .map(|d| d.name.trim())
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            surface
+                .definition
+                .as_ref()
+                .and_then(|d| d.locator.as_ref())
+                .map(|l| l.value.as_str())
+                .filter(|s| !s.is_empty())
+        })
+        .unwrap_or(&surface.id)
+}
+
+/// Index only recorded relationships; locator similarity never grants scope or adds edges.
+pub(crate) struct Analysis {
+    pub indices: HashMap<String, usize>,
+    pub incoming: Vec<usize>,
+    pub outgoing: Vec<usize>,
+    pub neighbors: Vec<HashSet<usize>>,
+    pub boundary: Vec<bool>,
+    pub dangling: usize,
+    pub links: usize,
+}
+
+impl Analysis {
+    pub fn new(surfaces: &[WorkspaceSurface]) -> Self {
+        let mut result = Self {
+            indices: surfaces
+                .iter()
+                .enumerate()
+                .map(|(i, s)| (s.id.clone(), i))
+                .collect(),
+            incoming: vec![0; surfaces.len()],
+            outgoing: vec![0; surfaces.len()],
+            neighbors: vec![HashSet::new(); surfaces.len()],
+            boundary: vec![false; surfaces.len()],
+            dangling: 0,
+            links: 0,
+        };
+        for (source, surface) in surfaces.iter().enumerate() {
+            for link in &surface.relationships {
+                result.outgoing[source] += 1;
+                let Some(&target) = result.indices.get(&link.target_id) else {
+                    result.dangling += 1;
+                    continue;
+                };
+                result.links += 1;
+                result.incoming[target] += 1;
+                if source != target {
+                    result.neighbors[source].insert(target);
+                    result.neighbors[target].insert(source);
+                }
+                let excluded = |i: usize| {
+                    surfaces[i]
+                        .definition
+                        .as_ref()
+                        .is_some_and(|d| d.scope == SurfaceScope::OutOfScope as i32)
+                };
+                if excluded(source) != excluded(target) {
+                    result.boundary[source] = true;
+                    result.boundary[target] = true;
+                }
+            }
+        }
+        result
+    }
+
+    pub fn degree(&self, index: usize) -> usize {
+        self.incoming[index] + self.outgoing[index]
+    }
+
+    pub fn matching(
+        &self,
+        surfaces: &[WorkspaceSurface],
+        focus: Focus,
+        query: &str,
+        explorer: &Explorer,
+    ) -> Vec<usize> {
+        let root = explorer
+            .neighborhood
+            .as_ref()
+            .and_then(|id| self.indices.get(id))
+            .copied();
+        if explorer.neighborhood.is_some() && root.is_none() {
+            return Vec::new();
+        }
+        let mut result: Vec<_> = surfaces
+            .iter()
+            .enumerate()
+            .filter(|(i, s)| {
+                matches(s, focus, query)
+                    && root.is_none_or(|root| root == *i || self.neighbors[root].contains(i))
+            })
+            .map(|(i, _)| i)
+            .collect();
+        match explorer.sort {
+            Sort::Recorded => {}
+            Sort::Name => result.sort_by_cached_key(|&i| {
+                (name(&surfaces[i]).to_lowercase(), surfaces[i].id.clone())
+            }),
+            Sort::Type => result.sort_by_cached_key(|&i| {
+                (
+                    surfaces[i]
+                        .definition
+                        .as_ref()
+                        .map_or("", |d| d.type_id.as_str())
+                        .to_lowercase(),
+                    name(&surfaces[i]).to_lowercase(),
+                    i,
+                )
+            }),
+            Sort::Connections => result.sort_by_key(|&i| (std::cmp::Reverse(self.degree(i)), i)),
+        }
+        // Place the neighborhood anchor first, independent of sort order.
+        if let Some(root) = root.and_then(|root| result.iter().position(|&i| i == root)) {
+            let index = result.remove(root);
+            result.insert(0, index);
+        }
+        result
+    }
+}
+
+pub(crate) fn page(indices: &[usize], requested: usize, size: usize) -> (usize, &[usize]) {
+    let page = requested.min(indices.len().saturating_sub(1) / size);
+    let start = (page * size).min(indices.len());
+    (page, &indices[start..(start + size).min(indices.len())])
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum Focus {
@@ -55,128 +232,210 @@ pub(crate) fn matches(surface: &WorkspaceSurface, focus: Focus, query: &str) -> 
     };
     let query = query.trim().to_lowercase();
     focused
-        && (query.is_empty()
-            || surface.id.to_lowercase().contains(&query)
-            || surface.definition.as_ref().is_some_and(|definition| {
-                [
-                    &definition.name,
-                    &definition.type_id,
-                    &definition.description,
-                ]
-                .iter()
-                .any(|value| value.to_lowercase().contains(&query))
-                    || definition
-                        .locator
-                        .as_ref()
-                        .is_some_and(|locator| locator.value.to_lowercase().contains(&query))
-            }))
+        && query.split_whitespace().all(|term| {
+            let definition = surface.definition.as_ref();
+            match term.split_once(':') {
+                Some(("type", value)) => {
+                    definition.is_some_and(|d| d.type_id.to_lowercase().contains(value))
+                }
+                Some(("id", value)) => surface.id.to_lowercase() == value,
+                Some(("scope", value)) => {
+                    definition.is_some_and(|d| match value {
+                        "in" => d.scope == SurfaceScope::InScope as i32,
+                        "out" => d.scope == SurfaceScope::OutOfScope as i32,
+                        "unknown" => !matches!(
+                            SurfaceScope::try_from(d.scope),
+                            Ok(SurfaceScope::InScope | SurfaceScope::OutOfScope)
+                        ),
+                        _ => false,
+                    }) || (value == "unknown" && definition.is_none())
+                }
+                _ => {
+                    surface.id.to_lowercase().contains(term)
+                        || definition.is_some_and(|d| {
+                            [&d.name, &d.type_id, &d.description]
+                                .iter()
+                                .any(|v| v.to_lowercase().contains(term))
+                                || d.locator
+                                    .as_ref()
+                                    .is_some_and(|l| l.value.to_lowercase().contains(term))
+                        })
+                }
+            }
+        })
 }
 
-/// Pack recorded connected components into readable rows. A serpentine order keeps
-/// adjacent records close when a component wraps; no relationships are inferred.
-pub(crate) fn layout(surfaces: &[WorkspaceSurface], width: f32, height: f32) -> Vec<[f32; 2]> {
+fn is_containment(link: &SurfaceRelationship) -> bool {
+    link.type_id == "contains"
+}
+
+pub(crate) struct Hierarchy {
+    pub parent: Vec<Option<usize>>,
+    pub children: Vec<Vec<usize>>,
+    pub roots: Vec<usize>,
+}
+
+pub(crate) fn hierarchy(surfaces: &[WorkspaceSurface]) -> Hierarchy {
     let indices: HashMap<&str, usize> = surfaces
         .iter()
         .enumerate()
-        .map(|(index, surface)| (surface.id.as_str(), index))
+        .map(|(i, surface)| (surface.id.as_str(), i))
         .collect();
-    let mut neighbors = vec![Vec::new(); surfaces.len()];
-    let mut incoming = vec![0_usize; surfaces.len()];
-    let mut edges = HashSet::new();
+    let mut parent = vec![None; surfaces.len()];
+    let mut children = vec![Vec::new(); surfaces.len()];
     for (source, surface) in surfaces.iter().enumerate() {
-        for relationship in &surface.relationships {
-            if let Some(&target) = indices.get(relationship.target_id.as_str())
+        for link in &surface.relationships {
+            if is_containment(link)
+                && let Some(&target) = indices.get(link.target_id.as_str())
                 && source != target
+                && parent[target].is_none()
             {
-                incoming[target] += 1;
-                if edges.insert((source.min(target), source.max(target))) {
-                    neighbors[source].push(target);
-                    neighbors[target].push(source);
-                }
+                parent[target] = Some(source);
+                children[source].push(target);
             }
         }
     }
-    let mut seen = vec![false; surfaces.len()];
-    let mut groups = Vec::new();
-    for start in 0..surfaces.len() {
-        if seen[start] {
-            continue;
-        }
-        let mut members = Vec::new();
-        let mut queue = VecDeque::from([start]);
-        seen[start] = true;
-        while let Some(index) = queue.pop_front() {
-            members.push(index);
-            for &next in &neighbors[index] {
-                if !seen[next] {
-                    seen[next] = true;
-                    queue.push_back(next);
-                }
-            }
-        }
-        // Prefer an explicit source, then the most connected record, with stable ties.
-        let root = *members
-            .iter()
-            .min_by_key(|&&index| {
-                (
-                    incoming[index],
-                    std::cmp::Reverse(neighbors[index].len()),
-                    index,
-                )
-            })
-            .unwrap();
-        let mut ordered = Vec::new();
-        let mut visited = HashSet::from([root]);
-        let mut queue = VecDeque::from([root]);
-        while let Some(index) = queue.pop_front() {
-            ordered.push(index);
-            for &next in &neighbors[index] {
-                if visited.insert(next) {
-                    queue.push_back(next);
-                }
-            }
-        }
-        groups.push(ordered);
+    let roots = (0..surfaces.len())
+        .filter(|&index| parent[index].is_none())
+        .collect();
+    Hierarchy {
+        parent,
+        children,
+        roots,
     }
-    groups.sort_by_key(|group| (std::cmp::Reverse(group.len()), group[0]));
-    // Choose the grid that maximizes card size while fitting every record.
-    let fit = |columns: usize| {
-        let rows = surfaces.len().div_ceil(columns).max(1);
-        let grid_width = columns as f32 * (NODE_MAX_WIDTH + COLUMN_GAP) - COLUMN_GAP;
-        let grid_height = rows as f32 * (NODE_HEIGHT + ROW_GAP) - ROW_GAP + 52.0;
-        ((width - 48.0).max(1.0) / grid_width).min((height - 24.0).max(1.0) / grid_height)
-    };
-    let columns = (1..=surfaces.len().max(1))
-        .max_by(|&left, &right| {
-            fit(left)
-                .total_cmp(&fit(right))
-                .then_with(|| right.cmp(&left))
-        })
-        .unwrap();
-    let mut positions = vec![[0.0, 0.0]; surfaces.len()];
-    let mut slot = 0;
-    for group in groups {
-        for index in group {
-            let row = slot / columns;
-            let col = if row % 2 == 0 {
-                slot % columns
-            } else {
-                columns - 1 - slot % columns
-            };
-            positions[index] = [
-                NODE_MAX_WIDTH / 2.0 + col as f32 * (NODE_MAX_WIDTH + COLUMN_GAP),
-                NODE_HEIGHT / 2.0 + row as f32 * (NODE_HEIGHT + ROW_GAP),
-            ];
-            slot += 1;
-        }
-    }
-    positions
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use beale_contracts::v1::SurfaceRelationship;
+
+    #[test]
+    fn large_scope_paging_keeps_every_record_reachable() {
+        let surfaces: Vec<_> = (0..10_000)
+            .map(|i| surface(&format!("S{i}"), Some("S0")))
+            .collect();
+        let analysis = Analysis::new(&surfaces);
+        let explorer = Explorer {
+            neighborhood: Some("S0".into()),
+            ..Default::default()
+        };
+        assert_eq!(explorer.view(surfaces.len()), View::Inventory);
+        let matches = analysis.matching(&surfaces, Focus::All, "", &explorer);
+        assert_eq!(matches.len(), 10_000);
+        let mut seen = HashSet::new();
+        for requested in 0..matches.len().div_ceil(INVENTORY_PAGE_SIZE) {
+            let (_, slice) = page(&matches, requested, INVENTORY_PAGE_SIZE);
+            seen.extend(slice.iter().copied());
+            assert!(slice.len() <= INVENTORY_PAGE_SIZE);
+        }
+        assert_eq!(seen.len(), surfaces.len());
+        assert_eq!(page(&[], usize::MAX, INVENTORY_PAGE_SIZE), (0, &[][..]));
+        assert_eq!(page(&matches[..3], usize::MAX, INVENTORY_PAGE_SIZE).0, 0);
+    }
+
+    #[test]
+    fn analysis_preserves_direction_cycles_missing_targets_and_explicit_boundaries() {
+        use beale_contracts::v1::SurfaceDefinition;
+        let mut surfaces = vec![
+            surface("S1", Some("S2")),
+            surface("S2", Some("S1")),
+            surface("S3", Some("missing")),
+            surface("S4", None),
+        ];
+        surfaces[1].definition = Some(SurfaceDefinition {
+            scope: SurfaceScope::OutOfScope as i32,
+            ..Default::default()
+        });
+        let analysis = Analysis::new(&surfaces);
+        assert_eq!(analysis.links, 2);
+        assert_eq!(analysis.dangling, 1);
+        assert_eq!(analysis.incoming, vec![1, 1, 0, 0]);
+        assert_eq!(analysis.outgoing, vec![1, 1, 1, 0]);
+        assert_eq!(analysis.boundary, vec![true, true, false, false]);
+        let explorer = Explorer {
+            neighborhood: Some("S1".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            analysis.matching(&surfaces, Focus::All, "", &explorer),
+            vec![0, 1]
+        );
+        assert_eq!(
+            analysis.matching(&surfaces, Focus::Excluded, "", &explorer),
+            vec![1]
+        );
+        let missing = Explorer {
+            neighborhood: Some("deleted-example".into()),
+            ..Default::default()
+        };
+        assert!(
+            analysis
+                .matching(&surfaces, Focus::All, "", &missing)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn inventory_sort_is_deterministic_for_names_types_and_link_counts() {
+        use beale_contracts::v1::SurfaceDefinition;
+        let mut surfaces = vec![
+            surface("S1", None),
+            surface("S2", Some("S3")),
+            surface("S3", None),
+        ];
+        for (surface, (name, kind)) in surfaces.iter_mut().zip([
+            ("Zulu", "repository"),
+            ("Alpha", "service"),
+            ("Beta", "binary"),
+        ]) {
+            surface.definition = Some(SurfaceDefinition {
+                name: name.into(),
+                type_id: kind.into(),
+                ..Default::default()
+            });
+        }
+        let analysis = Analysis::new(&surfaces);
+        for (sort, expected) in [
+            (Sort::Name, vec![1, 2, 0]),
+            (Sort::Type, vec![2, 0, 1]),
+            (Sort::Connections, vec![1, 2, 0]),
+        ] {
+            let explorer = Explorer {
+                sort,
+                ..Default::default()
+            };
+            assert_eq!(
+                analysis.matching(&surfaces, Focus::All, "", &explorer),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn scoped_search_combines_terms_without_inferring_wildcard_authorization() {
+        use beale_contracts::v1::{SurfaceDefinition, SurfaceLocator};
+        let mut record = surface("S1", None);
+        record.definition = Some(SurfaceDefinition {
+            name: "Example parser".into(),
+            type_id: "code.module".into(),
+            locator: Some(SurfaceLocator {
+                kind: "domain".into(),
+                value: "*.example.test".into(),
+            }),
+            scope: SurfaceScope::OutOfScope as i32,
+            ..Default::default()
+        });
+        assert!(matches(
+            &record,
+            Focus::All,
+            "type:code scope:out parser *.example.test"
+        ));
+        assert!(matches(&record, Focus::All, "id:S1"));
+        assert!(!matches(&record, Focus::All, "scope:in"));
+        assert!(!matches(&record, Focus::All, "id:S10"));
+        assert!(!matches(&record, Focus::All, "other.example.test"));
+    }
 
     fn surface(id: &str, target: Option<&str>) -> WorkspaceSurface {
         WorkspaceSurface {
@@ -188,83 +447,12 @@ mod tests {
                     label: "calls".to_owned(),
                     type_id: String::new(),
                     evidence_refs: Vec::new(),
-                    source_element_id: String::new(),
                 })
                 .collect(),
             ..Default::default()
         }
     }
 
-    #[test]
-    fn connected_surfaces_cluster_with_stable_positions() {
-        let surfaces = [
-            surface("hub", Some("left")),
-            surface("left", None),
-            surface("right", Some("hub")),
-            surface("free-a", None),
-            surface("free-b", None),
-            surface("free-c", None),
-        ];
-        let positions = layout(&surfaces, 1000.0, 700.0);
-        let distance = |a: usize, b: usize| {
-            ((positions[a][0] - positions[b][0]).powi(2)
-                + (positions[a][1] - positions[b][1]).powi(2))
-            .sqrt()
-        };
-        assert!(distance(0, 1) < distance(0, 3));
-        assert!(distance(0, 2) < distance(0, 3));
-        assert_eq!(positions, layout(&surfaces, 1000.0, 700.0));
-    }
-
-    #[test]
-    fn narrow_view_wraps_unconnected_surfaces() {
-        let surfaces = [
-            surface("one", None),
-            surface("two", None),
-            surface("three", None),
-        ];
-        let positions = layout(&surfaces, 600.0, 700.0);
-        assert!(
-            positions
-                .iter()
-                .any(|position| position[1] != positions[0][1])
-        );
-    }
-
-    #[test]
-    fn explicit_contains_relationship_places_surfaces_together() {
-        let positions = layout(
-            &[
-                surface("S1", Some("S2")),
-                surface("S2", None),
-                surface("S3", None),
-            ],
-            1000.0,
-            700.0,
-        );
-        let distance = |left: usize, right: usize| {
-            ((positions[left][0] - positions[right][0]).powi(2)
-                + (positions[left][1] - positions[right][1]).powi(2))
-            .sqrt()
-        };
-        assert!(distance(0, 1) < distance(0, 2));
-    }
-
-    #[test]
-    fn dense_related_surfaces_leave_room_for_cards() {
-        let mut surfaces = vec![surface("hub", None)];
-        surfaces.extend((0..16).map(|index| surface(&format!("leaf-{index}"), Some("hub"))));
-        let positions = layout(&surfaces, 1400.0, 1000.0);
-        for (index, &[x, y]) in positions.iter().enumerate() {
-            for &[other_x, other_y] in &positions[index + 1..] {
-                assert!(
-                    (x - other_x).abs() >= NODE_MAX_WIDTH + 8.0
-                        || (y - other_y).abs() >= NODE_HEIGHT + 8.0,
-                    "cards overlap at {x}, {y} and {other_x}, {other_y}"
-                );
-            }
-        }
-    }
     #[test]
     fn review_distinguishes_approval_from_recorded_scope() {
         use beale_contracts::v1::SurfaceDefinition;

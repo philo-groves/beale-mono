@@ -823,7 +823,8 @@ pub fn router(token: String, db: HostDatabase) -> Router {
     Router::new()
         .route(findings::QUERY_PATH, post(query))
         .route(findings::GET_PATH, post(get))
-        .layer(axum::extract::DefaultBodyLimit::max(8_192))
+        .route(findings::CREATE_PATH, post(create))
+        .layer(axum::extract::DefaultBodyLimit::max(32_768))
         .with_state(HttpState { token, db })
 }
 fn authorized(headers: &HeaderMap, token: &str) -> bool {
@@ -906,6 +907,50 @@ async fn get(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
     Ok(Json(json!(page)))
+}
+
+async fn create(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<findings::CreateResponse>, StatusCode> {
+    if !authorized(&headers, &state.token) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    let request: findings::CreateRequest = decode(&headers, &body)?;
+    if request.summary.trim().is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    if !state
+        .db
+        .feature_enabled(FEATURE_ID)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        || !state
+            .db
+            .extension_applies_to("feature", FEATURE_ID, &request.workspace_id)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let context = ToolContext {
+        workspace_id: &request.workspace_id,
+        session_id: "desktop-operator",
+        evidence_role: None,
+        pending: &[],
+    };
+    let result = execute(
+        &state.db,
+        &context,
+        CREATE,
+        &json!({
+            "title": request.title,
+            "summary": request.summary,
+            "hypothesis": request.hypothesis,
+        }),
+    )
+    .map_err(|_| StatusCode::BAD_REQUEST)?;
+    let response = serde_json::from_str(&result).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(response))
 }
 
 #[cfg(test)]
@@ -1807,6 +1852,119 @@ mod tests {
             serde_json::from_slice(&to_bytes(response.into_body(), 16_384).await.unwrap()).unwrap();
         assert_eq!(detail["record"]["id"], id);
         assert_eq!(detail["record"]["history"], json!([]));
+        drop(db);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn create_route_records_operator_candidate_with_feature_scope() {
+        let root = std::env::temp_dir().join(format!(
+            "beale-findings-create-example-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let db = HostDatabase::open(&root).unwrap();
+        migrate(&db).unwrap();
+        db.replace_workspaces(&[WorkspaceRow {
+            id: "workspace-example".to_owned(),
+            name: "Example Workspace".to_owned(),
+            directory: "example-directory".to_owned(),
+        }])
+        .unwrap();
+        let app = router("example-token".to_owned(), db.clone());
+        let request = |authorized: bool, title: &str| {
+            let mut builder = Request::builder()
+                .uri(findings::CREATE_PATH)
+                .method("POST")
+                .header(header::CONTENT_TYPE, "application/json");
+            if authorized {
+                builder = builder.header(header::AUTHORIZATION, "Bearer example-token");
+            }
+            builder
+                .body(Body::from(
+                    json!({
+                        "workspace_id": "workspace-example",
+                        "title": title,
+                        "summary": "A synthetic boundary observation",
+                        "hypothesis": "An example.test input may cross a boundary"
+                    })
+                    .to_string(),
+                ))
+                .unwrap()
+        };
+        assert_eq!(
+            app.clone()
+                .oneshot(request(false, "Example candidate"))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            app.clone()
+                .oneshot(request(true, "Example candidate"))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        db.set_feature_enabled(FEATURE_ID, true).unwrap();
+        db.set_extension_scope("feature", FEATURE_ID, false, &[])
+            .unwrap();
+        assert_eq!(
+            app.clone()
+                .oneshot(request(true, "Example candidate"))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        db.set_extension_scope("feature", FEATURE_ID, true, &[])
+            .unwrap();
+        assert_eq!(
+            app.clone()
+                .oneshot(request(true, " "))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::BAD_REQUEST
+        );
+        let response = app
+            .clone()
+            .oneshot(request(true, "Example candidate"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let created: findings::CreateResponse =
+            serde_json::from_slice(&to_bytes(response.into_body(), 16_384).await.unwrap()).unwrap();
+        assert_eq!(created.record.status, Status::Candidate);
+        let saved = db
+            .finding_get_page("workspace-example", &created.record.id, Some(0))
+            .unwrap()
+            .unwrap()
+            .record;
+        assert_eq!(saved.title, "Example candidate");
+        assert_eq!(saved.history[0].session_id, "desktop-operator");
+        let large_body = serde_json::to_vec(&findings::CreateRequest {
+            workspace_id: "workspace-example".to_owned(),
+            title: "T".repeat(200),
+            summary: "S".repeat(4_000),
+            hypothesis: "H".repeat(4_000),
+        })
+        .unwrap();
+        assert!(large_body.len() > 8_192);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(findings::CREATE_PATH)
+                    .method("POST")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(header::AUTHORIZATION, "Bearer example-token")
+                    .body(Body::from(large_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
         drop(db);
         std::fs::remove_dir_all(root).unwrap();
     }

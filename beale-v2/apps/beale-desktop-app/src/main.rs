@@ -225,7 +225,9 @@ enum SelectionMenu {
     ResearchWorkspaceHeading,
     QuickChatWorkspace,
     HomeCollection,
+    AutomationList,
     FleetAdd,
+    SurfaceFilter,
     SurfaceKind,
     WorkspaceSurfaceKind,
     ColorTheme,
@@ -514,8 +516,11 @@ const NAVIGATION_HEADER_HEIGHT: f32 = 44.0;
 const HEADER_TITLE_INSET: f32 = 5.0;
 const SIDENAV_BOTTOM_GAP: f32 = 6.0;
 const SIDENAV_CORNER_RADIUS: f32 = 12.0;
+const COLLAPSED_DIVIDER_TOP_GAP: f32 = 8.0;
+const COLLAPSED_DIVIDER_BOTTOM_GAP: f32 = 12.0;
 const SIDENAV_FLYOUT_LEAVE_DELAY: Duration = Duration::from_millis(220);
 const NAVIGATION_DIVIDER_COLOR: &str = "#555555";
+const NAVIGATION_ICON_COLOR: &str = "#aaaaaa";
 const SIDENAV_DEFAULT_WIDTH: f32 = 264.0;
 const SIDENAV_MIN_WIDTH: f32 = 240.0;
 const SIDENAV_MAX_WIDTH: f32 = 420.0;
@@ -699,12 +704,9 @@ struct State {
     workspace_name_dialog_error: String,
     workspace_guidance_edit: TextEdit,
     workspace_surface_edits: Vec<WorkspaceSurface>,
-    workspace_surface_pan: [f32; 2],
-    workspace_surface_zoom: f32,
     workspace_surface_focus: workspace_surface_layout::Focus,
     workspace_surface_query: TextEdit,
-    workspace_surface_pan_origin: [f32; 2],
-    workspace_surface_management_open: bool,
+    workspace_surface_explorer: workspace_surface_layout::Explorer,
     workspace_surface_hovered: Option<usize>,
     workspace_surface_selected: Option<usize>,
     canvas_surface: surface_canvas::SurfaceCanvas,
@@ -844,6 +846,7 @@ struct State {
     sidenav_scrolls: SidenavScrolls,
     settings_scroll: SettingsScroll,
     workspace_scroll: SettingsScroll,
+    workspace_surface_graph_scroll: SettingsScroll,
     findings_lane_scrolls: [SettingsScroll; 4],
 }
 
@@ -991,12 +994,9 @@ impl Default for State {
             workspace_name_dialog_error: String::new(),
             workspace_guidance_edit: TextEdit::new(""),
             workspace_surface_edits: Vec::new(),
-            workspace_surface_pan: [0.0; 2],
-            workspace_surface_zoom: 1.0,
             workspace_surface_focus: workspace_surface_layout::Focus::All,
             workspace_surface_query: TextEdit::new(""),
-            workspace_surface_pan_origin: [0.0; 2],
-            workspace_surface_management_open: false,
+            workspace_surface_explorer: workspace_surface_layout::Explorer::default(),
             workspace_surface_hovered: None,
             workspace_surface_selected: None,
             canvas_surface: surface_canvas::SurfaceCanvas::default(),
@@ -1141,6 +1141,9 @@ impl Default for State {
             sidenav_scrolls: SidenavScrolls::default(),
             settings_scroll: SettingsScroll::default(),
             workspace_scroll: SettingsScroll::for_key("workspace-scroll"),
+            workspace_surface_graph_scroll: SettingsScroll::for_key(
+                "workspace-surface-network-scroll",
+            ),
             findings_lane_scrolls: findings_view::lane_scrolls(),
         }
     }
@@ -1169,18 +1172,23 @@ impl State {
 
     fn close_sidenav_flyout(&mut self) {
         if self.sidenav_flyout.take().is_some()
-            && self.selection_menu == Some(SelectionMenu::HomeCollection)
+            && matches!(
+                self.selection_menu,
+                Some(SelectionMenu::HomeCollection | SelectionMenu::AutomationList)
+            )
         {
             self.selection_menu = None;
         }
     }
 
     fn close_unhovered_sidenav_flyout(&mut self) {
-        if self.selection_menu != Some(SelectionMenu::HomeCollection)
-            && self
-                .sidenav_flyout
-                .as_ref()
-                .is_some_and(|flyout| !flyout.icon_hovered && !flyout.panel_hovered)
+        if !matches!(
+            self.selection_menu,
+            Some(SelectionMenu::HomeCollection | SelectionMenu::AutomationList)
+        ) && self
+            .sidenav_flyout
+            .as_ref()
+            .is_some_and(|flyout| !flyout.icon_hovered && !flyout.panel_hovered)
         {
             self.close_sidenav_flyout();
         }
@@ -1534,7 +1542,11 @@ impl State {
     }
 
     fn start_new_research_in_workspace(&mut self, workspace_id: String) {
+        let switching_workspace = self.new_research_workspace_id.as_deref() != Some(&workspace_id);
         self.start_new_research();
+        if switching_workspace {
+            self.new_research_prompt.clear();
+        }
         self.new_research_workspace_id = Some(workspace_id);
     }
 
@@ -1934,7 +1946,6 @@ impl State {
     }
 
     fn open_workspace(&mut self, id: uuid::Uuid) {
-        self.workspace_surface_management_open = false;
         self.navigate_to(ViewLocation::Workspace(
             id,
             if extensions_view::surfaces_enabled(self, &id.to_string()) {
@@ -2110,12 +2121,11 @@ impl State {
                 );
                 self.workspace_guidance_edit = TextEdit::new(&sections.details.guidance);
                 self.workspace_surface_edits = sections.details.surfaces.clone();
-                self.workspace_surface_pan = [0.0; 2];
-                self.workspace_surface_zoom = 1.0;
                 self.workspace_surface_focus = workspace_surface_layout::Focus::All;
                 self.workspace_surface_query.clear();
-                self.workspace_surface_pan_origin = [0.0; 2];
-                self.workspace_surface_management_open = false;
+                self.workspace_surface_explorer = workspace_surface_layout::Explorer::default();
+                self.workspace_surface_graph_scroll =
+                    SettingsScroll::for_key("workspace-surface-network-scroll");
                 self.workspace_surface_hovered = None;
                 surface_canvas::sync(self);
                 self.workspace_surface_connecting = None;
@@ -3464,6 +3474,15 @@ fn selection_menu_items(state: &State, menu: SelectionMenu) -> Vec<in_place_menu
                 selected: state.home_collection == collection,
             })
             .collect(),
+        SelectionMenu::AutomationList => automations_view::AutomationList::ALL
+            .into_iter()
+            .map(|list| in_place_menu::MenuItem {
+                value: list.key().to_owned(),
+                label: list.label().to_owned(),
+                detail: None,
+                selected: state.automations.list == list,
+            })
+            .collect(),
         SelectionMenu::FleetAdd => [
             ("manual", "Manually Add", "Enter a Tailscale HTTPS URL"),
             (
@@ -3480,6 +3499,7 @@ fn selection_menu_items(state: &State, menu: SelectionMenu) -> Vec<in_place_menu
             selected: false,
         })
         .collect(),
+        SelectionMenu::SurfaceFilter => workspace_view::surface_filter_items(state),
         SelectionMenu::Repeat => new_research::RepeatPreset::ALL
             .into_iter()
             .map(|preset| in_place_menu::MenuItem {
@@ -3696,7 +3716,9 @@ fn selection_menu_anchor(menu: SelectionMenu) -> String {
             return format!("fleet-vm-scope-{index}");
         }
         SelectionMenu::HomeCollection => "home-collection-control",
+        SelectionMenu::AutomationList => "automations-list-control",
         SelectionMenu::FleetAdd => "fleet-add-server",
+        SelectionMenu::SurfaceFilter => "workspace-surface-filter-control",
         SelectionMenu::Repeat => "new-research-repeat-control",
         SelectionMenu::GoalMode => "new-research-goal-control",
         SelectionMenu::SessionGraph => "new-research-graph-control",
@@ -3751,6 +3773,7 @@ fn toggle_selection_menu(state: &mut State, menu: SelectionMenu) {
             | SelectionMenu::ResearchWorkspaceHeading
             | SelectionMenu::QuickChatWorkspace
             | SelectionMenu::HomeCollection
+            | SelectionMenu::AutomationList
     ) {
         state.composer_menu_open = false;
     }
@@ -3784,11 +3807,20 @@ fn choose_selection_menu_item(state: &mut State, menu: SelectionMenu, value: Str
                 state.home_collection = collection;
             }
         }
+        SelectionMenu::AutomationList => {
+            if let Some(list) = automations_view::AutomationList::ALL
+                .into_iter()
+                .find(|list| list.key() == value)
+            {
+                state.automations.list = list;
+            }
+        }
         SelectionMenu::FleetAdd => match value.as_str() {
             "manual" => fleet_view::start_manual_add(state),
             "tailscale" => fleet_view::start_import(state),
             _ => {}
         },
+        SelectionMenu::SurfaceFilter => workspace_view::select_surface_filter(state, &value),
         SelectionMenu::Repeat => {
             if let Some(preset) = new_research::RepeatPreset::ALL
                 .into_iter()
@@ -3921,6 +3953,12 @@ fn selection_menu_key(state: &mut State, event: &KeyEvent, tx: &mut Tx) -> bool 
         }
         return false;
     };
+    if menu == SelectionMenu::SurfaceFilter
+        && state.workspace_surface_query.focused
+        && !matches!(event.key, Key::Escape)
+    {
+        return false;
+    }
     let items = selection_menu_items(state, menu);
     if items.is_empty() {
         state.selection_menu = None;
@@ -4025,12 +4063,13 @@ fn header_icon_button(
         .help(label)
         .size(34.0, 34.0)
         .center()
-        .radius(6.0)
+        .radius(11.0)
+        .continuous_corners()
         .hover(color("#303030"))
         .child(
             icon(glyph, 16.0)
                 .key("header-sidebar-toggle-icon")
-                .color(color("#c8c8c8"))
+                .color(color(NAVIGATION_ICON_COLOR))
                 .offset(0.0, 1.0),
         )
 }
@@ -4058,8 +4097,15 @@ fn history_button(direction: HistoryDirection, enabled: bool, theme: ThemeStyle<
         .help(label)
         .size(30.0, 34.0)
         .center()
-        .radius(6.0)
-        .child(icon(glyph, 16.0).color(color(if enabled { "#c8c8c8" } else { "#777777" })));
+        .radius(11.0)
+        .continuous_corners()
+        .child(
+            icon(glyph, 16.0).color(color(NAVIGATION_ICON_COLOR).alpha(if enabled {
+                1.0
+            } else {
+                0.5
+            })),
+        );
     if enabled {
         button
             .hover(color("#303030"))
@@ -4430,45 +4476,19 @@ fn header(state: &State, prefix_width: f32, window_width: f32) -> El {
     bar
 }
 
-fn nav_button(
+fn with_sidenav_hover(
+    button: El,
     state: &State,
     view: PrimaryView,
     key: &'static str,
     label: &'static str,
-    glyph: &'static Icon,
-    theme: ThemeStyle<'_>,
 ) -> El {
-    let color = |value| theme.color(value);
-    let active = state.primary_view.sidenav() == view;
-    let glyph = if active {
-        match view {
-            PrimaryView::Home => &HOME_FILLED,
-            PrimaryView::Automations => &AUTOMATIONS_FILLED,
-            PrimaryView::Extensions => &EXTENSIONS_FILLED,
-            PrimaryView::Settings => &SETTINGS_FILLED,
-            PrimaryView::Tracking => &TRACKING_FILLED,
-            _ => glyph,
-        }
-    } else {
-        glyph
-    };
     let (enter_delay, leave_delay) = if state.sidenav_visible {
         (Duration::from_millis(350), Duration::ZERO)
     } else {
         (Duration::ZERO, SIDENAV_FLYOUT_LEAVE_DELAY)
     };
-    el().key(key)
-        .role("button")
-        .label(label)
-        .size(38.0, 38.0)
-        .center()
-        .radius(12.0)
-        .fill(if active {
-            theme.subtle_accent()
-        } else {
-            Color::TRANSPARENT
-        })
-        .hover(color("#303030"))
+    button
         .on_hover_change(move |s: &mut State, inside, _| {
             if inside {
                 if s.sidenav_visible {
@@ -4502,26 +4522,68 @@ fn nav_button(
             }
         })
         .hover_delays(enter_delay, leave_delay)
-        .child(icon(glyph, 20.0).color(if active {
-            theme.accent()
-        } else {
-            color("#aaaaaa")
-        }))
-        .on_press(move |s: &mut State| {
-            s.rail_tooltip = None;
-            match view {
-                PrimaryView::Home => s.navigate_to(ViewLocation::Home),
-                PrimaryView::Settings => s.show_section(s.settings_section),
-                PrimaryView::Extensions => s.navigate_to(ViewLocation::Extensions(
-                    s.extensions_section,
-                    s.plugin_tab,
-                    s.feature_tab,
-                )),
-                PrimaryView::Automations => s.navigate_to(ViewLocation::Automations),
-                PrimaryView::Tracking => s.navigate_to(ViewLocation::Tracking),
-                _ => {}
-            }
-        })
+}
+
+fn nav_button(
+    state: &State,
+    view: PrimaryView,
+    key: &'static str,
+    label: &'static str,
+    glyph: &'static Icon,
+    theme: ThemeStyle<'_>,
+) -> El {
+    let color = |value| theme.color(value);
+    let active = state.primary_view.sidenav() == view;
+    let glyph = if active {
+        match view {
+            PrimaryView::Home => &HOME_FILLED,
+            PrimaryView::Automations => &AUTOMATIONS_FILLED,
+            PrimaryView::Extensions => &EXTENSIONS_FILLED,
+            PrimaryView::Settings => &SETTINGS_FILLED,
+            PrimaryView::Tracking => &TRACKING_FILLED,
+            _ => glyph,
+        }
+    } else {
+        glyph
+    };
+    with_sidenav_hover(
+        el().key(key)
+            .role("button")
+            .label(label)
+            .size(38.0, 38.0)
+            .center()
+            .radius(12.0)
+            .fill(if active {
+                theme.subtle_accent()
+            } else {
+                Color::TRANSPARENT
+            })
+            .hover(color("#303030")),
+        state,
+        view,
+        key,
+        label,
+    )
+    .child(icon(glyph, 20.0).color(if active {
+        theme.accent()
+    } else {
+        color(NAVIGATION_ICON_COLOR)
+    }))
+    .on_press(move |s: &mut State| {
+        s.rail_tooltip = None;
+        match view {
+            PrimaryView::Home => s.navigate_to(ViewLocation::Home),
+            PrimaryView::Settings => s.show_section(s.settings_section),
+            PrimaryView::Extensions => s.navigate_to(ViewLocation::Extensions(
+                s.extensions_section,
+                s.plugin_tab,
+                s.feature_tab,
+            )),
+            PrimaryView::Automations => s.navigate_to(ViewLocation::Automations),
+            PrimaryView::Tracking => s.navigate_to(ViewLocation::Tracking),
+            _ => {}
+        }
+    })
 }
 
 fn fleet_ring_status(status: &ConnectionStatus) -> (&'static str, &'static str) {
@@ -4538,38 +4600,33 @@ fn fleet_indicator(state: &State, theme: ThemeStyle<'_>) -> El {
     let (status, ring_color) = fleet_ring_status(&state.connection);
     let glyph_size = 12.0;
     let glyph_inset = (provider_usage::INDICATOR_SIZE - glyph_size) / 2.0;
-    el().key("fleet-status")
-        .role("button")
-        .label(format!("Fleet · {status}"))
-        .size(
-            provider_usage::INDICATOR_SIZE,
-            provider_usage::INDICATOR_SIZE,
-        )
-        .radius(provider_usage::INDICATOR_SIZE / 2.0)
-        .hover(theme.color("#292929"))
-        .on_hover_change(|state: &mut State, inside, _| {
-            if inside {
-                state.rail_tooltip = Some(("fleet-status", "Fleet"));
-            } else if state
-                .rail_tooltip
-                .is_some_and(|(key, _)| key == "fleet-status")
-            {
-                state.rail_tooltip = None;
-            }
-        })
-        .hover_delays(Duration::from_millis(350), Duration::ZERO)
-        .on_press(|state: &mut State| {
-            state.rail_tooltip = None;
-            state.navigate_to(ViewLocation::Fleet(state.fleet_section, state.fleet.tab));
-        })
-        .child(provider_usage::outer_ring_track(theme).key("fleet-status-track"))
-        .child(provider_usage::full_outer_ring(theme.color(ring_color)).key("fleet-status-ring"))
-        .child(
-            icon(&FLEET, glyph_size)
-                .key("fleet-status-icon")
-                .absolute(glyph_inset, glyph_inset)
-                .color(theme.color("#bdbdbd")),
-        )
+    with_sidenav_hover(
+        el().key("fleet-status")
+            .role("button")
+            .label(format!("Fleet · {status}"))
+            .size(
+                provider_usage::INDICATOR_SIZE,
+                provider_usage::INDICATOR_SIZE,
+            )
+            .radius(provider_usage::INDICATOR_SIZE / 2.0)
+            .hover(theme.color("#292929")),
+        state,
+        PrimaryView::Fleet,
+        "fleet-status",
+        "Fleet",
+    )
+    .on_press(|state: &mut State| {
+        state.rail_tooltip = None;
+        state.navigate_to(ViewLocation::Fleet(state.fleet_section, state.fleet.tab));
+    })
+    .child(provider_usage::outer_ring_track(theme).key("fleet-status-track"))
+    .child(provider_usage::full_outer_ring(theme.color(ring_color)).key("fleet-status-ring"))
+    .child(
+        icon(&FLEET, glyph_size)
+            .key("fleet-status-icon")
+            .absolute(glyph_inset, glyph_inset)
+            .color(theme.color("#bdbdbd")),
+    )
 }
 
 fn rail(state: &State, theme: ThemeStyle<'_>) -> El {
@@ -4600,6 +4657,14 @@ fn rail(state: &State, theme: ThemeStyle<'_>) -> El {
         ))
         .child(nav_button(
             state,
+            PrimaryView::Tracking,
+            "nav-tracking",
+            "Tracking",
+            &TRACKING,
+            theme,
+        ))
+        .child(nav_button(
+            state,
             PrimaryView::Extensions,
             "nav-extensions",
             "Extensions",
@@ -4612,21 +4677,6 @@ fn rail(state: &State, theme: ThemeStyle<'_>) -> El {
             "nav-settings",
             "Settings",
             &SETTINGS,
-            theme,
-        ));
-    rail = rail
-        .child(
-            el().key("navigation-conditional-divider")
-                .w(26.0)
-                .h(1.0)
-                .fill(theme.color(NAVIGATION_DIVIDER_COLOR)),
-        )
-        .child(nav_button(
-            state,
-            PrimaryView::Tracking,
-            "nav-tracking",
-            "Tracking",
-            &TRACKING,
             theme,
         ));
     rail = rail.child(el().grow(1.0));
@@ -6568,6 +6618,10 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
         .child(header(state, header_prefix_width, window_width))
         .child(body);
     let navigation_border = color(NAVIGATION_DIVIDER_COLOR);
+    let flyout = state
+        .sidenav_flyout
+        .as_ref()
+        .filter(|_| !state.sidenav_visible);
     let surface = if state.sidenav_visible {
         surface.child(
             el().key("navigation-sidenav-border")
@@ -6583,24 +6637,32 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
                 .border(1.0, navigation_border)
                 .inert(),
         )
+    } else if flyout.is_some_and(|flyout| {
+        matches!(
+            flyout.view,
+            PrimaryView::Home
+                | PrimaryView::Automations
+                | PrimaryView::Tracking
+                | PrimaryView::Extensions
+                | PrimaryView::Settings
+                | PrimaryView::Fleet
+        )
+    }) {
+        surface
     } else {
         surface.child(
             el().key("navigation-rail-divider")
                 .pin(
                     Some(header_prefix_width - 1.0),
-                    Some(NAVIGATION_HEADER_HEIGHT),
+                    Some(NAVIGATION_HEADER_HEIGHT + COLLAPSED_DIVIDER_TOP_GAP),
                     None,
-                    Some(NAVIGATION_SHELL_INSET),
+                    Some(NAVIGATION_SHELL_INSET + COLLAPSED_DIVIDER_BOTTOM_GAP),
                 )
                 .w(1.0)
                 .fill(navigation_border)
                 .inert(),
         )
     };
-    let flyout = state
-        .sidenav_flyout
-        .as_ref()
-        .filter(|_| !state.sidenav_visible);
     window = window.child(if let Some(flyout) = flyout {
         surface.child(sidenav_flyout(state, flyout.view, theme))
     } else {
@@ -6770,7 +6832,14 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
                     && state.workspace_tab == workspace_view::WorkspaceTab::Surfaces
                     && state.workspace_surface_dialog_scope.is_some()
             }
+            SelectionMenu::SurfaceFilter => {
+                state.primary_view == PrimaryView::Workspace && workspace_view::graph_open(state)
+            }
             SelectionMenu::HomeCollection => home_sidenav_visible,
+            SelectionMenu::AutomationList => {
+                (state.sidenav_visible && state.primary_view == PrimaryView::Automations)
+                    || flyout.is_some_and(|flyout| flyout.view == PrimaryView::Automations)
+            }
             SelectionMenu::FleetAdd => {
                 state.primary_view == PrimaryView::Fleet
                     && state.fleet_section == fleet_view::FleetSection::AppServers
@@ -6830,11 +6899,17 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
                 new_research::goal_menu(state, theme)
                     .modal(true, |s: &mut State| s.selection_menu = None),
             );
+        } else if menu == SelectionMenu::SurfaceFilter {
+            window = window.child(
+                workspace_view::surface_filter_menu(state, theme)
+                    .modal(true, |s: &mut State| s.selection_menu = None),
+            );
         } else {
             let items = selection_menu_items(state, menu);
             if !items.is_empty() {
                 let (title, width) = match menu {
                     SelectionMenu::HomeCollection => ("Sidebar collection", 170.0),
+                    SelectionMenu::AutomationList => ("Automation list", 170.0),
                     SelectionMenu::FleetAdd => ("Add App Server", 240.0),
                     SelectionMenu::Repeat => ("Repeat schedule", 190.0),
                     SelectionMenu::GoalMode => ("Goal Mode", 150.0),
@@ -6844,6 +6919,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
                     SelectionMenu::QuickChatWorkspace => ("Quick Chat workspace", 280.0),
                     SelectionMenu::SurfaceKind => ("Surface Type", 178.0),
                     SelectionMenu::WorkspaceSurfaceKind => ("Surface Type", 178.0),
+                    SelectionMenu::SurfaceFilter => ("Filter surfaces", 190.0),
                     SelectionMenu::LeadProvider => ("Default", 178.0),
                     SelectionMenu::ColorTheme => ("Theme", 178.0),
                     SelectionMenu::InterfaceFont => ("Interface Font", 178.0),
@@ -6879,7 +6955,10 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
                     )
                     .modal(true, move |s: &mut State| {
                         s.selection_menu = None;
-                        if menu == SelectionMenu::HomeCollection {
+                        if matches!(
+                            menu,
+                            SelectionMenu::HomeCollection | SelectionMenu::AutomationList
+                        ) {
                             s.close_sidenav_flyout();
                         }
                     })
@@ -7451,16 +7530,14 @@ mod tests {
         runtime.frame(1.0);
         assert_eq!(runtime.state.primary_view, PrimaryView::Automations);
         assert!(runtime.find("automations-schedule-job").is_some());
-        assert!(runtime.find("automations-Active-label").is_some());
-        assert!(runtime.find("automations-Future-label").is_some());
-        assert!(runtime.find("automations-Past-label").is_some());
+        assert!(runtime.find("automations-list-control").is_some());
         assert!(
             runtime
                 .find(&format!(
                     "automation-run-active-{}",
                     runtime.state.automations.runs[0].id
                 ))
-                .is_some()
+                .is_none()
         );
         assert!(
             runtime
@@ -7468,12 +7545,13 @@ mod tests {
                     "automation-run-past-{}",
                     runtime.state.automations.runs[1].id
                 ))
-                .is_some()
+                .is_none()
         );
         let job_key = format!(
             "automation-job-future-{}",
             runtime.state.automations.jobs[0].id
         );
+        assert!(runtime.find(&job_key).is_some());
         let (x, y) = runtime.find(&job_key).unwrap();
         runtime.pointer_down(x, y);
         runtime.pointer_up(x, y);
@@ -7491,7 +7569,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_automation_sections_indent_their_labels() {
+    fn automations_selector_shows_one_empty_list_at_a_time() {
         let state = State {
             primary_view: PrimaryView::Automations,
             ..State::default()
@@ -7499,11 +7577,36 @@ mod tests {
         let mut runtime = Runtime::new(state, view, (1040.0, 720.0), Env::new(true, 1.0));
         runtime.frame(0.0);
         let (runs_row, _) = runtime.presented("automations-runs-row").unwrap();
-        let (runs_label, _) = runtime.presented("automations-runs-label").unwrap();
+        let (list_control, _) = runtime.presented("automations-list-control").unwrap();
         let (search, _) = runtime.presented("automations-search-runs").unwrap();
-        assert_eq!(runs_label[0], runs_row[0] + 8.0);
+        assert_eq!(list_control[0], runs_row[0]);
         assert_eq!(search[0] + search[2], runs_row[0] + runs_row[2]);
-        for section in ["Active", "Future", "Past"] {
+        for (index, section) in [(0, "Future"), (1, "Past"), (2, "Active")] {
+            runtime.pointer_move(500.0, 500.0);
+            runtime.frame(0.0);
+            let (x, y) = runtime.find("automations-list-control").unwrap();
+            runtime.pointer_down(x, y);
+            runtime.pointer_up(x, y);
+            runtime.frame(1.0);
+            assert_eq!(
+                runtime.state.selection_menu,
+                Some(SelectionMenu::AutomationList)
+            );
+            let (x, y) = runtime
+                .find(&format!("selection-menu-item-{index}"))
+                .unwrap();
+            runtime.pointer_down(x, y);
+            runtime.pointer_up(x, y);
+            runtime.frame(1.0);
+            assert_eq!(runtime.state.automations.list.label(), section);
+            for other in ["Active", "Future", "Past"] {
+                assert_eq!(
+                    runtime
+                        .find(&format!("automations-{other}-empty"))
+                        .is_some(),
+                    other == section
+                );
+            }
             let (row, _) = runtime
                 .presented(&format!("automations-{section}-empty"))
                 .unwrap();
@@ -7669,6 +7772,11 @@ mod tests {
             let mut state = State {
                 primary_view: PrimaryView::Automations,
                 ..State::default()
+            };
+            state.automations.list = match section {
+                "active" => automations_view::AutomationList::Active,
+                "past" => automations_view::AutomationList::Past,
+                _ => automations_view::AutomationList::Future,
             };
             for index in 1..=6 {
                 let id = format!("00000000-0000-4000-8000-{index:012x}");
@@ -11627,6 +11735,248 @@ active_runbook_count: 0,
     }
 
     #[test]
+    fn surface_view_toggle_sits_beside_title_at_wide_and_narrow_widths() {
+        for (width, compact) in [(840.0, true), (1440.0, false)] {
+            let state = visual_preview::fixture("surfaces");
+            let mut runtime = Runtime::new(state, view, (width, 800.0), Env::new(true, 1.0));
+            runtime.frame(0.0);
+            let (header, _) = runtime.presented("workspace-view-header").unwrap();
+            let (title, _) = runtime.presented("workspace-title-squircle").unwrap();
+            let (title_text, _) = runtime.presented("workspace-view-title").unwrap();
+            let (toggle, _) = runtime.presented("workspace-surface-view-toggle").unwrap();
+            let (tabs, _) = runtime.presented("workspace-view-tabs").unwrap();
+            assert!((0.0..=24.0).contains(&(toggle[0] - title[0] - title[2])));
+            assert!((0.0..=24.0).contains(&(toggle[0] - title_text[0] - title_text[2])));
+            assert!(
+                (title_text[1] + title_text[3] / 2.0 - toggle[1] - toggle[3] / 2.0).abs() < 2.0
+            );
+            assert!(toggle[0] + toggle[2] < tabs[0]);
+            assert!(toggle[1] >= header[1] && toggle[1] + toggle[3] <= header[1] + header[3]);
+            assert!(runtime.find("workspace-surface-sort").is_none());
+            let (graph, _) = runtime.presented("workspace-surface-view-Graph").unwrap();
+            let (inventory, _) = runtime
+                .presented("workspace-surface-view-Inventory")
+                .unwrap();
+            let left = graph[0] - toggle[0];
+            let right = toggle[0] + toggle[2] - inventory[0] - inventory[2];
+            assert!((left - right).abs() < 1.0);
+            if compact {
+                for (button, key) in [
+                    (graph, "segmented-tab-icon-graph"),
+                    (inventory, "segmented-tab-icon-inventory"),
+                ] {
+                    let (glyph, _) = runtime.presented(key).unwrap();
+                    assert_eq!(button[2], design::CONTROL_HEIGHT);
+                    assert!((button[0] + button[2] / 2.0 - glyph[0] - glyph[2] / 2.0).abs() < 1.0);
+                }
+            } else {
+                assert!(graph[2] > design::CONTROL_HEIGHT);
+                assert!(inventory[2] > design::CONTROL_HEIGHT);
+            }
+        }
+    }
+
+    #[test]
+    fn surface_web_titles_links_and_drills_through_children() {
+        let mut state = visual_preview::fixture("surfaces-web");
+        let mut nested = state.workspace_surface_edits[7].clone();
+        nested.id = "S9".to_owned();
+        nested.relationships.clear();
+        if let Some(definition) = &mut nested.definition {
+            definition.name = "Nested example".to_owned();
+        }
+        state.workspace_surface_edits.push(nested);
+        state.workspace_surface_edits[1].relationships.push(
+            beale_contracts::v1::SurfaceRelationship {
+                target_id: "S9".to_owned(),
+                label: "contains".to_owned(),
+                type_id: "contains".to_owned(),
+                ..Default::default()
+            },
+        );
+        state.workspace_details.as_mut().unwrap().surfaces = state.workspace_surface_edits.clone();
+        let mut runtime = Runtime::new(state, view, (1440.0, 960.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        for root in [0, 3, 5] {
+            assert!(
+                runtime
+                    .find(&format!("workspace-surface-web-title-{root}"))
+                    .is_some()
+            );
+            assert!(
+                runtime
+                    .find(&format!("workspace-surface-web-node-{root}"))
+                    .is_some()
+            );
+        }
+        assert!(runtime.find("workspace-surface-node-0").is_none());
+        assert!(runtime.find("workspace-surface-web-link-0-1-0-5").is_some());
+        let click = |runtime: &mut Runtime<State>, key: &str| {
+            let (x, y) = runtime.find(key).unwrap();
+            runtime.pointer_down(x, y);
+            runtime.pointer_up(x, y);
+            runtime.frame(1.0 / 60.0);
+        };
+        click(&mut runtime, "workspace-surface-web-node-1");
+        assert_eq!(
+            runtime.state.workspace_surface_explorer.focus_path,
+            vec!["S2"]
+        );
+        assert!(runtime.find("workspace-surface-web-title-1").is_some());
+        assert!(runtime.find("workspace-surface-web-node-8").is_some());
+        assert!(runtime.find("workspace-surface-web-title-3").is_none());
+        click(&mut runtime, "workspace-surface-web-node-8");
+        assert_eq!(
+            runtime.state.workspace_surface_explorer.focus_path,
+            vec!["S2", "S9"]
+        );
+        assert!(runtime.find("workspace-surface-web-title-8").is_some());
+        click(&mut runtime, "workspace-surface-web-back");
+        assert_eq!(
+            runtime.state.workspace_surface_explorer.focus_path,
+            vec!["S2"]
+        );
+        click(&mut runtime, "workspace-surface-web-all");
+        assert!(
+            runtime
+                .state
+                .workspace_surface_explorer
+                .focus_path
+                .is_empty()
+        );
+        assert!(runtime.find("workspace-surface-web-title-3").is_some());
+        let (x, y) = runtime.find("workspace-surface-web-title-0").unwrap();
+        runtime.pointer_move(x, y);
+        runtime.frame(1.0 / 60.0);
+        assert_eq!(runtime.state.workspace_surface_hovered, Some(0));
+        runtime.pointer_move(700.0, 700.0);
+        runtime.frame(1.0 / 60.0);
+        assert_eq!(runtime.state.workspace_surface_hovered, None);
+        click(&mut runtime, "workspace-surface-web-title-0");
+        assert_eq!(runtime.state.canvas_surface.active(), Some("S1"));
+        assert!(runtime.state.canvas_open);
+    }
+
+    #[test]
+    fn narrow_surface_web_scrolls_and_restores_position_after_focus() {
+        let state = visual_preview::fixture("surfaces-web-overflow");
+        let mut runtime = Runtime::new(state, view, (840.0, 600.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        runtime.frame(1.0);
+        let click = |runtime: &mut Runtime<State>, key: &str| {
+            let (x, y) = runtime.find(key).unwrap();
+            runtime.pointer_down(x, y);
+            runtime.pointer_up(x, y);
+            runtime.frame(1.0);
+        };
+        assert!(runtime.find("workspace-surface-page-count").is_none());
+        assert!(runtime.find("workspace-surface-page-next").is_none());
+        assert!(runtime.find("workspace-surface-bound-right").is_none());
+        assert!(runtime.find("workspace-surface-bound-bottom").is_none());
+        assert!(runtime.find("workspace-surface-bound-left").is_none());
+        assert!(runtime.find("workspace-surface-bound-top").is_none());
+        let scroll = runtime.state.workspace_surface_graph_scroll.position();
+        assert!(scroll.max[1] > 0.0);
+        assert!(runtime.state.workspace_surface_graph_scroll.metrics().1 > 0.0);
+        let (track, _) = runtime
+            .presented("workspace-surface-network-scrollbar-track")
+            .unwrap();
+        runtime.pointer_down(track[0] + track[2] / 2.0, track[1] + track[3] - 6.0);
+        runtime.pointer_up(track[0] + track[2] / 2.0, track[1] + track[3] - 6.0);
+        runtime.frame(1.0);
+        assert!(
+            runtime
+                .state
+                .workspace_surface_graph_scroll
+                .position()
+                .offset[1]
+                > scroll.max[1] * 0.9
+        );
+        let (title, _) = runtime.presented("workspace-surface-web-title-9").unwrap();
+        let (viewport, _) = runtime
+            .presented("workspace-surface-network-scroll")
+            .unwrap();
+        assert!(title[1] >= viewport[1] && title[1] < viewport[1] + viewport[3]);
+        runtime.pointer_down(track[0] + track[2] / 2.0, track[1] + 6.0);
+        runtime.pointer_up(track[0] + track[2] / 2.0, track[1] + 6.0);
+        runtime.frame(1.0);
+        let (viewport, _) = runtime
+            .presented("workspace-surface-network-scroll")
+            .unwrap();
+        runtime
+            .wheel_event(WheelEvent::new(0.0, -40.0).at(viewport[0] + 80.0, viewport[1] + 160.0));
+        runtime.frame(1.0);
+        let before_focus = runtime
+            .state
+            .workspace_surface_graph_scroll
+            .position()
+            .offset[1];
+        assert!(before_focus > 0.0);
+        click(&mut runtime, "workspace-surface-web-node-1");
+        assert!(
+            runtime
+                .state
+                .workspace_surface_graph_scroll
+                .position()
+                .offset[1]
+                < 1.0
+        );
+        click(&mut runtime, "workspace-surface-web-back");
+        assert!(
+            (runtime
+                .state
+                .workspace_surface_graph_scroll
+                .position()
+                .offset[1]
+                - before_focus)
+                .abs()
+                < 1.0
+        );
+    }
+
+    #[test]
+    fn large_surface_web_scrolls_to_the_last_root() {
+        let mut state = visual_preview::fixture("surfaces-dense");
+        let template = state.workspace_surface_edits[0].clone();
+        for index in 40..620 {
+            let mut surface = template.clone();
+            surface.id = format!("example-surface-{index}");
+            surface.relationships.clear();
+            state.workspace_surface_edits.push(surface);
+        }
+        state.workspace_details.as_mut().unwrap().surfaces = state.workspace_surface_edits.clone();
+        state.workspace_surface_explorer.view = Some(workspace_surface_layout::View::Graph);
+        let mut runtime = Runtime::new(state, view, (1440.0, 960.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        runtime.frame(1.0);
+        assert!(runtime.find("workspace-surface-page-next").is_none());
+        assert!(runtime.find("workspace-surface-bound-bottom").is_none());
+        let scroll = runtime.state.workspace_surface_graph_scroll.position();
+        assert!(scroll.max[1] > 0.0);
+        let (track, _) = runtime
+            .presented("workspace-surface-network-scrollbar-track")
+            .unwrap();
+        runtime.pointer_down(track[0] + track[2] / 2.0, track[1] + track[3] - 6.0);
+        runtime.pointer_up(track[0] + track[2] / 2.0, track[1] + track[3] - 6.0);
+        runtime.frame(2.0);
+        assert!(
+            runtime
+                .state
+                .workspace_surface_graph_scroll
+                .position()
+                .offset[1]
+                > scroll.max[1] * 0.9
+        );
+        let (title, _) = runtime
+            .presented("workspace-surface-web-title-619")
+            .unwrap();
+        let (viewport, _) = runtime
+            .presented("workspace-surface-network-scroll")
+            .unwrap();
+        assert!(title[1] >= viewport[1] && title[1] < viewport[1] + viewport[3]);
+    }
+
+    #[test]
     fn saved_workspace_opens_surface_graph_and_shows_recorded_forms() {
         use beale_contracts::v1::{
             SurfaceDefinition, SurfaceLocator, SurfaceRevision, SurfaceScope, WorkspaceSurface,
@@ -11640,12 +11990,19 @@ active_runbook_count: 0,
                 .to_string_lossy()
                 .into_owned(),
         };
-        let state = with_surface_feature(State {
+        let mut state = with_surface_feature(State {
             primary_view: PrimaryView::Home,
             workspaces: vec![summary.clone()],
             workspace_list_loaded: true,
             ..State::default()
         });
+        let findings = state
+            .features
+            .iter_mut()
+            .find(|feature| feature.id == beale_findings::FEATURE_ID)
+            .unwrap();
+        findings.enabled = true;
+        findings.all_workspaces = true;
         let mut runtime = Runtime::new(state, view, (2200.0, 900.0), Env::new(true, 1.0));
         runtime.frame(0.0);
         let (x, y) = runtime.find(&format!("home-workspace-{id}")).unwrap();
@@ -11731,10 +12088,27 @@ active_runbook_count: 0,
         let (workspace_title, _) = loaded.presented("workspace-view-title").unwrap();
         assert!((workspace_title[0] - content_rect[0] - 24.0).abs() < 1.0);
         assert!(workspace_title[1] >= title_container[1]);
-        for (tab, expected) in [
-            ("workspace-tab-surfaces", "workspace-surface-network"),
-            ("workspace-tab-rules", "saved-workspace-rules-form"),
-            ("workspace-tab-settings", "saved-workspace-details-form"),
+        for (tab, expected, expected_title) in [
+            (
+                "workspace-tab-surfaces",
+                "workspace-surface-network",
+                "Example Workspace Surfaces",
+            ),
+            (
+                "workspace-tab-findings",
+                "workspace-findings-view",
+                "Example Workspace Findings",
+            ),
+            (
+                "workspace-tab-rules",
+                "saved-workspace-rules-form",
+                "Example Workspace Rules",
+            ),
+            (
+                "workspace-tab-settings",
+                "saved-workspace-details-form",
+                "Example Workspace Settings",
+            ),
         ] {
             let (x, y) = loaded.find(tab).unwrap();
             loaded.pointer_down(x, y);
@@ -11743,28 +12117,34 @@ active_runbook_count: 0,
             assert!(loaded.find(expected).is_some(), "{expected}");
             let (current_title, _) = loaded.presented("workspace-view-title").unwrap();
             assert!((current_title[0] - workspace_title[0]).abs() < 1.0);
+            let title = loaded
+                .elements()
+                .into_iter()
+                .find(|item| item.key.as_deref() == Some("workspace-view-title"))
+                .unwrap();
+            assert_eq!(title.text.as_deref(), Some(expected_title));
             if tab != "workspace-tab-surfaces" {
                 assert!(loaded.find("workspace-surface-network").is_none());
             }
             if tab == "workspace-tab-surfaces" {
                 assert!(loaded.find("workspace-surface-network").is_some());
                 loaded.frame(1.0);
-                let (node_x, node_y) = loaded.find("workspace-surface-node-0").unwrap();
+                let (node_x, node_y) = loaded.find("workspace-surface-web-node-0").unwrap();
                 loaded.pointer_move(node_x, node_y);
                 loaded.frame(1.0 / 60.0);
-                assert!(loaded.find("workspace-surface-visible-name-0").is_some());
+                assert!(loaded.find("workspace-surface-web-title-0").is_some());
                 loaded.pointer_down(node_x, node_y);
                 loaded.pointer_up(node_x, node_y);
                 loaded.frame(1.0 / 60.0);
                 assert!(loaded.find("surface-canvas-details").is_some());
                 assert!(loaded.find("workspace-surface-progress-0-0").is_none());
                 loaded.frame(1.0);
-                let (x, y) = loaded.find("workspace-surface-manage").unwrap();
+                let (x, y) = loaded.find("workspace-surface-view-Inventory").unwrap();
                 loaded.pointer_down(x, y);
                 loaded.pointer_up(x, y);
                 loaded.frame(1.0);
-                assert!(loaded.find("saved-workspace-in-scope-surfaces").is_some());
-                assert!(loaded.find("workspace-surface-network").is_none());
+                assert!(loaded.find("workspace-surface-inventory").is_some());
+                assert!(loaded.find("workspace-surface-management-header").is_none());
                 let (x, y) = loaded.find("saved-workspace-add-in-scope-surface").unwrap();
                 loaded.pointer_down(x, y);
                 loaded.pointer_up(x, y);
@@ -11804,7 +12184,7 @@ active_runbook_count: 0,
                         .scope,
                     SurfaceScope::InScope as i32
                 );
-                let (x, y) = loaded.find("workspace-surface-management-back").unwrap();
+                let (x, y) = loaded.find("workspace-surface-view-Graph").unwrap();
                 loaded.pointer_down(x, y);
                 loaded.pointer_up(x, y);
                 loaded.frame(1.0);
@@ -11813,7 +12193,7 @@ active_runbook_count: 0,
                 loaded.pointer_down(x, y);
                 loaded.pointer_up(x, y);
                 loaded.frame(1.0 / 60.0);
-                let (x, y) = loaded.find("workspace-surface-node-1").unwrap();
+                let (x, y) = loaded.find("workspace-surface-web-node-1").unwrap();
                 loaded.pointer_down(x, y);
                 loaded.pointer_up(x, y);
                 loaded.frame(1.0 / 60.0);
@@ -11831,7 +12211,7 @@ active_runbook_count: 0,
                     loaded.state.workspace_surface_edits[0].relationships[0].label,
                     "contains"
                 );
-                let (x, y) = loaded.find("workspace-surface-manage").unwrap();
+                let (x, y) = loaded.find("workspace-surface-view-Inventory").unwrap();
                 loaded.pointer_down(x, y);
                 loaded.pointer_up(x, y);
                 loaded.frame(1.0);
@@ -12034,357 +12414,265 @@ active_runbook_count: 0,
     }
 
     #[test]
-    fn surface_overview_filters_preserve_topology_and_fit_resets_pan() {
-        use workspace_surface_layout::Focus;
-        let state = visual_preview::fixture("surfaces");
-        let mut runtime = Runtime::new(state, view, (1440.0, 960.0), Env::new(true, 1.0));
+    fn surface_connections_return_to_inventory_page_and_view_tabs_exit_focus() {
+        for (width, height) in [(840.0, 600.0), (1440.0, 960.0)] {
+            let mut state = visual_preview::fixture("surfaces-dense");
+            let template = state.workspace_surface_edits[0].clone();
+            for i in 40..65 {
+                let mut record = template.clone();
+                record.id = format!("example-surface-{i}");
+                record.relationships.clear();
+                state.workspace_surface_edits.push(record);
+            }
+            state.workspace_details.as_mut().unwrap().surfaces =
+                state.workspace_surface_edits.clone();
+            state.workspace_surface_explorer.page = 1;
+            let mut runtime = Runtime::new(state, view, (width, height), Env::new(true, 1.0));
+            runtime.frame(1.0);
+            let click = |runtime: &mut Runtime<State>, key: &str| {
+                let (x, y) = runtime.find(key).unwrap();
+                runtime.pointer_down(x, y);
+                runtime.pointer_up(x, y);
+                runtime.frame(1.0);
+            };
+            for exit in [
+                "workspace-surface-web-back",
+                "workspace-surface-view-Inventory",
+            ] {
+                assert!(runtime.find("workspace-surface-row-50").is_some());
+                click(&mut runtime, "workspace-surface-neighborhood-50");
+                let (back, _) = runtime.presented("workspace-surface-web-back").unwrap();
+                assert!(back[0] >= 0.0 && back[0] + back[2] <= width);
+                assert!(back[1] >= 0.0 && back[1] + back[3] < height);
+                click(&mut runtime, exit);
+                assert_eq!(runtime.state.workspace_surface_explorer.page, 1);
+                assert!(
+                    runtime
+                        .state
+                        .workspace_surface_explorer
+                        .neighborhood
+                        .is_none()
+                );
+                assert!(runtime.state.workspace_surface_explorer.return_to.is_none());
+            }
+            click(&mut runtime, "workspace-surface-neighborhood-50");
+            click(&mut runtime, "workspace-surface-view-Graph");
+            assert!(
+                runtime
+                    .state
+                    .workspace_surface_explorer
+                    .neighborhood
+                    .is_none()
+            );
+            assert!(runtime.find("workspace-surface-web-node-0").is_some());
+            assert!(runtime.find("workspace-surface-web-back").is_none());
+        }
+    }
+
+    #[test]
+    fn surface_inventory_manages_records_without_a_separate_screen() {
+        let mut runtime = Runtime::new(
+            visual_preview::fixture("surfaces-dense"),
+            view,
+            (1440.0, 960.0),
+            Env::new(true, 1.0),
+        );
         runtime.frame(0.0);
-        let original = runtime.presented("workspace-surface-node-0").unwrap().0;
         let click = |runtime: &mut Runtime<State>, key: &str| {
             let (x, y) = runtime.find(key).unwrap();
             runtime.pointer_down(x, y);
             runtime.pointer_up(x, y);
             runtime.frame(1.0);
         };
-        click(&mut runtime, "workspace-surface-focus-Review");
-        assert_eq!(runtime.state.workspace_surface_focus, Focus::Review);
+        assert!(runtime.find("workspace-surface-manage").is_none());
+        click(&mut runtime, "saved-workspace-surface-edit-0");
+        assert_eq!(runtime.state.workspace_surface_edit_index, Some(0));
+        assert!(!runtime.state.canvas_open);
+        click(&mut runtime, "saved-workspace-surface-dialog-cancel");
+        click(&mut runtime, "saved-workspace-surface-remove-0");
+        assert_eq!(runtime.state.workspace_surface_delete_index, Some(0));
+        click(&mut runtime, "saved-workspace-surface-delete-cancel");
+        click(&mut runtime, "saved-workspace-add-in-scope-surface");
+        click(&mut runtime, "surface-scope-out");
+        runtime.state.workspace_surface_value = TextEdit::new("excluded.example.test");
+        click(&mut runtime, "saved-workspace-add-surface");
+        assert_eq!(runtime.state.workspace_surface_edits.len(), 41);
         assert_eq!(
-            runtime.presented("workspace-surface-node-0").unwrap().0,
-            original
-        );
-        let elements = runtime.elements();
-        let opacity = |key: &str| {
-            elements
-                .iter()
-                .find(|el| el.key.as_deref() == Some(key))
+            runtime.state.workspace_surface_edits[40]
+                .definition
+                .as_ref()
                 .unwrap()
-                .opacity
-        };
-        assert!(opacity("workspace-surface-node-0") < opacity("workspace-surface-node-2"));
-        assert!(
-            elements
-                .iter()
-                .any(|el| el.text.as_deref() == Some("7 connections · 3 of 8 match"))
+                .scope,
+            beale_contracts::v1::SurfaceScope::OutOfScope as i32
         );
+        assert!(runtime.find("workspace-surface-inventory").is_some());
+        assert!(runtime.find("saved-workspace-save").is_some());
+    }
+
+    #[test]
+    fn surface_inventory_pages_searches_and_opens_recorded_neighborhoods() {
+        let mut state = visual_preview::fixture("surfaces-dense");
+        let template = state.workspace_surface_edits[0].clone();
+        for i in 40..620 {
+            let mut record = template.clone();
+            record.id = format!("example-surface-{i}");
+            record.relationships.clear();
+            state.workspace_surface_edits.push(record);
+        }
+        let mut runtime = Runtime::new(state, view, (1440.0, 960.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        let click = |runtime: &mut Runtime<State>, key: &str| {
+            let (x, y) = runtime.find(key).unwrap();
+            runtime.pointer_down(x, y);
+            runtime.pointer_up(x, y);
+            runtime.frame(1.0);
+        };
+        assert!(runtime.find("workspace-surface-inventory").is_some());
+        assert!(runtime.presented("workspace-surface-row-49").is_some());
+        assert!(runtime.presented("workspace-surface-row-50").is_none());
+        click(&mut runtime, "workspace-surface-page-next");
+        assert!(runtime.presented("workspace-surface-row-0").is_none());
+        assert!(runtime.presented("workspace-surface-row-50").is_some());
+        click(&mut runtime, "workspace-surface-filter-control");
+        click(&mut runtime, "workspace-surface-search");
+        runtime.paste("id:example-surface-619");
+        runtime.frame(0.0);
+        runtime.on_key = Some(selection_menu_key);
+        runtime.key(KeyEvent {
+            key: Key::Escape,
+            mods: Default::default(),
+        });
+        runtime.frame(0.0);
+        assert!(runtime.find("workspace-surface-row-619").is_some());
+        assert!(runtime.find("workspace-surface-page-next").is_none());
+        click(&mut runtime, "workspace-surface-neighborhood-619");
+        assert!(
+            !runtime.state.canvas_open,
+            "Map navigates without opening the row inspector"
+        );
+        assert!(runtime.find("workspace-surface-web-node-619").is_some());
+        assert!(runtime.find("workspace-surface-web-node-0").is_none());
+        click(&mut runtime, "workspace-surface-web-back");
+        assert_eq!(
+            runtime.state.workspace_surface_query.text,
+            "id:example-surface-619"
+        );
+        assert!(runtime.find("workspace-surface-row-619").is_some());
+        assert!(
+            runtime
+                .state
+                .workspace_surface_explorer
+                .neighborhood
+                .is_none()
+        );
+        click(&mut runtime, "workspace-surface-neighborhood-619");
+        click(&mut runtime, "workspace-surface-view-Inventory");
+        assert!(
+            runtime
+                .state
+                .workspace_surface_explorer
+                .neighborhood
+                .is_none()
+        );
+        assert!(runtime.find("workspace-surface-row-619").is_some());
+        click(&mut runtime, "workspace-surface-neighborhood-619");
+        click(&mut runtime, "workspace-surface-web-node-619");
+        assert_eq!(runtime.state.workspace_surface_selected, Some(619));
+        assert!(runtime.state.canvas_open);
+    }
+
+    #[test]
+    fn surface_filter_menu_filters_records() {
+        use workspace_surface_layout::Focus;
+        let state = visual_preview::fixture("surfaces");
+        let mut runtime = Runtime::new(state, view, (1440.0, 960.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        let click = |runtime: &mut Runtime<State>, key: &str| {
+            let (x, y) = runtime.find(key).unwrap();
+            runtime.pointer_down(x, y);
+            runtime.pointer_up(x, y);
+            runtime.frame(1.0);
+        };
+        assert!(runtime.find("workspace-surface-overview").is_none());
+        let (count, _) = runtime.presented("workspace-surface-match-count").unwrap();
+        let (filter, _) = runtime
+            .presented("workspace-surface-filter-control")
+            .unwrap();
+        let (add, _) = runtime
+            .presented("saved-workspace-add-in-scope-surface")
+            .unwrap();
+        let (view_toggle, _) = runtime.presented("workspace-surface-view-toggle").unwrap();
+        let (workspace_tabs, _) = runtime.presented("workspace-view-tabs").unwrap();
+        assert!(count[0] + count[2] < filter[0]);
+        assert!(view_toggle[0] + view_toggle[2] < add[0]);
+        assert!(add[0] + add[2] < workspace_tabs[0]);
+        assert!(((view_toggle[1] + view_toggle[3] / 2.0) - (add[1] + add[3] / 2.0)).abs() < 1.0);
+        click(&mut runtime, "workspace-surface-filter-control");
+        assert_eq!(
+            runtime.state.selection_menu,
+            Some(SelectionMenu::SurfaceFilter)
+        );
+        let options = selection_menu_items(&runtime.state, SelectionMenu::SurfaceFilter);
+        assert_eq!(options.len(), 4);
+        assert_eq!(options[1].label, "Needs review (3)");
+        let (sort, _) = runtime.presented("workspace-surface-sort").unwrap();
+        let (top_divider, _) = runtime
+            .presented("workspace-surface-filter-top-divider")
+            .unwrap();
+        let (first_filter, _) = runtime.presented("selection-menu-item-0").unwrap();
+        let (last_filter, _) = runtime.presented("selection-menu-item-3").unwrap();
+        let (bottom_divider, _) = runtime
+            .presented("workspace-surface-filter-bottom-divider")
+            .unwrap();
+        let (search, _) = runtime.presented("workspace-surface-search").unwrap();
+        assert!(sort[1] + sort[3] < top_divider[1]);
+        assert!(top_divider[1] < first_filter[1]);
+        assert!(last_filter[1] + last_filter[3] < bottom_divider[1]);
+        assert!(bottom_divider[1] < search[1]);
+        click(&mut runtime, "selection-menu-item-1");
+        assert_eq!(runtime.state.workspace_surface_focus, Focus::Review);
+        assert!(runtime.presented("workspace-surface-web-title-0").is_none());
+        assert!(runtime.presented("workspace-surface-web-node-2").is_some());
+        assert!(
+            runtime
+                .elements()
+                .iter()
+                .any(|el| el.text.as_deref() == Some("3 / 8 surfaces"))
+        );
+        click(&mut runtime, "workspace-surface-filter-control");
         click(&mut runtime, "workspace-surface-search");
         runtime.paste("no-such-example");
+        runtime.frame(0.0);
+        runtime.on_key = Some(selection_menu_key);
+        runtime.key(KeyEvent {
+            key: Key::Enter,
+            mods: Default::default(),
+        });
         runtime.frame(0.0);
         assert!(runtime.find("workspace-surface-clear-filters").is_some());
         click(&mut runtime, "workspace-surface-clear-filters");
         assert_eq!(runtime.state.workspace_surface_focus, Focus::All);
         assert!(runtime.state.workspace_surface_query.text.is_empty());
-        click(&mut runtime, "workspace-surface-zoom-in");
-        assert!(runtime.presented("workspace-surface-node-0").unwrap().0[2] > original[2]);
-        runtime.update(|state, tx| {
-            tx.instant();
-            state.workspace_surface_pan = [100.0, -80.0];
-        });
-        runtime.frame(0.0);
-        click(&mut runtime, "workspace-surface-fit");
-        assert_eq!(runtime.state.workspace_surface_pan, [0.0; 2]);
-        assert_eq!(
-            runtime.presented("workspace-surface-node-0").unwrap().0,
-            original
-        );
         assert!(runtime.find("saved-workspace-save").is_none());
-    }
 
-    #[test]
-    fn surface_overview_fits_cards_and_controls_across_themes_and_densities() {
-        for theme in [
-            AppearanceTheme::Light,
-            AppearanceTheme::Dark,
-            AppearanceTheme::Cream,
-            AppearanceTheme::Midnight,
-        ] {
-            for (width, height, variant) in [
-                (1440.0, 960.0, "surfaces"),
-                (1040.0, 800.0, "surfaces"),
-                (840.0, 720.0, "surfaces-large"),
-                (1440.0, 960.0, "surfaces-dense"),
-                (840.0, 720.0, "surfaces-empty"),
-            ] {
-                let mut state = visual_preview::fixture(variant);
-                state.appearance.theme = theme;
-                let mut runtime = Runtime::new(state, view, (width, height), Env::new(true, 1.0));
-                runtime.frame(0.0);
-                let (stage, _) = runtime.presented("workspace-surface-network").unwrap();
-                let (search, _) = runtime.presented("workspace-surface-search").unwrap();
-                let (actions, _) = runtime.presented("workspace-surface-actions").unwrap();
-                for key in [
-                    "workspace-surface-overview",
-                    "workspace-surface-search",
-                    "workspace-surface-actions",
-                ] {
-                    let (bounds, _) = runtime.presented(key).unwrap();
-                    assert!(
-                        bounds[0] >= stage[0] - 1.0
-                            && bounds[0] + bounds[2] <= stage[0] + stage[2] + 1.0,
-                        "{key}, {width}, {variant}: {bounds:?} outside {stage:?}"
-                    );
-                }
-                for index in 0..runtime.state.workspace_surface_edits.len() {
-                    let (card, _) = runtime
-                        .presented(&format!("workspace-surface-node-{index}"))
-                        .unwrap();
-                    assert!(
-                        card[0] >= stage[0] - 1.0 && card[0] + card[2] <= stage[0] + stage[2] + 1.0,
-                        "card {index}, {width}, {variant}: {card:?} outside {stage:?}"
-                    );
-                    assert!(
-                        card[1] >= search[1] + search[3] && card[1] + card[3] < actions[1],
-                        "card {index}, {width}, {variant}: {card:?} outside graph"
-                    );
-                    let (name, _) = runtime
-                        .presented(&format!("workspace-surface-visible-name-{index}"))
-                        .unwrap();
-                    assert!(
-                        name[1] + name[3] <= card[1] + card[3] + 1.0,
-                        "name {index}, {width}, {variant} overflows card"
-                    );
-                }
-                let elements = runtime.elements();
-                let captions = elements
-                    .iter()
-                    .filter(|element| {
-                        element
-                            .key
-                            .as_deref()
-                            .is_some_and(|key| key.starts_with("workspace-surface-relationship-"))
-                    })
-                    .collect::<Vec<_>>();
-                if width == 1440.0 && variant == "surfaces" {
-                    assert_eq!(captions.len(), 7);
-                }
-                let overlaps = |a: [f32; 4], b: [f32; 4]| {
-                    a[0] < b[0] + b[2]
-                        && a[0] + a[2] > b[0]
-                        && a[1] < b[1] + b[3]
-                        && a[1] + a[3] > b[1]
-                };
-                for (index, caption) in captions.iter().enumerate() {
-                    assert!(caption.rect[1] > search[1] + search[3]);
-                    for card in elements.iter().filter(|element| {
-                        element
-                            .key
-                            .as_deref()
-                            .is_some_and(|key| key.starts_with("workspace-surface-node-"))
-                    }) {
-                        assert!(
-                            !overlaps(caption.rect, card.rect),
-                            "caption overlaps card at {width}"
-                        );
-                    }
-                    for other in &captions[index + 1..] {
-                        assert!(
-                            !overlaps(caption.rect, other.rect),
-                            "captions overlap at {width}"
-                        );
-                    }
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn surface_network_covers_content_and_pans_beneath_title() {
-        use beale_contracts::v1::{
-            SurfaceDefinition, SurfaceKind, SurfaceLocator, SurfaceScope, WorkspaceSurface,
-        };
-
-        let id = uuid::Uuid::parse_str("00000000-0000-4000-8000-000000000003").unwrap();
-        let summary = WorkspaceSummary {
-            id: id.to_string(),
-            name: "Example Workspace".to_owned(),
-            directory: std::env::temp_dir()
-                .join("example-workspace")
-                .to_string_lossy()
-                .into_owned(),
-        };
-        let kinds = [
-            SurfaceKind::Repository,
-            SurfaceKind::Documentation,
-            SurfaceKind::Binary,
-            SurfaceKind::Service,
-            SurfaceKind::Domain,
-            SurfaceKind::Other,
-        ];
-        let surfaces = (0..600)
-            .map(|index| WorkspaceSurface {
-                id: format!("surface-example-{index}"),
-                definition: Some(SurfaceDefinition {
-                    type_id: match kinds[index % kinds.len()] {
-                        SurfaceKind::Repository => "repository",
-                        SurfaceKind::Documentation => "documentation",
-                        SurfaceKind::Binary => "binary",
-                        SurfaceKind::Service => "service",
-                        SurfaceKind::Domain => "domain",
-                        _ => "other",
-                    }
-                    .to_owned(),
-                    name: if index == 0 {
-                        "Example Repository".to_owned()
-                    } else {
-                        String::new()
-                    },
-                    locator: Some(SurfaceLocator {
-                        kind: "freeform".to_owned(),
-                        value: format!("surface-{index}.example.test"),
-                    }),
-                    scope: SurfaceScope::InScope as i32,
-                    ..Default::default()
-                }),
-                ..Default::default()
-            })
-            .collect::<Vec<_>>();
-        let details = WorkspaceDetails {
-            summary: Some(summary),
-            guidance: String::new(),
-            surfaces: surfaces.clone(),
-            rules: Vec::new(),
-        };
-        let state = with_surface_feature(State {
-            primary_view: PrimaryView::Workspace,
-            workspace_id: Some(id),
-            workspace_tab: workspace_view::WorkspaceTab::Surfaces,
-            workspace_details: Some(details),
-            workspace_surface_edits: surfaces,
-            ..State::default()
-        });
-        let mut runtime = Runtime::new(state, view, (2200.0, 1200.0), Env::new(true, 1.0));
-        runtime.frame(0.0);
-        let (content, _) = runtime.presented("content-surface").unwrap();
-        let (stage, _) = runtime.presented("workspace-surface-network").unwrap();
-        let (node_before, _) = runtime.presented("workspace-surface-node-0").unwrap();
-        let (name, _) = runtime
-            .presented("workspace-surface-visible-name-0")
-            .unwrap();
-        let (title, _) = runtime.presented("workspace-title-squircle").unwrap();
-        let (manage, _) = runtime.presented("workspace-surface-manage").unwrap();
-        assert_eq!(stage, content);
-        assert!(node_before[2] <= workspace_surface_layout::NODE_MAX_WIDTH);
-        assert!(node_before[3] <= workspace_surface_layout::NODE_HEIGHT);
-        assert!(
-            (node_before[2] / workspace_surface_layout::NODE_MAX_WIDTH
-                - node_before[3] / workspace_surface_layout::NODE_HEIGHT)
-                .abs()
-                < 0.01
+        click(&mut runtime, "workspace-surface-filter-control");
+        click(&mut runtime, "workspace-surface-sort");
+        assert_eq!(
+            runtime.state.workspace_surface_explorer.sort,
+            workspace_surface_layout::Sort::Name
         );
-        assert!(name[0] >= node_before[0]);
-        assert!(name[1] >= node_before[1]);
-        assert!(name[0] + name[2] <= node_before[0] + node_before[2]);
-        assert!(name[1] + name[3] <= node_before[1] + node_before[3]);
-        assert!(title[2] < content[2] / 2.0);
-        assert!((manage[0] + manage[2] - content[0] - content[2] + 24.0).abs() < 2.0);
-        assert!((manage[1] + manage[3] - content[1] - content[3] + 24.0).abs() < 2.0);
-        for removed in [
-            "workspace-surface-network-legend",
-            "workspace-surface-legend-out-of-scope",
-            "workspace-surface-network-resize",
-        ] {
-            assert!(runtime.find(removed).is_none(), "{removed}");
-        }
-        let labels = runtime
-            .elements()
-            .into_iter()
-            .filter_map(|element| element.text)
-            .collect::<Vec<_>>();
-        assert!(labels.iter().any(|label| label == "Example Repository"));
-        assert!(!labels.iter().any(|label| label == "Surface Network"));
-        assert!(!labels.iter().any(|label| label == "Repositories 100"));
-        assert!(
-            !labels
-                .iter()
-                .any(|label| label.starts_with("Select a surface"))
+        assert_eq!(
+            runtime.state.selection_menu,
+            Some(SelectionMenu::SurfaceFilter)
         );
 
-        let scale = node_before[2] / workspace_surface_layout::NODE_MAX_WIDTH;
-        let x =
-            node_before[0] + node_before[2] + workspace_surface_layout::COLUMN_GAP * scale / 2.0;
-        let y = node_before[1] + node_before[3] / 2.0;
-        let drag_distance = (node_before[1] - title[1] - title[3] + 18.0).max(110.0);
-        runtime.pointer_down(x, y);
-        runtime.pointer_move(x, y - drag_distance);
-        runtime.frame(0.0);
-        assert_eq!(runtime.state.workspace_surface_pan, [0.0, -drag_distance]);
-        let (node_after, _) = runtime.presented("workspace-surface-node-0").unwrap();
-        assert!((node_after[1] - node_before[1] + drag_distance).abs() < 1.0);
-        assert!(node_after[1] < title[1] + title[3]);
-        runtime.pointer_up(x, y - drag_distance);
-        runtime.frame(0.0);
-    }
-
-    #[test]
-    fn workspace_network_keeps_canvas_in_frame() {
-        use beale_contracts::v1::{SurfaceDefinition, SurfaceLocator, SurfaceScope};
-
-        let id = uuid::Uuid::from_u128(21);
-        let summary = WorkspaceSummary {
-            id: id.to_string(),
-            name: "Example Workspace".to_owned(),
-            directory: "example-directory".to_owned(),
-        };
-        let surfaces = vec![WorkspaceSurface {
-            id: "S1".to_owned(),
-            definition: Some(SurfaceDefinition {
-                type_id: "repository".to_owned(),
-                locator: Some(SurfaceLocator {
-                    kind: "freeform".to_owned(),
-                    value: "example.test".to_owned(),
-                }),
-                scope: SurfaceScope::InScope as i32,
-                ..Default::default()
-            }),
-            ..Default::default()
-        }];
-        let state = with_surface_feature(State {
-            primary_view: PrimaryView::Workspace,
-            workspace_id: Some(id),
-            workspace_tab: workspace_view::WorkspaceTab::Surfaces,
-            workspace_details: Some(WorkspaceDetails {
-                summary: Some(summary),
-                guidance: String::new(),
-                surfaces: surfaces.clone(),
-                rules: Vec::new(),
-            }),
-            workspace_surface_edits: surfaces,
-            canvas_open: true,
-            ..State::default()
-        });
-        let mut runtime = Runtime::new(state, view, (1040.0, 720.0), Env::new(true, 1.0));
-        runtime.frame(0.0);
-        runtime.frame(0.0);
-        let (main, _) = runtime.presented("content-surface").unwrap();
-        let (stage, _) = runtime.presented("workspace-surface-network").unwrap();
-        let (canvas, _) = runtime.presented("canvas").unwrap();
-        assert!(canvas[0] + canvas[2] <= 1040.0, "canvas={canvas:?}");
-        assert!(
-            main[0] + main[2] <= canvas[0],
-            "main={main:?} canvas={canvas:?}"
-        );
-        assert_eq!(stage, main, "stage={stage:?} main={main:?}");
-
-        let (sidebar, _) = runtime.presented("home-sidenav").unwrap();
-        let (node, _) = runtime.presented("workspace-surface-node-0").unwrap();
-        let target_x = sidebar[0] + sidebar[2] - 20.0;
-        let target_y = node[1] + node[3] / 2.0;
-        let drag_x = stage[0] + stage[2] - 18.0;
-        let drag_y = stage[1] + stage[3] / 2.0 + 100.0;
-        let delta_x = target_x - node[0] - node[2] / 2.0;
-        runtime.pointer_down(drag_x, drag_y);
-        runtime.pointer_move(drag_x + delta_x, drag_y);
-        runtime.frame(0.0);
-        runtime.pointer_up(drag_x + delta_x, drag_y);
-        runtime.frame(0.0);
-        let (moved, _) = runtime.presented("workspace-surface-node-0").unwrap();
-        assert!(moved[0] < main[0]);
-        runtime.pointer_move(target_x, target_y);
-        runtime.frame(0.0);
-        assert_eq!(runtime.state.workspace_surface_hovered, None);
-        runtime.pointer_down(target_x, target_y);
-        runtime.pointer_up(target_x, target_y);
-        runtime.frame(0.0);
-        assert_eq!(runtime.state.workspace_surface_selected, None);
+        let state = visual_preview::fixture("surfaces");
+        let mut narrow = Runtime::new(state, view, (840.0, 600.0), Env::new(true, 1.0));
+        narrow.frame(0.0);
+        click(&mut narrow, "workspace-surface-filter-control");
+        let (menu, _) = narrow.presented("selection-menu").unwrap();
+        assert!(menu[0] >= 0.0 && menu[0] + menu[2] <= 840.0);
+        assert!(menu[1] >= 0.0 && menu[1] + menu[3] <= 600.0);
     }
 
     #[test]
@@ -12440,7 +12728,7 @@ active_runbook_count: 0,
             runtime.frame(0.0);
         };
 
-        let (x, y) = runtime.find("workspace-surface-node-0").unwrap();
+        let (x, y) = runtime.find("workspace-surface-web-node-0").unwrap();
         click(&mut runtime, x, y);
         assert_eq!(runtime.state.workspace_surface_selected, Some(0));
         assert!(runtime.state.canvas_open);
@@ -12457,7 +12745,7 @@ active_runbook_count: 0,
         assert!(runtime.find("surface-canvas-tab-0").is_some());
         assert!(runtime.find("workspace-surface-network-details").is_none());
 
-        let (x, y) = runtime.find("workspace-surface-node-1").unwrap();
+        let (x, y) = runtime.find("workspace-surface-web-node-1").unwrap();
         click(&mut runtime, x, y);
         assert_eq!(runtime.state.workspace_surface_selected, Some(1));
         assert!(runtime.find("surface-canvas-tab-0").is_some());
@@ -12475,7 +12763,7 @@ active_runbook_count: 0,
         click(&mut runtime, x, y);
         assert_eq!(runtime.state.workspace_surface_selected, Some(0));
         assert_eq!(runtime.state.workspace_surface_connecting, None);
-        let (x, y) = runtime.find("workspace-surface-node-1").unwrap();
+        let (x, y) = runtime.find("workspace-surface-web-node-1").unwrap();
         click(&mut runtime, x, y);
         assert_eq!(runtime.state.workspace_surface_selected, Some(1));
         assert!(runtime.find("surface-canvas-tab-2").is_none());
@@ -13954,15 +14242,18 @@ active_runbook_count: 0,
             assert_eq!(actual, label);
             assert!(tip[1] >= button[1] + button[3]);
         }
-        let (x, y) = runtime.find("nav-home").unwrap();
-        runtime.pointer_move(x, y);
-        runtime.frame(0.4);
-        let (button, _) = runtime.presented("nav-home").unwrap();
-        let (tooltip, _) = runtime.presented("rail-tooltip").unwrap();
-        assert!(tooltip[0] >= button[0] + button[2]);
-        runtime.pointer_move(500.0, 500.0);
-        runtime.frame(0.0);
-        assert!(runtime.find("rail-tooltip").is_none());
+        for key in ["nav-home", "fleet-status"] {
+            let (x, y) = runtime.find(key).unwrap();
+            runtime.pointer_move(x, y);
+            runtime.frame(0.4);
+            let (button, _) = runtime.presented(key).unwrap();
+            let (tooltip, _) = runtime.presented("rail-tooltip").unwrap();
+            assert!(tooltip[0] >= button[0] + button[2]);
+            assert!(runtime.find("sidenav-flyout").is_none());
+            runtime.pointer_move(500.0, 500.0);
+            runtime.frame(0.0);
+            assert!(runtime.find("rail-tooltip").is_none());
+        }
     }
 
     #[test]
@@ -13981,6 +14272,7 @@ active_runbook_count: 0,
             ("nav-automations", "automations-schedule-job"),
             ("nav-extensions", "extensions-features"),
             ("nav-tracking", "tracking-tokens-nav"),
+            ("fleet-status", "fleet-app-servers"),
             ("nav-settings", "settings-appearance"),
         ] {
             let (x, y) = runtime.find(icon).unwrap();
@@ -13989,6 +14281,7 @@ active_runbook_count: 0,
             let (flyout, _) = runtime.presented("sidenav-flyout").unwrap();
             assert_eq!(&flyout[..2], &content[..2]);
             assert_eq!(flyout[2], SIDENAV_DEFAULT_WIDTH);
+            assert!(runtime.find("navigation-rail-divider").is_none());
             assert!(runtime.find(row).is_some());
             assert!(runtime.find("rail-tooltip").is_none());
             assert_eq!(runtime.presented("content-surface").unwrap().0, content);
@@ -14010,6 +14303,7 @@ active_runbook_count: 0,
             runtime.frame(1.0 / 60.0);
         }
         assert!(runtime.find("sidenav-flyout").is_none());
+        assert!(runtime.find("navigation-rail-divider").is_some());
 
         let (x, y) = runtime.find("nav-settings").unwrap();
         runtime.pointer_move(x, y);
@@ -14020,6 +14314,7 @@ active_runbook_count: 0,
         });
         runtime.frame(0.4);
         assert!(runtime.find("sidenav-flyout").is_none());
+        assert!(runtime.find("navigation-rail-divider").is_some());
         runtime.pointer_move(700.0, 500.0);
         runtime.frame(0.4);
         runtime.pointer_move(x, y);
@@ -14034,6 +14329,50 @@ active_runbook_count: 0,
         runtime.frame(0.0);
         assert_eq!(runtime.state.primary_view, PrimaryView::Settings);
         assert_eq!(runtime.state.settings_section, SettingsSection::Appearance);
+        assert_eq!(runtime.state.view_history.back, [ViewLocation::Home]);
+        assert!(!runtime.state.sidenav_visible);
+        assert!(runtime.find("sidenav-flyout").is_none());
+    }
+
+    #[test]
+    fn collapsed_fleet_sidenav_stays_open_for_navigation_and_dismisses_on_leave() {
+        let state = State {
+            primary_view: PrimaryView::Home,
+            sidenav_visible: false,
+            ..State::default()
+        };
+        let mut runtime = Runtime::new(state, view, (1040.0, 720.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        let (icon_x, icon_y) = runtime.find("fleet-status").unwrap();
+        runtime.pointer_move(icon_x, icon_y);
+        runtime.frame(1.0 / 60.0);
+        let (x, y) = runtime.find("fleet-virtual-machines").unwrap();
+        runtime.pointer_move(x, y);
+        for _ in 0..24 {
+            runtime.frame(1.0 / 60.0);
+        }
+        assert!(runtime.find("sidenav-flyout").is_some());
+        runtime.pointer_move(700.0, 500.0);
+        for _ in 0..24 {
+            runtime.frame(1.0 / 60.0);
+        }
+        assert!(runtime.find("sidenav-flyout").is_none());
+
+        runtime.pointer_move(icon_x, icon_y);
+        runtime.frame(1.0 / 60.0);
+        let (x, y) = runtime.find("fleet-virtual-machines").unwrap();
+        runtime.pointer_move(x, y);
+        for _ in 0..24 {
+            runtime.frame(1.0 / 60.0);
+        }
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+        assert_eq!(runtime.state.primary_view, PrimaryView::Fleet);
+        assert_eq!(
+            runtime.state.fleet_section,
+            fleet_view::FleetSection::VirtualMachines
+        );
         assert_eq!(runtime.state.view_history.back, [ViewLocation::Home]);
         assert!(!runtime.state.sidenav_visible);
         assert!(runtime.find("sidenav-flyout").is_none());
@@ -14077,6 +14416,41 @@ active_runbook_count: 0,
         let (x, y) = runtime.find("nav-automations").unwrap();
         runtime.pointer_move(x, y);
         runtime.frame(1.0 / 60.0);
+        let (x, y) = runtime.find("automations-list-control").unwrap();
+        runtime.pointer_move(x, y);
+        for _ in 0..24 {
+            runtime.frame(1.0 / 60.0);
+        }
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
+        assert_eq!(
+            runtime.state.selection_menu,
+            Some(SelectionMenu::AutomationList)
+        );
+        let (x, y) = runtime.find("selection-menu-item-1").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
+        assert_eq!(
+            runtime.state.automations.list,
+            automations_view::AutomationList::Past
+        );
+        assert!(runtime.find("automation-job-future-example-job").is_none());
+        assert!(runtime.find("sidenav-flyout").is_some());
+
+        let (x, y) = runtime.find("automations-list-control").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
+        let (x, y) = runtime.find("selection-menu-item-0").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
+        assert_eq!(
+            runtime.state.automations.list,
+            automations_view::AutomationList::Future
+        );
         let (x, y) = runtime.find("automation-job-future-example-job").unwrap();
         runtime.pointer_move(x, y);
         for _ in 0..24 {
@@ -14343,7 +14717,12 @@ active_runbook_count: 0,
             .unwrap();
         assert_eq!(
             divider.rect,
-            [content[0] - 1.0, content[1], 1.0, content[3]]
+            [
+                content[0] - 1.0,
+                content[1] + COLLAPSED_DIVIDER_TOP_GAP,
+                1.0,
+                content[3] - COLLAPSED_DIVIDER_TOP_GAP - COLLAPSED_DIVIDER_BOTTOM_GAP,
+            ]
         );
         assert_eq!(divider.fill, border_color);
         assert!(divider.inert);
@@ -14556,7 +14935,7 @@ active_runbook_count: 0,
         standard.frame(0.0);
         assert!(standard.find("fleet-status").is_some());
         assert!(standard.find("fleet-usage-divider").is_none());
-        assert!(standard.find("navigation-conditional-divider").is_some());
+        assert!(standard.find("navigation-conditional-divider").is_none());
         let no_usage_state = State {
             primary_view: PrimaryView::Home,
             ..State::default()
@@ -14601,7 +14980,7 @@ active_runbook_count: 0,
         assert_eq!([glyph[0] - ring[0], glyph[1] - ring[1]], [10.0, 10.0]);
         assert!(runtime.find("nav-fleet").is_none());
         assert!(runtime.find("fleet-usage-divider").is_some());
-        assert!(runtime.find("navigation-conditional-divider").is_some());
+        assert!(runtime.find("navigation-conditional-divider").is_none());
         assert!(runtime.find("fleet-status-ring").is_some());
         assert!(runtime.find("fleet-status-icon").is_some());
 
