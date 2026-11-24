@@ -537,6 +537,7 @@ const TYPOGRAPHY_ROWS: [TypographyRowSpec; 2] = [
 const NAVIGATION_RAIL_WIDTH: f32 = 50.0;
 const NAVIGATION_SHELL_INSET: f32 = 6.0;
 const NAVIGATION_HEADER_HEIGHT: f32 = 44.0;
+const MACOS_TRAFFIC_LIGHT_ORIGIN: (f32, f32) = (15.0, 18.0);
 const HEADER_TITLE_INSET: f32 = 5.0;
 const SIDENAV_BOTTOM_GAP: f32 = 6.0;
 const SIDENAV_CORNER_RADIUS: f32 = 12.0;
@@ -552,11 +553,6 @@ const SIDENAV_MAX_WIDTH: f32 = 420.0;
 const SIDENAV_AUTO_COLLAPSE_WIDTH: f32 = 1000.0;
 const CANVAS_MIN_CONTENT_WIDTH: f32 = 320.0;
 const CONTENT_SURFACE_COLOR: &str = "#0d0d0d";
-const HEADER_COLLAPSED_PREFIX_WIDTH: f32 = if cfg!(target_os = "macos") {
-    160.0
-} else {
-    NAVIGATION_RAIL_WIDTH
-};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PrimaryView {
@@ -4097,7 +4093,7 @@ fn header_icon_button(
             icon(glyph, 16.0)
                 .key("header-sidebar-toggle-icon")
                 .color(color(NAVIGATION_ICON_COLOR))
-                .offset(0.0, 1.0),
+                .offset(0.0, -1.0),
         )
 }
 
@@ -4229,16 +4225,8 @@ fn session_sidenav_toggle(open: bool, theme: ThemeStyle<'_>) -> El {
         })
 }
 
-fn navigation_rail_width(state: &State) -> f32 {
-    if state.sidenav_visible {
-        NAVIGATION_RAIL_WIDTH
-    } else {
-        HEADER_COLLAPSED_PREFIX_WIDTH
-    }
-}
-
 fn navigation_shell_width(state: &State) -> f32 {
-    navigation_rail_width(state)
+    NAVIGATION_RAIL_WIDTH
         + if state.sidenav_visible {
             state.sidenav_width
         } else {
@@ -4250,14 +4238,23 @@ fn navigation_content_offset(state: &State) -> f32 {
     NAVIGATION_SHELL_INSET + navigation_shell_width(state)
 }
 
+fn navigation_header_prefix_width(state: &State, macos_controls_visible: bool) -> f32 {
+    if macos_controls_visible {
+        NAVIGATION_SHELL_INSET + NAVIGATION_RAIL_WIDTH + state.sidenav_width
+    } else {
+        navigation_content_offset(state)
+    }
+}
+
 fn canvas_width(window_width: f32, navigation_width: f32) -> f32 {
     (window_width * 0.5)
         .min((window_width - navigation_width - CANVAS_MIN_CONTENT_WIDTH - 12.0).max(160.0))
 }
 
-fn header(state: &State, prefix_width: f32, window_width: f32) -> El {
+fn header(state: &State, prefix_width: f32, window_width: f32, macos_controls_visible: bool) -> El {
     let theme = state.appearance.style();
     let color = |value| theme.color(value);
+    let show_sidenav_header = state.sidenav_visible || macos_controls_visible;
     let mut left = row()
         .key("header-leading")
         .w_full()
@@ -4265,37 +4262,38 @@ fn header(state: &State, prefix_width: f32, window_width: f32) -> El {
         .center_y()
         .gap(2.0)
         .pt(8.0)
-        .pl(if state.sidenav_visible {
+        .pl(if macos_controls_visible {
+            // Match the Home sidebar's primary-action label start.
+            100.0
+        } else if state.sidenav_visible {
             8.0 + NAVIGATION_SHELL_INSET
         } else {
             NAVIGATION_SHELL_INSET
         })
-        .pr(if state.sidenav_visible { 8.0 } else { 0.0 });
-    if cfg!(target_os = "macos") && state.sidenav_visible {
-        left = left.child(el().w(76.0));
-    }
-    if !state.sidenav_visible {
+        .pr(if show_sidenav_header { 8.0 } else { 0.0 });
+    if !show_sidenav_header {
         left = left.justify_center();
     }
-    left = left.child(
-        header_icon_button(
-            "header-sidebar-toggle",
-            if state.sidenav_visible {
-                "Hide Sidebar"
-            } else {
-                "Show Sidebar"
-            },
-            &SIDEBAR,
-            theme,
-        )
-        .on_press(|s: &mut State| {
-            s.close_sidenav_flyout();
-            s.rail_tooltip = None;
-            s.sidenav_visible = !s.sidenav_visible;
-            s.sidenav_auto_collapsed = false;
-        }),
-    );
-    if state.sidenav_visible {
+    let toggle = header_icon_button(
+        "header-sidebar-toggle",
+        if state.sidenav_visible {
+            "Hide Sidebar"
+        } else {
+            "Show Sidebar"
+        },
+        &SIDEBAR,
+        theme,
+    )
+    .on_press(|s: &mut State| {
+        s.close_sidenav_flyout();
+        s.rail_tooltip = None;
+        s.sidenav_visible = !s.sidenav_visible;
+        s.sidenav_auto_collapsed = false;
+    });
+    if !macos_controls_visible {
+        left = left.child(toggle.clone());
+    }
+    if show_sidenav_header {
         let sidenav_title = match state.primary_view {
             PrimaryView::Settings => "Settings",
             PrimaryView::Extensions => "Extensions",
@@ -4304,18 +4302,24 @@ fn header(state: &State, prefix_width: f32, window_width: f32) -> El {
             PrimaryView::Tracking => "Tracking",
             _ => "Beale",
         };
+        if !macos_controls_visible {
+            left = left.child(el().w(16.0));
+        }
+        left = left.child(
+            text(sidenav_title)
+                .key("header-sidenav-title")
+                .min_w(0.0)
+                .shrink()
+                .fade_truncate()
+                .font(ui_font(16.0, 600.0))
+                .color(color("#aaaaaa"))
+                .offset(0.0, -1.0),
+        );
+        left = left.child(el().grow(1.0));
+        if macos_controls_visible {
+            left = left.child(toggle);
+        }
         left = left
-            .child(el().w(16.0))
-            .child(
-                text(sidenav_title)
-                    .key("header-sidenav-title")
-                    .min_w(0.0)
-                    .shrink()
-                    .fade_truncate()
-                    .font(ui_font(16.0, 600.0))
-                    .color(color("#aaaaaa")),
-            )
-            .child(el().grow(1.0))
             .child(history_button(
                 HistoryDirection::Back,
                 !state.view_history.back.is_empty(),
@@ -4661,7 +4665,7 @@ fn rail(state: &State, theme: ThemeStyle<'_>) -> El {
         .key("navigation")
         .role("navigation")
         .label("Main navigation")
-        .w(navigation_rail_width(state))
+        .w(NAVIGATION_RAIL_WIDTH)
         .h_full()
         .pt(8.0)
         .gap(6.0)
@@ -6284,6 +6288,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
     let theme = state.appearance.style();
     let palette = theme.palette();
     let color = |value| theme.color(value);
+    let macos_controls_visible = cfg!(target_os = "macos") && cx.titlebar_inset() > 0.0;
     let window_width = cx.layout_size("app-surface").map_or(1040.0, |size| size[0]);
     let available_width = (window_width - navigation_content_offset(state) - 8.0).max(0.0);
     let compact_auxiliary = available_width < 680.0;
@@ -6581,7 +6586,13 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
     }
     let [background_width, background_height] =
         cx.layout_size("app-surface").unwrap_or([1040.0, 720.0]);
-    let header_prefix_width = navigation_content_offset(state);
+    let header_prefix_width = navigation_header_prefix_width(state, macos_controls_visible);
+    let body_prefix_width = navigation_content_offset(state);
+    let inverse_corner_x = if macos_controls_visible {
+        header_prefix_width
+    } else {
+        body_prefix_width
+    };
     let upper_left_radius = ((background_width * 0.88).hypot(background_height * 0.92)) * 0.43;
     let lower_right_radius = ((background_width * 0.88).hypot(background_height * 0.92)) * 0.48;
     let surface = col()
@@ -6644,11 +6655,28 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
                 .continuous_corners()
                 .fill(color(CONTENT_SURFACE_COLOR))
                 .inert(),
+        );
+    let surface = if macos_controls_visible && !state.sidenav_visible {
+        surface.child(
+            el().key("navigation-header-shell")
+                .absolute(NAVIGATION_SHELL_INSET, NAVIGATION_SHELL_INSET)
+                .size(
+                    NAVIGATION_RAIL_WIDTH + state.sidenav_width,
+                    NAVIGATION_HEADER_HEIGHT - NAVIGATION_SHELL_INSET,
+                )
+                .corners([18.0, 18.0, 0.0, 0.0])
+                .continuous_corners()
+                .fill(color(CONTENT_SURFACE_COLOR))
+                .inert(),
         )
+    } else {
+        surface
+    };
+    let surface = surface
         .child(
             el().key("navigation-sidenav-inverse-corner")
                 .absolute(
-                    header_prefix_width,
+                    inverse_corner_x,
                     NAVIGATION_HEADER_HEIGHT - SIDENAV_CORNER_RADIUS,
                 )
                 .size(SIDENAV_CORNER_RADIUS, SIDENAV_CORNER_RADIUS)
@@ -6663,7 +6691,12 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
                 )
                 .inert(),
         )
-        .child(header(state, header_prefix_width, window_width))
+        .child(header(
+            state,
+            header_prefix_width,
+            window_width,
+            macos_controls_visible,
+        ))
         .child(body);
     let navigation_border = color(NAVIGATION_DIVIDER_COLOR);
     let flyout = state
@@ -6701,7 +6734,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
         surface.child(
             el().key("navigation-rail-divider")
                 .pin(
-                    Some(header_prefix_width - 1.0),
+                    Some(body_prefix_width - 1.0),
                     Some(NAVIGATION_HEADER_HEIGHT + COLLAPSED_DIVIDER_TOP_GAP),
                     None,
                     Some(NAVIGATION_SHELL_INSET + COLLAPSED_DIVIDER_BOTTOM_GAP),
@@ -7221,6 +7254,11 @@ fn main() -> std::process::ExitCode {
     };
     let app = rune::App::new(spec).chrome(rune::Chrome {
         drag_regions: true,
+        traffic_lights: if cfg!(target_os = "macos") {
+            Some(MACOS_TRAFFIC_LIGHT_ORIGIN)
+        } else {
+            None
+        },
         ..rune::Chrome::DEFAULT
     });
     #[cfg(target_os = "windows")]
@@ -7523,6 +7561,11 @@ mod tests {
     }
     use super::*;
     use rune::{Env, Runtime, WheelEvent};
+
+    #[cfg(target_os = "macos")]
+    fn show_macos_controls(runtime: &mut Runtime<State>) {
+        runtime.set_titlebar_inset(1.0);
+    }
 
     #[test]
     fn automations_navigation_shows_future_details_and_cancel_choice() {
@@ -15131,6 +15174,8 @@ active_runbook_count: 0,
         let shell_color = state.appearance.style().color(CONTENT_SURFACE_COLOR);
         let border_color = state.appearance.style().color(NAVIGATION_DIVIDER_COLOR);
         let mut runtime = Runtime::new(state, view, (1040.0, 720.0), Env::new(true, 1.0));
+        #[cfg(target_os = "macos")]
+        show_macos_controls(&mut runtime);
         runtime.frame(0.0);
         let (app, _) = runtime.presented("app-surface").unwrap();
         let (shell, _) = runtime.presented("navigation-shell").unwrap();
@@ -15166,11 +15211,22 @@ active_runbook_count: 0,
         assert_eq!(inverse_corner[1] + inverse_corner[3], content[1]);
         assert_eq!(inverse_corner[2], SIDENAV_CORNER_RADIUS);
         assert_eq!(inverse_corner[3], SIDENAV_CORNER_RADIUS);
-        assert_eq!(toggle[0] + toggle[2] * 0.5, rail[0] + rail[2] * 0.5);
+        if cfg!(target_os = "macos") {
+            assert!(toggle[0] + toggle[2] <= back[0]);
+            let title = runtime.presented("header-sidenav-title").unwrap().0;
+            let label = runtime
+                .elements()
+                .into_iter()
+                .find(|item| item.text.as_deref() == Some("New Research"))
+                .unwrap();
+            assert_eq!(title[0], label.rect[0]);
+        } else {
+            assert_eq!(toggle[0] + toggle[2] * 0.5, rail[0] + rail[2] * 0.5);
+        }
         assert!(toggle[1] > shell[1]);
         assert_eq!(
             toggle_icon[1] + toggle_icon[3] * 0.5,
-            toggle[1] + toggle[3] * 0.5 + 1.0
+            toggle[1] + toggle[3] * 0.5 - 1.0
         );
         assert!(back[0] >= sidenav[0]);
         assert_eq!(forward[0] + forward[2], sidenav[0] + sidenav[2] - 8.0);
@@ -15195,6 +15251,7 @@ active_runbook_count: 0,
         assert_eq!(sidenav_border_element.radius, SIDENAV_CORNER_RADIUS);
         assert!(sidenav_border_element.inert);
         assert!(runtime.find("navigation-rail-divider").is_none());
+        assert!(runtime.find("navigation-header-shell").is_none());
 
         let mut collapsed = Runtime::new(
             State {
@@ -15206,6 +15263,8 @@ active_runbook_count: 0,
             (1040.0, 720.0),
             Env::new(true, 1.0),
         );
+        #[cfg(target_os = "macos")]
+        show_macos_controls(&mut collapsed);
         collapsed.frame(0.0);
         let (shell, _) = collapsed.presented("navigation-shell").unwrap();
         let (rail, _) = collapsed.presented("navigation").unwrap();
@@ -15214,12 +15273,47 @@ active_runbook_count: 0,
             .presented("navigation-sidenav-inverse-corner")
             .unwrap();
         let (toggle, _) = collapsed.presented("header-sidebar-toggle").unwrap();
-        assert_eq!(shell[2], HEADER_COLLAPSED_PREFIX_WIDTH);
+        assert_eq!(shell[2], NAVIGATION_RAIL_WIDTH);
         assert_eq!(rail[0], shell[0]);
         assert_eq!(rail[2], shell[2]);
-        assert_eq!(toggle[0] + toggle[2] * 0.5, rail[0] + rail[2] * 0.5);
+        if cfg!(target_os = "macos") {
+            assert_eq!(content[0], NAVIGATION_SHELL_INSET + NAVIGATION_RAIL_WIDTH);
+            assert_eq!(
+                collapsed.presented("navigation-header-shell").unwrap().0,
+                [
+                    NAVIGATION_SHELL_INSET,
+                    NAVIGATION_SHELL_INSET,
+                    NAVIGATION_RAIL_WIDTH + SIDENAV_DEFAULT_WIDTH,
+                    NAVIGATION_HEADER_HEIGHT - NAVIGATION_SHELL_INSET,
+                ]
+            );
+            assert_eq!(
+                toggle[0],
+                runtime.presented("header-sidebar-toggle").unwrap().0[0]
+            );
+            assert_eq!(
+                collapsed.presented("header-sidenav-title").unwrap().0,
+                runtime.presented("header-sidenav-title").unwrap().0
+            );
+            assert_eq!(collapsed.presented("header-back").unwrap().0, back);
+            assert_eq!(collapsed.presented("header-forward").unwrap().0, forward);
+            assert_eq!(
+                collapsed.presented("header-leading").unwrap().0,
+                runtime.presented("header-leading").unwrap().0
+            );
+        } else {
+            assert!(collapsed.find("navigation-header-shell").is_none());
+            assert_eq!(toggle[0] + toggle[2] * 0.5, rail[0] + rail[2] * 0.5);
+        }
         assert_eq!(content[0], shell[0] + shell[2]);
-        assert_eq!(inverse_corner[0], content[0]);
+        if cfg!(target_os = "macos") {
+            assert_eq!(
+                inverse_corner[0],
+                collapsed.presented("header-title").unwrap().0[0]
+            );
+        } else {
+            assert_eq!(inverse_corner[0], content[0]);
+        }
         assert_eq!(inverse_corner[1] + inverse_corner[3], content[1]);
         let divider = collapsed
             .elements()
@@ -15239,9 +15333,11 @@ active_runbook_count: 0,
         assert!(divider.inert);
         assert!(collapsed.find("home-sidenav").is_none());
         assert!(collapsed.find("navigation-sidenav-border").is_none());
-        assert!(collapsed.find("header-sidenav-title").is_none());
-        assert!(collapsed.find("header-back").is_none());
-        assert!(collapsed.find("header-forward").is_none());
+        if !cfg!(target_os = "macos") {
+            assert!(collapsed.find("header-sidenav-title").is_none());
+            assert!(collapsed.find("header-back").is_none());
+            assert!(collapsed.find("header-forward").is_none());
+        }
 
         let mut wide = Runtime::new(
             State {
@@ -15258,6 +15354,68 @@ active_runbook_count: 0,
         let (sidenav_border, _) = wide.presented("navigation-sidenav-border").unwrap();
         assert_eq!(shell[2], NAVIGATION_RAIL_WIDTH + SIDENAV_MAX_WIDTH);
         assert_eq!(sidenav_border[2], SIDENAV_MAX_WIDTH);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn hidden_macos_controls_use_the_compact_header_and_rail() {
+        let mut runtime = Runtime::new(
+            State {
+                primary_view: PrimaryView::Home,
+                ..State::default()
+            },
+            view,
+            (1040.0, 720.0),
+            Env::new(true, 1.0),
+        );
+        show_macos_controls(&mut runtime);
+        runtime.frame(0.0);
+        let (windowed_title, _) = runtime.presented("header-sidenav-title").unwrap();
+        let (windowed_toggle, _) = runtime.presented("header-sidebar-toggle").unwrap();
+        assert!(windowed_toggle[0] > windowed_title[0]);
+        let title_center = windowed_title[1] + windowed_title[3] * 0.5;
+        let control_center = MACOS_TRAFFIC_LIGHT_ORIGIN.1 + rune::Chrome::TRAFFIC_LIGHT * 0.5;
+        assert!((title_center - control_center).abs() < 0.5);
+
+        runtime.set_titlebar_inset(0.0);
+        runtime.frame(1.0);
+        runtime.frame(2.0);
+        let (title, _) = runtime.presented("header-sidenav-title").unwrap();
+        let (toggle, _) = runtime.presented("header-sidebar-toggle").unwrap();
+        assert!(
+            toggle[0] + toggle[2] <= title[0],
+            "toggle={toggle:?} title={title:?}"
+        );
+
+        let (x, y) = runtime.find("header-sidebar-toggle").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(3.0);
+        assert!(!runtime.state.sidenav_visible);
+        let (rail, _) = runtime.presented("navigation").unwrap();
+        let (shell, _) = runtime.presented("navigation-shell").unwrap();
+        let (title_area, _) = runtime.presented("header-title").unwrap();
+        assert_eq!(rail[2], NAVIGATION_RAIL_WIDTH);
+        assert_eq!(shell[2], NAVIGATION_RAIL_WIDTH);
+        assert_eq!(
+            title_area[0],
+            NAVIGATION_SHELL_INSET + NAVIGATION_RAIL_WIDTH
+        );
+        assert!(runtime.find("header-sidenav-title").is_none());
+        assert!(runtime.find("header-back").is_none());
+        assert!(runtime.find("header-forward").is_none());
+        assert!(runtime.find("navigation-header-shell").is_none());
+
+        show_macos_controls(&mut runtime);
+        runtime.frame(4.0);
+        runtime.frame(5.0);
+        assert!(runtime.find("header-sidenav-title").is_some());
+        assert!(runtime.find("header-back").is_some());
+        assert!(runtime.find("navigation-header-shell").is_some());
+        assert_eq!(
+            runtime.presented("navigation").unwrap().0[2],
+            NAVIGATION_RAIL_WIDTH
+        );
     }
 
     #[test]
@@ -15645,6 +15803,8 @@ active_runbook_count: 0,
 
         let mut runtime =
             Runtime::new(State::default(), view, (1040.0, 720.0), Env::new(true, 1.0));
+        #[cfg(target_os = "macos")]
+        show_macos_controls(&mut runtime);
         runtime.frame(0.0);
         aligned(&runtime);
         let (x, y) = runtime.find("settings-sidenav-resize").unwrap();
@@ -15663,6 +15823,7 @@ active_runbook_count: 0,
         aligned(&runtime);
         runtime.pointer_up(x - 300.0, y);
         runtime.frame(0.0);
+        let (expanded_title_area, _) = runtime.presented("header-title").unwrap();
 
         let (x, y) = runtime.find("header-sidebar-toggle").unwrap();
         runtime.pointer_down(x, y);
@@ -15671,12 +15832,18 @@ active_runbook_count: 0,
         runtime.frame(1.0);
         let (title_area, _) = runtime.presented("header-title").unwrap();
         let (shell, _) = runtime.presented("navigation-shell").unwrap();
-        assert!(
-            (title_area[0] - shell[0] - shell[2]).abs() < 1.0,
-            "shell={shell:?}, title={title_area:?}"
-        );
-        assert!(runtime.find("header-back").is_none());
-        assert!(runtime.find("header-forward").is_none());
+        if cfg!(target_os = "macos") {
+            assert_eq!(title_area[0], expanded_title_area[0]);
+            assert!(runtime.find("header-back").is_some());
+            assert!(runtime.find("header-forward").is_some());
+        } else {
+            assert!(
+                (title_area[0] - shell[0] - shell[2]).abs() < 1.0,
+                "shell={shell:?}, title={title_area:?}"
+            );
+            assert!(runtime.find("header-back").is_none());
+            assert!(runtime.find("header-forward").is_none());
+        }
         assert!(runtime.find("settings-sidenav-resize").is_none());
 
         let (x, y) = runtime.find("header-sidebar-toggle").unwrap();

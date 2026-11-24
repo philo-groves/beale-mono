@@ -6,6 +6,7 @@
 
 #### Fixed
 
+- V2 macOS window controls align vertically with the sidenav title. The windowed header stays stable with a rounded lower corner above a compact icon rail when the sidenav collapses; fullscreen restores the toggle-first header while the controls are hidden.
 - V2 header sidebar and history icons use the rail icons' muted color; unavailable history actions remain dimmed.
 - V2 segmented button groups now have even left and right padding, including compact workspace and Findings controls.
 - V2 surface connection views have a dedicated Back control that restores the originating view, filters, sort, and page. Graph and Inventory tabs exit the neighborhood filter.
