@@ -23,12 +23,12 @@ use beale_contracts::v1::{
 use rune::{Color, El, Icon, ScrollSpec, TextEdit, col, el, icon, row, text, text_input};
 
 use crate::{
-    FormSpec, SelectionMenu, State, ThemeStyle, ViewLocation, form_button,
+    SelectionMenu, State, ThemeStyle, ViewLocation, form_button,
     form_controls::icon_action_button,
     form_label_font,
     icons::{EVIDENCE, FINDINGS, PEN, PLUS, SAFETY, SETTINGS, TARGET, TRASH, WORKSPACE_SURFACES},
-    modal_dialog, selection_button, settings_form, settings_form_card, toggle_selection_menu,
-    ui_font, view_title_font,
+    modal_dialog, selection_button, settings_form_card, toggle_selection_menu, ui_font,
+    view_title_font,
     workspace_creation::{
         SurfaceKind as DraftKind, SurfaceScope as DraftScope, display_directory, field,
         row_with_control, value_with_actions,
@@ -347,39 +347,38 @@ fn foundation(state: &State, details: &WorkspaceDetails, theme: ThemeStyle<'_>) 
         name_actions,
         theme,
     );
-    settings_form(
-        FormSpec {
-            key: "saved-workspace-details-form",
-            heading: "Basic Information",
-        },
-        [
-            row_with_control(
-                "Workspace Name",
-                "The name shown throughout Beale.",
-                name,
-                theme,
-            ),
-            row_with_control(
-                "Workspace Directory",
-                "Directory for this workspace on the host.",
-                value_with_actions(
-                    "saved-workspace-directory-value",
-                    display_directory(&summary.directory),
-                    320.0,
-                    Vec::new(),
+    col()
+        .key("saved-workspace-details-form")
+        .w_full()
+        .child(settings_form_card(
+            [
+                row_with_control(
+                    "Workspace Name",
+                    "The name shown throughout Beale.",
+                    name,
                     theme,
                 ),
-                theme,
-            ),
-            row_with_control(
-                "Research Kit",
-                "Optional surface and rule acquisition kit.",
-                read_only_value("None".to_owned(), 100.0, theme),
-                theme,
-            ),
-        ],
-        theme,
-    )
+                row_with_control(
+                    "Workspace Directory",
+                    "Directory for this workspace on the host.",
+                    value_with_actions(
+                        "saved-workspace-directory-value",
+                        display_directory(&summary.directory),
+                        320.0,
+                        Vec::new(),
+                        theme,
+                    ),
+                    theme,
+                ),
+                row_with_control(
+                    "Research Kit",
+                    "Optional surface and rule acquisition kit.",
+                    read_only_value("None".to_owned(), 100.0, theme),
+                    theme,
+                ),
+            ],
+            theme,
+        ))
 }
 
 fn agents_guidance(state: &State, theme: ThemeStyle<'_>) -> El {
