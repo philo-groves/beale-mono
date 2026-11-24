@@ -102,6 +102,31 @@ fn view_title_font() -> TextStyle {
     ui_font(24.0, 600.0)
 }
 
+fn tab_view_title(label: &'static str, theme: ThemeStyle<'_>) -> El {
+    row().h(40.0).pr(10.0).center_y().child(
+        text(label)
+            .key(format!(
+                "{}-view-title",
+                label.to_lowercase().replace(' ', "-")
+            ))
+            .font(view_title_font())
+            .color(theme.color("#f2f2f2")),
+    )
+}
+
+fn titled_view_tabs(label: &'static str, tabs: El, theme: ThemeStyle<'_>) -> El {
+    row()
+        .center_y()
+        .flex_wrap()
+        .gap(12.0)
+        .child(tab_view_title(label, theme))
+        .child(tabs)
+}
+
+fn titled_view_tabs_width(label: &str, tabs_width: f32) -> f32 {
+    rune::text::measure(label, &[], view_title_font(), None).0 + 22.0 + tabs_width
+}
+
 fn form_label_font() -> TextStyle {
     ui_font(14.0, 550.0)
 }
@@ -217,7 +242,6 @@ enum ModelRole {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SelectionMenu {
-    LeadProvider,
     GoalMode,
     SessionGraph,
     Repeat,
@@ -3631,34 +3655,6 @@ fn selection_menu_items(state: &State, menu: SelectionMenu) -> Vec<in_place_menu
                 selected: state.workspace_surface_kind == kind,
             })
             .collect(),
-        SelectionMenu::LeadProvider => {
-            let mut options: Vec<_> = Provider::ALL
-                .into_iter()
-                .filter(|provider| {
-                    let status = &state.auth_status[provider.index()];
-                    status.subscription || status.api_key
-                })
-                .map(|provider| in_place_menu::MenuItem {
-                    value: provider.key().to_owned(),
-                    label: provider.name().to_owned(),
-                    detail: None,
-                    selected: state.lead_provider == Some(provider),
-                })
-                .collect();
-            options.extend(
-                state
-                    .custom_providers
-                    .iter()
-                    .map(|provider| in_place_menu::MenuItem {
-                        value: provider.id.clone(),
-                        label: provider.name.clone(),
-                        detail: Some("Custom API".to_owned()),
-                        selected: state.lead_provider == Some(Provider::Custom)
-                            && state.lead_custom_provider_id == provider.id,
-                    }),
-            );
-            options
-        }
         SelectionMenu::ColorTheme => AppearanceTheme::ALL
             .into_iter()
             .map(|theme| in_place_menu::MenuItem {
@@ -3770,7 +3766,6 @@ fn selection_menu_anchor(menu: SelectionMenu) -> String {
         SelectionMenu::QuickChatWorkspace => "quick-chat-workspace-control",
         SelectionMenu::SurfaceKind => "workspace-surface-kind-control",
         SelectionMenu::WorkspaceSurfaceKind => "saved-workspace-surface-kind-control",
-        SelectionMenu::LeadProvider => "lead-provider-control",
         SelectionMenu::ColorTheme => "color-theme-control",
         SelectionMenu::InterfaceFont => "appearance-font-control",
         SelectionMenu::TextSize => "appearance-size-control",
@@ -3901,20 +3896,6 @@ fn choose_selection_menu_item(state: &mut State, menu: SelectionMenu, value: Str
                 .find(|kind| kind.key() == value)
             {
                 state.workspace_surface_kind = kind;
-            }
-        }
-        SelectionMenu::LeadProvider => {
-            if let Some(provider) = Provider::ALL
-                .into_iter()
-                .find(|provider| provider.key() == value)
-            {
-                start_lead_save(state, provider);
-            } else if state
-                .custom_providers
-                .iter()
-                .any(|provider| provider.id == value)
-            {
-                start_custom_lead_save(state, value);
             }
         }
         SelectionMenu::ColorTheme => {
@@ -4948,17 +4929,37 @@ fn sidenav_resize_handle(width: f32) -> El {
         })
 }
 
-fn provider_tab(provider: Provider, selected: bool, theme: ThemeStyle<'_>) -> El {
+fn provider_tab(provider: Provider, selected: bool, configured: bool, theme: ThemeStyle<'_>) -> El {
     let glyph = if provider == Provider::Custom {
         &icons::PLUGINS
     } else {
         provider.logo()
     };
-    design::segmented_tab(provider.name(), Some(glyph), selected, true, theme)
+    let mut tab = design::segmented_tab(provider.name(), Some(glyph), selected, true, theme)
         .key(format!("provider-{}", provider.key()))
-        .on_press(move |s: &mut State| {
-            s.navigate_to(ViewLocation::Providers(provider));
-        })
+        .label(format!(
+            "{}{}{}",
+            provider.name(),
+            if configured { ", configured" } else { "" },
+            if selected { ", selected" } else { "" }
+        ))
+        .on_press(move |s: &mut State| s.navigate_to(ViewLocation::Providers(provider)));
+    if configured {
+        tab = tab.child(
+            row()
+                .absolute(0.0, 1.0)
+                .w_full()
+                .pr(1.0)
+                .child(el().grow(1.0))
+                .child(
+                    el().key(format!("provider-configured-{}", provider.key()))
+                        .size(7.0, 7.0)
+                        .radius(3.5)
+                        .fill(theme.color(HEALTHY_RING_COLOR)),
+                ),
+        );
+    }
+    tab
 }
 
 fn appearance_tab_button(tab: AppearanceTab, selected: bool, theme: ThemeStyle<'_>) -> El {
@@ -4973,58 +4974,39 @@ fn appearance_tab_button(tab: AppearanceTab, selected: bool, theme: ThemeStyle<'
         })
 }
 
-fn lead_provider_controls(state: &State) -> (El, f32) {
-    let theme = state.appearance.style();
-    let color = |value| theme.color(value);
-    let configured = state
-        .auth_status
-        .iter()
-        .any(|status| status.subscription || status.api_key)
-        || !state.custom_providers.is_empty();
-    let label = if state.lead_provider == Some(Provider::Custom) {
-        state
-            .custom_providers
-            .iter()
-            .find(|provider| provider.id == state.lead_custom_provider_id)
-            .map_or("Custom", |provider| provider.name.as_str())
+fn default_provider_switch(
+    key: impl Into<String>,
+    selected: bool,
+    available: bool,
+    on_select: impl Fn(&mut State) + 'static,
+    theme: ThemeStyle<'_>,
+) -> El {
+    let mut button = form_controls::toggle_button(
+        key,
+        "Default provider",
+        selected,
+        available && !selected,
+        theme,
+    )
+    .help(if selected {
+        "Default provider selected; select another provider to change it"
+    } else if available {
+        "Make this the default provider"
     } else {
-        state.lead_provider.map_or("None", Provider::name)
-    };
-    let selectable = state.auth_loaded && configured && !state.lead_busy;
-    let label = if state.lead_busy { "Saving" } else { label };
-    let value_font = if selectable {
-        ui_font(13.0, 550.0)
-    } else {
-        ui_font(13.5, 400.0)
-    };
-    let value_width = if selectable {
-        selection_button_width(label)
-    } else {
-        rune::text::measure(label, &[], value_font, None).0
-    };
-    let width =
-        rune::text::measure("Default", &[], ui_font(14.0, 500.0), None).0 + 7.0 + value_width;
-    let control = row()
-        .key("lead-provider-controls")
+        "Default selection unavailable"
+    });
+    if available && !selected {
+        button = button.on_press(on_select);
+    }
+    row()
         .center_y()
-        .gap(7.0)
+        .gap(8.0)
         .child(
             text("Default")
-                .font(ui_font(14.0, 500.0))
-                .color(color("#a8a8a8")),
+                .font(ui_font(13.0, 500.0))
+                .color(theme.color("#a8a8a8")),
         )
-        .child(if selectable {
-            selection_button(
-                label,
-                state.selection_menu == Some(SelectionMenu::LeadProvider),
-                |s| toggle_selection_menu(s, SelectionMenu::LeadProvider),
-                theme,
-            )
-            .key("lead-provider-control")
-        } else {
-            el().child(text(label).font(value_font).color(color("#888888")))
-        });
-    (control, width.ceil())
+        .child(button)
 }
 
 fn color_theme_controls(state: &State) -> (El, f32) {
@@ -5515,6 +5497,16 @@ fn provider_detail(state: &State) -> El {
     let provider = state.selected;
     let auth = &state.auth_status[provider.index()];
     let name = provider.name();
+    let is_default = state.lead_provider == Some(provider);
+    let can_select_default =
+        state.auth_loaded && !state.lead_busy && (auth.subscription || auth.api_key);
+    let default_button = default_provider_switch(
+        "provider-default-toggle",
+        is_default,
+        can_select_default,
+        move |s: &mut State| start_lead_save(s, provider),
+        theme,
+    );
     let title_row = row()
         .w_full()
         .center_y()
@@ -5539,7 +5531,9 @@ fn provider_detail(state: &State) -> El {
             text(name)
                 .font(ui_font(23.0, 600.0))
                 .color(color("#f2f2f2")),
-        );
+        )
+        .child(el().grow(1.0))
+        .child(default_button);
     let mut detail = col()
         .key(format!("provider-detail-{}", provider.key()))
         .role("tabpanel")
@@ -6205,27 +6199,35 @@ fn providers_settings_view(state: &State, cx: &mut Cx<State>) -> Vec<El> {
     let available_width = tabs_width.min(760.0);
     let tab_widths = providers.map(|provider| design::segmented_tab_width(provider.name(), true));
     let row_width = design::segmented_group_width(&tab_widths);
-    if available_width < row_width {
+    let tabs_available_width =
+        (available_width - titled_view_tabs_width("Providers", 0.0)).max(180.0);
+    if tabs_available_width < row_width {
         let column_width = tab_widths.iter().copied().fold(0.0_f32, f32::max);
-        let columns = if available_width >= design::segmented_group_width(&[column_width; 3]) {
+        let columns = if tabs_available_width >= design::segmented_group_width(&[column_width; 3]) {
             3
         } else {
             2
         };
-        tabs = tabs.w_full().equal_columns(columns);
+        tabs = tabs.w(tabs_available_width).equal_columns(columns);
     }
     for provider in providers {
-        tabs = tabs.child(provider_tab(provider, state.selected == provider, theme));
+        let configured = if provider == Provider::Custom {
+            state
+                .custom_providers
+                .iter()
+                .any(|custom| custom.api_key_configured)
+        } else {
+            let status = &state.auth_status[provider.index()];
+            status.subscription || status.api_key
+        };
+        tabs = tabs.child(provider_tab(
+            provider,
+            state.selected == provider,
+            configured,
+            theme,
+        ));
     }
-    let (default_control, default_width) = lead_provider_controls(state);
-    let controls = design::tabs_with_control(
-        tabs,
-        row_width,
-        default_control,
-        default_width,
-        available_width,
-    )
-    .key("provider-view-tabs");
+    let controls = titled_view_tabs("Providers", tabs, theme).key("provider-view-tabs");
     let mut content = vec![controls];
     if !state.lead_error.is_empty() {
         content.push(
@@ -6256,8 +6258,8 @@ fn appearance_settings_view(state: &State, cx: &mut Cx<State>) -> Vec<El> {
     let tab_widths = AppearanceTab::ALL.map(|tab| design::segmented_tab_width(tab.label(), true));
     let (theme_control, theme_width) = color_theme_controls(state);
     let controls = design::tabs_with_control(
-        tabs,
-        design::segmented_group_width(&tab_widths),
+        titled_view_tabs("Appearance", tabs, theme),
+        titled_view_tabs_width("Appearance", design::segmented_group_width(&tab_widths)),
         theme_control,
         theme_width,
         tabs_width.min(760.0),
@@ -6966,7 +6968,6 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
                     SelectionMenu::SurfaceKind => ("Surface Type", 178.0),
                     SelectionMenu::WorkspaceSurfaceKind => ("Surface Type", 178.0),
                     SelectionMenu::SurfaceFilter => ("Filter surfaces", 190.0),
-                    SelectionMenu::LeadProvider => ("Default", 178.0),
                     SelectionMenu::ColorTheme => ("Theme", 178.0),
                     SelectionMenu::InterfaceFont => ("Interface Font", 178.0),
                     SelectionMenu::TextSize => ("Text Size", 178.0),
@@ -7813,6 +7814,77 @@ mod tests {
     }
 
     #[test]
+    fn titled_view_tabs_fit_with_the_sidenav_open_at_minimum_width() {
+        for (scene, title_key, tabs_key) in [
+            (
+                "tracking",
+                "token-tracking-view-title",
+                "tracking-agent-filters",
+            ),
+            ("features", "features-view-title", "feature-view-tabs"),
+            ("plugins", "plugins-view-title", "plugin-view-tabs"),
+            ("safety", "safety-view-title", "safety-view-tabs"),
+            (
+                "appearance",
+                "appearance-view-title",
+                "appearance-view-tabs",
+            ),
+            ("providers", "providers-view-title", "provider-tab-group"),
+            ("archive", "archive-view-title", "archive-view-tabs"),
+            ("fleet", "app-servers-view-title", "fleet-view-tabs"),
+            ("vms", "virtual-machines-view-title", "fleet-view-tabs"),
+            (
+                "research-tools",
+                "research-tools-view-title",
+                "fleet-view-tabs",
+            ),
+        ] {
+            let mut state = visual_preview::fixture(scene);
+            state.appearance.text_size = TextSize::ExtraLarge;
+            state.sidenav_visible = true;
+            state.sidenav_width = SIDENAV_MAX_WIDTH;
+            let mut runtime = Runtime::new(state, view, (840.0, 900.0), Env::new(true, 1.0));
+            runtime.frame(0.0);
+            let (page, _) = runtime.presented("settings-page").unwrap();
+            for key in [title_key, tabs_key] {
+                let (rect, _) = runtime.presented(key).unwrap();
+                assert!(
+                    rect[0] >= page[0] - 1.0,
+                    "{scene}: {key} starts outside page"
+                );
+                assert!(
+                    rect[0] + rect[2] <= page[0] + page[2] + 1.0,
+                    "{scene}: {key} ends outside page: {rect:?}, page={page:?}"
+                );
+            }
+            let (title, _) = runtime.presented(title_key).unwrap();
+            let (tabs, _) = runtime.presented(tabs_key).unwrap();
+            assert!(
+                title[0] + title[2] + 8.0 <= tabs[0] || title[1] + title[3] <= tabs[1],
+                "{scene}: title overlaps tabs: {title:?}, {tabs:?}"
+            );
+            let auxiliary = match scene {
+                "tracking" => Some("tracking-clear-day"),
+                "plugins" => Some("plugin-add-source"),
+                "fleet" => Some("fleet-add-server"),
+                "appearance" => Some("color-theme-control"),
+                _ => None,
+            };
+            if let Some(key) = auxiliary {
+                let (rect, _) = runtime.presented(key).unwrap();
+                assert!(
+                    rect[0] >= page[0] - 1.0,
+                    "{scene}: {key} starts outside page"
+                );
+                assert!(
+                    rect[0] + rect[2] <= page[0] + page[2] + 1.0,
+                    "{scene}: {key} ends outside page: {rect:?}, page={page:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn automation_sections_show_five_rows_until_expanded() {
         for section in ["active", "future", "past"] {
             let mut state = State {
@@ -8574,7 +8646,47 @@ mod tests {
     }
 
     #[test]
-    fn lead_menu_lists_only_configured_providers_without_moving_content() {
+    fn configured_provider_tabs_show_status_dots() {
+        let mut state = visual_preview::fixture("custom");
+        state.auth_status[Provider::Anthropic.index()].subscription = true;
+        let mut runtime = Runtime::new(state, view, (1440.0, 720.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        for provider in [Provider::OpenAi, Provider::Anthropic, Provider::Custom] {
+            let (tab, _) = runtime
+                .presented(&format!("provider-{}", provider.key()))
+                .unwrap();
+            let (dot, _) = runtime
+                .presented(&format!("provider-configured-{}", provider.key()))
+                .unwrap();
+            assert_eq!([dot[2], dot[3]], [7.0, 7.0]);
+            assert!(dot[0] + dot[2] <= tab[0] + tab[2]);
+            assert!(tab[0] + tab[2] - dot[0] - dot[2] <= 3.0);
+            assert!(dot[1] >= tab[1]);
+            assert!(dot[1] - tab[1] <= 3.0);
+        }
+        for provider in [Provider::Xai, Provider::Zai, Provider::OpenRouter] {
+            assert!(
+                runtime
+                    .find(&format!("provider-configured-{}", provider.key()))
+                    .is_none()
+            );
+        }
+        let (x, y) = runtime.find("provider-configured-openai").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+        assert_eq!(runtime.state.selected, Provider::OpenAi);
+        runtime.update(|state, _| {
+            state.auth_status[Provider::OpenAi.index()].api_key = false;
+            state.custom_providers[0].api_key_configured = false;
+        });
+        runtime.frame(0.0);
+        assert!(runtime.find("provider-configured-openai").is_none());
+        assert!(runtime.find("provider-configured-custom").is_none());
+    }
+
+    #[test]
+    fn default_provider_switch_sits_in_the_selected_provider_header() {
         let state = State {
             settings_section: SettingsSection::Providers,
             auth_loaded: true,
@@ -8593,18 +8705,20 @@ mod tests {
         };
         let mut runtime = Runtime::new(state, view, (1040.0, 720.0), Env::new(true, 1.0));
         runtime.frame(0.0);
-        let detail_before = runtime.find("provider-detail-openai").unwrap();
-        let (x, y) = runtime.find("lead-provider-control").unwrap();
-        runtime.pointer_down(x, y);
-        runtime.pointer_up(x, y);
-        runtime.frame(0.0);
-        assert!(runtime.find("selection-menu").is_some());
-        assert!(runtime.find("selection-menu-item-0").is_some());
-        assert!(runtime.find("selection-menu-item-1").is_none());
-        assert_eq!(
-            runtime.find("provider-detail-openai").unwrap(),
-            detail_before
-        );
+        let (tabs, _) = runtime.presented("provider-view-tabs").unwrap();
+        let (header, _) = runtime.presented("provider-view-header").unwrap();
+        let (button, _) = runtime.presented("provider-default-toggle").unwrap();
+        let (off_thumb, _) = runtime.presented("provider-default-toggle-thumb").unwrap();
+        assert!(header[1] - tabs[1] - tabs[3] <= 32.0);
+        assert!(button[0] >= header[0] + header[2] / 2.0);
+        assert!(button[0] + button[2] <= header[0] + header[2] - 13.0);
+        assert!(button[1] >= header[1] + 13.0);
+        assert!(button[1] + button[3] <= header[1] + header[3] - 13.0);
+        assert!(runtime.find("selection-menu").is_none());
+        runtime.update(|state, _| state.lead_provider = Some(Provider::OpenAi));
+        runtime.frame(1.0);
+        let (on_thumb, _) = runtime.presented("provider-default-toggle-thumb").unwrap();
+        assert!(on_thumb[0] > off_thumb[0]);
     }
 
     #[test]
@@ -8635,6 +8749,28 @@ mod tests {
         assert!((detail[0] - page[0]).abs() < 1.0);
         assert!((detail[0] + detail[2] - page[0] - page[2]).abs() < 1.0);
         assert!(runtime.find("custom-provider-custom-example").is_some());
+        let (card, _) = runtime.presented("custom-provider-custom-example").unwrap();
+        let (button, _) = runtime
+            .presented("custom-provider-default-custom-example")
+            .unwrap();
+        assert!(
+            runtime
+                .find("custom-provider-default-custom-example-thumb")
+                .is_some()
+        );
+        assert!(button[0] > card[0] + card[2] / 2.0);
+        assert!(button[0] + button[2] <= card[0] + card[2] - 15.0);
+        runtime.update(|state, _| {
+            state.sidenav_visible = true;
+            state.sidenav_width = SIDENAV_MAX_WIDTH;
+            state.appearance.text_size = TextSize::ExtraLarge;
+        });
+        runtime.frame(0.0);
+        let (card, _) = runtime.presented("custom-provider-custom-example").unwrap();
+        let (button, _) = runtime
+            .presented("custom-provider-default-custom-example")
+            .unwrap();
+        assert!(button[0] + button[2] <= card[0] + card[2] - 15.0);
     }
 
     #[test]
@@ -12191,22 +12327,22 @@ active_runbook_count: 0,
             (
                 "workspace-tab-surfaces",
                 "workspace-surface-network",
-                "Example Workspace Surfaces",
+                "Surfaces",
             ),
             (
                 "workspace-tab-findings",
                 "workspace-findings-view",
-                "Example Workspace Findings",
+                "Findings",
             ),
             (
                 "workspace-tab-guidance",
                 "saved-workspace-rules-form",
-                "Example Workspace Guidance",
+                "Guidance",
             ),
             (
                 "workspace-tab-identity",
                 "saved-workspace-details-form",
-                "Example Workspace Identity",
+                "Identity",
             ),
         ] {
             let (x, y) = loaded.find(tab).unwrap();
@@ -12587,7 +12723,9 @@ active_runbook_count: 0,
         let (rules, _) = runtime.presented("workspace-guidance-rules").unwrap();
         let (agents, _) = runtime.presented("workspace-guidance-agents").unwrap();
         let (toggle, _) = runtime.presented("workspace-guidance-view-toggle").unwrap();
+        let (title, _) = runtime.presented("workspace-title-squircle").unwrap();
         let (add, _) = runtime.presented("saved-workspace-add-rule").unwrap();
+        assert!((toggle[0] - title[0] - title[2] - 12.0).abs() < 1.0);
         assert!(rules[0] + rules[2] <= agents[0]);
         assert!(toggle[0] + toggle[2] < add[0]);
         assert!(
@@ -12648,8 +12786,10 @@ active_runbook_count: 0,
         assert!(first[1] + first[3] <= divider[1]);
         assert!(divider[1] + divider[3] <= second[1]);
         let (toggle, _) = runtime.presented("workspace-guidance-view-toggle").unwrap();
+        let (title, _) = runtime.presented("workspace-title-squircle").unwrap();
         let (add, _) = runtime.presented("saved-workspace-add-rule").unwrap();
         let (tabs, _) = runtime.presented("workspace-view-tabs").unwrap();
+        assert!((toggle[0] - title[0] - title[2] - 12.0).abs() < 1.0);
         assert!(toggle[0] + toggle[2] < add[0]);
         assert!(add[0] + add[2] < tabs[0]);
         assert!((toggle[1] + toggle[3] / 2.0 - add[1] - add[3] / 2.0).abs() < 1.0);

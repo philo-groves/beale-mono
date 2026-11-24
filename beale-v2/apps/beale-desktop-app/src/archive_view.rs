@@ -174,7 +174,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
     for tab in ArchiveTab::ALL {
         tabs = tabs.child(tab_button(tab, state.archive_tab == tab, theme));
     }
-    let mut content = vec![tabs];
+    let mut content = vec![crate::titled_view_tabs("Archive", tabs, theme)];
     if !state.archive_error.is_empty() {
         content.push(
             text(state.archive_error.clone())

@@ -299,11 +299,12 @@ pub(crate) fn sidenav(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
         )
 }
 
-fn filter_tabs(state: &State, theme: ThemeStyle<'_>) -> El {
+fn filter_tabs(state: &State, compact: bool, theme: ThemeStyle<'_>) -> El {
     token_charts::agent_filters(
         state.tracking.filter,
         "Main",
         "tracking",
+        compact,
         |state, filter| state.tracking.filter = filter,
         theme,
     )
@@ -348,6 +349,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> V
             },
             theme,
         ));
+        content.insert(0, crate::tab_view_title("Token Tracking", theme));
         return content;
     };
     let summary = tracking_data::summarize(
@@ -376,13 +378,23 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> V
     }
     .key("tracking-clear-day");
     let widths = AgentFilter::ALL.map(|filter| design::segmented_tab_width(filter.label(), true));
-    content.push(design::tabs_with_control(
-        filter_tabs(state, theme),
-        design::segmented_group_width(&widths),
-        control,
-        165.0,
-        page_width,
-    ));
+    let labeled_width = design::segmented_group_width(&widths);
+    let compact = page_width < crate::titled_view_tabs_width("Token Tracking", labeled_width);
+    let tabs_width = if compact {
+        design::segmented_group_width(&[design::CONTROL_HEIGHT; 3])
+    } else {
+        labeled_width
+    };
+    content.insert(
+        0,
+        design::tabs_with_control(
+            crate::titled_view_tabs("Token Tracking", filter_tabs(state, compact, theme), theme),
+            crate::titled_view_tabs_width("Token Tracking", tabs_width),
+            control,
+            165.0,
+            page_width,
+        ),
+    );
     if snapshot.model_days.is_empty() {
         content.push(card(theme).key("tracking-empty")
             .child(design::empty_state(&SESSION_TOKENS, "Your token story starts here", "Run a research session to see daily usage, model breakdowns, and cache reuse. Only reported token counts appear here.", theme)

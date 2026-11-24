@@ -16,6 +16,7 @@ pub(crate) fn agent_filters(
     selected: AgentFilter,
     main_label: &'static str,
     key_prefix: &'static str,
+    compact: bool,
     on_select: fn(&mut State, AgentFilter),
     theme: ThemeStyle<'_>,
 ) -> El {
@@ -29,20 +30,20 @@ pub(crate) fn agent_filters(
             AgentFilter::Main => &AGENT,
             AgentFilter::Subagents => &WORKSPACE_SURFACES,
         };
+        let label = if filter == AgentFilter::Main {
+            main_label
+        } else {
+            filter.label()
+        };
+        let button = if compact {
+            design::segmented_icon_tab(label, glyph, filter == selected, theme)
+        } else {
+            design::segmented_tab(label, Some(glyph), filter == selected, true, theme)
+        };
         tabs = tabs.child(
-            design::segmented_tab(
-                if filter == AgentFilter::Main {
-                    main_label
-                } else {
-                    filter.label()
-                },
-                Some(glyph),
-                filter == selected,
-                true,
-                theme,
-            )
-            .key(format!("{key_prefix}-filter-{filter:?}"))
-            .on_press(move |state: &mut State| on_select(state, filter)),
+            button
+                .key(format!("{key_prefix}-filter-{filter:?}"))
+                .on_press(move |state: &mut State| on_select(state, filter)),
         );
     }
     tabs

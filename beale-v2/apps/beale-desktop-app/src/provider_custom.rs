@@ -510,10 +510,21 @@ pub(crate) fn render(state: &State) -> El {
             .child(form_button("Add Provider", theme).on_press(|s: &mut State| { clear_editor(s); s.custom_editor_open = true; })));
     for provider in &state.custom_providers {
         let id = provider.id.clone();
+        let default_id = id.clone();
         let edit_id = id.clone();
         let key_id = id.clone();
         let remove_id = id.clone();
         let model_count = provider.models.len();
+        let is_default = state.lead_provider == Some(crate::Provider::Custom)
+            && state.lead_custom_provider_id == id;
+        let can_select_default = state.auth_loaded && !state.lead_busy;
+        let default_button = crate::default_provider_switch(
+            format!("custom-provider-default-{id}"),
+            is_default,
+            can_select_default,
+            move |s: &mut State| crate::start_custom_lead_save(s, default_id.clone()),
+            theme,
+        );
         let mut actions = row().w_full().flex_wrap().gap(8.0).child(
             form_button("Edit", theme).on_press(move |s: &mut State| edit_provider(s, &edit_id)),
         );
@@ -564,7 +575,8 @@ pub(crate) fn render(state: &State) -> El {
                                     "#969696"
                                 },
                             )),
-                        ),
+                        )
+                        .child(default_button),
                 )
                 .child(
                     text(format!(

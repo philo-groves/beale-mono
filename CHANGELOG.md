@@ -30,6 +30,10 @@
 
 #### Changed
 
+- V2 Providers marks configured provider tabs with a green status dot, including Custom when at least one custom provider has a saved API key.
+- V2 Fleet gives App Servers, Virtual Machines, and Research Tools view titles beside their tabs. Research Tools adds All Research Tools, Allowed Locally, and Allowed in VMs filters for the selected app-server.
+- V2 Settings title rows no longer leave extra space below the tabs. Providers moves Default selection from the header dropdown to a switch on each provider's card.
+- V2 Token Tracking, Features, Plugins, Safety, Appearance, Providers, and Archive place workspace-style titles beside their view tabs, with compact or wrapped controls at narrow widths.
 - V2 Surfaces renames Inventory to List and refreshes its flat rows with larger text, scope badges, clearer connection counts, and quieter actions.
 - V2 Guidance puts Rules before AGENTS.md, moves Add Rule into the header, and shows flat rule rows separated by lines. The AGENTS.md label now sits inside its form card.
 - V2 workspace tabs are named Guidance and Identity. Guidance has AGENTS.md and Rules views beside its title; each view saves its own edits.
@@ -45,7 +49,7 @@
 - V2 Surfaces places an Add Surface button with a plus icon and text beside Graph and Inventory in the header. Sorting, scope and review filters, a separate Show excluded option, and search stay in the footer Filter menu beside the matching/total surface count. Excluded surfaces are hidden by default in Graph and Inventory.
 - V2 Surfaces places Graph and Inventory in a compactable toggle group beside the view title, with workspace view tabs aligned to the right.
 - V2 Findings places the Ledger and Plot selector beside the view title, adds icons with compact centered buttons for narrow windows, and removes the redundant heading and active count.
-- V2 workspace views show the workspace name and active view name together in the page title.
+- V2 workspace pages title themselves with only the active view name; the workspace name remains in the header tab. Guidance uses the same title-to-toggle spacing as Surfaces and Findings.
 - V2 Inventory now includes surface editing and deletion, replacing the separate Manage Surfaces screen. Add surface offers an explicit scope selector, and Map is labeled Connections.
 - V2 Surfaces adds a paged, sortable inventory for large scopes, surface webs, direct-neighborhood navigation, compound search, and filters that isolate matching records. Directional connection counts, definition/link evidence counts, exclusion boundaries, and drawn-link totals replace update activity bars.
 - V2 icon rail places Tracking directly below Automations, without a divider between them.

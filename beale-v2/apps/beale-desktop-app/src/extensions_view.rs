@@ -1256,21 +1256,24 @@ pub(crate) fn sidenav(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
         .child(items)
 }
 
-fn tab_button(tab: PluginTab, selected: bool, theme: ThemeStyle<'_>) -> El {
+fn tab_button(tab: PluginTab, selected: bool, compact: bool, theme: ThemeStyle<'_>) -> El {
     let glyph = match tab {
         PluginTab::All => &PLUGINS,
         PluginTab::Available => &PLUS,
         PluginTab::Installed => &crate::icons::CHECK,
     };
-    crate::design::segmented_tab(tab.label(), Some(glyph), selected, true, theme)
-        .key(tab.key())
-        .on_press(move |state: &mut State| {
-            state.navigate_to(ViewLocation::Extensions(
-                ExtensionSection::Plugins,
-                tab,
-                state.feature_tab,
-            ));
-        })
+    let button = if compact {
+        crate::design::segmented_icon_tab(tab.label(), glyph, selected, theme)
+    } else {
+        crate::design::segmented_tab(tab.label(), Some(glyph), selected, true, theme)
+    };
+    button.key(tab.key()).on_press(move |state: &mut State| {
+        state.navigate_to(ViewLocation::Extensions(
+            ExtensionSection::Plugins,
+            tab,
+            state.feature_tab,
+        ));
+    })
 }
 
 fn plugin_rows(state: &State) -> impl Iterator<Item = (usize, &PluginEntry)> {
@@ -1285,21 +1288,24 @@ fn plugin_rows(state: &State) -> impl Iterator<Item = (usize, &PluginEntry)> {
         })
 }
 
-fn feature_tab_button(tab: FeatureTab, selected: bool, theme: ThemeStyle<'_>) -> El {
+fn feature_tab_button(tab: FeatureTab, selected: bool, compact: bool, theme: ThemeStyle<'_>) -> El {
     let glyph = match tab {
         FeatureTab::All => &FEATURES,
         FeatureTab::Available => &PLUS,
         FeatureTab::Enabled => &crate::icons::CHECK,
     };
-    crate::design::segmented_tab(tab.label(), Some(glyph), selected, true, theme)
-        .key(tab.key())
-        .on_press(move |state: &mut State| {
-            state.navigate_to(ViewLocation::Extensions(
-                ExtensionSection::Features,
-                state.plugin_tab,
-                tab,
-            ));
-        })
+    let button = if compact {
+        crate::design::segmented_icon_tab(tab.label(), glyph, selected, theme)
+    } else {
+        crate::design::segmented_tab(tab.label(), Some(glyph), selected, true, theme)
+    };
+    button.key(tab.key()).on_press(move |state: &mut State| {
+        state.navigate_to(ViewLocation::Extensions(
+            ExtensionSection::Features,
+            state.plugin_tab,
+            tab,
+        ));
+    })
 }
 
 fn feature_rows(state: &State) -> impl Iterator<Item = (usize, &FeatureEntry)> {
@@ -1683,17 +1689,24 @@ fn plugin_columns(page_width: f32) -> usize {
 }
 
 fn plugins(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> Vec<El> {
+    let tab_widths =
+        PluginTab::ALL.map(|tab| crate::design::segmented_tab_width(tab.label(), true));
+    let compact = page_width
+        < crate::titled_view_tabs_width(
+            "Plugins",
+            crate::design::segmented_group_width(&tab_widths),
+        ) + 38.0;
     let mut tabs = crate::design::segmented_control(theme)
         .key("plugin-view-tabs")
         .label("Plugin views");
     for tab in PluginTab::ALL {
-        tabs = tabs.child(tab_button(tab, state.plugin_tab == tab, theme));
+        tabs = tabs.child(tab_button(tab, state.plugin_tab == tab, compact, theme));
     }
     let tabs = row()
         .w_full()
         .center_y()
         .gap(12.0)
-        .child(tabs)
+        .child(crate::titled_view_tabs("Plugins", tabs, theme))
         .child(el().grow(1.0))
         .child(
             el().key("plugin-add-source")
@@ -1893,11 +1906,23 @@ fn feature_card(
 }
 
 fn features(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> Vec<El> {
+    let tab_widths =
+        FeatureTab::ALL.map(|tab| crate::design::segmented_tab_width(tab.label(), true));
+    let compact = page_width
+        < crate::titled_view_tabs_width(
+            "Features",
+            crate::design::segmented_group_width(&tab_widths),
+        );
     let mut tabs = crate::design::segmented_control(theme)
         .key("feature-view-tabs")
         .label("Feature views");
     for tab in FeatureTab::ALL {
-        tabs = tabs.child(feature_tab_button(tab, state.feature_tab == tab, theme));
+        tabs = tabs.child(feature_tab_button(
+            tab,
+            state.feature_tab == tab,
+            compact,
+            theme,
+        ));
     }
     let mut cards = row()
         .key("feature-cards")
@@ -1928,7 +1953,7 @@ fn features(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> Vec<El> {
             .mt(12.0),
         );
     }
-    let mut content = vec![tabs];
+    let mut content = vec![crate::titled_view_tabs("Features", tabs, theme)];
     if !state.feature_error.is_empty() {
         content.push(
             text(state.feature_error.clone())

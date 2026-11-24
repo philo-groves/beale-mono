@@ -152,6 +152,7 @@ pub(crate) fn dialog(state: &State, theme: ThemeStyle<'_>, window_width: f32) ->
                 state.session_insights_filter,
                 main_label,
                 "session-insights",
+                false,
                 |state, filter| state.session_insights_filter = filter,
                 theme,
             ),

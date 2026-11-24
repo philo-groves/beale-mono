@@ -1621,12 +1621,7 @@ pub(crate) fn render(
     let Some(id) = state.workspace_id else {
         return col();
     };
-    let name = state
-        .workspaces
-        .iter()
-        .find(|workspace| workspace.id == id.to_string())
-        .map_or("Workspace", |workspace| workspace.name.as_str());
-    let title = format!("{name} {}", state.workspace_tab.label());
+    let title = state.workspace_tab.label().to_owned();
     let surface_graph_open = graph_open(state);
     let visible_tabs: Vec<WorkspaceTab> = WorkspaceTab::ALL
         .into_iter()
@@ -1649,15 +1644,14 @@ pub(crate) fn render(
     };
     let guidance_rules = state.workspace_tab == WorkspaceTab::Rules
         && state.workspace_guidance_view == GuidanceView::Rules;
-    let header_gaps = if surface_graph_open || state.workspace_tab == WorkspaceTab::Findings {
-        48.0
-    } else if guidance_rules {
-        32.0
-    } else if secondary_toggle_width > 0.0 {
-        36.0
-    } else {
-        24.0
-    };
+    let header_gaps =
+        if surface_graph_open || state.workspace_tab == WorkspaceTab::Findings || guidance_rules {
+            48.0
+        } else if secondary_toggle_width > 0.0 {
+            36.0
+        } else {
+            24.0
+        };
     let add_action_width = match state.workspace_tab {
         WorkspaceTab::Surfaces if surface_graph_open => {
             crate::design::segmented_tab_width("Add Surface", true)
@@ -1697,7 +1691,7 @@ pub(crate) fn render(
         .key("workspace-view-header")
         .w_full()
         .center_y()
-        .gap(if guidance_rules { 8.0 } else { 12.0 })
+        .gap(12.0)
         .child(
             row()
                 .key("workspace-title-squircle")
@@ -1708,7 +1702,7 @@ pub(crate) fn render(
                 .max_w(420.0)
                 .h(56.0)
                 .pl(18.0)
-                .pr(if guidance_rules { 0.0 } else { 10.0 })
+                .pr(10.0)
                 .center_y()
                 .child(
                     text(title)

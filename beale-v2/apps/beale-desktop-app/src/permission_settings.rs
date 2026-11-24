@@ -477,7 +477,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
     for tab in PermissionTab::ALL {
         tabs = tabs.child(tab_button(tab, state.permissions_tab == tab, theme));
     }
-    let mut content = vec![tabs];
+    let mut content = vec![crate::titled_view_tabs("Safety", tabs, theme)];
     let heading = match state.permissions_tab {
         PermissionTab::AutoReview => "Auto-Review Rules",
         PermissionTab::Guardian => "Guardian Rules",

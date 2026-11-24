@@ -37,13 +37,19 @@ pub(crate) enum FleetTab {
 impl FleetTab {
     const ALL: [Self; 3] = [Self::All, Self::Available, Self::Enabled];
 
-    fn label(self, section: FleetSection) -> String {
+    fn label(self, section: FleetSection) -> &'static str {
         match self {
-            Self::All => format!("All {}", section.label()),
-            Self::Available if section == FleetSection::VirtualMachines => "Running".to_owned(),
-            Self::Available => "Available".to_owned(),
-            Self::Enabled if section == FleetSection::VirtualMachines => "Not Running".to_owned(),
-            Self::Enabled => "Enabled".to_owned(),
+            Self::All => match section {
+                FleetSection::AppServers => "All App Servers",
+                FleetSection::VirtualMachines => "All Virtual Machines",
+                FleetSection::ResearchTools => "All Research Tools",
+            },
+            Self::Available if section == FleetSection::ResearchTools => "Allowed Locally",
+            Self::Enabled if section == FleetSection::ResearchTools => "Allowed in VMs",
+            Self::Available if section == FleetSection::VirtualMachines => "Running",
+            Self::Available => "Available",
+            Self::Enabled if section == FleetSection::VirtualMachines => "Not Running",
+            Self::Enabled => "Enabled",
         }
     }
 
@@ -714,20 +720,31 @@ fn start_qr(state: &mut State) {
         });
     });
 }
-fn tab_button(tab: FleetTab, section: FleetSection, active: bool, theme: ThemeStyle<'_>) -> El {
+fn tab_button(
+    tab: FleetTab,
+    section: FleetSection,
+    active: bool,
+    compact: bool,
+    theme: ThemeStyle<'_>,
+) -> El {
     let glyph = match (tab, section) {
         (FleetTab::All, _) => section.glyph(),
         (FleetTab::Available, FleetSection::VirtualMachines) => &VM_RUN,
         (FleetTab::Enabled, FleetSection::VirtualMachines) => &crate::icons::STOP,
         (FleetTab::Available, FleetSection::AppServers) => &PLUS,
         (FleetTab::Enabled, FleetSection::AppServers) => &crate::icons::CHECK,
-        (_, FleetSection::ResearchTools) => &WRENCH,
+        (FleetTab::Available, FleetSection::ResearchTools) => &FLEET,
+        (FleetTab::Enabled, FleetSection::ResearchTools) => &FLEET_VIRTUAL_MACHINE,
     };
-    crate::design::segmented_tab(tab.label(section), Some(glyph), active, true, theme)
-        .key(tab.key())
-        .on_press(move |state: &mut State| {
-            state.navigate_to(ViewLocation::Fleet(section, tab));
-        })
+    let label = tab.label(section);
+    let button = if compact {
+        crate::design::segmented_icon_tab(label, glyph, active, theme)
+    } else {
+        crate::design::segmented_tab(label, Some(glyph), active, true, theme)
+    };
+    button.key(tab.key()).on_press(move |state: &mut State| {
+        state.navigate_to(ViewLocation::Fleet(section, tab));
+    })
 }
 
 fn stat_row(label: &'static str, value: String, theme: ThemeStyle<'_>) -> El {
@@ -1131,39 +1148,85 @@ fn virtual_machine_card(
 
 pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> Vec<El> {
     let section = state.fleet_section;
-    if section == FleetSection::ResearchTools {
-        return render_research_tools(state, theme);
-    }
+    let tab_widths =
+        FleetTab::ALL.map(|tab| crate::design::segmented_tab_width(tab.label(section), true));
+    let labeled_width = crate::design::segmented_group_width(&tab_widths);
+    let add_width = if section == FleetSection::AppServers {
+        38.0
+    } else {
+        0.0
+    };
+    let compact =
+        page_width < crate::titled_view_tabs_width(section.label(), labeled_width) + add_width;
+    let displayed_width = if compact {
+        crate::design::segmented_group_width(&[crate::design::CONTROL_HEIGHT; 3])
+    } else {
+        labeled_width
+    };
+    let title_tabs_wrap =
+        page_width < crate::titled_view_tabs_width(section.label(), displayed_width);
+    let add_wraps = section == FleetSection::AppServers
+        && page_width
+            < crate::titled_view_tabs_width(
+                section.label(),
+                crate::design::segmented_group_width(&[crate::design::CONTROL_HEIGHT; 3]),
+            ) + add_width;
     let mut tabs = crate::design::segmented_control(theme)
         .key("fleet-view-tabs")
         .label("Fleet views");
     for tab in FleetTab::ALL {
-        tabs = tabs.child(tab_button(tab, section, state.fleet.tab == tab, theme));
+        tabs = tabs.child(tab_button(
+            tab,
+            section,
+            state.fleet.tab == tab,
+            compact,
+            theme,
+        ));
     }
-    let mut tabs = row()
+    let title_tabs = if title_tabs_wrap {
+        col()
+            .gap(8.0)
+            .child(crate::tab_view_title(section.label(), theme))
+            .child(tabs)
+    } else {
+        crate::titled_view_tabs(section.label(), tabs, theme)
+    };
+    let mut header = row()
         .w_full()
         .center_y()
         .gap(12.0)
-        .child(tabs)
+        .child(title_tabs)
         .child(el().grow(1.0));
     if section == FleetSection::AppServers {
-        tabs = tabs.child(
-            el().key("fleet-add-server")
-                .role("button")
-                .label("Add an app server")
-                .help("Add an app server")
-                .size(26.0, 26.0)
-                .center()
-                .radius(8.0)
-                .continuous_corners()
-                .hover(theme.color("#303030"))
-                .on_press(|state: &mut State| {
-                    crate::toggle_selection_menu(state, crate::SelectionMenu::FleetAdd);
-                })
-                .child(icon(&PLUS, 17.0).color(theme.color("#bdbdbd"))),
-        );
+        let add = el()
+            .key("fleet-add-server")
+            .role("button")
+            .label("Add an app server")
+            .help("Add an app server")
+            .size(26.0, 26.0)
+            .center()
+            .radius(8.0)
+            .continuous_corners()
+            .hover(theme.color("#303030"))
+            .on_press(|state: &mut State| {
+                crate::toggle_selection_menu(state, crate::SelectionMenu::FleetAdd);
+            })
+            .child(icon(&PLUS, 17.0).color(theme.color("#bdbdbd")));
+        if add_wraps {
+            header = col()
+                .w_full()
+                .gap(8.0)
+                .child(header)
+                .child(row().w_full().child(el().grow(1.0)).child(add));
+        } else {
+            header = header.child(add);
+        }
     }
-    let mut content = vec![tabs];
+    let mut content = vec![header];
+    if section == FleetSection::ResearchTools {
+        content.extend(render_research_tools(state, theme));
+        return content;
+    }
     if !state.fleet.error.is_empty() {
         content.push(
             text(state.fleet.error.clone())
@@ -1393,7 +1456,14 @@ fn render_research_tools(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
         .mt(16.0)
         .child(headers)
         .child(divider());
-    for tool in &host.tools {
+    let visible_tools = host.tools.iter().filter(|tool| match state.fleet.tab {
+        FleetTab::All => true,
+        FleetTab::Available => tool.allow_locally,
+        FleetTab::Enabled => tool.allow_in_vms,
+    });
+    let mut visible_count = 0;
+    for tool in visible_tools {
+        visible_count += 1;
         let local_action = ResearchToolMutation {
             host_id: host.id.clone(),
             id: tool.id.clone(),
@@ -1443,6 +1513,19 @@ fn render_research_tools(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
                     .child(buttons),
             )
             .child(divider());
+    }
+    if visible_count == 0 {
+        let message = match state.fleet.tab {
+            FleetTab::All => "No research tools available on this app server.",
+            FleetTab::Available => "No research tools allowed locally on this app server.",
+            FleetTab::Enabled => "No research tools allowed in VMs on this app server.",
+        };
+        tools = tools.child(
+            text(message)
+                .mt(14.0)
+                .font(ui_font(14.0, 400.0))
+                .color(theme.color("#969696")),
+        );
     }
     content.push(tools);
     content
@@ -2018,14 +2101,32 @@ mod tests {
         state.fleet.tool_hosts.push(ResearchToolHost {
             id: "local".to_owned(),
             name: "Local App Server".to_owned(),
-            tools: vec![beale_contracts::v1::FleetResearchTool {
-                id: "ripgrep".to_owned(),
-                name: "ripgrep".to_owned(),
-                category: "Source".to_owned(),
-                description: "Fast search across source and artifacts.".to_owned(),
-                allow_locally: true,
-                allow_in_vms: false,
-            }],
+            tools: vec![
+                beale_contracts::v1::FleetResearchTool {
+                    id: "ripgrep".to_owned(),
+                    name: "ripgrep".to_owned(),
+                    category: "Source".to_owned(),
+                    description: "Fast search across source and artifacts.".to_owned(),
+                    allow_locally: true,
+                    allow_in_vms: false,
+                },
+                beale_contracts::v1::FleetResearchTool {
+                    id: "example-vm-tool".to_owned(),
+                    name: "Example VM Tool".to_owned(),
+                    category: "Analysis".to_owned(),
+                    description: "Example analysis tool.".to_owned(),
+                    allow_locally: false,
+                    allow_in_vms: true,
+                },
+                beale_contracts::v1::FleetResearchTool {
+                    id: "example-disabled-tool".to_owned(),
+                    name: "Example Disabled Tool".to_owned(),
+                    category: "Analysis".to_owned(),
+                    description: "Example unavailable tool.".to_owned(),
+                    allow_locally: false,
+                    allow_in_vms: false,
+                },
+            ],
         });
         let mut runtime = Runtime::new(
             state,
@@ -2040,11 +2141,69 @@ mod tests {
         );
         runtime.frame(0.0);
         assert!(runtime.find("fleet-research-tools").is_some());
+        assert!(runtime.find("research-tools-view-title").is_some());
+        assert!(runtime.find("fleet-view-tabs").is_some());
         assert!(runtime.find("fleet-research-tool-list").is_some());
         assert!(runtime.find("fleet-tool-row-local-ripgrep").is_some());
+        assert!(
+            runtime
+                .find("fleet-tool-row-local-example-vm-tool")
+                .is_some()
+        );
+        assert!(
+            runtime
+                .find("fleet-tool-row-local-example-disabled-tool")
+                .is_some()
+        );
         assert!(runtime.find("fleet-tool-local-local-ripgrep").is_some());
         assert!(runtime.find("fleet-tool-vms-local-ripgrep").is_some());
         assert!(runtime.find("fleet-tool-install-local-ripgrep").is_none());
+        assert_eq!(
+            FleetTab::All.label(FleetSection::ResearchTools),
+            "All Research Tools"
+        );
+        assert_eq!(
+            FleetTab::Available.label(FleetSection::ResearchTools),
+            "Allowed Locally"
+        );
+        assert_eq!(
+            FleetTab::Enabled.label(FleetSection::ResearchTools),
+            "Allowed in VMs"
+        );
+
+        let (x, y) = runtime.find("fleet-tab-available").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+        assert_eq!(runtime.state.fleet.tab, FleetTab::Available);
+        assert!(runtime.find("fleet-tool-row-local-ripgrep").is_some());
+        assert!(
+            runtime
+                .find("fleet-tool-row-local-example-vm-tool")
+                .is_none()
+        );
+        assert!(
+            runtime
+                .find("fleet-tool-row-local-example-disabled-tool")
+                .is_none()
+        );
+
+        let (x, y) = runtime.find("fleet-tab-enabled").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+        assert_eq!(runtime.state.fleet.tab, FleetTab::Enabled);
+        assert!(runtime.find("fleet-tool-row-local-ripgrep").is_none());
+        assert!(
+            runtime
+                .find("fleet-tool-row-local-example-vm-tool")
+                .is_some()
+        );
+        assert!(
+            runtime
+                .find("fleet-tool-row-local-example-disabled-tool")
+                .is_none()
+        );
     }
 
     #[test]
