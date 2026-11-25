@@ -397,7 +397,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> V
     );
     if snapshot.model_days.is_empty() {
         content.push(card(theme).key("tracking-empty")
-            .child(design::empty_state(&SESSION_TOKENS, "Your token story starts here", "Run a research session to see daily usage, model breakdowns, and cache reuse. Only reported token counts appear here.", theme)
+            .child(design::empty_state(&SESSION_TOKENS, "Your token story starts here", "Run a security scan to see daily usage, model breakdowns, and cache reuse. Only reported token counts appear here.", theme)
                 .child(design::primary_button("Start research", theme).self_start().mt(8.0).on_press(State::start_new_research))));
     } else {
         content.push(metrics(summary.total, &summary.days, page_width, theme));

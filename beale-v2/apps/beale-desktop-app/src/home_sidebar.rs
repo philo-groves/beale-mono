@@ -47,7 +47,7 @@ struct SidebarAction {
 const PRIMARY_ACTIONS: [SidebarAction; 2] = [
     SidebarAction {
         key: "home-new-research",
-        label: "New Research",
+        label: "New Scan",
         icon: &NEW_RESEARCH,
         action: Some(State::start_new_research),
     },
@@ -61,7 +61,7 @@ const PRIMARY_ACTIONS: [SidebarAction; 2] = [
 
 const SEARCH_WORKSPACES: SidebarAction = SidebarAction {
     key: "home-search-workspaces",
-    label: "Search sessions",
+    label: "Search scans",
     icon: &SEARCH,
     action: None,
 };
@@ -302,11 +302,15 @@ pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
                 .h(SIDENAV_ROW_HEIGHT)
                 .center_y()
                 .gap(10.0)
-                .child(icon(&FOLDER_OPEN, 15.0).color(color(if selected {
-                    SIDENAV_ACTIVE_FOREGROUND
-                } else {
-                    "#9d9d9d"
-                })))
+                .child(crate::workspace_logo::mark(
+                    Some(workspace),
+                    15.0,
+                    color(if selected {
+                        SIDENAV_ACTIVE_FOREGROUND
+                    } else {
+                        "#9d9d9d"
+                    }),
+                ))
                 .child(
                     text(workspace.name.clone())
                         .grow(1.0)
@@ -358,8 +362,8 @@ pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
                 .child(
                     el().key(format!("home-new-research-{}", workspace.id))
                         .role("button")
-                        .label(format!("Start new research in {}", workspace.name))
-                        .help("New Research")
+                        .label(format!("Start new scan in {}", workspace.name))
+                        .help("New Scan")
                         .size(26.0, 26.0)
                         .center()
                         .radius(8.0)
@@ -379,12 +383,12 @@ pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
                 group = group.child(
                     session_row(
                         format!("home-session-{}", workspace.id),
-                        "New Session",
+                        "New Scan",
                         true,
                         true,
                         theme,
                     )
-                    .label(format!("New Session in {}", workspace.name))
+                    .label(format!("New Scan in {}", workspace.name))
                     .on_press(State::start_new_research),
                 );
             }
@@ -405,7 +409,7 @@ pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
                         .gap(10.0)
                         .child(el().size(15.0, 15.0))
                         .child(
-                            text("No Sessions")
+                            text("No Scans")
                                 .key(format!("home-session-empty-label-{}", workspace.id))
                                 .font(ui_font(13.0, 400.0))
                                 .color(color("#777777")),
@@ -477,7 +481,7 @@ pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
                             el().key(format!("home-archive-session-{}", session.id))
                                 .role("button")
                                 .label(format!("Archive {}", session.title))
-                                .help("Archive Session")
+                                .help("Archive Scan")
                                 .pin(
                                     None,
                                     Some((SIDENAV_ROW_HEIGHT - 26.0) / 2.0),
@@ -651,9 +655,8 @@ pub(crate) fn session_tooltip(state: &State, theme: ThemeStyle<'_>) -> Option<El
                     .gap(6.0)
                     .center_y()
                     .child(
-                        icon(&FOLDER_OPEN, 13.0)
-                            .key("home-session-tooltip-workspace-icon")
-                            .color(theme.color("#b8b8b8")),
+                        crate::workspace_logo::mark(Some(workspace), 13.0, theme.color("#b8b8b8"))
+                            .key("home-session-tooltip-workspace-icon"),
                     )
                     .child(
                         text(workspace.name.clone())
@@ -718,11 +721,7 @@ pub(crate) fn workspace_tooltip(state: &State, theme: ThemeStyle<'_>) -> Option<
                     .child(
                         text(format!(
                             "{session_count} {}",
-                            if session_count == 1 {
-                                "session"
-                            } else {
-                                "sessions"
-                            }
+                            if session_count == 1 { "scan" } else { "scans" }
                         ))
                         .key("home-workspace-tooltip-sessions")
                         .font(ui_font(12.0, 400.0))
@@ -775,7 +774,7 @@ pub(crate) fn archive_dialog(state: &State, theme: ThemeStyle<'_>) -> [El; 2] {
                 .iter()
                 .find(|session| session.id == id)
         })
-        .map_or("This session", |session| session.title.as_str());
+        .map_or("This scan", |session| session.title.as_str());
     let mut body = col()
         .w_full()
         .gap(10.0)
@@ -787,7 +786,7 @@ pub(crate) fn archive_dialog(state: &State, theme: ThemeStyle<'_>) -> [El; 2] {
                 .color(theme.color("#e2e2e2")),
         )
         .child(
-            text("Archive this session? It will leave the workspace sidebar.")
+            text("Archive this scan? It will leave the workspace sidebar.")
                 .w_full()
                 .wrap()
                 .font(ui_font(14.0, 400.0))
@@ -811,7 +810,7 @@ pub(crate) fn archive_dialog(state: &State, theme: ThemeStyle<'_>) -> [El; 2] {
         if state.archive_session_busy {
             "Archiving..."
         } else {
-            "Archive Session"
+            "Archive Scan"
         },
         theme,
     )
@@ -825,7 +824,7 @@ pub(crate) fn archive_dialog(state: &State, theme: ThemeStyle<'_>) -> [El; 2] {
     modal_dialog::render(
         modal_dialog::DialogSpec {
             key: "home-session-archive-dialog",
-            title: "Archive Session?",
+            title: "Archive Scan?",
             width: 480.0,
             focus_return: "home-collection-control",
         },

@@ -49,7 +49,7 @@ fn grid_guard(width: f32, page_height: f32, top: f32, height: f32, theme: ThemeS
             canvas(crate::grid_background::dots(
                 width,
                 page_height,
-                theme.color("#303030").alpha(0.34),
+                theme.color("#303030"),
             ))
             .absolute(0.0, -top)
             .size(width, page_height),
@@ -353,7 +353,7 @@ pub(super) fn render(
             canvas(crate::grid_background::dots(
                 viewport[0],
                 viewport[1],
-                theme.color("#303030").alpha(0.34),
+                theme.color("#303030"),
             ))
             .absolute(0.0, 0.0)
             .size(viewport[0], viewport[1]),

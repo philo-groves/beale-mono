@@ -359,6 +359,45 @@ fn foundation(state: &State, details: &WorkspaceDetails, theme: ThemeStyle<'_>) 
                     theme,
                 ),
                 row_with_control(
+                    "Workspace Logo",
+                    "Optional PNG, JPEG, or WebP image. Save Changes to apply.",
+                    row()
+                        .gap(10.0)
+                        .center_y()
+                        .child(
+                            crate::workspace_logo::preview(
+                                &state.workspace_logo_edit,
+                                36.0,
+                                theme.color("#9d9d9d"),
+                            )
+                            .key("workspace-logo-preview"),
+                        )
+                        .child(
+                            form_button(
+                                if state.workspace_logo_edit.is_empty() {
+                                    "Upload Logo"
+                                } else {
+                                    "Replace Logo"
+                                },
+                                theme,
+                            )
+                            .key("workspace-logo-upload")
+                            .disabled(busy)
+                            .on_press_tx(crate::workspace_logo::choose),
+                        )
+                        .child(
+                            form_button("Remove", theme)
+                                .key("workspace-logo-remove")
+                                .disabled(busy || state.workspace_logo_edit.is_empty())
+                                .on_press(|state: &mut State| {
+                                    state.workspace_logo_edit.clear();
+                                    state.workspace_save_error.clear();
+                                    state.workspace_save_message.clear();
+                                }),
+                        ),
+                    theme,
+                ),
+                row_with_control(
                     "Workspace Directory",
                     "Directory for this workspace on the host.",
                     value_with_actions(
@@ -1144,7 +1183,7 @@ pub(crate) fn rule_dialog(state: &State, theme: ThemeStyle<'_>) -> [El; 2] {
     let form = settings_form_card(
         [row_with_control(
             "Rule",
-            "Operating constraint for research sessions.",
+            "Operating constraint for security scans.",
             field(
                 &state.workspace_rule_input,
                 "saved-workspace-rule-input",
@@ -1771,7 +1810,7 @@ pub(crate) fn render(
                 .min_h(resource_height)
                 .center()
                 .child(
-                    crate::design::empty_state(&TARGET, "Keep your research connected", "Open Surfaces or Findings above, or a session runbook in Canvas, to review this workspace's research. Enable additional capabilities in Extensions.", theme),
+                    crate::design::empty_state(&TARGET, "Keep your research connected", "Open Surfaces or Findings above, or a scan runbook in Canvas, to review this workspace's research. Enable additional capabilities in Extensions.", theme),
                 ),
         );
     }
@@ -1804,10 +1843,10 @@ pub(crate) fn render(
             page = page.child(form);
         }
         let dirty = match state.workspace_tab {
-            WorkspaceTab::Foundation => details
-                .summary
-                .as_ref()
-                .is_some_and(|summary| state.workspace_name_edit.text.trim() != summary.name),
+            WorkspaceTab::Foundation => details.summary.as_ref().is_some_and(|summary| {
+                state.workspace_name_edit.text.trim() != summary.name
+                    || state.workspace_logo_edit != summary.logo_rgba
+            }),
             WorkspaceTab::Surfaces => state.workspace_surface_edits != details.surfaces,
             WorkspaceTab::Findings => false,
             WorkspaceTab::Rules => match state.workspace_guidance_view {

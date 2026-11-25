@@ -1,0 +1,484 @@
+{
+  "schema_version": 1,
+  "graphs": [
+    {
+      "id": "simple",
+      "revision": 1,
+      "name": "Simple Orchestra",
+      "description": "One main agent with a single layer of Mapper, Investigator, Experimenter, Challenger, and Builder subagents.",
+      "entry": "main",
+      "scheduler": {
+        "mode": "single",
+        "max_active_top_level": 1
+      },
+      "nodes": [
+        {
+          "id": "main",
+          "profile": "main@1",
+          "x": 235,
+          "y": 15
+        },
+        {
+          "id": "mapper",
+          "profile": "mapper@1",
+          "x": 25,
+          "y": 170
+        },
+        {
+          "id": "investigator",
+          "profile": "investigator@1",
+          "x": 235,
+          "y": 170
+        },
+        {
+          "id": "experimenter",
+          "profile": "experimenter@1",
+          "x": 445,
+          "y": 170
+        },
+        {
+          "id": "challenger",
+          "profile": "challenger@1",
+          "x": 25,
+          "y": 265
+        },
+        {
+          "id": "builder",
+          "profile": "builder@1",
+          "x": 235,
+          "y": 265
+        }
+      ],
+      "delegation": [
+        {
+          "parents": [
+            "main"
+          ],
+          "children": [
+            "mapper",
+            "investigator",
+            "experimenter",
+            "challenger",
+            "builder"
+          ]
+        }
+      ],
+      "handoffs": []
+    },
+    {
+      "id": "cloudflare_harness",
+      "revision": 1,
+      "name": "Discovery and Validation",
+      "description": "Two peer agents for vulnerability discovery and independent validation, each with subagents.",
+      "entry": "discovery_harness",
+      "scheduler": {
+        "mode": "concurrent",
+        "max_active_top_level": 2
+      },
+      "nodes": [
+        {
+          "id": "discovery_harness",
+          "profile": "discovery_harness@1",
+          "x": 75,
+          "y": 15
+        },
+        {
+          "id": "validation_system",
+          "profile": "validation_system@1",
+          "x": 335,
+          "y": 15
+        },
+        {
+          "id": "mapper",
+          "profile": "mapper@1",
+          "x": 25,
+          "y": 170
+        },
+        {
+          "id": "investigator",
+          "profile": "investigator@1",
+          "x": 235,
+          "y": 170
+        },
+        {
+          "id": "experimenter",
+          "profile": "experimenter@1",
+          "x": 445,
+          "y": 170
+        },
+        {
+          "id": "challenger",
+          "profile": "challenger@1",
+          "x": 25,
+          "y": 265
+        },
+        {
+          "id": "builder",
+          "profile": "builder@1",
+          "x": 235,
+          "y": 265
+        }
+      ],
+      "delegation": [
+        {
+          "parents": [
+            "discovery_harness"
+          ],
+          "children": [
+            "mapper",
+            "investigator",
+            "challenger"
+          ]
+        },
+        {
+          "parents": [
+            "validation_system"
+          ],
+          "children": [
+            "builder",
+            "experimenter",
+            "challenger"
+          ]
+        }
+      ],
+      "handoffs": [
+        {
+          "from": "discovery_harness",
+          "to": "validation_system",
+          "bidirectional": true,
+          "payload": "task@1"
+        }
+      ]
+    },
+    {
+      "id": "openai_pipeline",
+      "revision": 1,
+      "name": "Concurrent Research Pipeline",
+      "description": "Audit target scouting and ranking, vulnerability discovery, dynamic validation, reporting, and patch generation as peer agents with subagents.",
+      "entry": "audit_targets",
+      "scheduler": {
+        "mode": "concurrent",
+        "max_active_top_level": 5
+      },
+      "nodes": [
+        {
+          "id": "audit_targets",
+          "profile": "audit_targets@1",
+          "x": 15,
+          "y": 15
+        },
+        {
+          "id": "discovery",
+          "profile": "discovery@1",
+          "x": 135,
+          "y": 15
+        },
+        {
+          "id": "validation",
+          "profile": "validation@1",
+          "x": 255,
+          "y": 15
+        },
+        {
+          "id": "reporter",
+          "profile": "reporter@1",
+          "x": 375,
+          "y": 15
+        },
+        {
+          "id": "patch_generation",
+          "profile": "patch_generation@1",
+          "x": 495,
+          "y": 15
+        },
+        {
+          "id": "mapper",
+          "profile": "mapper@1",
+          "x": 25,
+          "y": 170
+        },
+        {
+          "id": "investigator",
+          "profile": "investigator@1",
+          "x": 235,
+          "y": 170
+        },
+        {
+          "id": "experimenter",
+          "profile": "experimenter@1",
+          "x": 445,
+          "y": 170
+        },
+        {
+          "id": "challenger",
+          "profile": "challenger@1",
+          "x": 25,
+          "y": 265
+        },
+        {
+          "id": "builder",
+          "profile": "builder@1",
+          "x": 235,
+          "y": 265
+        }
+      ],
+      "delegation": [
+        {
+          "parents": [
+            "audit_targets"
+          ],
+          "children": [
+            "mapper",
+            "investigator"
+          ]
+        },
+        {
+          "parents": [
+            "discovery"
+          ],
+          "children": [
+            "mapper",
+            "investigator",
+            "challenger"
+          ]
+        },
+        {
+          "parents": [
+            "validation"
+          ],
+          "children": [
+            "builder",
+            "experimenter",
+            "challenger"
+          ]
+        },
+        {
+          "parents": [
+            "reporter"
+          ],
+          "children": [
+            "investigator",
+            "challenger"
+          ]
+        },
+        {
+          "parents": [
+            "patch_generation"
+          ],
+          "children": [
+            "builder",
+            "experimenter",
+            "challenger"
+          ]
+        }
+      ],
+      "handoffs": [
+        {
+          "from": "audit_targets",
+          "to": "discovery",
+          "bidirectional": true,
+          "payload": "ranked_targets@1",
+          "reverse_payload": "task@1"
+        },
+        {
+          "from": "discovery",
+          "to": "validation",
+          "bidirectional": true,
+          "payload": "task@1"
+        },
+        {
+          "from": "validation",
+          "to": "reporter",
+          "bidirectional": true,
+          "payload": "task@1"
+        },
+        {
+          "from": "reporter",
+          "to": "patch_generation",
+          "bidirectional": true,
+          "payload": "task@1"
+        }
+      ]
+    },
+    {
+      "id": "sequential_pipeline",
+      "revision": 1,
+      "name": "Sequential Research Pipeline",
+      "description": "One research stage at a time, with timed turns, durable finding queues, and a cycle back to audit target scouting.",
+      "entry": "audit_targets",
+      "scheduler": {
+        "mode": "rotating_stages",
+        "max_active_top_level": 1,
+        "default_stage_minutes": 60,
+        "grace_minutes": 10,
+        "stages": [
+          {
+            "role": "audit_targets",
+            "when_empty": "continue"
+          },
+          {
+            "role": "discovery",
+            "when_empty": "continue"
+          },
+          {
+            "role": "validation",
+            "when_empty": "advance"
+          },
+          {
+            "role": "reporter",
+            "when_empty": "advance"
+          },
+          {
+            "role": "patch_generation",
+            "when_empty": "advance"
+          }
+        ]
+      },
+      "nodes": [
+        {
+          "id": "audit_targets",
+          "profile": "audit_targets@1",
+          "x": 15,
+          "y": 15
+        },
+        {
+          "id": "discovery",
+          "profile": "discovery@1",
+          "x": 135,
+          "y": 15
+        },
+        {
+          "id": "validation",
+          "profile": "validation@1",
+          "x": 255,
+          "y": 15
+        },
+        {
+          "id": "reporter",
+          "profile": "reporter@1",
+          "x": 375,
+          "y": 15
+        },
+        {
+          "id": "patch_generation",
+          "profile": "patch_generation@1",
+          "x": 495,
+          "y": 15
+        },
+        {
+          "id": "mapper",
+          "profile": "mapper@1",
+          "x": 25,
+          "y": 170
+        },
+        {
+          "id": "investigator",
+          "profile": "investigator@1",
+          "x": 235,
+          "y": 170
+        },
+        {
+          "id": "experimenter",
+          "profile": "experimenter@1",
+          "x": 445,
+          "y": 170
+        },
+        {
+          "id": "challenger",
+          "profile": "challenger@1",
+          "x": 25,
+          "y": 265
+        },
+        {
+          "id": "builder",
+          "profile": "builder@1",
+          "x": 235,
+          "y": 265
+        }
+      ],
+      "delegation": [
+        {
+          "parents": [
+            "audit_targets"
+          ],
+          "children": [
+            "mapper",
+            "investigator"
+          ]
+        },
+        {
+          "parents": [
+            "discovery"
+          ],
+          "children": [
+            "mapper",
+            "investigator",
+            "challenger"
+          ]
+        },
+        {
+          "parents": [
+            "validation"
+          ],
+          "children": [
+            "builder",
+            "experimenter",
+            "challenger"
+          ]
+        },
+        {
+          "parents": [
+            "reporter"
+          ],
+          "children": [
+            "investigator",
+            "challenger"
+          ]
+        },
+        {
+          "parents": [
+            "patch_generation"
+          ],
+          "children": [
+            "builder",
+            "experimenter",
+            "challenger"
+          ]
+        }
+      ],
+      "handoffs": [
+        {
+          "from": "audit_targets",
+          "to": "discovery",
+          "bidirectional": true,
+          "payload": "ranked_targets@1",
+          "reverse_payload": "task@1"
+        },
+        {
+          "from": "discovery",
+          "to": "validation",
+          "bidirectional": true,
+          "payload": "task@1"
+        },
+        {
+          "from": "validation",
+          "to": "reporter",
+          "bidirectional": true,
+          "payload": "task@1"
+        },
+        {
+          "from": "reporter",
+          "to": "patch_generation",
+          "bidirectional": true,
+          "payload": "task@1"
+        },
+        {
+          "from": "patch_generation",
+          "to": "audit_targets",
+          "bidirectional": false,
+          "payload": "task@1"
+        }
+      ]
+    }
+  ]
+}

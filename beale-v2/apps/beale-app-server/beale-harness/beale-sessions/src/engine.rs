@@ -115,6 +115,21 @@ pub(crate) async fn run_turn(
     progress: Option<mpsc::Sender<SessionStreamEvent>>,
     stop: Option<watch::Receiver<bool>>,
 ) -> Result<SessionDetail, TurnError> {
+    if request.max_concurrent_workers > 64 {
+        return Err(TurnError::Invalid);
+    }
+    #[cfg(feature = "graphs")]
+    if request.session_id.is_empty() {
+        if request.graph_id.starts_with("custom:")
+            && !graph_templates::load(state.workspaces.root())
+                .iter()
+                .any(|template| template.id == request.graph_id)
+        {
+            return Err(TurnError::Invalid);
+        }
+    } else {
+        restore_graph_template(&state.db, &request.session_id).map_err(|_| TurnError::Internal)?;
+    }
     let lock = if request.session_id.is_empty() {
         Arc::new(Mutex::new(()))
     } else {
@@ -215,7 +230,8 @@ struct ValidatedRequest {
 /// reasoning effort. Host-dependent checks (workspace, graph feature scope,
 /// saved session) follow separately.
 fn validate_request(request: &SubmitSessionTurnRequest) -> Result<ValidatedRequest, TurnError> {
-    if request.prompt.trim().is_empty()
+    if request.max_concurrent_workers > 64
+        || request.prompt.trim().is_empty()
         || request.prompt.len() > 16_384
         || request.model.is_empty()
         || request.model.len() > 200
@@ -276,6 +292,8 @@ struct DynamicFeatures<'a> {
     #[cfg(feature = "graphs")]
     graph: Option<&'static dyn beale_graphs::GraphRuntime>,
     #[cfg(feature = "graphs")]
+    graph_parent: Option<beale_graphs::ProfileId>,
+    #[cfg(feature = "graphs")]
     graph_section: Option<&'a str>,
     _marker: std::marker::PhantomData<&'a ()>,
 }
@@ -327,7 +345,11 @@ async fn assemble_extensions(
                 dynamic
                     .graph
                     .map(|runtime| {
-                        let mut tools = vec![runtime.tool_definition()];
+                        let mut tools = dynamic
+                            .graph_parent
+                            .and_then(|parent| beale_graphs::spawn_definition(runtime.id(), parent))
+                            .into_iter()
+                            .collect::<Vec<_>>();
                         tools.extend(beale_graphs::subagent_tools());
                         tools
                     })
@@ -485,9 +507,9 @@ pub(crate) async fn run_one_turn(
     if peer.as_ref().is_some_and(|peer| {
         !matches!(
             peer.role,
-            beale_graphs::Role::AuditTargets
-                | beale_graphs::Role::Discovery
-                | beale_graphs::Role::DiscoveryHarness
+            beale_graphs::ProfileId::AuditTargets
+                | beale_graphs::ProfileId::Discovery
+                | beale_graphs::ProfileId::DiscoveryHarness
         )
     }) {
         goal = None;
@@ -670,8 +692,10 @@ pub(crate) async fn run_one_turn(
         SessionGraphConfig::default()
     };
     #[cfg(feature = "graphs")]
+    let scan_budget = graphs::budget_for_scan(state, &session.id, &active_graph_config).await;
+    #[cfg(feature = "graphs")]
     let graph_fallback = GraphNodeModel {
-        node_id: beale_graphs::Role::Main.id().to_owned(),
+        node_id: beale_graphs::ProfileId::Main.id().to_owned(),
         provider: request.provider,
         method: request.method,
         model: request.model.clone(),
@@ -751,6 +775,10 @@ pub(crate) async fn run_one_turn(
             #[cfg(feature = "graphs")]
             graph: active_graph,
             #[cfg(feature = "graphs")]
+            graph_parent: beale_graphs::ProfileId::from_id(&request.agent_role).or_else(|| {
+                active_graph.and_then(|runtime| beale_graphs::entry_role(runtime.id()))
+            }),
+            #[cfg(feature = "graphs")]
             graph_section: graph_section.as_deref(),
             _marker: std::marker::PhantomData,
         },
@@ -823,18 +851,18 @@ pub(crate) async fn run_one_turn(
             .or_else(|| {
                 previous_role
                     .as_deref()
-                    .and_then(beale_graphs::Role::from_id)
+                    .and_then(beale_graphs::ProfileId::from_id)
                     .filter(|role| {
                         beale_graphs::graph_definition(&saved_graph_id)
                             .is_some_and(|graph| graph.nodes.contains(role))
                     })
             })
             .or_else(|| beale_graphs::entry_role(&saved_graph_id))
-            .unwrap_or(beale_graphs::Role::Main)
+            .unwrap_or(beale_graphs::ProfileId::Main)
     } else {
         requested_role
             .or_else(|| active_graph.and_then(|_| beale_graphs::entry_role(&saved_graph_id)))
-            .unwrap_or(beale_graphs::Role::Main)
+            .unwrap_or(beale_graphs::ProfileId::Main)
     };
     #[cfg(feature = "graphs")]
     if let Some(peer) = &peer {
@@ -896,7 +924,7 @@ pub(crate) async fn run_one_turn(
     #[cfg(feature = "graphs")]
     let child_message_sequence = Arc::new(AtomicU32::new(0x8000_0000));
     #[cfg(feature = "graphs")]
-    let mut subagents = HashMap::<beale_graphs::Role, graphs::Subagents>::new();
+    let mut subagents = HashMap::<beale_graphs::ProfileId, graphs::Subagents>::new();
     #[cfg(feature = "graphs")]
     let child_usage = Arc::new(Mutex::new(Vec::<ModelUsageRow>::new()));
     #[cfg(not(feature = "graphs"))]
@@ -1159,7 +1187,7 @@ pub(crate) async fn run_one_turn(
         }
         let mut anthropic_tool_results = Vec::new();
         #[cfg(feature = "graphs")]
-        let mut pending_handoff: Option<(beale_graphs::Role, String)> = None;
+        let mut pending_handoff: Option<(beale_graphs::ProfileId, String)> = None;
         for call in step.calls {
             if stop_requested(&stop) {
                 input.truncate(prior_input_len);
@@ -1265,12 +1293,8 @@ pub(crate) async fn run_one_turn(
             #[cfg(feature = "graphs")]
             let summary = if peer.is_none()
                 && active_graph.is_some()
-                && matches!(
-                    saved_graph_id.as_str(),
-                    beale_graphs::CLOUDFLARE_ID
-                        | beale_graphs::OPENAI_ID
-                        | beale_graphs::SEQUENTIAL_ID
-                ) {
+                && beale_graphs::is_peer_graph(&saved_graph_id)
+            {
                 format!("{}: {summary}", active_role.label())
             } else {
                 summary
@@ -1413,6 +1437,7 @@ pub(crate) async fn run_one_turn(
                             .and_then(|runtime| {
                                 validate_delegations(
                                     runtime,
+                                    active_role,
                                     &args,
                                     &active_graph_config,
                                     &graph_fallback,
@@ -1428,9 +1453,9 @@ pub(crate) async fn run_one_turn(
                                         .ok()
                                 })
                                 .unwrap_or_default();
-                            let manager = subagents
-                                .entry(active_role)
-                                .or_insert_with(|| graphs::Subagents::new(&active_graph_config));
+                            let manager = subagents.entry(active_role).or_insert_with(|| {
+                                graphs::Subagents::with_budget(Arc::clone(&scan_budget))
+                            });
                             let output = manager
                                 .spawn(
                                     assignments,
@@ -1466,9 +1491,9 @@ pub(crate) async fn run_one_turn(
                         if !args.as_object().is_some_and(serde_json::Map::is_empty) {
                             ("Invalid subagent list arguments.".to_owned(), true)
                         } else {
-                            let manager = subagents
-                                .entry(active_role)
-                                .or_insert_with(|| graphs::Subagents::new(&active_graph_config));
+                            let manager = subagents.entry(active_role).or_insert_with(|| {
+                                graphs::Subagents::with_budget(Arc::clone(&scan_budget))
+                            });
                             (manager.list().await, false)
                         }
                     }
@@ -1515,9 +1540,9 @@ pub(crate) async fn run_one_turn(
                     Ok(args)
                         if call.name == beale_graphs::MESSAGE_TOOL && active_graph.is_some() =>
                     {
-                        let manager = subagents
-                            .entry(active_role)
-                            .or_insert_with(|| graphs::Subagents::new(&active_graph_config));
+                        let manager = subagents.entry(active_role).or_insert_with(|| {
+                            graphs::Subagents::with_budget(Arc::clone(&scan_budget))
+                        });
                         match manager.message("parent", &args).await {
                             Ok(output) => (output, false),
                             Err(error) => (error.to_owned(), true),
@@ -1525,9 +1550,9 @@ pub(crate) async fn run_one_turn(
                     }
                     #[cfg(feature = "graphs")]
                     Ok(args) if call.name == beale_graphs::KILL_TOOL && active_graph.is_some() => {
-                        let manager = subagents
-                            .entry(active_role)
-                            .or_insert_with(|| graphs::Subagents::new(&active_graph_config));
+                        let manager = subagents.entry(active_role).or_insert_with(|| {
+                            graphs::Subagents::with_budget(Arc::clone(&scan_budget))
+                        });
                         match manager.kill(&args).await {
                             Ok(output) => (output, false),
                             Err(error) => (error.to_owned(), true),

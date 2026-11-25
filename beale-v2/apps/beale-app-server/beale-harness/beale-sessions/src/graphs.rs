@@ -13,7 +13,7 @@ use beale_contracts::v1::{
     AuthMethod, GraphNodeModel, ProviderId, SessionGraphConfig, SessionStreamEvent,
     SessionStreamKind, SessionSubagentSummary, SessionToolDetailPage, SessionToolSummary,
 };
-use beale_graphs::{Assignment, Role};
+use beale_graphs::{Assignment, ProfileId};
 use beale_providers::{
     AuthMode, OpenAiConnection, Provider, TextMessage, TextRole, ToolStepRequest, input_messages,
     provider_error_message,
@@ -41,7 +41,7 @@ pub(super) struct SubagentOutcome {
 }
 
 pub(super) struct ReceiveContext<'a> {
-    pub agent_role: Role,
+    pub agent_role: ProfileId,
     pub subagent_id: &'a str,
     pub turn_number: i64,
     pub ordinal: i64,
@@ -50,7 +50,7 @@ pub(super) struct ReceiveContext<'a> {
 
 pub(super) async fn received_message(
     from_id: &str,
-    from_role: Role,
+    from_role: ProfileId,
     message: &str,
     context: ReceiveContext<'_>,
 ) -> ToolCallRow {
@@ -112,7 +112,9 @@ pub(super) async fn received_message(
 }
 
 struct ChildEntry {
-    role: Role,
+    contract: Option<beale_graphs::TaskContract>,
+    evidence_only: bool,
+    role: ProfileId,
     task: String,
     status: &'static str,
     last_message_at: std::time::Instant,
@@ -287,7 +289,7 @@ fn completed_tool_activity(tool: &ToolCallRow, preview: Option<&str>) -> Value {
 pub(super) fn inspect_saved(
     db: &HostDatabase,
     session_id: &str,
-    parent_role: Role,
+    parent_role: ProfileId,
     request: &InspectRequest,
 ) -> anyhow::Result<Option<String>> {
     let Some(child) = db.session_child(session_id, &request.id)? else {
@@ -352,34 +354,76 @@ struct Registry {
 }
 
 pub(super) struct Subagents {
+    budget: Arc<ScanBudget>,
     registry: Arc<Mutex<Registry>>,
     handles: Vec<(String, JoinHandle<(ChildOutcome, ChildTurnRow)>)>,
-    limits: HashMap<Role, Arc<Semaphore>>,
+    limits: HashMap<ProfileId, Arc<Semaphore>>,
     mutation_lock: Arc<Mutex<()>>,
     tool_sequence: Arc<AtomicI64>,
     progress: Option<mpsc::Sender<SessionStreamEvent>>,
-    parent_role: Option<Role>,
+    parent_role: Option<ProfileId>,
 }
 
-impl Subagents {
-    pub fn new(config: &SessionGraphConfig) -> Self {
-        let limits = [Role::Scout, Role::Reviewer, Role::Prover]
+pub(super) struct ScanBudget {
+    workers: Arc<Semaphore>,
+    limits: HashMap<ProfileId, Arc<Semaphore>>,
+    mutation_lock: Arc<Mutex<()>>,
+}
+
+impl ScanBudget {
+    fn new(config: &SessionGraphConfig) -> Self {
+        let limits = beale_graphs::task_profiles()
             .into_iter()
             .map(|role| {
                 let max = config
                     .concurrency
                     .iter()
                     .find(|item| item.node_id == role.id())
-                    .map_or(beale_graphs::MAX_BATCH, |item| item.max_concurrent as usize)
-                    .clamp(1, beale_graphs::MAX_BATCH);
-                (role, Arc::new(Semaphore::new(max)))
+                    .map_or(
+                        role.default_max_concurrent()
+                            .unwrap_or(role.runtime_max_concurrent()),
+                        |item| item.max_concurrent,
+                    )
+                    .clamp(1, role.runtime_max_concurrent());
+                (role, Arc::new(Semaphore::new(max as usize)))
             })
             .collect();
         Self {
-            registry: Arc::new(Mutex::new(Registry::default())),
-            handles: Vec::new(),
+            workers: Arc::new(Semaphore::new(beale_graphs::worker_budget(config) as usize)),
             limits,
             mutation_lock: Arc::new(Mutex::new(())),
+        }
+    }
+}
+
+pub(super) async fn budget_for_scan(
+    state: &SessionState,
+    id: &str,
+    config: &SessionGraphConfig,
+) -> Arc<ScanBudget> {
+    let mut budgets = state.scan_worker_budgets.lock().await;
+    budgets.retain(|_, weak| weak.strong_count() > 0);
+    if let Some(budget) = budgets.get(id).and_then(std::sync::Weak::upgrade) {
+        return budget;
+    }
+    let budget = Arc::new(ScanBudget::new(config));
+    budgets.insert(id.to_owned(), Arc::downgrade(&budget));
+    budget
+}
+
+impl Subagents {
+    #[cfg(test)]
+    pub fn new(config: &SessionGraphConfig) -> Self {
+        Self::with_budget(Arc::new(ScanBudget::new(config)))
+    }
+
+    pub fn with_budget(budget: Arc<ScanBudget>) -> Self {
+        Self {
+            registry: Arc::new(Mutex::new(Registry::default())),
+            handles: Vec::new(),
+            limits: budget.limits.clone(),
+            mutation_lock: Arc::clone(&budget.mutation_lock),
+            budget,
             tool_sequence: Arc::new(AtomicI64::new(0)),
             progress: None,
             parent_role: None,
@@ -422,6 +466,10 @@ impl Subagents {
             self.registry.lock().await.entries.insert(
                 id.clone(),
                 ChildEntry {
+                    contract: assignment.contract.clone(),
+                    evidence_only: assignment.contract.as_ref().is_some_and(|c| {
+                        c.context_policy == beale_graphs::ContextPolicy::EvidenceOnly
+                    }),
                     role: assignment.role,
                     task: assignment.task.clone(),
                     status: "queued",
@@ -437,8 +485,10 @@ impl Subagents {
             let tool_sequence = Arc::clone(&self.tool_sequence);
             let child_context = context.clone();
             let child_id = id.clone();
+            let budget = Arc::clone(&self.budget);
             let handle = tokio::spawn(async move {
-                let _permit = limit.acquire().await.ok();
+                let _permit = limit.acquire().await.expect("open profile semaphore");
+                let _scan_permit = budget.workers.acquire().await.expect("open scan semaphore");
                 if let Some(entry) = registry.lock().await.entries.get_mut(&child_id) {
                     entry.status = "active";
                 }
@@ -474,7 +524,7 @@ impl Subagents {
             json!({"from":from,"message":text})).collect::<Vec<_>>()}).to_string()
     }
 
-    pub async fn role_of(&self, id: &str) -> Option<Role> {
+    pub async fn role_of(&self, id: &str) -> Option<ProfileId> {
         self.registry
             .lock()
             .await
@@ -521,7 +571,10 @@ impl Subagents {
             .ok_or("subagent task not found")?;
         handle.abort();
         entry.status = "killed";
-        entry.result = Some("Stopped by parent agent.".to_owned());
+        entry.result = Some(interrupted_result(
+            entry.contract.is_some(),
+            "Stopped by parent agent.",
+        ));
         entry.last_message_at = std::time::Instant::now();
         let role = entry.role;
         let task = entry.task.clone();
@@ -538,7 +591,10 @@ impl Subagents {
             handle.abort();
             if let Some(entry) = self.registry.lock().await.entries.get_mut(id) {
                 entry.status = "killed";
-                entry.result = Some("Stopped by user.".to_owned());
+                entry.result = Some(interrupted_result(
+                    entry.contract.is_some(),
+                    "Stopped by user.",
+                ));
                 entry.last_message_at = std::time::Instant::now();
                 let role = entry.role;
                 let task = entry.task.clone();
@@ -547,7 +603,7 @@ impl Subagents {
         }
     }
 
-    async fn emit_stopped(&self, id: &str, role: Role, task: String) {
+    async fn emit_stopped(&self, id: &str, role: ProfileId, task: String) {
         if let (Some(tx), Some(parent)) = (&self.progress, self.parent_role) {
             let _ = tx
                 .send(SessionStreamEvent {
@@ -584,7 +640,7 @@ impl Subagents {
                 Err(error) if error.is_cancelled() => {
                     let registry = self.registry.lock().await;
                     if let Some(entry) = registry.entries.get(&id) {
-                        let messages: Vec<Value> = entry
+                        let mut messages: Vec<Value> = entry
                             .activity
                             .iter()
                             .map(|item| {
@@ -595,6 +651,9 @@ impl Subagents {
                                 }
                             })
                             .collect();
+                        if let Some(contract) = &entry.contract {
+                            messages.insert(0, contract_message(contract));
+                        }
                         let reasoning: Vec<_> = entry
                             .activity
                             .iter()
@@ -652,6 +711,17 @@ fn send_message(
     if sender != "parent" && !registry.entries.contains_key(sender) {
         return Err("sender not found");
     }
+    if sender != "parent"
+        && recipient != "parent"
+        && [sender, recipient].iter().any(|id| {
+            registry
+                .entries
+                .get(*id)
+                .is_some_and(|entry| entry.evidence_only)
+        })
+    {
+        return Err("evidence-only tasks cannot exchange sibling messages");
+    }
     if sender == recipient {
         return Err("invalid recipient");
     }
@@ -707,6 +777,18 @@ pub(super) fn provider_for(model: &GraphNodeModel) -> Option<(Provider, AuthMode
     Some((provider, mode))
 }
 
+fn contract_message(contract: &beale_graphs::TaskContract) -> Value {
+    json!({"role":"user","text":serde_json::to_string(contract).unwrap_or_default(),"task_contract":contract})
+}
+
+fn interrupted_result(structured: bool, reason: &str) -> String {
+    if !structured {
+        return reason.to_owned();
+    }
+    json!({"completion":"incomplete","assessment":"inconclusive","summary":reason,
+        "observations":[],"evidence_refs":[],"artifacts":[],"uncertainties":["Worker did not satisfy its completion criteria."]}).to_string()
+}
+
 struct ChildOutcome {
     result: String,
     is_error: bool,
@@ -715,7 +797,7 @@ struct ChildOutcome {
 
 #[derive(Clone)]
 pub(super) struct ChildContext {
-    pub parent_role: Role,
+    pub parent_role: ProfileId,
     pub state: SessionState,
     pub workspace: PathBuf,
     pub agent_files: Arc<AgentFiles>,
@@ -744,7 +826,7 @@ async fn run_child(
     registry: &Arc<Mutex<Registry>>,
 ) -> (ChildOutcome, ChildTurnRow) {
     let role = assignment.role.id().to_owned();
-    let task = if context.parent_role == Role::Main {
+    let task = if context.parent_role == ProfileId::Main {
         assignment.task.clone()
     } else {
         format!("From {}: {}", context.parent_role.label(), assignment.task)
@@ -767,18 +849,37 @@ async fn run_child(
             })
             .await;
     }
+    let contract = assignment.contract.clone();
     let mut messages = Vec::new();
+    if let Some(contract) = &contract {
+        messages.push(contract_message(contract));
+    }
     let mut reasoning = Vec::new();
-    let outcome = run_child_inner(
-        assignment,
-        context,
-        mutation_lock,
-        tool_sequence,
-        agent_id,
-        registry,
-        (&mut messages, &mut reasoning),
+    let duration = contract
+        .as_ref()
+        .map_or(120, |c| c.budget.max_duration_minutes);
+    let mut partial_tools = Vec::new();
+    let mut outcome = tokio::time::timeout(
+        std::time::Duration::from_secs(u64::from(duration) * 60),
+        run_child_inner(
+            assignment,
+            context,
+            mutation_lock,
+            tool_sequence,
+            agent_id,
+            registry,
+            (&mut messages, &mut reasoning, &mut partial_tools),
+        ),
     )
-    .await;
+    .await
+    .unwrap_or_else(|_| ChildOutcome {
+        result: "Worker duration budget exhausted; partial transcript retained.".to_owned(),
+        is_error: true,
+        tools: partial_tools,
+    });
+    if contract.is_some() && outcome.is_error {
+        outcome.result = interrupted_result(true, &outcome.result);
+    }
     let completed_at_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |duration| {
@@ -858,9 +959,9 @@ async fn run_child_inner(
     tool_sequence: &AtomicI64,
     agent_id: &str,
     registry: &Arc<Mutex<Registry>>,
-    transcript: (&mut Vec<Value>, &mut Vec<String>),
+    transcript: (&mut Vec<Value>, &mut Vec<String>, &mut Vec<ToolCallRow>),
 ) -> ChildOutcome {
-    let (messages, reasoning) = transcript;
+    let (messages, reasoning, tools) = transcript;
     let Some((provider, mode)) = provider_for(&assignment.model) else {
         return ChildOutcome {
             result: "Configured subagent provider is invalid.".to_owned(),
@@ -868,16 +969,34 @@ async fn run_child_inner(
             tools: Vec::new(),
         };
     };
+    let independent = assignment
+        .contract
+        .as_ref()
+        .is_some_and(|c| c.context_policy == beale_graphs::ContextPolicy::EvidenceOnly);
+    let communication = if independent {
+        "Use graph_subagents_message only to contact your parent (`parent`) for clarification. Assess the supplied evidence independently; sibling messages and transcript inspection are unavailable."
+    } else {
+        "Use graph_subagents_message to contact your parent (`parent`) or a sibling ID, and graph_subagents_inspect to read a sibling's work."
+    };
     let system = format!(
-        "{}\n\n## {} subagent for {}\n\n{}\n\nYou have a fresh context. Work only on the assigned task. You cannot spawn or kill subagents. Use graph_subagents_message to contact your parent (`parent`) or a sibling ID, and graph_subagents_inspect to read a sibling's work. Return a concise result with evidence and uncertainties to your parent agent.",
+        "{}\n\n## {} subagent for {}\n\n{}\n\nYou have a fresh context. Work only on the assigned task. You cannot spawn or kill subagents. {communication} Return a concise result with evidence and uncertainties to your parent agent.",
         context.base_system,
         assignment.role.label(),
         context.parent_role.label(),
         assignment.role.instruction()
     );
+    let task_body = assignment.contract.as_ref().map_or_else(
+        || assignment.task.clone(),
+        |contract| serde_json::to_string(contract).unwrap_or_default(),
+    );
+    let system = if assignment.contract.is_some() {
+        format!("{system}\n\n{}", beale_graphs::RESULT_INSTRUCTIONS)
+    } else {
+        system
+    };
     let task = format!(
         "Task: {}\n\nIf scope details are missing, state the gap in your result so the parent can resolve it. Stay within the recorded authorization boundary.\n\nRecorded surfaces at delegation:\n{}",
-        assignment.task, context.surfaces_context
+        task_body, context.surfaces_context
     );
     let mut input = input_messages(&[TextMessage {
         role: TextRole::User,
@@ -887,11 +1006,28 @@ async fn run_child_inner(
         input.insert(0, json!({"role":"system","content":system}));
     }
     let mut connection = OpenAiConnection::default();
-    let definitions = child_tool_definitions(&context.feature_tools);
+    let mut definitions = child_tool_definitions(&context.feature_tools);
+    if independent {
+        definitions.retain(|tool| {
+            tool.get("name").and_then(Value::as_str) != Some(beale_graphs::INSPECT_TOOL)
+        });
+    }
     let no_plugins = HashSet::new();
-    let mut tools = Vec::<ToolCallRow>::new();
+    let max_turns = assignment
+        .contract
+        .as_ref()
+        .map_or(128, |c| c.budget.max_model_turns);
+    let mut turns_used = 0;
     loop {
-        let incoming = {
+        if turns_used >= max_turns {
+            return ChildOutcome {
+                result: "Worker model-turn budget exhausted.".to_owned(),
+                is_error: true,
+                tools: std::mem::take(tools),
+            };
+        }
+        turns_used += 1;
+        let mut incoming = {
             let mut state = registry.lock().await;
             state
                 .entries
@@ -899,6 +1035,9 @@ async fn run_child_inner(
                 .map(|entry| std::mem::take(&mut entry.inbox))
                 .unwrap_or_default()
         };
+        if independent {
+            incoming.retain(|(from, _)| from == "parent");
+        }
         if !incoming.is_empty() {
             for (from, text) in &incoming {
                 let from_role = if from == "parent" {
@@ -989,7 +1128,7 @@ async fn run_child_inner(
                 return ChildOutcome {
                     result: provider_error_message(provider, mode, &error),
                     is_error: true,
-                    tools,
+                    tools: std::mem::take(tools),
                 };
             }
         };
@@ -1098,13 +1237,22 @@ async fn run_child_inner(
                 return ChildOutcome {
                     result: "Subagent completed without a result.".to_owned(),
                     is_error: true,
-                    tools,
+                    tools: std::mem::take(tools),
+                };
+            }
+            if assignment.contract.is_some()
+                && let Err(error) = beale_graphs::TaskResult::parse(result)
+            {
+                return ChildOutcome {
+                    result: error.to_owned(),
+                    is_error: true,
+                    tools: std::mem::take(tools),
                 };
             }
             return ChildOutcome {
                 result: result.to_owned(),
                 is_error: false,
-                tools,
+                tools: std::mem::take(tools),
             };
         }
         let mut anthropic_results = Vec::new();
@@ -1117,7 +1265,7 @@ async fn run_child_inner(
                 return ChildOutcome {
                     result: "Subagent returned an invalid tool call.".to_owned(),
                     is_error: true,
-                    tools,
+                    tools: std::mem::take(tools),
                 };
             }
             let id = Uuid::new_v4().to_string();
@@ -1227,6 +1375,20 @@ async fn run_child_inner(
             let mut no_stop = None;
             let mut review_unavailable = false;
             let (output, is_error) = match arguments {
+                Ok(_) if independent && call.name == beale_graphs::INSPECT_TOOL => (
+                    "Evidence-only tasks cannot inspect sibling reasoning.".to_owned(),
+                    true,
+                ),
+                Ok(arguments)
+                    if independent
+                        && call.name == beale_graphs::MESSAGE_TOOL
+                        && arguments.get("recipient").and_then(Value::as_str) != Some("parent") =>
+                {
+                    (
+                        "Evidence-only tasks can message only their parent.".to_owned(),
+                        true,
+                    )
+                }
                 Ok(arguments) if call.name == beale_graphs::INSPECT_TOOL => {
                     match InspectRequest::parse(&arguments) {
                         Ok(request) => match inspect_live(registry, &request).await {
@@ -1260,7 +1422,7 @@ async fn run_child_inner(
                 }
                 arguments => {
                     let result = runtime
-                        .dispatch(&id, &call.name, arguments, &tools, &mut no_stop)
+                        .dispatch(&id, &call.name, arguments, tools, &mut no_stop)
                         .await;
                     review_unavailable = result.review_unavailable;
                     (result.output, result.is_error)
@@ -1332,7 +1494,7 @@ async fn run_child_inner(
                 return ChildOutcome {
                     result: "Auto-Review was unavailable; the tool was not run. Retry this subagent after the review service is available.".to_owned(),
                     is_error: true,
-                    tools,
+                    tools: std::mem::take(tools),
                 };
             }
         }
@@ -1347,28 +1509,30 @@ async fn schedule<T, F, Fut>(
     assignments: Vec<Assignment>,
     config: &SessionGraphConfig,
     run: F,
-) -> Vec<(Role, String, Option<T>)>
+) -> Vec<(ProfileId, String, Option<T>)>
 where
     F: Fn(Assignment) -> Fut,
     Fut: Future<Output = T>,
 {
-    let limits: Vec<_> = [Role::Scout, Role::Reviewer, Role::Prover]
+    let limits: HashMap<_, _> = beale_graphs::task_profiles()
         .into_iter()
         .map(|role| {
             let max = config
                 .concurrency
                 .iter()
                 .find(|item| item.node_id == role.id())
-                .map_or(beale_graphs::MAX_BATCH, |item| item.max_concurrent as usize)
-                .clamp(1, beale_graphs::MAX_BATCH);
-            Arc::new(Semaphore::new(max))
+                .map_or(role.runtime_max_concurrent() as usize, |item| {
+                    item.max_concurrent as usize
+                })
+                .clamp(1, role.runtime_max_concurrent() as usize);
+            (role, Arc::new(Semaphore::new(max)))
         })
         .collect();
     join_all(assignments.into_iter().map(|assignment| {
-        let semaphore = if assignment.role == Role::Main {
+        let semaphore = if assignment.role == ProfileId::Main {
             None
         } else {
-            limits.get(assignment.role.index() - 1).cloned()
+            limits.get(&assignment.role).cloned()
         };
         let run = &run;
         async move {
@@ -1392,14 +1556,70 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn scan_worker_budget_is_shared_across_parents_and_released_on_cancel() {
+        let root = std::env::temp_dir().join(format!("beale-budget-example-{}", Uuid::new_v4()));
+        let state = crate::build_state(
+            "example-token".to_owned(),
+            beale_workspaces::WorkspaceStore::at(root.clone()).unwrap(),
+        )
+        .unwrap();
+        let config = SessionGraphConfig {
+            max_concurrent_workers: 1,
+            ..Default::default()
+        };
+        let first = budget_for_scan(&state, "scan-example-one", &config).await;
+        let second = budget_for_scan(&state, "scan-example-one", &config).await;
+        let other = budget_for_scan(&state, "scan-example-two", &config).await;
+        assert!(Arc::ptr_eq(&first, &second));
+        assert!(!Arc::ptr_eq(&first, &other));
+        let permit = first.workers.clone().acquire_owned().await.unwrap();
+        assert!(second.workers.try_acquire().is_err());
+        assert!(other.workers.try_acquire().is_ok());
+        let task = tokio::spawn(async move {
+            let _permit = permit;
+            std::future::pending::<()>().await;
+        });
+        task.abort();
+        let _ = task.await;
+        assert!(second.workers.try_acquire().is_ok());
+        drop(state);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn evidence_only_workers_reject_sibling_messages_but_accept_parent_clarification() {
+        let mut registry = Registry::default();
+        let mut independent = example_entry(ProfileId::from_id("challenger").unwrap());
+        independent.evidence_only = true;
+        registry.entries.insert("independent".into(), independent);
+        registry.entries.insert(
+            "sibling".into(),
+            example_entry(ProfileId::from_id("investigator").unwrap()),
+        );
+        assert!(
+            send_message(&mut registry, "sibling", "independent", "Example reasoning").is_err()
+        );
+        assert!(send_message(&mut registry, "independent", "sibling", "Example request").is_err());
+        assert!(
+            send_message(
+                &mut registry,
+                "parent",
+                "independent",
+                "Example scope clarification"
+            )
+            .is_ok()
+        );
+    }
+
+    #[tokio::test]
     async fn received_graph_message_has_stream_and_saved_tool_activity() {
         let (tx, mut rx) = mpsc::channel(4);
         let row = received_message(
             "child-example",
-            Role::Scout,
+            ProfileId::Scout,
             "Check example evidence",
             ReceiveContext {
-                agent_role: Role::Main,
+                agent_role: ProfileId::Main,
                 subagent_id: "",
                 turn_number: 1,
                 ordinal: 3,
@@ -1420,8 +1640,10 @@ mod tests {
         assert_eq!(finished.tool_detail.unwrap().output, row.output);
     }
 
-    fn example_entry(role: Role) -> ChildEntry {
+    fn example_entry(role: ProfileId) -> ChildEntry {
         ChildEntry {
+            contract: None,
+            evidence_only: false,
             role,
             task: "Inspect the example module".to_owned(),
             status: "active",
@@ -1439,10 +1661,10 @@ mod tests {
         let mut group = manager.registry.lock().await;
         group
             .entries
-            .insert("child-a".to_owned(), example_entry(Role::Scout));
+            .insert("child-a".to_owned(), example_entry(ProfileId::Scout));
         group
             .entries
-            .insert("child-b".to_owned(), example_entry(Role::Reviewer));
+            .insert("child-b".to_owned(), example_entry(ProfileId::Reviewer));
         assert!(send_message(&mut group, "parent", "child-a", "Check boundary").is_ok());
         assert!(send_message(&mut group, "child-a", "child-b", "Review evidence").is_ok());
         assert!(send_message(&mut group, "child-b", "parent", "Evidence ready").is_ok());
@@ -1478,7 +1700,7 @@ mod tests {
             .lock()
             .await
             .entries
-            .insert("child-a".to_owned(), example_entry(Role::Scout));
+            .insert("child-a".to_owned(), example_entry(ProfileId::Scout));
         record_activity(
             &manager.registry,
             "child-a",
@@ -1536,12 +1758,18 @@ mod tests {
     #[tokio::test]
     async fn kill_aborts_a_child_and_retains_a_failed_transcript() {
         let mut manager = Subagents::new(&SessionGraphConfig::default());
+        let mut entry = example_entry(ProfileId::from_id("mapper").unwrap());
+        entry.contract = Some(serde_json::from_value(json!({
+            "question":"Map the example boundary", "scope":["example module"],
+            "evidence_refs":[], "deliverable":"Boundary map", "completion_criteria":["List entry points"],
+            "context_policy":"shared", "budget":{"max_model_turns":4,"max_duration_minutes":5}
+        })).unwrap());
         manager
             .registry
             .lock()
             .await
             .entries
-            .insert("child-a".to_owned(), example_entry(Role::Scout));
+            .insert("child-a".to_owned(), entry);
         record_activity(
             &manager.registry,
             "child-a",
@@ -1572,6 +1800,12 @@ mod tests {
         assert_eq!(result.child_turns.len(), 1);
         assert!(result.child_turns[0].is_error);
         assert_eq!(result.child_turns[0].agent_id, "child-a");
+        assert!(
+            result.child_turns[0]
+                .messages_json
+                .contains("task_contract")
+        );
+        assert!(beale_graphs::TaskResult::parse(&result.child_turns[0].result).is_ok());
         assert!(result.child_turns[0].messages_json.contains("inspect_tool"));
         assert!(
             result.child_turns[0]
@@ -1627,15 +1861,21 @@ mod tests {
             method: AuthMethod::ApiKey as i32,
             model: "example-model".to_owned(),
         };
-        let assignments = [Role::Scout, Role::Scout, Role::Reviewer, Role::Reviewer]
-            .into_iter()
-            .enumerate()
-            .map(|(index, role)| Assignment {
-                role,
-                task: format!("example-task-{index}"),
-                model: model.clone(),
-            })
-            .collect();
+        let assignments = [
+            ProfileId::Scout,
+            ProfileId::Scout,
+            ProfileId::Reviewer,
+            ProfileId::Reviewer,
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, role)| Assignment {
+            contract: None,
+            role,
+            task: format!("example-task-{index}"),
+            model: model.clone(),
+        })
+        .collect();
         let config = SessionGraphConfig {
             models: Vec::new(),
             concurrency: vec![beale_contracts::v1::GraphNodeConcurrency {
@@ -1643,6 +1883,8 @@ mod tests {
                 max_concurrent: 1,
             }],
             stage_duration_minutes: 0,
+            template_json: String::new(),
+            max_concurrent_workers: 0,
         };
         let active = Arc::new([AtomicUsize::new(0), AtomicUsize::new(0)]);
         let peak = Arc::new([AtomicUsize::new(0), AtomicUsize::new(0)]);
@@ -1650,7 +1892,11 @@ mod tests {
             let active = active.clone();
             let peak = peak.clone();
             async move {
-                let index = if assignment.role == Role::Scout { 0 } else { 1 };
+                let index = if assignment.role == ProfileId::Scout {
+                    0
+                } else {
+                    1
+                };
                 let count = active[index].fetch_add(1, Ordering::SeqCst) + 1;
                 peak[index].fetch_max(count, Ordering::SeqCst);
                 tokio::time::sleep(Duration::from_millis(10)).await;

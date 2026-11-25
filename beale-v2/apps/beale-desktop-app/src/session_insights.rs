@@ -130,13 +130,8 @@ pub(crate) fn dialog(state: &State, theme: ThemeStyle<'_>, window_width: f32) ->
     let detail = live_detail.as_ref();
     let title = detail
         .and_then(|d| d.summary.as_ref())
-        .map_or("Current session", |s| s.title.as_str());
-    let main_label = if detail.is_some_and(|detail| {
-        matches!(
-            detail.graph_id.as_str(),
-            beale_graphs::CLOUDFLARE_ID | beale_graphs::OPENAI_ID | beale_graphs::SEQUENTIAL_ID
-        )
-    }) {
+        .map_or("Current scan", |s| s.title.as_str());
+    let main_label = if detail.is_some_and(|detail| beale_graphs::is_peer_graph(&detail.graph_id)) {
         "Top-level"
     } else {
         "Main"
@@ -231,7 +226,7 @@ pub(crate) fn dialog(state: &State, theme: ThemeStyle<'_>, window_width: f32) ->
         }
         if models.is_empty() {
             body = body.child(token_charts::card(theme).child(muted(
-                "Model breakdown is unavailable for this session.",
+                "Model breakdown is unavailable for this scan.",
                 theme,
             )));
         } else {
@@ -245,18 +240,18 @@ pub(crate) fn dialog(state: &State, theme: ThemeStyle<'_>, window_width: f32) ->
             if detail.is_some_and(|d| d.model_usage.is_empty()) {
                 (
                     "Agent breakdown unavailable",
-                    "This session has no recorded agent breakdown. Select All agents to see its totals.",
+                    "This scan has no recorded agent breakdown. Select All agents to see its totals.",
                 )
             } else {
                 (
                     "No calls for this agent group",
-                    "This session has no recorded calls for the selected group. Select All agents to see the session totals.",
+                    "This scan has no recorded calls for the selected group. Select All agents to see the scan totals.",
                 )
             }
         } else {
             (
                 "No recorded usage yet",
-                "Token insights appear after this session completes a model turn.",
+                "Token insights appear after this scan completes a model turn.",
             )
         };
         body = body.child(
@@ -268,7 +263,7 @@ pub(crate) fn dialog(state: &State, theme: ThemeStyle<'_>, window_width: f32) ->
         if state.session_busy {
             "A turn is running. These recorded totals update when it completes."
         } else {
-            "Usage from this session only. Cached tokens are included in input."
+            "Usage from this scan only. Cached tokens are included in input."
         },
         theme,
     ));
@@ -280,7 +275,7 @@ pub(crate) fn dialog(state: &State, theme: ThemeStyle<'_>, window_width: f32) ->
     modal_dialog::render(
         modal_dialog::DialogSpec {
             key: "session-insights-dialog",
-            title: "Session insights",
+            title: "Scan insights",
             width,
             focus_return: "session-sidenav-chart-button",
         },

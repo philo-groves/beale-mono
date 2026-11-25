@@ -48,27 +48,31 @@ fn takes_mutation_lock(name: &str) -> bool {
 
 /// Pipeline role ownership of finding actions, by tool and requested state.
 #[cfg(all(feature = "graphs", feature = "findings"))]
-pub(crate) fn pipeline_finding_allowed(role: beale_graphs::Role, name: &str, args: &Value) -> bool {
-    use beale_graphs::Role;
+pub(crate) fn pipeline_finding_allowed(
+    role: beale_graphs::ProfileId,
+    name: &str,
+    args: &Value,
+) -> bool {
+    use beale_graphs::ProfileId;
     let state = args.get("state").and_then(Value::as_str);
     match name {
         "findings_query" | "findings_read" => true,
-        "findings_create" => role == Role::Discovery,
+        "findings_create" => role == ProfileId::Discovery,
         "findings_update" => match role {
-            Role::AuditTargets => false,
-            Role::Discovery => matches!(state, Some("finding" | "candidate")),
-            Role::Validation => matches!(state, Some("finding" | "validated")),
-            Role::Reporter => matches!(state, Some("finding" | "screened" | "reported")),
-            Role::PatchGeneration => state == Some("finding"),
+            ProfileId::AuditTargets => false,
+            ProfileId::Discovery => matches!(state, Some("finding" | "candidate")),
+            ProfileId::Validation => matches!(state, Some("finding" | "validated")),
+            ProfileId::Reporter => matches!(state, Some("finding" | "screened" | "reported")),
+            ProfileId::PatchGeneration => state == Some("finding"),
             _ => true,
         },
         "findings_complete_state" => match role {
-            Role::Validation => state == Some("validated"),
-            Role::Reporter => matches!(state, Some("screened" | "reported")),
-            Role::AuditTargets | Role::Discovery | Role::PatchGeneration => false,
+            ProfileId::Validation => state == Some("validated"),
+            ProfileId::Reporter => matches!(state, Some("screened" | "reported")),
+            ProfileId::AuditTargets | ProfileId::Discovery | ProfileId::PatchGeneration => false,
             _ => true,
         },
-        "findings_reject" | beale_findings::VERIFY => role == Role::Validation,
+        "findings_reject" | beale_findings::VERIFY => role == ProfileId::Validation,
         _ => true,
     }
 }
@@ -77,7 +81,7 @@ pub(crate) fn pipeline_finding_allowed(role: beale_graphs::Role, name: &str, arg
 /// must be allowed. Derived from [`pipeline_finding_allowed`] so the tool list
 /// and the dispatch check cannot disagree.
 #[cfg(all(feature = "graphs", feature = "findings"))]
-pub(crate) fn pipeline_finding_visible(role: beale_graphs::Role, name: &str) -> bool {
+pub(crate) fn pipeline_finding_visible(role: beale_graphs::ProfileId, name: &str) -> bool {
     [
         None,
         Some("finding"),
@@ -181,7 +185,7 @@ pub(crate) struct ToolRuntime<'a> {
     pub progress: Option<&'a mpsc::Sender<SessionStreamEvent>>,
     /// Research Pipeline role that owns finding actions, when one applies.
     #[cfg(feature = "graphs")]
-    pub pipeline_role: Option<beale_graphs::Role>,
+    pub pipeline_role: Option<beale_graphs::ProfileId>,
 }
 
 impl ToolRuntime<'_> {
@@ -734,13 +738,13 @@ mod tests {
     #[cfg(all(feature = "graphs", feature = "findings"))]
     #[test]
     fn pipeline_tool_visibility_matches_dispatch_permissions() {
-        use beale_graphs::Role;
+        use beale_graphs::ProfileId;
         for role in [
-            Role::AuditTargets,
-            Role::Discovery,
-            Role::Validation,
-            Role::Reporter,
-            Role::PatchGeneration,
+            ProfileId::AuditTargets,
+            ProfileId::Discovery,
+            ProfileId::Validation,
+            ProfileId::Reporter,
+            ProfileId::PatchGeneration,
         ] {
             for tool in beale_findings::definitions() {
                 let name = tool["name"].as_str().unwrap();
@@ -756,15 +760,15 @@ mod tests {
             }
         }
         assert!(pipeline_finding_visible(
-            Role::Validation,
+            ProfileId::Validation,
             beale_findings::VERIFY
         ));
         assert!(!pipeline_finding_visible(
-            Role::Discovery,
+            ProfileId::Discovery,
             beale_findings::VERIFY
         ));
         assert!(!pipeline_finding_visible(
-            Role::AuditTargets,
+            ProfileId::AuditTargets,
             "findings_update"
         ));
     }

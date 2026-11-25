@@ -227,19 +227,14 @@ pub(crate) fn render(
     active_menu: Option<UsageMenu>,
     theme: ThemeStyle<'_>,
 ) -> El {
-    let peer_graph = detail.is_some_and(|detail| {
-        matches!(
-            detail.graph_id.as_str(),
-            beale_graphs::CLOUDFLARE_ID | beale_graphs::OPENAI_ID | beale_graphs::SEQUENTIAL_ID
-        )
-    });
+    let peer_graph = detail.is_some_and(|detail| beale_graphs::is_peer_graph(&detail.graph_id));
     let sidebar_title = if peer_graph {
-        beale_graphs::Role::from_id(agent_role).map_or_else(
-            || "Agent Session".to_owned(),
-            |role| format!("{} Session", role.label()),
+        beale_graphs::ProfileId::from_id(agent_role).map_or_else(
+            || "Agent Scan".to_owned(),
+            |role| format!("{} Scan", role.label()),
         )
     } else {
-        "Session".to_owned()
+        "Scan".to_owned()
     };
     let filtered_events = live_events
         .iter()
@@ -364,7 +359,7 @@ pub(crate) fn render(
     let mut sidebar = col()
         .key("session-sidenav")
         .role("complementary")
-        .label("Session sidebar")
+        .label("Scan sidebar")
         .w(WIDTH)
         .px(16.0)
         .pt(14.0)
@@ -394,8 +389,8 @@ pub(crate) fn render(
                 .child(
                     el().key("session-sidenav-chart-button")
                         .role("button")
-                        .label("Open session insights")
-                        .help("Open session insights")
+                        .label("Open scan insights")
+                        .help("Open scan insights")
                         .size(24.0, 24.0)
                         .center()
                         .radius(6.0)
@@ -416,7 +411,7 @@ pub(crate) fn render(
                 .w_full()
                 .gap(2.0)
                 .role("group")
-                .label("Session usage")
+                .label("Scan usage")
                 .child(usage_row(
                     UsageMenu::Tokens,
                     active_menu == Some(UsageMenu::Tokens),
@@ -424,7 +419,7 @@ pub(crate) fn render(
                         mark: &SESSION_TOKENS,
                         primary: format!("{token_display} Tokens"),
                         stats: token_stats,
-                        accessible: format!("{token_value} session tokens. {token_accessible}"),
+                        accessible: format!("{token_value} scan tokens. {token_accessible}"),
                         key: "session-sidenav-tokens",
                         stats_key: "session-sidenav-token-stats",
                     },
@@ -787,7 +782,7 @@ fn subagent_popup(
         };
         for member in members.iter().take(visible) {
             let selected = (*member).clone();
-            let role = beale_graphs::Role::from_id(&member.role)
+            let role = beale_graphs::ProfileId::from_id(&member.role)
                 .map_or(member.role.as_str(), |role| role.label())
                 .to_owned();
             group = group.child(
@@ -1012,7 +1007,7 @@ fn runbook_popup(
     let panel = col()
         .key("session-runbooks-popup")
         .role("dialog")
-        .label("Session runbooks")
+        .label("Scan runbooks")
         .w(350.0)
         .padding(14.0)
         .gap(10.0)
@@ -1054,7 +1049,7 @@ pub(crate) fn popup(state: &State, menu: UsageMenu, theme: ThemeStyle<'_>) -> El
     let points = detail.map_or(&[][..], |detail| detail.usage_snapshots.as_slice());
     let selected = selected.min(points.len().saturating_sub(1));
     let title = match menu {
-        UsageMenu::Tokens => "Session tokens",
+        UsageMenu::Tokens => "Scan tokens",
         UsageMenu::Cache => "Cache usage",
         UsageMenu::Runbooks | UsageMenu::Subagents => unreachable!(),
     };
@@ -1098,7 +1093,7 @@ pub(crate) fn popup(state: &State, menu: UsageMenu, theme: ThemeStyle<'_>) -> El
         );
     if points.is_empty() {
         panel = panel.child(
-            text("No completed session work yet.")
+            text("No completed scan work yet.")
                 .font(ui_font(12.0, 400.0))
                 .color(theme.color("#aaaaaa")),
         );

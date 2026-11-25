@@ -404,6 +404,7 @@ mod tests {
         let context = workspace_context(
             WorkspaceDetails {
                 summary: Some(WorkspaceSummary {
+                    logo_rgba: Vec::new(),
                     id: Uuid::new_v4().to_string(),
                     name: "Example Workspace".to_owned(),
                     directory: "example-directory".to_owned(),
@@ -465,6 +466,7 @@ mod tests {
         let context = workspace_context(
             WorkspaceDetails {
                 summary: Some(WorkspaceSummary {
+                    logo_rgba: Vec::new(),
                     id: Uuid::new_v4().to_string(),
                     name: "Example Workspace".to_owned(),
                     directory: "example-directory".to_owned(),

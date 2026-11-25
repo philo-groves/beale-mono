@@ -298,6 +298,8 @@ message WorkspaceImportEvent {
 }
 
 message WorkspaceSummary {
+  // Empty or 64 x 64 straight-alpha sRGB RGBA bytes.
+  bytes logo_rgba = 4;
   string id = 1;
   string name = 2;
   string directory = 3;
@@ -365,6 +367,8 @@ message WorkspaceFoundation {
 }
 
 message UpdateWorkspaceFoundationRequest {
+  // Omitted preserves the current logo; present and empty removes it.
+  optional bytes logo_rgba = 4;
   uint64 expected_revision = 1;
   string name = 2;
   string guidance = 3;
@@ -528,6 +532,9 @@ message SessionDetail {
   repeated SessionGraphHandoff graph_handoffs = 20;
   repeated SessionAgentMetrics agent_metrics = 21; // Saved usage for each top-level graph agent and its subagents.
   repeated SessionSubagentSummary subagents = 22;
+  uint32 stage_duration_minutes = 23;
+  uint32 max_concurrent_workers = 25;
+  string graph_template_json = 24; // Saved custom graph definition; empty for bundled graphs.
 }
 
 message SessionSubagentSummary {
@@ -632,6 +639,19 @@ message GraphNodeConcurrency {
 message SessionGraphConfig {
   repeated GraphNodeModel models = 1;
   repeated GraphNodeConcurrency concurrency = 2;
+  uint32 stage_duration_minutes = 3;
+  uint32 max_concurrent_workers = 5; // Zero uses the default shared worker budget.
+  string template_json = 4; // Exact custom definition saved at session creation.
+}
+
+message GraphTemplate {
+  string id = 1; // Content-derived ID.
+  string name = 2;
+  string definition_json = 3;
+}
+
+message ListGraphTemplatesResponse {
+  repeated GraphTemplate templates = 1;
 }
 
 enum GoalStatus {
@@ -679,6 +699,8 @@ message SubmitSessionTurnRequest {
   repeated GraphNodeModel graph_models = 13; // Role model choices on the first turn only.
   repeated GraphNodeConcurrency graph_node_concurrency = 14; // Per-role maximums on the first turn only.
   string agent_role = 15; // Optional top-level role to address for this turn.
+  uint32 stage_duration_minutes = 16;
+  uint32 max_concurrent_workers = 17;
 }
 
 message AutomationJob {

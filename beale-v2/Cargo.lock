@@ -381,7 +381,9 @@ dependencies = [
  "beale-contracts",
  "beale-feature-api",
  "beale-storage",
+ "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

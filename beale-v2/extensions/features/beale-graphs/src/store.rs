@@ -115,7 +115,7 @@ impl GraphStore for HostDatabase {
         repeat: Option<(&str, AutomationOptions)>,
     ) -> Result<()> {
         ensure!(
-            !graph_id.is_empty() && graph_id.len() <= 64,
+            !graph_id.is_empty() && graph_id.len() <= crate::MAX_GRAPH_ID_BYTES,
             "invalid graph id"
         );
         ensure!(graph_config.len() <= 32_768, "graph config is too large");
@@ -342,7 +342,9 @@ impl TurnExtension for GraphCommit<'_> {
     fn commit(&self, transaction: &Transaction<'_>, turn: &CommittedTurn<'_>) -> Result<()> {
         if let Some((graph_id, config)) = self.selection {
             ensure!(
-                turn.new_session && !graph_id.is_empty() && graph_id.len() <= 64,
+                turn.new_session
+                    && !graph_id.is_empty()
+                    && graph_id.len() <= crate::MAX_GRAPH_ID_BYTES,
                 "graph requires a new session"
             );
             ensure!(config.len() <= 32_768, "graph config must be bounded");

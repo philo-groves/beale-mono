@@ -1,0 +1,19 @@
+{
+  "id": "example_review",
+  "revision": 1,
+  "name": "Example Review",
+  "description": "Two peer roles with a focused challenger specialist.",
+  "entry": "discovery_harness",
+  "scheduler": { "mode": "concurrent", "max_active_top_level": 2 },
+  "nodes": [
+    { "id": "discovery_harness", "profile": "discovery_harness@1", "x": 75, "y": 15 },
+    { "id": "validation_system", "profile": "validation_system@1", "x": 335, "y": 15 },
+    { "id": "challenger", "profile": "challenger@1", "x": 235, "y": 169 }
+  ],
+  "delegation": [
+    { "parents": ["discovery_harness", "validation_system"], "children": ["challenger"] }
+  ],
+  "handoffs": [
+    { "from": "discovery_harness", "to": "validation_system", "bidirectional": true, "payload": "task@1" }
+  ]
+}

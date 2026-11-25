@@ -25,7 +25,7 @@ impl ArchiveTab {
 
     fn label(self) -> &'static str {
         match self {
-            Self::Sessions => "Sessions",
+            Self::Sessions => "Scans",
             Self::QuickChats => "Quick Chats",
         }
     }
@@ -107,11 +107,11 @@ pub(crate) async fn restore_session(
         .bearer_auth(token)
         .send()
         .await
-        .map_err(|_| "Could not restore session".to_owned())?;
+        .map_err(|_| "Could not restore scan".to_owned())?;
     match response.status() {
         StatusCode::NO_CONTENT => Ok(()),
-        StatusCode::NOT_FOUND => Err("Session is no longer available".to_owned()),
-        _ => Err(format!("Could not restore session ({})", response.status())),
+        StatusCode::NOT_FOUND => Err("Scan is no longer available".to_owned()),
+        _ => Err(format!("Could not restore scan ({})", response.status())),
     }
 }
 
@@ -201,7 +201,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
             text(if state.archive_loading && !state.archive_loaded {
                 "Loading archive…"
             } else if state.archive_tab == ArchiveTab::Sessions {
-                "No archived sessions."
+                "No archived scans."
             } else {
                 "No archived Quick Chats."
             })

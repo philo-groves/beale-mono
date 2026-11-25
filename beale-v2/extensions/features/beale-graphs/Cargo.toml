@@ -9,5 +9,7 @@ license.workspace = true
 beale-feature-api = { path = "../../../apps/beale-app-server/beale-harness/beale-feature-api" }
 beale-contracts = { path = "../../../apps/beale-app-server/beale-harness/beale-contracts" }
 serde_json.workspace = true
+serde.workspace = true
+sha2.workspace = true
 anyhow.workspace = true
 beale-storage = { path = "../../../apps/beale-app-server/beale-harness/beale-storage" }

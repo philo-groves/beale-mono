@@ -1,12 +1,12 @@
 use beale_contracts::{
-    PROTOBUF_CONTENT_TYPE, PROTOBUF_STREAM_CONTENT_TYPE, SESSION_ARCHIVE_PATH,
-    SESSION_DETAIL_MAX_TOOL_SUMMARIES, SESSION_DETAIL_PATH, SESSION_STREAM_MAX_FRAME_BYTES,
-    SESSION_SUBAGENT_DETAIL_PATH, SESSION_TOOL_DETAIL_PATH, SESSION_TURN_ID_HEADER,
-    SESSION_TURN_STOP_PATH, SESSION_TURN_STREAM_PATH, SESSIONS_PATH,
+    GRAPH_TEMPLATES_PATH, PROTOBUF_CONTENT_TYPE, PROTOBUF_STREAM_CONTENT_TYPE,
+    SESSION_ARCHIVE_PATH, SESSION_DETAIL_MAX_TOOL_SUMMARIES, SESSION_DETAIL_PATH,
+    SESSION_STREAM_MAX_FRAME_BYTES, SESSION_SUBAGENT_DETAIL_PATH, SESSION_TOOL_DETAIL_PATH,
+    SESSION_TURN_ID_HEADER, SESSION_TURN_STOP_PATH, SESSION_TURN_STREAM_PATH, SESSIONS_PATH,
     v1::{
-        GoalStatus, ListSessionsResponse, SessionDetail, SessionRole, SessionStreamEvent,
-        SessionStreamKind, SessionSubagentDetail, SessionSubagentSummary, SessionSummary,
-        SessionToolDetailPage, SubmitSessionTurnRequest,
+        GoalStatus, GraphTemplate, ListGraphTemplatesResponse, ListSessionsResponse, SessionDetail,
+        SessionRole, SessionStreamEvent, SessionStreamKind, SessionSubagentDetail,
+        SessionSubagentSummary, SessionSummary, SessionToolDetailPage, SubmitSessionTurnRequest,
     },
 };
 use prost::Message;
@@ -31,21 +31,21 @@ impl StreamDecoder {
             let length = u32::from_be_bytes(
                 self.pending[..4]
                     .try_into()
-                    .map_err(|_| "Invalid session stream frame")?,
+                    .map_err(|_| "Invalid scan stream frame")?,
             ) as usize;
             if length == 0 || length > SESSION_STREAM_MAX_FRAME_BYTES {
-                return Err("Invalid session stream frame".to_owned());
+                return Err("Invalid scan stream frame".to_owned());
             }
             if self.pending.len() < length + 4 {
                 break;
             }
             let event = SessionStreamEvent::decode(&self.pending[4..length + 4])
-                .map_err(|_| "Invalid session stream event".to_owned())?;
+                .map_err(|_| "Invalid scan stream event".to_owned())?;
             self.pending.drain(..length + 4);
             events.push(event);
         }
         if self.pending.len() > SESSION_STREAM_MAX_FRAME_BYTES + 4 {
-            return Err("Session stream frame is too large".to_owned());
+            return Err("Scan stream frame is too large".to_owned());
         }
         Ok(events)
     }
@@ -58,7 +58,7 @@ pub(crate) fn client() -> Result<Client, String> {
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .build()
-        .map_err(|_| "Could not initialize session connection".to_owned())
+        .map_err(|_| "Could not initialize scan connection".to_owned())
 }
 
 pub(crate) fn stream_client() -> Result<Client, String> {
@@ -67,7 +67,7 @@ pub(crate) fn stream_client() -> Result<Client, String> {
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .build()
-        .map_err(|_| "Could not initialize session connection".to_owned())
+        .map_err(|_| "Could not initialize scan connection".to_owned())
 }
 
 fn url(addr: SocketAddr, path: &str) -> String {
@@ -77,11 +77,11 @@ fn url(addr: SocketAddr, path: &str) -> String {
 async fn decode<T: Message + Default>(response: reqwest::Response) -> Result<T, String> {
     if response.status() != StatusCode::OK {
         return Err(match response.status() {
-            StatusCode::NOT_FOUND => "Workspace or session is unavailable.".to_owned(),
-            StatusCode::CONFLICT => "Session changed or reached its turn limit.".to_owned(),
-            StatusCode::BAD_REQUEST => "The session request is invalid.".to_owned(),
+            StatusCode::NOT_FOUND => "Workspace or scan is unavailable.".to_owned(),
+            StatusCode::CONFLICT => "Scan changed or reached its turn limit.".to_owned(),
+            StatusCode::BAD_REQUEST => "The scan request is invalid.".to_owned(),
             StatusCode::BAD_GATEWAY => "The provider could not complete this turn.".to_owned(),
-            _ => format!("Session request failed ({})", response.status()),
+            _ => format!("Scan request failed ({})", response.status()),
         });
     }
     if response
@@ -90,16 +90,16 @@ async fn decode<T: Message + Default>(response: reqwest::Response) -> Result<T, 
         .and_then(|value| value.to_str().ok())
         != Some(PROTOBUF_CONTENT_TYPE)
     {
-        return Err("Invalid app-server session response".to_owned());
+        return Err("Invalid app-server scan response".to_owned());
     }
     let bytes = response
         .bytes()
         .await
-        .map_err(|_| "Could not read session response".to_owned())?;
+        .map_err(|_| "Could not read scan response".to_owned())?;
     if bytes.len() > MAX_REPLY_BYTES {
-        return Err("Session response is too large".to_owned());
+        return Err("Scan response is too large".to_owned());
     }
-    T::decode(bytes).map_err(|_| "Invalid app-server session response".to_owned())
+    T::decode(bytes).map_err(|_| "Invalid app-server scan response".to_owned())
 }
 
 fn usage_values(usage: &beale_contracts::v1::SessionTokenUsage) -> [u128; 7] {
@@ -163,8 +163,8 @@ pub(crate) fn detail_with_live_usage(
     for delta in deltas {
         let Some(usage) = &delta.usage else { continue };
         add_usage(&mut total, usage);
-        let scope = if beale_graphs::Role::from_id(&delta.role)
-            .is_some_and(beale_graphs::Role::is_top_level)
+        let scope = if beale_graphs::ProfileId::from_id(&delta.role)
+            .is_some_and(beale_graphs::ProfileId::is_top_level)
             || delta.role.is_empty()
         {
             &mut main
@@ -224,10 +224,7 @@ pub(crate) fn detail_for_agent(
     live_ms: u64,
 ) -> Option<SessionDetail> {
     let detail = detail?;
-    if !matches!(
-        detail.graph_id.as_str(),
-        beale_graphs::CLOUDFLARE_ID | beale_graphs::OPENAI_ID | beale_graphs::SEQUENTIAL_ID
-    ) {
+    if !beale_graphs::is_peer_graph(&detail.graph_id) {
         return detail_with_live_usage(Some(detail), events, live_ms);
     }
     let metrics = detail
@@ -327,8 +324,8 @@ fn valid_scoped_snapshots(detail: &SessionDetail) -> bool {
     for source in &detail.model_usage {
         let index = if source.role.is_empty() {
             continue;
-        } else if beale_graphs::Role::from_id(&source.role)
-            .is_some_and(beale_graphs::Role::is_top_level)
+        } else if beale_graphs::ProfileId::from_id(&source.role)
+            .is_some_and(beale_graphs::ProfileId::is_top_level)
         {
             0
         } else {
@@ -349,7 +346,7 @@ fn valid_graph_state(detail: &SessionDetail) -> bool {
         return false;
     }
     let graph = beale_graphs::graph_definition(&detail.graph_id);
-    if detail.graph_id == beale_graphs::SEQUENTIAL_ID
+    if beale_graphs::is_rotating_graph(&detail.graph_id)
         && !(1..=1_440).contains(&detail.stage_duration_minutes)
     {
         return false;
@@ -367,7 +364,7 @@ fn valid_graph_state(detail: &SessionDetail) -> bool {
     }
     let mut roles = std::collections::BTreeSet::new();
     if !detail.graph_agents.iter().all(|agent| {
-        beale_graphs::Role::from_id(&agent.role).is_some_and(|role| {
+        beale_graphs::ProfileId::from_id(&agent.role).is_some_and(|role| {
             role.is_top_level() && graph.is_some_and(|graph| graph.nodes.contains(&role))
         }) && matches!(
             agent.status.as_str(),
@@ -384,12 +381,24 @@ fn valid_graph_state(detail: &SessionDetail) -> bool {
                 item.status.as_str(),
                 "pending" | "running" | "completed" | "failed"
             )
-            && beale_graphs::Role::from_id(&item.from_role).is_some_and(|role| role.is_top_level())
-            && beale_graphs::Role::from_id(&item.to_role).is_some_and(|role| role.is_top_level())
+            && beale_graphs::ProfileId::from_id(&item.from_role)
+                .is_some_and(|role| role.is_top_level())
+            && beale_graphs::ProfileId::from_id(&item.to_role)
+                .is_some_and(|role| role.is_top_level())
     })
 }
 
 pub(crate) fn valid_detail(detail: &SessionDetail) -> bool {
+    if detail.max_concurrent_workers > beale_graphs::MAX_CONCURRENT {
+        return false;
+    }
+    if detail.graph_id.starts_with("custom:")
+        && beale_graphs::register_template(&detail.graph_template_json)
+            .ok()
+            .is_none_or(|id| id != detail.graph_id)
+    {
+        return false;
+    }
     let Some(summary) = &detail.summary else {
         return false;
     };
@@ -529,6 +538,34 @@ pub(crate) fn valid_detail(detail: &SessionDetail) -> bool {
                         && tool.summary.len() <= 512
                 })
         })
+}
+
+pub(crate) async fn list_graph_templates(
+    client: &Client,
+    addr: SocketAddr,
+) -> Result<Vec<GraphTemplate>, String> {
+    let token = crate::provider_auth::authenticated_token(client, addr).await?;
+    let reply: ListGraphTemplatesResponse = decode(
+        client
+            .get(url(addr, GRAPH_TEMPLATES_PATH))
+            .bearer_auth(token)
+            .send()
+            .await
+            .map_err(|_| "Could not list graph templates".to_owned())?,
+    )
+    .await?;
+    if reply.templates.len() > 64
+        || reply.templates.iter().any(|template| {
+            template.name.is_empty()
+                || template.name.len() > 200
+                || beale_graphs::register_template(&template.definition_json)
+                    .ok()
+                    .is_none_or(|id| id != template.id)
+        })
+    {
+        return Err("Invalid app-server graph templates".to_owned());
+    }
+    Ok(reply.templates)
 }
 
 fn valid_subagent_summary(item: &SessionSubagentSummary) -> bool {
@@ -734,7 +771,7 @@ pub(crate) async fn list(client: &Client, addr: SocketAddr) -> Result<Vec<Sessio
             .bearer_auth(token)
             .send()
             .await
-            .map_err(|_| "Could not list sessions".to_owned())?,
+            .map_err(|_| "Could not list scans".to_owned())?,
     )
     .await?;
     if reply.sessions.len() > 1_024
@@ -746,14 +783,14 @@ pub(crate) async fn list(client: &Client, addr: SocketAddr) -> Result<Vec<Sessio
                 || session.last_message_at_ms == 0
         })
     {
-        return Err("Invalid app-server session list".to_owned());
+        return Err("Invalid app-server scan list".to_owned());
     }
     Ok(reply.sessions)
 }
 
 pub(crate) async fn archive(client: &Client, addr: SocketAddr, id: &str) -> Result<(), String> {
     if uuid::Uuid::parse_str(id).is_err() {
-        return Err("Invalid session ID".to_owned());
+        return Err("Invalid scan ID".to_owned());
     }
     let token = crate::provider_auth::authenticated_token(client, addr).await?;
     let path = SESSION_ARCHIVE_PATH.replace("{id}", id);
@@ -762,11 +799,11 @@ pub(crate) async fn archive(client: &Client, addr: SocketAddr, id: &str) -> Resu
         .bearer_auth(token)
         .send()
         .await
-        .map_err(|_| "Could not archive session".to_owned())?;
+        .map_err(|_| "Could not archive scan".to_owned())?;
     match response.status() {
         StatusCode::NO_CONTENT => Ok(()),
-        StatusCode::NOT_FOUND => Err("Session is no longer available".to_owned()),
-        _ => Err(format!("Could not archive session ({})", response.status())),
+        StatusCode::NOT_FOUND => Err("Scan is no longer available".to_owned()),
+        _ => Err(format!("Could not archive scan ({})", response.status())),
     }
 }
 
@@ -783,7 +820,7 @@ pub(crate) async fn load(
             .bearer_auth(token)
             .send()
             .await
-            .map_err(|_| "Could not load session".to_owned())?,
+            .map_err(|_| "Could not load scan".to_owned())?,
     )
     .await?;
     if !valid_detail(&reply)
@@ -792,7 +829,7 @@ pub(crate) async fn load(
             .as_ref()
             .is_none_or(|summary| summary.id != id)
     {
-        return Err("Invalid app-server session detail".to_owned());
+        return Err("Invalid app-server scan detail".to_owned());
     }
     Ok(reply)
 }
@@ -813,9 +850,9 @@ pub(crate) async fn submit_stream(
         .body(request.encode_to_vec())
         .send()
         .await
-        .map_err(|_| "Could not send session turn".to_owned())?;
+        .map_err(|_| "Could not send scan turn".to_owned())?;
     if response.status() != StatusCode::OK {
-        return Err(format!("Session request failed ({})", response.status()));
+        return Err(format!("Scan request failed ({})", response.status()));
     }
     if response
         .headers()
@@ -823,17 +860,17 @@ pub(crate) async fn submit_stream(
         .and_then(|value| value.to_str().ok())
         != Some(PROTOBUF_STREAM_CONTENT_TYPE)
     {
-        return Err("Invalid app-server session stream".to_owned());
+        return Err("Invalid app-server scan stream".to_owned());
     }
     let mut decoder = StreamDecoder::default();
     while let Some(chunk) = response
         .chunk()
         .await
-        .map_err(|_| "Session stream was interrupted".to_owned())?
+        .map_err(|_| "Scan stream was interrupted".to_owned())?
     {
         for event in decoder.push(&chunk)? {
             if !valid_stream_event(&event) {
-                return Err("Invalid app-server session stream event".to_owned());
+                return Err("Invalid app-server scan stream event".to_owned());
             }
             match SessionStreamKind::try_from(event.kind) {
                 Ok(SessionStreamKind::TurnCompleted) => {
@@ -843,17 +880,17 @@ pub(crate) async fn submit_stream(
                             .as_ref()
                             .is_none_or(|summary| summary.workspace_id != request.workspace_id)
                     }) {
-                        return Err("Invalid app-server session detail".to_owned());
+                        return Err("Invalid app-server scan detail".to_owned());
                     }
                     on_progress(event);
                 }
                 Ok(SessionStreamKind::Completed) => {
-                    let detail = event.detail.ok_or("Missing session detail".to_owned())?;
+                    let detail = event.detail.ok_or("Missing scan detail".to_owned())?;
                     if detail.summary.as_ref().is_none_or(|summary| {
                         summary.workspace_id != request.workspace_id
                             || (!request.session_id.is_empty() && summary.id != request.session_id)
                     }) {
-                        return Err("Invalid app-server session detail".to_owned());
+                        return Err("Invalid app-server scan detail".to_owned());
                     }
                     return Ok(detail);
                 }
@@ -862,7 +899,7 @@ pub(crate) async fn submit_stream(
             }
         }
     }
-    Err("Session stream ended before completion".to_owned())
+    Err("Scan stream ended before completion".to_owned())
 }
 
 pub(crate) async fn stop_turn(
@@ -880,14 +917,11 @@ pub(crate) async fn stop_turn(
         .bearer_auth(token)
         .send()
         .await
-        .map_err(|_| "Could not stop session turn".to_owned())?;
+        .map_err(|_| "Could not stop scan turn".to_owned())?;
     match response.status() {
         StatusCode::NO_CONTENT => Ok(()),
-        StatusCode::NOT_FOUND => Err("Session turn has already finished".to_owned()),
-        _ => Err(format!(
-            "Could not stop session turn ({})",
-            response.status()
-        )),
+        StatusCode::NOT_FOUND => Err("Scan turn has already finished".to_owned()),
+        _ => Err(format!("Could not stop scan turn ({})", response.status())),
     }
 }
 
@@ -1211,6 +1245,21 @@ mod tests {
             });
         }
         assert!(valid_detail(&detail));
+        let template =
+            include_str!("../../../extensions/features/beale-graphs/examples/example-review.json");
+        let custom_id = beale_graphs::register_template(template).unwrap();
+        let mut custom = detail.clone();
+        custom.graph_id = custom_id;
+        custom.graph_template_json = template.to_owned();
+        custom.graph_agents.retain(|agent| {
+            matches!(
+                agent.role.as_str(),
+                "discovery_harness" | "validation_system"
+            )
+        });
+        assert!(valid_detail(&custom));
+        custom.graph_template_json.push(' ');
+        assert!(!valid_detail(&custom));
         let mut earlier_pipeline = detail.clone();
         earlier_pipeline.graph_agents.remove(0);
         assert!(valid_detail(&earlier_pipeline));

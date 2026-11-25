@@ -16,7 +16,7 @@ use std::{collections::HashSet, net::SocketAddr, path::Path, time::Duration};
 
 use crate::workspace_creation::WorkspaceDraft;
 
-const MAX_LIST_BYTES: usize = 2_097_152;
+const MAX_LIST_BYTES: usize = 2_097_152 + 4_096 * beale_contracts::workspace_logo::BYTE_LEN;
 const MAX_CREATE_BYTES: usize = 4_096;
 const MAX_DETAILS_BYTES: usize = 8_000_000;
 pub(crate) const WORKSPACE_CONFLICT_MESSAGE: &str =
@@ -202,7 +202,8 @@ async fn bounded_body(mut response: Response, max: usize) -> Result<Vec<u8>, Str
 }
 
 fn valid_summary(summary: &WorkspaceSummary) -> bool {
-    uuid::Uuid::parse_str(&summary.id).is_ok()
+    beale_contracts::workspace_logo::valid(&summary.logo_rgba)
+        && uuid::Uuid::parse_str(&summary.id).is_ok()
         && !summary.name.trim().is_empty()
         && summary.name.chars().count() <= 200
         && !summary.name.chars().any(char::is_control)
@@ -315,7 +316,14 @@ pub(crate) async fn load_sections(
 ) -> Result<WorkspaceSections, String> {
     let token = crate::provider_auth::authenticated_token(client, addr).await?;
     let (foundation, surfaces, rules, campaign) = tokio::try_join!(
-        get_section::<WorkspaceFoundation>(client, addr, id, &token, "foundation", 25_000),
+        get_section::<WorkspaceFoundation>(
+            client,
+            addr,
+            id,
+            &token,
+            "foundation",
+            25_000 + beale_contracts::workspace_logo::BYTE_LEN
+        ),
         get_section::<WorkspaceSurfaces>(client, addr, id, &token, "surfaces", MAX_DETAILS_BYTES),
         get_section::<WorkspaceRules>(client, addr, id, &token, "rules", 262_144),
         get_section::<WorkspaceCampaign>(client, addr, id, &token, "campaign", 4_096),
@@ -376,8 +384,15 @@ pub(crate) async fn save_foundation(
     id: uuid::Uuid,
     request: UpdateWorkspaceFoundationRequest,
 ) -> Result<WorkspaceFoundation, String> {
-    let saved: WorkspaceFoundation =
-        put_section(client, addr, id, "foundation", request, 25_000).await?;
+    let saved: WorkspaceFoundation = put_section(
+        client,
+        addr,
+        id,
+        "foundation",
+        request,
+        25_000 + beale_contracts::workspace_logo::BYTE_LEN,
+    )
+    .await?;
     if saved.revision == 0
         || !saved
             .summary
@@ -455,6 +470,24 @@ mod tests {
         SurfaceScope as DraftSurfaceScope,
     };
     use rune::TextEdit;
+
+    #[test]
+    fn list_accepts_complete_logos_and_rejects_malformed_thumbnails() {
+        let mut reply = ListWorkspacesResponse {
+            workspaces: vec![WorkspaceSummary {
+                id: "00000000-0000-4000-8000-000000000003".to_owned(),
+                name: "Example Workspace".to_owned(),
+                directory: std::env::temp_dir().to_string_lossy().into_owned(),
+                logo_rgba: vec![100; beale_contracts::workspace_logo::BYTE_LEN],
+            }],
+        };
+        assert_eq!(
+            decode_list(&reply.encode_to_vec()).unwrap(),
+            reply.workspaces
+        );
+        reply.workspaces[0].logo_rgba.pop();
+        assert!(decode_list(&reply.encode_to_vec()).is_err());
+    }
 
     #[test]
     fn draft_maps_scope_and_kind_to_contract_without_local_metadata() {
@@ -543,6 +576,7 @@ mod tests {
         assert!(request_from_draft(&draft).unwrap().surfaces.is_empty());
         let invalid = ListWorkspacesResponse {
             workspaces: vec![WorkspaceSummary {
+                logo_rgba: Vec::new(),
                 id: "not-a-uuid".to_owned(),
                 name: "Example Workspace".to_owned(),
                 directory: std::env::temp_dir().to_string_lossy().into_owned(),
@@ -556,6 +590,7 @@ mod tests {
         let id = uuid::Uuid::parse_str("00000000-0000-4000-8000-000000000003").unwrap();
         let mut details = WorkspaceDetails {
             summary: Some(WorkspaceSummary {
+                logo_rgba: Vec::new(),
                 id: id.to_string(),
                 name: "Example Workspace".to_owned(),
                 directory: std::env::temp_dir().to_string_lossy().into_owned(),

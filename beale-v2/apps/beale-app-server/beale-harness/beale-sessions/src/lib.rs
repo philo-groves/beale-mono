@@ -27,6 +27,8 @@ use beale_contracts::{
         SubmitSessionTurnRequest, SurfaceScopeState, WorkspaceSurface,
     },
 };
+#[cfg(feature = "graphs")]
+use beale_contracts::{GRAPH_TEMPLATES_PATH, v1::ListGraphTemplatesResponse};
 use beale_extender::PluginRuntime;
 use beale_goals::{GoalRow, GoalStore};
 #[cfg(feature = "graphs")]
@@ -440,11 +442,11 @@ fn scope_state_name(value: i32) -> &'static str {
 fn requested_top_level_role(
     graph: Option<&beale_graphs::GraphDefinition>,
     id: &str,
-) -> Result<Option<beale_graphs::Role>, StatusCode> {
+) -> Result<Option<beale_graphs::ProfileId>, StatusCode> {
     if id.is_empty() {
         return Ok(None);
     }
-    beale_graphs::Role::from_id(id)
+    beale_graphs::ProfileId::from_id(id)
         .filter(|role| role.is_top_level())
         .filter(|role| graph.is_some_and(|graph| graph.nodes.contains(role)))
         .map(Some)
@@ -454,13 +456,24 @@ fn requested_top_level_role(
 #[cfg(feature = "graphs")]
 fn validate_delegations(
     runtime: &dyn beale_graphs::GraphRuntime,
+    parent: beale_graphs::ProfileId,
     arguments: &Value,
     config: &SessionGraphConfig,
     fallback: &GraphNodeModel,
 ) -> Result<(), String> {
-    runtime
+    let assignments = runtime
         .assignments(arguments, config, fallback)
         .map_err(|error| format!("Invalid delegation: {error}"))?;
+    let graph = beale_graphs::graph_definition(runtime.id())
+        .ok_or_else(|| "Invalid delegation graph".to_owned())?;
+    if assignments.iter().any(|assignment| {
+        !graph
+            .edges
+            .iter()
+            .any(|edge| edge.from == parent && edge.to == assignment.role)
+    }) {
+        return Err("Invalid delegation: role is not permitted for this parent".to_owned());
+    }
     Ok(())
 }
 
@@ -468,8 +481,8 @@ fn validate_delegations(
 async fn graph_child_role_label(
     state: &SessionState,
     session_id: &str,
-    parent_role: beale_graphs::Role,
-    groups: &HashMap<beale_graphs::Role, graphs::Subagents>,
+    parent_role: beale_graphs::ProfileId,
+    groups: &HashMap<beale_graphs::ProfileId, graphs::Subagents>,
     id: &str,
 ) -> Option<&'static str> {
     if let Some(role) = match groups.get(&parent_role) {
@@ -482,15 +495,15 @@ async fn graph_child_role_label(
     if child.parent_role != parent_role.id() {
         return None;
     }
-    beale_graphs::Role::from_id(&child.turn.role).map(beale_graphs::Role::label)
+    beale_graphs::ProfileId::from_id(&child.turn.role).map(beale_graphs::ProfileId::label)
 }
 
 #[cfg(feature = "graphs")]
 async fn graph_tool_summary(
     state: &SessionState,
     session_id: &str,
-    parent_role: beale_graphs::Role,
-    groups: &HashMap<beale_graphs::Role, graphs::Subagents>,
+    parent_role: beale_graphs::ProfileId,
+    groups: &HashMap<beale_graphs::ProfileId, graphs::Subagents>,
     name: &str,
     args: &Value,
 ) -> String {
@@ -528,8 +541,8 @@ async fn graph_tool_summary(
             let role = args
                 .get("role")
                 .and_then(Value::as_str)
-                .and_then(beale_graphs::Role::from_id)
-                .map(beale_graphs::Role::label);
+                .and_then(beale_graphs::ProfileId::from_id)
+                .map(beale_graphs::ProfileId::label);
             role.map_or_else(
                 || "Graph handoff".to_owned(),
                 |role| format!("Graph handoff role: {role}"),
@@ -550,6 +563,8 @@ fn runbook_review_context(state: &SessionState, workspace_id: &str) -> Result<St
     ))
 }
 mod engine;
+#[cfg(feature = "graphs")]
+mod graph_templates;
 #[cfg(feature = "graphs")]
 mod graphs;
 mod http;
@@ -634,16 +649,16 @@ fn validate_graph_selection(
             return Err(StatusCode::BAD_REQUEST);
         }
         let mut seen = std::collections::HashSet::new();
-        let mut per_role = [0_usize; 11];
+        let mut per_role = HashMap::<beale_graphs::ProfileId, usize>::new();
         for item in graph_models {
-            let Some(role) = beale_graphs::Role::from_id(&item.node_id) else {
+            let Some(role) = beale_graphs::ProfileId::from_id(&item.node_id) else {
                 return Err(StatusCode::BAD_REQUEST);
             };
             if !graph.nodes.contains(&role) {
                 return Err(StatusCode::BAD_REQUEST);
             }
-            per_role[role.index()] += 1;
-            if per_role[role.index()] > role.max_models()
+            *per_role.entry(role).or_default() += 1;
+            if per_role[&role] > role.max_models()
                 || item.model.is_empty()
                 || item.model.len() > 256
                 || !item.model.bytes().all(|byte| {
@@ -663,14 +678,14 @@ fn validate_graph_selection(
         }
         let mut limited_roles = std::collections::HashSet::new();
         for item in graph_node_concurrency {
-            let Some(role) = beale_graphs::Role::from_id(&item.node_id) else {
+            let Some(role) = beale_graphs::ProfileId::from_id(&item.node_id) else {
                 return Err(StatusCode::BAD_REQUEST);
             };
             if !graph.nodes.contains(&role) {
                 return Err(StatusCode::BAD_REQUEST);
             }
             if item.max_concurrent == 0
-                || item.max_concurrent > beale_graphs::MAX_CONCURRENT
+                || item.max_concurrent > role.runtime_max_concurrent()
                 || (role.is_top_level() && item.max_concurrent != 1)
                 || !limited_roles.insert(item.node_id.as_str())
             {
@@ -712,24 +727,37 @@ fn encoded_graph_config(request: &SubmitSessionTurnRequest) -> Option<Vec<u8>> {
     if request.graph_id == beale_graphs::SIMPLE_ID
         && !concurrency
             .iter()
-            .any(|item| item.node_id == beale_graphs::Role::Main.id())
-        && let Some(max_concurrent) = beale_graphs::Role::Main.default_max_concurrent()
+            .any(|item| item.node_id == beale_graphs::ProfileId::Main.id())
+        && let Some(max_concurrent) = beale_graphs::ProfileId::Main.default_max_concurrent()
     {
         concurrency.push(GraphNodeConcurrency {
-            node_id: beale_graphs::Role::Main.id().to_owned(),
+            node_id: beale_graphs::ProfileId::Main.id().to_owned(),
             max_concurrent,
         });
     }
+    #[cfg(feature = "graphs")]
+    let default_stage_minutes = beale_graphs::graph_definition(&request.graph_id)
+        .map_or(0, |graph| graph.default_stage_minutes);
+    #[cfg(not(feature = "graphs"))]
+    let default_stage_minutes = 0;
+    #[cfg(feature = "graphs")]
+    let template_json = beale_graphs::template_snapshot(&request.graph_id).unwrap_or_default();
+    #[cfg(not(feature = "graphs"))]
+    let template_json = String::new();
     Some(
         SessionGraphConfig {
             models: request.graph_models.clone(),
             concurrency,
-            stage_duration_minutes: if request.graph_id == "sequential_pipeline"
-                && request.stage_duration_minutes == 0
-            {
-                60
+            stage_duration_minutes: if request.stage_duration_minutes == 0 {
+                default_stage_minutes
             } else {
                 request.stage_duration_minutes
+            },
+            template_json,
+            max_concurrent_workers: if request.max_concurrent_workers == 0 {
+                8
+            } else {
+                request.max_concurrent_workers
             },
         }
         .encode_to_vec(),
@@ -823,6 +851,8 @@ struct SessionState {
     credentials: Arc<CredentialStore>,
     provider: Arc<ProviderClient>,
     session_locks: Arc<Mutex<HashMap<String, Weak<Mutex<()>>>>>,
+    #[cfg(feature = "graphs")]
+    scan_worker_budgets: Arc<Mutex<HashMap<String, Weak<graphs::ScanBudget>>>>,
     turn_stops: Arc<Mutex<HashMap<Uuid, watch::Sender<bool>>>>,
     quick_chat_lock: Arc<Mutex<()>>,
 }
@@ -850,7 +880,7 @@ struct StoredTurn {
 #[cfg(feature = "graphs")]
 #[derive(Clone)]
 struct PeerRun {
-    role: beale_graphs::Role,
+    role: beale_graphs::ProfileId,
     turn_number: i64,
     notify: mpsc::UnboundedSender<()>,
     handoff: bool,
@@ -860,7 +890,7 @@ struct PeerRun {
 #[cfg(feature = "graphs")]
 fn peer_input_messages(
     turns: &[StoredTurn],
-    role: beale_graphs::Role,
+    role: beale_graphs::ProfileId,
     prompt: &str,
 ) -> Vec<TextMessage> {
     let mut messages = Vec::new();
@@ -911,9 +941,24 @@ pub fn router_with_runtime(
         .route(QUICK_CHAT_DETAIL_PATH, get(quick_chat::details));
     #[cfg(feature = "runbooks")]
     let router = router.route(runbooks::CELL_RUN_PATH, post(run_runbook_cell));
+    #[cfg(feature = "graphs")]
+    let router = router.route(GRAPH_TEMPLATES_PATH, get(list_graph_templates));
     Ok(router
         .layer(DefaultBodyLimit::max(20_000))
         .with_state(state))
+}
+
+#[cfg(feature = "graphs")]
+async fn list_graph_templates(
+    State(state): State<SessionState>,
+    headers: HeaderMap,
+) -> Result<impl axum::response::IntoResponse, StatusCode> {
+    if !authorized(&headers, &state.token) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    Ok(response(ListGraphTemplatesResponse {
+        templates: graph_templates::load(state.workspaces.root()),
+    }))
 }
 
 fn build_state(token: String, workspaces: WorkspaceStore) -> anyhow::Result<SessionState> {
@@ -939,6 +984,8 @@ fn build_state_with_runtime(
         credentials,
         provider: Arc::new(ProviderClient::new()?),
         session_locks: Arc::new(Mutex::new(HashMap::new())),
+        #[cfg(feature = "graphs")]
+        scan_worker_budgets: Arc::new(Mutex::new(HashMap::new())),
         turn_stops: Arc::new(Mutex::new(HashMap::new())),
         quick_chat_lock: Arc::new(Mutex::new(())),
     })
@@ -1105,6 +1152,7 @@ fn graph_state(
         let id = graph_records::graph_id(db, session_id)
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
             .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+        restore_graph_template(db, session_id).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         let graph = beale_graphs::graph_definition(&id).ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
         let agents = graph
             .nodes
@@ -1138,6 +1186,26 @@ fn graph_state(
         let _ = (db, session_id);
         Ok((Vec::new(), Vec::new()))
     }
+}
+
+#[cfg(feature = "graphs")]
+fn restore_graph_template(db: &HostDatabase, session_id: &str) -> Result<(), ()> {
+    let Some(id) = db.session_graph_id(session_id).map_err(|_| ())? else {
+        return Ok(());
+    };
+    if !id.starts_with("custom:") {
+        return Ok(());
+    }
+    let bytes = db
+        .session_graph_config(session_id)
+        .map_err(|_| ())?
+        .ok_or(())?;
+    let config = SessionGraphConfig::decode(bytes.as_slice()).map_err(|_| ())?;
+    let restored = beale_graphs::register_template(&config.template_json).map_err(|_| ())?;
+    if restored != id {
+        return Err(());
+    }
+    Ok(())
 }
 
 fn recent_peer_turns(
@@ -1210,6 +1278,8 @@ fn detail(
                 graph_models: config.models,
                 graph_node_concurrency: config.concurrency,
                 stage_duration_minutes: config.stage_duration_minutes,
+                graph_template_json: config.template_json,
+                max_concurrent_workers: config.max_concurrent_workers,
                 token_usage: Some(SessionTokenUsage::default()),
                 agent_metrics: graph_agents
                     .iter()
@@ -1503,6 +1573,8 @@ fn detail(
         graph_models: graph_config.models,
         graph_node_concurrency: graph_config.concurrency,
         stage_duration_minutes: graph_config.stage_duration_minutes,
+        graph_template_json: graph_config.template_json,
+        max_concurrent_workers: graph_config.max_concurrent_workers,
         total_duration_ms: db
             .session_total_duration_ms(&session.id)
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
@@ -2280,7 +2352,7 @@ mod tests {
     #[cfg(all(feature = "graphs", feature = "findings"))]
     #[test]
     fn pipeline_finding_stages_follow_top_level_responsibilities() {
-        use beale_graphs::Role;
+        use beale_graphs::ProfileId;
         for name in [
             "findings_create",
             "findings_update",
@@ -2288,43 +2360,43 @@ mod tests {
             "findings_reject",
         ] {
             assert!(!tool_runtime::pipeline_finding_allowed(
-                Role::AuditTargets,
+                ProfileId::AuditTargets,
                 name,
                 &json!({"state":"candidate"})
             ));
         }
         assert!(tool_runtime::pipeline_finding_allowed(
-            Role::Discovery,
+            ProfileId::Discovery,
             "findings_create",
             &json!({})
         ));
         assert!(tool_runtime::pipeline_finding_allowed(
-            Role::Discovery,
+            ProfileId::Discovery,
             "findings_update",
             &json!({"state":"candidate"})
         ));
         assert!(!tool_runtime::pipeline_finding_allowed(
-            Role::Discovery,
+            ProfileId::Discovery,
             "findings_complete_state",
             &json!({"state":"validated"})
         ));
         assert!(tool_runtime::pipeline_finding_allowed(
-            Role::Validation,
+            ProfileId::Validation,
             "findings_complete_state",
             &json!({"state":"validated"})
         ));
         assert!(!tool_runtime::pipeline_finding_allowed(
-            Role::Validation,
+            ProfileId::Validation,
             "findings_complete_state",
             &json!({"state":"screened"})
         ));
         assert!(tool_runtime::pipeline_finding_allowed(
-            Role::Reporter,
+            ProfileId::Reporter,
             "findings_complete_state",
             &json!({"state":"screened"})
         ));
         assert!(!tool_runtime::pipeline_finding_allowed(
-            Role::Reporter,
+            ProfileId::Reporter,
             "findings_create",
             &json!({})
         ));
@@ -2620,7 +2692,7 @@ mod tests {
             Ok(())
         );
         let model = GraphNodeModel {
-            node_id: "scout".to_owned(),
+            node_id: "mapper".to_owned(),
             provider: ProviderId::Openai as i32,
             method: AuthMethod::Subscription as i32,
             model: "model-example".to_owned(),
@@ -2672,7 +2744,7 @@ mod tests {
             Err(StatusCode::BAD_REQUEST)
         );
         let limit = GraphNodeConcurrency {
-            node_id: "scout".to_owned(),
+            node_id: "mapper".to_owned(),
             max_concurrent: 2,
         };
         let main_limit = GraphNodeConcurrency {
@@ -2819,7 +2891,7 @@ mod tests {
         let pipeline = beale_graphs::graph_definition(beale_graphs::OPENAI_ID);
         assert_eq!(
             requested_top_level_role(pipeline, "reporter").unwrap(),
-            Some(beale_graphs::Role::Reporter)
+            Some(beale_graphs::ProfileId::Reporter)
         );
         assert_eq!(requested_top_level_role(pipeline, "").unwrap(), None);
         for role in ["scout", "validation_system", "unknown"] {
@@ -2853,7 +2925,8 @@ mod tests {
             make(2, "validation", "Check the lead", "Example check"),
             make(3, "discovery", "Continue", "Example follow-up"),
         ];
-        let messages = peer_input_messages(&turns, beale_graphs::Role::Validation, "Next check");
+        let messages =
+            peer_input_messages(&turns, beale_graphs::ProfileId::Validation, "Next check");
         let text: Vec<_> = messages
             .iter()
             .map(|message| message.text.as_str())
@@ -2907,26 +2980,57 @@ mod tests {
         };
         let invalid =
             json!({"assignments":[{"role":"scout","task":"Inspect example","model_index":7}]});
-        assert!(validate_delegations(runtime, &invalid, &config, &fallback).is_err());
-        let valid = json!({"assignments":[{"role":"scout","task":"Inspect example"}]});
+        assert!(
+            validate_delegations(
+                runtime,
+                beale_graphs::ProfileId::Discovery,
+                &invalid,
+                &config,
+                &fallback
+            )
+            .is_err()
+        );
+        let valid = json!({"assignments":[{"role":"investigator","contract":{
+            "question":"Inspect example", "scope":["example module"], "evidence_refs":[],
+            "deliverable":"Trace the boundary", "completion_criteria":["Explain the observed path"],
+            "context_policy":"shared", "budget":{"max_model_turns":4,"max_duration_minutes":5}
+        }}]});
         for _ in 0..20 {
-            validate_delegations(runtime, &valid, &config, &fallback).unwrap();
+            validate_delegations(
+                runtime,
+                beale_graphs::ProfileId::Discovery,
+                &valid,
+                &config,
+                &fallback,
+            )
+            .unwrap();
         }
     }
 
     #[cfg(feature = "graphs")]
     #[test]
-    fn simple_graph_defaults_only_main_concurrency() {
+    fn graph_config_persists_worker_budget_and_profile_limits() {
         let request = SubmitSessionTurnRequest {
             graph_id: beale_graphs::SIMPLE_ID.to_owned(),
             graph_node_concurrency: vec![GraphNodeConcurrency {
-                node_id: "scout".to_owned(),
+                node_id: "mapper".to_owned(),
                 max_concurrent: 3,
             }],
             ..Default::default()
         };
         let bytes = encoded_graph_config(&request).unwrap();
         let saved = SessionGraphConfig::decode(bytes.as_slice()).unwrap();
+        assert_eq!(saved.max_concurrent_workers, 8);
+        let explicit = SubmitSessionTurnRequest {
+            max_concurrent_workers: 3,
+            ..request.clone()
+        };
+        assert_eq!(
+            SessionGraphConfig::decode(encoded_graph_config(&explicit).unwrap().as_slice())
+                .unwrap()
+                .max_concurrent_workers,
+            3
+        );
         assert_eq!(saved.concurrency.len(), 2);
         assert!(
             saved
@@ -2938,7 +3042,7 @@ mod tests {
             saved
                 .concurrency
                 .iter()
-                .any(|item| item.node_id == "scout" && item.max_concurrent == 3)
+                .any(|item| item.node_id == "mapper" && item.max_concurrent == 3)
         );
         assert!(encoded_graph_config(&SubmitSessionTurnRequest::default()).is_none());
         let sequential = SubmitSessionTurnRequest {
@@ -3024,6 +3128,7 @@ mod tests {
     #[test]
     fn session_effort_contract_rejects_unknown_values() {
         let request = SubmitSessionTurnRequest {
+            max_concurrent_workers: 0,
             workspace_id: Uuid::new_v4().to_string(),
             session_id: String::new(),
             provider: ProviderId::Openai as i32,
@@ -3071,6 +3176,7 @@ mod tests {
     #[test]
     fn goal_contract_round_trips_as_an_opt_in() {
         let request = SubmitSessionTurnRequest {
+            max_concurrent_workers: 0,
             workspace_id: Uuid::new_v4().to_string(),
             session_id: String::new(),
             provider: ProviderId::Openai as i32,
@@ -3474,6 +3580,8 @@ mod tests {
                 max_concurrent: 1,
             }],
             stage_duration_minutes: 0,
+            template_json: String::new(),
+            max_concurrent_workers: 0,
         }
         .encode_to_vec();
         let db = HostDatabase::open(&root).unwrap();
@@ -3743,7 +3851,7 @@ mod tests {
         let inspect =
             graphs::InspectRequest::parse(&json!({"subagent_id":child.agent_id})).unwrap();
         let page: Value = serde_json::from_str(
-            &graphs::inspect_saved(&db, &session.id, beale_graphs::Role::Main, &inspect)
+            &graphs::inspect_saved(&db, &session.id, beale_graphs::ProfileId::Main, &inspect)
                 .unwrap()
                 .unwrap(),
         )
@@ -3752,9 +3860,14 @@ mod tests {
         assert_eq!(page["items"][1]["name"], "read");
         assert_eq!(page["items"][1]["output"], "Example file contents");
         assert!(
-            graphs::inspect_saved(&db, &session.id, beale_graphs::Role::Discovery, &inspect)
-                .unwrap()
-                .is_none()
+            graphs::inspect_saved(
+                &db,
+                &session.id,
+                beale_graphs::ProfileId::Discovery,
+                &inspect
+            )
+            .unwrap()
+            .is_none()
         );
         drop(db);
         std::fs::remove_dir_all(root).unwrap();
@@ -3785,6 +3898,26 @@ mod tests {
             app.clone().oneshot(request).await.unwrap().status(),
             StatusCode::OK
         );
+        #[cfg(feature = "graphs")]
+        {
+            let request = Request::builder()
+                .uri(GRAPH_TEMPLATES_PATH)
+                .body(Body::empty())
+                .unwrap();
+            assert_eq!(
+                app.clone().oneshot(request).await.unwrap().status(),
+                StatusCode::UNAUTHORIZED
+            );
+            let request = Request::builder()
+                .uri(GRAPH_TEMPLATES_PATH)
+                .header("authorization", "Bearer example-token")
+                .body(Body::empty())
+                .unwrap();
+            assert_eq!(
+                app.clone().oneshot(request).await.unwrap().status(),
+                StatusCode::OK
+            );
+        }
         #[cfg(feature = "runbooks")]
         {
             let cell_request = |token: &str, session_id: String| {
@@ -3851,6 +3984,7 @@ mod tests {
             StatusCode::NOT_FOUND
         );
         let request = SubmitSessionTurnRequest {
+            max_concurrent_workers: 0,
             workspace_id: Uuid::new_v4().to_string(),
             session_id: String::new(),
             provider: ProviderId::Openai as i32,
@@ -4292,6 +4426,7 @@ mod tests {
         )
         .unwrap();
         let request = SubmitSessionTurnRequest {
+            max_concurrent_workers: 0,
             workspace_id: Uuid::new_v4().to_string(),
             session_id: String::new(),
             provider: ProviderId::Openai as i32,

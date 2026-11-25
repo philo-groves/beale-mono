@@ -254,12 +254,12 @@ async fn post_action(
     if response.status() != StatusCode::OK {
         return Err(match response.status() {
             StatusCode::CONFLICT => {
-                "Runbook changed or the session is busy. Reload and try again.".to_owned()
+                "Runbook changed or the scan is busy. Reload and try again.".to_owned()
             }
             StatusCode::FORBIDDEN => {
                 "Runbook action was denied or the feature is disabled.".to_owned()
             }
-            StatusCode::NOT_FOUND => "Runbook or session is unavailable.".to_owned(),
+            StatusCode::NOT_FOUND => "Runbook or scan is unavailable.".to_owned(),
             code => format!("Runbook action failed ({code})"),
         });
     }
@@ -335,7 +335,7 @@ fn start_action(state: &mut State, cell_id: String, change: Option<CellChange>) 
     };
     let Some(session_id) = state.canvas_runbook.session_id.clone() else {
         state.canvas_runbook.error =
-            "Save a session before changing or running its runbook cells.".to_owned();
+            "Save a scan before changing or running its runbook cells.".to_owned();
         return;
     };
     let Some(handle) = AUTH_HANDLE.get().cloned() else {
@@ -895,7 +895,7 @@ fn code_source(id: &str, language: &str, source: &str, theme: ThemeStyle<'_>) ->
 
 pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, height: f32) -> El {
     let Some(selected) = &state.canvas_runbook.selected else {
-        return col().w_full().grow(1.0).min_h(0.0).center().child(crate::design::empty_state(&RUNBOOK, "Research canvas", "Open a runbook from the session panel to inspect its procedure, code, and execution results.", theme));
+        return col().w_full().grow(1.0).min_h(0.0).center().child(crate::design::empty_state(&RUNBOOK, "Research canvas", "Open a runbook from the scan panel to inspect its procedure, code, and execution results.", theme));
     };
     let current_session_matches = state
         .active_session

@@ -4,6 +4,7 @@ pub mod findings;
 pub mod memories;
 pub mod research_tools;
 pub mod runbooks;
+pub mod workspace_logo;
 
 pub mod v1 {
     /// `proto/beale/v1/host.proto` is the source wire schema. Field tags and
@@ -486,6 +487,8 @@ pub mod v1 {
 
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct WorkspaceSummary {
+        #[prost(bytes = "vec", tag = "4")]
+        pub logo_rgba: Vec<u8>,
         #[prost(string, tag = "1")]
         pub id: String,
         #[prost(string, tag = "2")]
@@ -598,6 +601,9 @@ pub mod v1 {
 
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct UpdateWorkspaceFoundationRequest {
+        /// None preserves the current logo; Some(empty) removes it.
+        #[prost(bytes = "vec", optional, tag = "4")]
+        pub logo_rgba: Option<Vec<u8>>,
         #[prost(uint64, tag = "1")]
         pub expected_revision: u64,
         #[prost(string, tag = "2")]
@@ -872,6 +878,10 @@ pub mod v1 {
         pub subagents: Vec<SessionSubagentSummary>,
         #[prost(uint32, tag = "23")]
         pub stage_duration_minutes: u32,
+        #[prost(string, tag = "24")]
+        pub graph_template_json: String,
+        #[prost(uint32, tag = "25")]
+        pub max_concurrent_workers: u32,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1056,6 +1066,26 @@ pub mod v1 {
         pub concurrency: Vec<GraphNodeConcurrency>,
         #[prost(uint32, tag = "3")]
         pub stage_duration_minutes: u32,
+        #[prost(string, tag = "4")]
+        pub template_json: String,
+        #[prost(uint32, tag = "5")]
+        pub max_concurrent_workers: u32,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct GraphTemplate {
+        #[prost(string, tag = "1")]
+        pub id: String,
+        #[prost(string, tag = "2")]
+        pub name: String,
+        #[prost(string, tag = "3")]
+        pub definition_json: String,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct ListGraphTemplatesResponse {
+        #[prost(message, repeated, tag = "1")]
+        pub templates: Vec<GraphTemplate>,
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq, ::prost::Enumeration)]
@@ -1133,6 +1163,8 @@ pub mod v1 {
         pub agent_role: String,
         #[prost(uint32, tag = "16")]
         pub stage_duration_minutes: u32,
+        #[prost(uint32, tag = "17")]
+        pub max_concurrent_workers: u32,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1651,7 +1683,7 @@ mod fleet_virtual_machine_tests {
 }
 
 pub const PROTOCOL_MAJOR: u32 = 2;
-pub const PROTOCOL_MINOR: u32 = 31;
+pub const PROTOCOL_MINOR: u32 = 34;
 pub const SERVICE_NAME: &str = "beale-app-server";
 pub const HEALTH_PATH: &str = "/v1/health";
 pub const AUTH_STATUS_PATH: &str = "/v1/providers/status";
@@ -1679,6 +1711,7 @@ pub const WORKSPACE_SURFACE_THREAT_MODEL_PATH: &str =
     "/v1/workspaces/{id}/surfaces/{surface_id}/threat-model";
 pub const WORKSPACE_RULES_PATH: &str = "/v1/workspaces/{id}/rules";
 pub const SESSIONS_PATH: &str = "/v1/sessions";
+pub const GRAPH_TEMPLATES_PATH: &str = "/v1/graphs/templates";
 pub const SESSION_DETAIL_PATH: &str = "/v1/sessions/{id}";
 pub const SESSION_ARCHIVE_PATH: &str = "/v1/sessions/{id}/archive";
 pub const SESSION_RESTORE_PATH: &str = "/v1/sessions/{id}/restore";
@@ -1744,7 +1777,10 @@ pub fn control_proof(token: &str, nonce: &[u8]) -> [u8; 32] {
 
 #[cfg(test)]
 mod tracking_tests {
-    use super::v1::TrackingModelDay;
+    use super::v1::{
+        GraphTemplate, ListGraphTemplatesResponse, SessionDetail, SessionGraphConfig,
+        TrackingModelDay,
+    };
     use prost::Message;
 
     #[test]
@@ -1889,5 +1925,88 @@ mod tracking_tests {
         let encoded = day.encode_to_vec();
         assert!(encoded.ends_with(&[0x58, 0, 0x60, 100, 0x68, 1]));
         assert_eq!(TrackingModelDay::decode(encoded.as_slice()).unwrap(), day);
+    }
+
+    #[test]
+    fn scan_worker_budget_round_trips_and_old_messages_default_to_zero() {
+        use crate::v1::SubmitSessionTurnRequest;
+        let config = SessionGraphConfig {
+            max_concurrent_workers: 7,
+            ..Default::default()
+        };
+        assert_eq!(
+            SessionGraphConfig::decode(config.encode_to_vec().as_slice()).unwrap(),
+            config
+        );
+        let request = SubmitSessionTurnRequest {
+            max_concurrent_workers: 7,
+            ..Default::default()
+        };
+        assert_eq!(
+            SubmitSessionTurnRequest::decode(request.encode_to_vec().as_slice()).unwrap(),
+            request
+        );
+        let detail = SessionDetail {
+            max_concurrent_workers: 7,
+            ..Default::default()
+        };
+        assert_eq!(
+            SessionDetail::decode(detail.encode_to_vec().as_slice()).unwrap(),
+            detail
+        );
+        assert_eq!(
+            SessionGraphConfig::decode(&[][..])
+                .unwrap()
+                .max_concurrent_workers,
+            0
+        );
+        assert_eq!(
+            SubmitSessionTurnRequest::decode(&[][..])
+                .unwrap()
+                .max_concurrent_workers,
+            0
+        );
+        assert_eq!(
+            SessionDetail::decode(&[][..])
+                .unwrap()
+                .max_concurrent_workers,
+            0
+        );
+    }
+
+    #[test]
+    fn custom_graph_snapshot_round_trips_on_the_wire() {
+        let snapshot = "{\"id\":\"example_review\"}".to_owned();
+        let config = SessionGraphConfig {
+            template_json: snapshot.clone(),
+            ..Default::default()
+        };
+        assert_eq!(
+            SessionGraphConfig::decode(config.encode_to_vec().as_slice())
+                .unwrap()
+                .template_json,
+            snapshot
+        );
+        let listing = ListGraphTemplatesResponse {
+            templates: vec![GraphTemplate {
+                id: "custom:example_review:example".to_owned(),
+                name: "Example Review".to_owned(),
+                definition_json: snapshot.clone(),
+            }],
+        };
+        assert_eq!(
+            ListGraphTemplatesResponse::decode(listing.encode_to_vec().as_slice()).unwrap(),
+            listing
+        );
+        let detail = SessionDetail {
+            graph_template_json: snapshot,
+            ..Default::default()
+        };
+        assert_eq!(
+            SessionDetail::decode(detail.encode_to_vec().as_slice())
+                .unwrap()
+                .graph_template_json,
+            detail.graph_template_json
+        );
     }
 }

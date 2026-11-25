@@ -95,6 +95,8 @@ struct StoredManifest {
     schema_version: u32,
     workspace_id: String,
     name: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    logo_rgba: Vec<u8>,
     directories: Vec<String>,
     surfaces: Vec<StoredSurface>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -283,10 +285,10 @@ impl WorkspaceStore {
             .read_registry()?
             .workspaces
             .into_iter()
-            .map(|entry| WorkspaceSummary {
-                id: entry.id,
-                name: entry.name,
-                directory: entry.directory,
+            .map(|entry| {
+                let logo = Self::manifest(&entry)
+                    .map_or_else(|_| Vec::new(), |manifest| manifest.logo_rgba);
+                summary(&entry, logo)
             })
             .collect())
     }
@@ -425,6 +427,7 @@ impl WorkspaceStore {
             .collect::<Result<Vec<_>, _>>()?;
         Ok(WorkspaceDetails {
             summary: Some(WorkspaceSummary {
+                logo_rgba: manifest.logo_rgba,
                 id: entry.id,
                 name: entry.name,
                 directory: entry.directory,
@@ -492,7 +495,7 @@ impl WorkspaceStore {
         let manifest = Self::manifest(&entry)?;
         let guidance = Self::guidance(&entry)?;
         Ok(WorkspaceFoundation {
-            summary: Some(summary(&entry)),
+            summary: Some(summary(&entry, manifest.logo_rgba)),
             guidance,
             revision: manifest.foundation_revision,
         })
@@ -585,6 +588,13 @@ impl WorkspaceStore {
             .write_lock
             .lock()
             .map_err(|_| WorkspaceError::Internal("workspace write lock"))?;
+        if request
+            .logo_rgba
+            .as_ref()
+            .is_some_and(|logo| !beale_contracts::workspace_logo::valid(logo))
+        {
+            return Err(WorkspaceError::Invalid);
+        }
         let name = request.name.trim();
         let guidance = request.guidance.replace("\r\n", "\n").replace('\r', "\n");
         if !valid_text(name, 200, false)
@@ -614,6 +624,9 @@ impl WorkspaceStore {
             format!("{}\n", guidance.trim())
         };
         manifest.name = name.to_owned();
+        if let Some(logo) = request.logo_rgba {
+            manifest.logo_rgba = logo;
+        }
         manifest.foundation_revision = manifest
             .foundation_revision
             .checked_add(1)
@@ -625,7 +638,7 @@ impl WorkspaceStore {
             return Err(error);
         }
         entry.name = name.to_owned();
-        let saved_summary = summary(entry);
+        let saved_summary = summary(entry, manifest.logo_rgba.clone());
         if let Err(error) = self.write_registry(&registry) {
             let _ = write_manifest(&directory, &previous_manifest);
             let _ = write_replace(&directory.join("AGENTS.md"), previous_guidance.as_bytes());
@@ -801,6 +814,7 @@ impl WorkspaceStore {
         manifest_bytes.push(b'\n');
         write_new(&input.directory.join("workspace.json"), &manifest_bytes)?;
         let summary = WorkspaceSummary {
+            logo_rgba: Vec::new(),
             id: id.clone(),
             name: input.name.clone(),
             directory: directory.clone(),
@@ -845,8 +859,9 @@ impl WorkspaceStore {
     }
 }
 
-fn summary(entry: &RegistryEntry) -> WorkspaceSummary {
+fn summary(entry: &RegistryEntry, logo_rgba: Vec<u8>) -> WorkspaceSummary {
     WorkspaceSummary {
+        logo_rgba,
         id: entry.id.clone(),
         name: entry.name.clone(),
         directory: entry.directory.clone(),
@@ -1376,6 +1391,9 @@ fn normalize_manifest(mut manifest: StoredManifest) -> Result<StoredManifest, Wo
     }
     if manifest.schema_version == 6 {
         manifest.schema_version = 7;
+    }
+    if !beale_contracts::workspace_logo::valid(&manifest.logo_rgba) {
+        return Err(WorkspaceError::Internal("invalid workspace logo"));
     }
     if manifest.schema_version != 7 {
         return Err(WorkspaceError::Internal(
@@ -2100,6 +2118,79 @@ mod tests {
             ],
             rules: vec!["Do not contact excluded third parties.".to_owned()],
         }
+    }
+
+    #[test]
+    fn workspace_logo_persists_replaces_and_removes_with_foundation_revisions() {
+        let base = std::env::temp_dir().join(format!("beale-logo-example-{}", Uuid::new_v4()));
+        fs::create_dir_all(&base).unwrap();
+        let store = WorkspaceStore::at(base.join("host")).unwrap();
+        let created = store
+            .create(example_request(&base.join("workspace")))
+            .unwrap();
+        assert!(created.logo_rgba.is_empty());
+        let request = |revision, logo_rgba| UpdateWorkspaceFoundationRequest {
+            expected_revision: revision,
+            name: created.name.clone(),
+            guidance: "Use only example.test.".to_owned(),
+            logo_rgba,
+        };
+        let logo = vec![100; beale_contracts::workspace_logo::BYTE_LEN];
+        assert!(matches!(
+            store.update_foundation(&created.id, request(1, Some(vec![1]))),
+            Err(WorkspaceError::Invalid)
+        ));
+        assert_eq!(store.foundation(&created.id).unwrap().revision, 1);
+        let saved = store
+            .update_foundation(&created.id, request(1, Some(logo.clone())))
+            .unwrap();
+        assert_eq!(saved.summary.unwrap().logo_rgba, logo);
+        assert!(matches!(
+            store.update_foundation(&created.id, request(1, Some(Vec::new()))),
+            Err(WorkspaceError::Conflict)
+        ));
+        let reopened = WorkspaceStore::at(base.join("host")).unwrap();
+        assert_eq!(reopened.list().unwrap()[0].logo_rgba, logo);
+        assert_eq!(
+            reopened
+                .details(&created.id)
+                .unwrap()
+                .summary
+                .unwrap()
+                .logo_rgba,
+            logo
+        );
+        assert_eq!(
+            store
+                .update_foundation(&created.id, request(2, None))
+                .unwrap()
+                .summary
+                .unwrap()
+                .logo_rgba,
+            logo
+        );
+        let replacement = vec![200; beale_contracts::workspace_logo::BYTE_LEN];
+        assert_eq!(
+            store
+                .update_foundation(&created.id, request(3, Some(replacement.clone())))
+                .unwrap()
+                .summary
+                .unwrap()
+                .logo_rgba,
+            replacement
+        );
+        store
+            .update_foundation(&created.id, request(4, Some(Vec::new())))
+            .unwrap();
+        assert!(reopened.list().unwrap()[0].logo_rgba.is_empty());
+        assert!(
+            !fs::read_to_string(base.join("workspace/workspace.json"))
+                .unwrap()
+                .contains("logoRgba")
+        );
+        drop(reopened);
+        drop(store);
+        fs::remove_dir_all(base).unwrap();
     }
 
     #[test]

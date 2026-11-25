@@ -2,8 +2,9 @@ use crate::design::FadeText;
 use rune::tok::TextStyle;
 use rune::{
     Align, AppSpec, Color, Cursor, Cx, Drag, El, Icon, Key, KeyEvent, Phase, ScrollSpec, Side,
-    TextEdit, Transition, Tx, canvas, col, el, icon, row, text, text_input,
+    TextEdit, Transition, Tx, col, el, icon, row, text, text_input,
 };
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 mod appearance;
@@ -46,6 +47,7 @@ mod tracking_data;
 mod tracking_view;
 mod visual_preview;
 mod workspace_creation;
+mod workspace_logo;
 mod workspace_surface_layout;
 mod workspace_view;
 mod workspaces;
@@ -636,11 +638,11 @@ struct State {
     new_research_goal_max_turns: TextEdit,
     new_research_goal_max_duration_minutes: TextEdit,
     new_research_graph_id: String,
+    custom_graph_templates: Vec<beale_contracts::v1::GraphTemplate>,
     new_research_stage_duration_minutes: TextEdit,
-    new_research_graph_models: [Option<Vec<new_research::ModelSelection>>; 11],
-    new_research_graph_concurrency: [Option<u32>; 11],
+    new_research_graph_models: HashMap<beale_graphs::ProfileId, Vec<new_research::ModelSelection>>,
+    graph_models_group: Option<bool>,
     graph_editor: Option<new_research::GraphEditor>,
-    graph_editor_max_concurrent: TextEdit,
     quick_chat_open: bool,
     quick_chat_draft: TextEdit,
     quick_chat_input_history: input_history::InputHistory,
@@ -720,6 +722,7 @@ struct State {
     workspace_surfaces_revision: u64,
     workspace_rules_revision: u64,
     workspace_name_edit: TextEdit,
+    workspace_logo_edit: Vec<u8>,
     workspace_name_dialog_open: bool,
     workspace_name_dialog_value: TextEdit,
     workspace_name_dialog_error: String,
@@ -924,13 +927,11 @@ impl Default for State {
             new_research_goal_max_turns: TextEdit::new(""),
             new_research_goal_max_duration_minutes: TextEdit::new(""),
             new_research_graph_id: beale_graphs::SIMPLE_ID.to_owned(),
+            custom_graph_templates: Vec::new(),
             new_research_stage_duration_minutes: TextEdit::new("60"),
-            new_research_graph_models: std::array::from_fn(|_| None),
-            new_research_graph_concurrency: std::array::from_fn(|index| {
-                if index == 0 { Some(1) } else { None }
-            }),
+            new_research_graph_models: HashMap::new(),
+            graph_models_group: None,
             graph_editor: None,
-            graph_editor_max_concurrent: TextEdit::new(""),
             quick_chat_open: false,
             quick_chat_draft: TextEdit::new(""),
             quick_chat_input_history: input_history::InputHistory::default(),
@@ -1010,6 +1011,7 @@ impl Default for State {
             workspace_surfaces_revision: 0,
             workspace_rules_revision: 0,
             workspace_name_edit: TextEdit::new(""),
+            workspace_logo_edit: Vec::new(),
             workspace_name_dialog_open: false,
             workspace_name_dialog_value: TextEdit::new(""),
             workspace_name_dialog_error: String::new(),
@@ -1548,11 +1550,9 @@ impl State {
         }
         self.new_research_graph_id = beale_graphs::SIMPLE_ID.to_owned();
         self.new_research_stage_duration_minutes = TextEdit::new("60");
-        self.new_research_graph_models = std::array::from_fn(|_| None);
-        self.new_research_graph_concurrency =
-            std::array::from_fn(|index| if index == 0 { Some(1) } else { None });
+        self.new_research_graph_models.clear();
+        self.graph_models_group = None;
         self.graph_editor = None;
-        self.graph_editor_max_concurrent.clear();
         self.new_research_workspace_id = if self.primary_view == PrimaryView::Workspace {
             self.workspace_id.map(|id| id.to_string())
         } else {
@@ -1700,11 +1700,8 @@ impl State {
                 detail.graph_id.as_str()
             });
         if !self.session_agent_tab_manual
-            && matches!(
-                graph_id,
-                beale_graphs::CLOUDFLARE_ID | beale_graphs::OPENAI_ID | beale_graphs::SEQUENTIAL_ID
-            )
-            && beale_graphs::Role::from_id(&event.agent_role)
+            && beale_graphs::is_peer_graph(graph_id)
+            && beale_graphs::ProfileId::from_id(&event.agent_role)
                 .is_some_and(|role| role.is_top_level())
         {
             self.session_agent_role = event.agent_role.clone();
@@ -1884,10 +1881,7 @@ impl State {
             .map_or(self.new_research_graph_id.as_str(), |detail| {
                 detail.graph_id.as_str()
             });
-        if matches!(
-            graph_id,
-            beale_graphs::CLOUDFLARE_ID | beale_graphs::OPENAI_ID | beale_graphs::SEQUENTIAL_ID
-        ) {
+        if beale_graphs::is_peer_graph(graph_id) {
             self.session_agent_started_at
                 .contains_key(&self.session_agent_role)
         } else {
@@ -1905,10 +1899,7 @@ impl State {
             .map_or(self.new_research_graph_id.as_str(), |detail| {
                 detail.graph_id.as_str()
             });
-        if matches!(
-            graph_id,
-            beale_graphs::CLOUDFLARE_ID | beale_graphs::OPENAI_ID | beale_graphs::SEQUENTIAL_ID
-        ) {
+        if beale_graphs::is_peer_graph(graph_id) {
             self.session_agent_started_at
                 .get(&self.session_agent_role)
                 .map_or(0, |started| {
@@ -2140,6 +2131,11 @@ impl State {
                         .as_ref()
                         .map_or("", |summary| &summary.name),
                 );
+                self.workspace_logo_edit = sections
+                    .details
+                    .summary
+                    .as_ref()
+                    .map_or_else(Vec::new, |summary| summary.logo_rgba.clone());
                 self.workspace_guidance_edit = TextEdit::new(&sections.details.guidance);
                 self.workspace_surface_edits = sections.details.surfaces.clone();
                 self.workspace_surface_focus = workspace_surface_layout::Focus::All;
@@ -2194,6 +2190,7 @@ impl State {
                         *item = summary.clone();
                     }
                     if target == FoundationSaveTarget::Identity {
+                        self.workspace_logo_edit = summary.logo_rgba;
                         self.workspace_name_edit = TextEdit::new(summary.name);
                     }
                 }
@@ -2409,7 +2406,7 @@ fn start_session_turn(state: &mut State) {
         .filter(|summary| summary.workspace_id == workspace_id)
         .map_or_else(String::new, |summary| summary.id.clone());
     let goal_mode = state.new_research_goal_mode
-        && state.new_research_graph_id != beale_graphs::SEQUENTIAL_ID
+        && !beale_graphs::is_rotating_graph(&state.new_research_graph_id)
         && extensions_view::goal_mode_enabled(state)
         && session_id.is_empty();
     let (goal_max_turns, goal_max_duration_minutes) = if goal_mode {
@@ -2429,7 +2426,7 @@ fn start_session_turn(state: &mut State) {
         (0, 0)
     };
     let repeat_preset = if session_id.is_empty()
-        && state.new_research_graph_id != beale_graphs::SEQUENTIAL_ID
+        && !beale_graphs::is_rotating_graph(&state.new_research_graph_id)
         && state.new_research_repeat != new_research::RepeatPreset::None
     {
         state.new_research_repeat.key().to_owned()
@@ -2443,17 +2440,12 @@ fn start_session_turn(state: &mut State) {
     };
     if !graph_id.is_empty() {
         state.session_agent_role = beale_graphs::entry_role(&graph_id)
-            .unwrap_or(beale_graphs::Role::Main)
+            .unwrap_or(beale_graphs::ProfileId::Main)
             .id()
             .to_owned();
     }
     let graph_models = if !graph_id.is_empty() {
         new_research::graph_model_config(state)
-    } else {
-        Vec::new()
-    };
-    let graph_node_concurrency = if !graph_id.is_empty() {
-        new_research::graph_concurrency_config(state)
     } else {
         Vec::new()
     };
@@ -2471,8 +2463,9 @@ fn start_session_turn(state: &mut State) {
         repeat_preset,
         graph_id,
         graph_models,
-        graph_node_concurrency,
-        stage_duration_minutes: if state.new_research_graph_id == beale_graphs::SEQUENTIAL_ID {
+        graph_node_concurrency: Vec::new(),
+        max_concurrent_workers: 0,
+        stage_duration_minutes: if beale_graphs::is_rotating_graph(&state.new_research_graph_id) {
             state
                 .new_research_stage_duration_minutes
                 .text
@@ -2482,10 +2475,7 @@ fn start_session_turn(state: &mut State) {
             0
         },
         agent_role: if let Some(detail) = &state.active_session {
-            if matches!(
-                detail.graph_id.as_str(),
-                beale_graphs::CLOUDFLARE_ID | beale_graphs::OPENAI_ID | beale_graphs::SEQUENTIAL_ID
-            ) {
+            if beale_graphs::is_peer_graph(&detail.graph_id) {
                 research_header::selected_role(state, &detail.graph_id)
             } else {
                 String::new()
@@ -2540,7 +2530,7 @@ fn start_session_turn(state: &mut State) {
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
-                .map_err(|_| "Could not initialize session connection".to_owned())?;
+                .map_err(|_| "Could not initialize scan connection".to_owned())?;
             let progress_handle = handle.clone();
             runtime.block_on(sessions::submit_stream(
                 &client,
@@ -2579,7 +2569,7 @@ fn stop_session_turn(state: &mut State) {
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
-                .map_err(|_| "Could not initialize session connection".to_owned())?;
+                .map_err(|_| "Could not initialize scan connection".to_owned())?;
             runtime.block_on(sessions::stop_turn(&client, addr, &turn_id))
         })();
         handle.update(move |state, _| {
@@ -2647,7 +2637,7 @@ fn start_session_load(state: &mut State, id: String) {
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
-                .map_err(|_| "Could not initialize session connection".to_owned())?;
+                .map_err(|_| "Could not initialize scan connection".to_owned())?;
             runtime.block_on(sessions::load(&client, addr, &id))
         })();
         handle.update(move |state, _| state.finish_session_load(generation, result));
@@ -2679,7 +2669,7 @@ fn start_session_archive(state: &mut State) {
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
-                .map_err(|_| "Could not initialize session connection".to_owned())?;
+                .map_err(|_| "Could not initialize scan connection".to_owned())?;
             runtime.block_on(sessions::archive(&client, addr, &id))
         })();
         handle.update(move |state, _| {
@@ -2902,7 +2892,7 @@ fn load_tool_detail_page(state: &mut State, id: String, offset: u64) {
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
-                .map_err(|_| "Could not initialize session connection".to_owned())?;
+                .map_err(|_| "Could not initialize scan connection".to_owned())?;
             runtime.block_on(sessions::load_tool_page(
                 &client,
                 addr,
@@ -2939,6 +2929,8 @@ fn foundation_request(
             summary.name.as_str()
         });
     UpdateWorkspaceFoundationRequest {
+        logo_rgba: (target == FoundationSaveTarget::Identity)
+            .then(|| state.workspace_logo_edit.clone()),
         expected_revision: state.workspace_foundation_revision,
         name: if target == FoundationSaveTarget::Identity {
             state.workspace_name_edit.text.clone()
@@ -3598,6 +3590,17 @@ fn selection_menu_items(state: &State, menu: SelectionMenu) -> Vec<in_place_menu
             detail: None,
             selected: state.new_research_graph_id == value,
         })
+        .chain(
+            state
+                .custom_graph_templates
+                .iter()
+                .map(|template| in_place_menu::MenuItem {
+                    value: template.id.clone(),
+                    label: template.name.clone(),
+                    detail: Some("Custom graph".to_owned()),
+                    selected: state.new_research_graph_id == template.id,
+                }),
+        )
         .collect(),
         SelectionMenu::ResearchWorkspace | SelectionMenu::ResearchWorkspaceHeading => {
             let selected_id = state
@@ -3866,9 +3869,13 @@ fn choose_selection_menu_item(state: &mut State, menu: SelectionMenu, value: Str
         }
         SelectionMenu::GoalMode => state.new_research_goal_mode = !state.new_research_goal_mode,
         SelectionMenu::SessionGraph => {
-            if value == beale_graphs::SEQUENTIAL_ID {
+            if beale_graphs::is_rotating_graph(&value) {
                 state.new_research_goal_mode = false;
                 state.new_research_repeat = new_research::RepeatPreset::None;
+                if let Some(graph) = beale_graphs::graph_definition(&value) {
+                    state.new_research_stage_duration_minutes =
+                        TextEdit::new(graph.default_stage_minutes.to_string());
+                }
             }
             state.new_research_graph_id = value;
         }
@@ -4201,9 +4208,9 @@ fn in_session(state: &State) -> bool {
 
 fn session_sidenav_toggle(open: bool, theme: ThemeStyle<'_>) -> El {
     let label = if open {
-        "Close Session Sidebar"
+        "Close Scan Sidebar"
     } else {
-        "Open Session Sidebar"
+        "Open Scan Sidebar"
     };
     el().key("header-session-sidenav-toggle")
         .role("button")
@@ -4427,7 +4434,7 @@ fn header(state: &State, prefix_width: f32, window_width: f32, macos_controls_vi
         title = title
             .child(icon(&NEW_RESEARCH, 16.0).color(color("#c8c8c8")))
             .child(
-                text("New Research")
+                text("New Scan")
                     .font(ui_font(13.0, 500.0))
                     .color(color("#e2e2e2")),
             );
@@ -4442,7 +4449,16 @@ fn header(state: &State, prefix_width: f32, window_width: f32, macos_controls_vi
             })
             .map_or("Workspace", |item| item.name.as_str());
         title = title
-            .child(icon(&FOLDER_OPEN, 16.0).color(color("#c8c8c8")))
+            .child(workspace_logo::mark(
+                state.workspace_id.and_then(|id| {
+                    state
+                        .workspaces
+                        .iter()
+                        .find(|workspace| workspace.id == id.to_string())
+                }),
+                16.0,
+                color("#c8c8c8"),
+            ))
             .child(
                 text(name)
                     .min_w(0.0)
@@ -6410,16 +6426,10 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
         );
     }
     if state.primary_view == PrimaryView::NewResearch {
-        let [width, height] = cx.layout_size("content-surface").unwrap_or([720.0, 600.0]);
+        let width = cx
+            .layout_size("content-surface")
+            .map_or(720.0, |size| size[0]);
         let graph_width = (width - 80.0).max(180.0);
-        if extensions_view::graphs_enabled(state) && !in_session(state) {
-            main_content = main_content.child(
-                canvas(grid_background::dots(width, height, theme.color("#303030")))
-                    .key("new-research-grid-background")
-                    .absolute(0.0, 0.0)
-                    .size(width, height),
-            );
-        }
         main_content = main_content.child(new_research::render(state, theme, graph_width).shrink());
     } else if state.primary_view == PrimaryView::Home {
         let page_width = cx
@@ -6848,9 +6858,9 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
     }
     if state.primary_view == PrimaryView::NewResearch
         && state.active_session.is_none()
-        && state.graph_editor.is_some()
+        && state.graph_models_group.is_some()
     {
-        for layer in new_research::graph_editor_dialog(state, theme) {
+        for layer in new_research::graph_models_group_dialog(state, theme) {
             window = window.child(layer);
         }
     }
@@ -6994,7 +7004,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
                     SelectionMenu::FleetAdd => ("Add App Server", 240.0),
                     SelectionMenu::Repeat => ("Repeat schedule", 190.0),
                     SelectionMenu::GoalMode => ("Goal Mode", 150.0),
-                    SelectionMenu::SessionGraph => ("Session Graph", 190.0),
+                    SelectionMenu::SessionGraph => ("Scan Graph", 190.0),
                     SelectionMenu::ResearchWorkspace => ("Workspace", 280.0),
                     SelectionMenu::ResearchWorkspaceHeading => ("Workspace", 280.0),
                     SelectionMenu::QuickChatWorkspace => ("Quick Chat workspace", 280.0),
@@ -7340,6 +7350,12 @@ fn main() -> std::process::ExitCode {
             } else {
                 None
             };
+            let graph_template_result =
+                if workspace_poll == 0 && matches!(status, ConnectionStatus::Connected { .. }) {
+                    Some(runtime.block_on(sessions::list_graph_templates(&client, addr)))
+                } else {
+                    None
+                };
             let custom_result =
                 if workspace_poll == 0 && matches!(status, ConnectionStatus::Connected { .. }) {
                     Some(runtime.block_on(provider_custom::list(&client, addr)))
@@ -7401,6 +7417,16 @@ fn main() -> std::process::ExitCode {
                         false
                     } else {
                         state.session_summaries = summaries;
+                        true
+                    }
+                });
+            }
+            if let Some(Ok(templates)) = graph_template_result {
+                handle.update_if(move |state, _| {
+                    if state.custom_graph_templates == templates {
+                        false
+                    } else {
+                        state.custom_graph_templates = templates;
                         true
                     }
                 });
@@ -7548,6 +7574,24 @@ fn main() -> std::process::ExitCode {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn session_graph_menu_includes_custom_templates() {
+        let template = beale_contracts::v1::GraphTemplate {
+            id: "custom:example_review:0123456789abcdef".to_owned(),
+            name: "Example Review".to_owned(),
+            definition_json: String::new(),
+        };
+        let state = super::State {
+            new_research_graph_id: template.id.clone(),
+            custom_graph_templates: vec![template.clone()],
+            ..Default::default()
+        };
+        let items = super::selection_menu_items(&state, super::SelectionMenu::SessionGraph);
+        let custom = items.iter().find(|item| item.value == template.id).unwrap();
+        assert_eq!(custom.label, template.name);
+        assert!(custom.selected);
+    }
+
     fn with_surface_feature(mut state: super::State) -> super::State {
         state.features = super::extensions_view::bundled_features();
         if let Some(feature) = state
@@ -8667,7 +8711,7 @@ mod tests {
                 },
                 ..State::default()
             };
-            let mut runtime = Runtime::new(state, view, (width, 800.0), Env::new(true, 1.0));
+            let mut runtime = Runtime::new(state, view, (width, 1800.0), Env::new(true, 1.0));
             runtime.frame(0.0);
             let (page, _) = runtime.presented("settings-page").unwrap();
             assert!(page[0] + page[2] <= width - 8.0, "page fits window");
@@ -9097,6 +9141,7 @@ mod tests {
         let mut state = visual_preview::fixture("home");
         for index in 0..12 {
             state.workspaces.push(WorkspaceSummary {
+                logo_rgba: Vec::new(),
                 id: format!("00000000-0000-4000-8000-{:012}", index + 10),
                 name: format!("Example workspace {index}"),
                 directory: format!("/example/research/workspace-{index}"),
@@ -9139,6 +9184,7 @@ mod tests {
         let mut state = visual_preview::fixture("home");
         for index in 0..12 {
             state.workspaces.push(WorkspaceSummary {
+                logo_rgba: Vec::new(),
                 id: format!("00000000-0000-4000-8000-{:012}", index + 20),
                 name: format!("Example workspace {index}"),
                 directory: format!("/example/research/workspace-{index}"),
@@ -9521,6 +9567,7 @@ mod tests {
         let state = State {
             primary_view: PrimaryView::Home,
             workspaces: vec![WorkspaceSummary {
+                logo_rgba: Vec::new(),
                 id: workspace_id.to_owned(),
                 name: "Example Workspace".to_owned(),
                 directory: "example-directory".to_owned(),
@@ -9598,6 +9645,7 @@ mod tests {
         let state = State {
             primary_view: PrimaryView::Home,
             workspaces: vec![WorkspaceSummary {
+                logo_rgba: Vec::new(),
                 id: workspace_id.to_owned(),
                 name: "Example Workspace".to_owned(),
                 directory: "/example/workspaces/a-very-long-synthetic-directory-name/another-synthetic-directory-name/research".to_owned(),
@@ -9658,6 +9706,7 @@ mod tests {
         let state = State {
             primary_view: PrimaryView::Home,
             workspaces: vec![WorkspaceSummary {
+                logo_rgba: Vec::new(),
                 id: workspace_id.to_owned(),
                 name: "Example Workspace".to_owned(),
                 directory: "example-directory".to_owned(),
@@ -9721,6 +9770,7 @@ mod tests {
             primary_view: PrimaryView::Settings,
             settings_section: SettingsSection::Archive,
             workspaces: vec![WorkspaceSummary {
+                logo_rgba: Vec::new(),
                 id: workspace_id.to_owned(),
                 name: "Example Workspace".to_owned(),
                 directory: "example-directory".to_owned(),
@@ -9798,6 +9848,7 @@ mod tests {
             State {
                 primary_view: PrimaryView::Home,
                 workspaces: vec![WorkspaceSummary {
+                    logo_rgba: Vec::new(),
                     id: workspace_id.clone(),
                     name: "Example Workspace".to_owned(),
                     directory: "example-directory".to_owned(),
@@ -9868,6 +9919,7 @@ mod tests {
             primary_view: PrimaryView::NewResearch,
             auth_loaded: true,
             workspaces: vec![WorkspaceSummary {
+                logo_rgba: Vec::new(),
                 id: "00000000-0000-4000-8000-000000000003".to_owned(),
                 name: "Example Workspace".to_owned(),
                 directory: std::env::temp_dir()
@@ -9898,6 +9950,7 @@ mod tests {
         let state = State {
             primary_view: PrimaryView::Home,
             workspaces: vec![WorkspaceSummary {
+                logo_rgba: Vec::new(),
                 id: workspace_id.to_owned(),
                 name: "Example Workspace".to_owned(),
                 directory: std::env::temp_dir()
@@ -10072,6 +10125,7 @@ mod tests {
         let mut state = State {
             primary_view: PrimaryView::NewResearch,
             workspaces: vec![WorkspaceSummary {
+                logo_rgba: Vec::new(),
                 id: "00000000-0000-4000-8000-000000000010".to_owned(),
                 name: "Example Workspace".to_owned(),
                 directory: "example-directory".to_owned(),
@@ -10116,243 +10170,119 @@ mod tests {
             .unwrap()
             .enabled = true;
         let mut runtime = Runtime::new(state, view, (900.0, 700.0), Env::new(true, 1.0));
-        runtime.on_key = Some(selection_menu_key);
         runtime.frame(0.0);
         assert_eq!(runtime.state.new_research_graph_id, beale_graphs::SIMPLE_ID);
-        assert!(runtime.find("new-research-workspace-heading").is_some());
-        assert!(runtime.find("new-research-graph-description").is_none());
-        assert!(runtime.find("new-research-simple-graph").is_some());
-        assert!(runtime.find("new-research-model-control").is_none());
-        let (content, _) = runtime.presented("content-surface").unwrap();
-        let (grid, _) = runtime.presented("new-research-grid-background").unwrap();
-        assert_eq!(grid, content);
         let (heading, _) = runtime.presented("new-research-workspace-heading").unwrap();
-        let (selector, _) = runtime.presented("new-research-graph-control").unwrap();
-        let (main, _) = runtime.presented("new-research-graph-node-main").unwrap();
-        let above = selector[1] - heading[1] - heading[3];
-        let below = main[1] - selector[1] - selector[3];
+        let (graph, _) = runtime.presented("new-scan-graph-row").unwrap();
+        let (agents, _) = runtime.presented("new-scan-agent-models-row").unwrap();
+        let (workers, _) = runtime.presented("new-scan-subagent-models-row").unwrap();
+        assert!(heading[1] + heading[3] <= graph[1]);
+        assert!(graph[1] < agents[1] && agents[1] < workers[1]);
+        assert!(runtime.find("new-scan-worker-budget-row").is_none());
+        assert!(runtime.find("new-research-model-control").is_none());
+        assert!(runtime.find("new-scan-agent-models-edit").is_none());
+        assert!(runtime.find("graph-editor-model-control-main").is_some());
+        assert!(runtime.find("new-scan-subagent-models-edit").is_some());
         assert!(
-            (below - above - 8.0).abs() < 1.0,
-            "above={above}, below={below}"
+            runtime
+                .elements()
+                .iter()
+                .any(|item| item.text.as_deref() == Some("Example Lead"))
         );
-        for role in beale_graphs::SIMPLE_GRAPH.nodes {
-            assert!(
-                runtime
-                    .find(&format!("new-research-graph-node-{}", role.id()))
-                    .is_some()
-            );
-        }
-        let (scout_before, _) = runtime.presented("new-research-graph-node-scout").unwrap();
-        assert!(scout_before[2] < 170.0);
-        assert!(scout_before[3] < 76.0);
-        let (x, y) = runtime.find("new-research-graph-node-scout").unwrap();
+        assert!(runtime.elements().iter().any(|item| {
+            item.text.as_deref() == Some("Leads the scan and coordinates specialist tasks.")
+        }));
+        let (x, y) = runtime.find("graph-editor-model-control-main").unwrap();
         runtime.pointer_down(x, y);
         runtime.pointer_up(x, y);
         runtime.frame(0.05);
-        assert_eq!(
+        assert_eq!(runtime.state.graph_models_group, None);
+        assert!(runtime.find("graph-models-group-dialog").is_none());
+        assert!(runtime.find("graph-editor-dialog").is_none());
+        assert!(
             runtime
-                .state
-                .graph_editor
-                .as_ref()
-                .map(|editor| editor.role),
-            Some(beale_graphs::Role::Scout)
+                .find("graph-editor-fixed-max-concurrent-main")
+                .is_none()
         );
-        assert!(runtime.find("graph-editor-dialog").is_some());
-        assert!(runtime.find("graph-editor-max-concurrent").is_some());
-        assert!(runtime.find("graph-editor-model-menu").is_none());
-        let (x, y) = runtime.find("graph-editor-model-control").unwrap();
-        runtime.pointer_down(x, y);
-        runtime.pointer_up(x, y);
-        runtime.frame(0.06);
-        assert!(runtime.find("graph-editor-model-menu").is_some());
         assert!(runtime.find("graph-editor-menu-provider").is_some());
         assert!(runtime.find("graph-editor-menu-model").is_some());
-        assert!(runtime.find("graph-editor-menu-effort").is_none());
-        let press = |runtime: &mut Runtime<State>, key| {
-            runtime.key(KeyEvent {
-                key,
-                mods: Default::default(),
-            });
-            runtime.frame(1.0 / 60.0);
-        };
-        press(&mut runtime, Key::Left);
-        press(&mut runtime, Key::End);
-        press(&mut runtime, Key::Enter);
-        assert!(runtime.find("graph-editor-menu-option-1").is_none());
-        assert_eq!(runtime.state.graph_editor.as_ref().unwrap().models.len(), 1);
-        press(&mut runtime, Key::Enter);
-        assert!(
-            runtime
-                .state
-                .graph_editor
-                .as_ref()
-                .unwrap()
-                .models
-                .iter()
-                .any(|model| { model.provider == Provider::Xai && model.id == "example-other" })
-        );
-        press(&mut runtime, Key::Enter);
-        assert_eq!(runtime.state.graph_editor.as_ref().unwrap().models.len(), 1);
-        press(&mut runtime, Key::Left);
-        press(&mut runtime, Key::Home);
-        press(&mut runtime, Key::Enter);
-        let (x, y) = runtime.find("graph-editor-menu-option-1").unwrap();
-        runtime.pointer_down(x, y);
-        runtime.pointer_up(x, y);
-        runtime.frame(0.07);
-        assert!(
-            runtime
-                .state
-                .graph_editor
-                .as_ref()
-                .unwrap()
-                .model_menu
-                .is_some()
-        );
-        assert_eq!(runtime.state.graph_editor.as_ref().unwrap().models.len(), 2);
-        press(&mut runtime, Key::Escape);
-        assert!(runtime.find("graph-editor-model-menu").is_none());
-        assert!(runtime.find("graph-editor-dialog").is_some());
-        let (x, y) = runtime.find("graph-editor-save").unwrap();
-        runtime.pointer_down(x, y);
-        runtime.pointer_up(x, y);
-        runtime.frame(0.08);
-        assert!(runtime.state.graph_editor.is_none());
-        let scout_models: Vec<_> = new_research::graph_model_config(&runtime.state)
-            .into_iter()
-            .filter(|model| model.node_id == "scout")
-            .map(|model| model.model)
-            .collect();
-        assert_eq!(scout_models, ["example-lead", "example-small"]);
-        assert_eq!(
-            new_research::graph_model_label(&runtime.state, beale_graphs::Role::Scout),
-            "Example Lead + 1"
-        );
-        let (scout_after, _) = runtime.presented("new-research-graph-node-scout").unwrap();
-        assert!(scout_after[2] > scout_before[2]);
-        assert!(
-            runtime
-                .find("new-research-graph-model-label-scout")
-                .is_some()
-        );
-        assert!(
-            runtime
-                .find("new-research-graph-agent-icon-scout")
-                .is_some()
-        );
-        assert!(runtime.find("new-research-graph-agent-icon-main").is_some());
-        assert_eq!(
-            runtime.state.new_research_graph_concurrency,
-            [
-                Some(1),
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None
-            ]
-        );
-        let (x, y) = runtime.find("new-research-graph-node-scout").unwrap();
-        runtime.pointer_down(x, y);
-        runtime.pointer_up(x, y);
-        runtime.frame(0.081);
-        runtime.state.graph_editor_max_concurrent = TextEdit::new("3");
-        runtime.frame(0.082);
-        let (x, y) = runtime.find("graph-editor-save").unwrap();
-        runtime.pointer_down(x, y);
-        runtime.pointer_up(x, y);
-        runtime.frame(0.083);
-        assert_eq!(runtime.state.new_research_graph_concurrency[1], Some(3));
-        let (x, y) = runtime.find("new-research-graph-node-main").unwrap();
-        runtime.pointer_down(x, y);
-        runtime.pointer_up(x, y);
-        runtime.frame(0.085);
-        assert_eq!(runtime.state.graph_editor.as_ref().unwrap().models.len(), 1);
-        assert!(runtime.find("graph-editor-max-concurrent").is_none());
-        assert!(runtime.find("graph-editor-fixed-max-concurrent").is_some());
-        let (x, y) = runtime.find("graph-editor-model-control").unwrap();
-        runtime.pointer_down(x, y);
-        runtime.pointer_up(x, y);
-        runtime.frame(0.087);
         let (x, y) = runtime.find("graph-editor-menu-option-1").unwrap();
         runtime.pointer_down(x, y);
         runtime.pointer_up(x, y);
         runtime.frame(0.09);
-        assert_eq!(runtime.state.graph_editor.as_ref().unwrap().models.len(), 1);
-        assert!(
-            !runtime
-                .state
-                .graph_editor
-                .as_ref()
-                .unwrap()
-                .model_menu
-                .is_some()
-        );
-        runtime.state.graph_editor_max_concurrent = TextEdit::new("2");
-        runtime.frame(0.095);
-        let (x, y) = runtime.find("graph-editor-save").unwrap();
-        runtime.pointer_down(x, y);
-        runtime.pointer_up(x, y);
-        runtime.frame(0.098);
-        let main_models: Vec<_> = new_research::graph_model_config(&runtime.state)
-            .into_iter()
-            .filter(|model| model.node_id == "main")
-            .map(|model| model.model)
-            .collect();
-        assert_eq!(main_models, ["example-small"]);
         assert_eq!(
-            new_research::graph_model_label(&runtime.state, beale_graphs::Role::Main),
+            new_research::graph_model_label(&runtime.state, beale_graphs::ProfileId::Main),
             "Example Small"
         );
-        assert_eq!(runtime.state.new_research_graph_concurrency[0], Some(1));
-        assert_eq!(
-            new_research::graph_concurrency_config(&runtime.state).len(),
-            2
-        );
-        assert_eq!(
-            new_research::graph_concurrency_config(&runtime.state)[0].max_concurrent,
-            1
-        );
-        let (x, y) = runtime.find("new-research-graph-control").unwrap();
+        assert!(runtime.find("graph-models-group-dialog").is_none());
+        assert!(runtime.find("graph-editor-model-menu").is_none());
+        let (x, y) = runtime.find("new-scan-subagent-models-edit").unwrap();
         runtime.pointer_down(x, y);
         runtime.pointer_up(x, y);
-        runtime.frame(0.1);
-        assert_eq!(
-            runtime.state.selection_menu,
-            Some(SelectionMenu::SessionGraph)
-        );
-        let (x, y) = runtime.find("selection-menu-item-4").unwrap();
+        runtime.frame(0.11);
+        assert_eq!(runtime.state.graph_models_group, Some(false));
+        for role in beale_graphs::SIMPLE_GRAPH
+            .nodes
+            .iter()
+            .filter(|role| !role.is_top_level())
+        {
+            assert!(
+                runtime
+                    .find(&format!("graph-editor-model-control-{}", role.id()))
+                    .is_some()
+            );
+            assert!(
+                runtime
+                    .find(&format!("graph-editor-max-concurrent-{}", role.id()))
+                    .is_none()
+            );
+        }
+        assert!(runtime.find("graph-editor-dialog").is_none());
+        let (x, y) = runtime.find("graph-editor-model-control-mapper").unwrap();
         runtime.pointer_down(x, y);
         runtime.pointer_up(x, y);
-        runtime.frame(0.2);
-        assert!(runtime.state.new_research_graph_id.is_empty());
-        assert!(runtime.find("new-research-simple-graph").is_none());
-        assert!(runtime.find("new-research-no-graph").is_some());
-        assert!(runtime.find("new-research-grid-background").is_some());
-        assert!(runtime.find("new-research-graph-node-main").is_some());
-        assert!(runtime.find("new-research-graph-node-main-max").is_some());
-        assert!(runtime.find("new-research-graph-node-scout").is_none());
-        let (heading, _) = runtime.presented("new-research-workspace-heading").unwrap();
-        let (selector, _) = runtime.presented("new-research-graph-control").unwrap();
-        let (main, _) = runtime.presented("new-research-graph-node-main").unwrap();
-        let above = selector[1] - heading[1] - heading[3];
-        let below = main[1] - selector[1] - selector[3];
+        runtime.frame(0.125);
+        assert!(runtime.find("graph-editor-model-menu").is_some());
+        let (x, y) = runtime.find("graph-editor-menu-option-0").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.126);
+        assert_eq!(
+            runtime
+                .state
+                .new_research_graph_models
+                .get(&beale_graphs::ProfileId::from_id("mapper").unwrap())
+                .map(Vec::len),
+            Some(2)
+        );
+        runtime.key(KeyEvent {
+            key: Key::Escape,
+            mods: Default::default(),
+        });
+        runtime.frame(0.127);
+        assert!(runtime.find("graph-editor-model-menu").is_none());
+        let (x, y) = runtime.find("graph-models-group-dialog-close").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.14);
+        assert!(runtime.find("graph-models-group-dialog").is_none());
+        runtime.update(|state, _| {
+            state.new_research_graph_models.insert(
+                beale_graphs::ProfileId::from_id("mapper").unwrap(),
+                vec![new_research::ModelSelection {
+                    provider: Provider::OpenAi,
+                    method: AuthMethod::Subscription,
+                    id: "example-lead".to_owned(),
+                }],
+            );
+        });
+        runtime.frame(0.16);
         assert!(
-            (below - above - 8.0).abs() < 1.0,
-            "above={above}, below={below}"
+            runtime
+                .elements()
+                .iter()
+                .any(|item| item.text.as_deref() == Some("2 models selected"))
         );
-        let (x, y) = runtime.find("new-research-graph-node-main").unwrap();
-        runtime.pointer_down(x, y);
-        runtime.pointer_up(x, y);
-        runtime.frame(0.21);
-        assert!(runtime.find("graph-editor-dialog").is_some());
-        assert!(runtime.find("graph-editor-max-concurrent").is_none());
-        assert!(runtime.find("graph-editor-fixed-max-concurrent").is_some());
     }
 
     #[test]
@@ -10361,6 +10291,7 @@ mod tests {
         let mut state = State {
             primary_view: PrimaryView::NewResearch,
             workspaces: vec![WorkspaceSummary {
+                logo_rgba: Vec::new(),
                 id: workspace_id.to_owned(),
                 name: "Example Workspace".to_owned(),
                 directory: "example-directory".to_owned(),
@@ -10412,7 +10343,7 @@ mod tests {
     }
 
     #[test]
-    fn new_research_grid_follows_graph_workspace_scope() {
+    fn new_scan_background_stays_plain_across_session_and_scope() {
         let first = "00000000-0000-4000-8000-000000000010";
         let second = "00000000-0000-4000-8000-000000000011";
         let mut state = State {
@@ -10420,6 +10351,7 @@ mod tests {
             workspaces: [first, second]
                 .into_iter()
                 .map(|id| WorkspaceSummary {
+                    logo_rgba: Vec::new(),
                     id: id.to_owned(),
                     name: "Example Workspace".to_owned(),
                     directory: "example-directory".to_owned(),
@@ -10442,7 +10374,7 @@ mod tests {
         graphs.workspace_ids = vec![first.to_owned()];
         let mut runtime = Runtime::new(state, view, (900.0, 700.0), Env::new(true, 1.0));
         runtime.frame(0.0);
-        assert!(runtime.find("new-research-grid-background").is_some());
+        assert!(runtime.find("new-research-grid-background").is_none());
         runtime.update(|state, _| {
             state.session_pending_prompt = Some("Example objective".to_owned());
         });
@@ -10471,7 +10403,7 @@ mod tests {
         assert!(runtime.find("new-research-grid-background").is_none());
         runtime.update(|state, _| state.active_session = None);
         runtime.frame(0.1);
-        assert!(runtime.find("new-research-grid-background").is_some());
+        assert!(runtime.find("new-research-grid-background").is_none());
         runtime.update(|state, _| state.new_research_workspace_id = Some(second.to_owned()));
         runtime.frame(0.1);
         assert!(runtime.find("new-research-grid-background").is_none());
@@ -10479,11 +10411,12 @@ mod tests {
     }
 
     #[test]
-    fn graph_nodes_stay_inside_the_preview_at_narrow_widths() {
+    fn graph_profile_rows_stay_inside_the_form_at_narrow_widths() {
         for width in [1200.0, 900.0, 720.0, 600.0] {
             let mut state = State {
                 primary_view: PrimaryView::NewResearch,
                 workspaces: vec![WorkspaceSummary {
+                    logo_rgba: Vec::new(),
                     id: "00000000-0000-4000-8000-000000000010".to_owned(),
                     name: "Example Workspace".to_owned(),
                     directory: "example-directory".to_owned(),
@@ -10508,28 +10441,21 @@ mod tests {
             let (surface, _) = runtime.presented("content-surface").unwrap();
             assert!(stage[0] >= surface[0] - 1.0);
             assert!(stage[0] + stage[2] <= surface[0] + surface[2] + 1.0);
-            for role in beale_graphs::SIMPLE_GRAPH.nodes {
-                let (node, _) = runtime
-                    .presented(&format!("new-research-graph-node-{}", role.id()))
-                    .unwrap();
-                assert!(
-                    node[0] >= stage[0] - 1.0,
-                    "{} at window width {width}",
-                    role.id()
-                );
-                assert!(
-                    node[0] + node[2] <= stage[0] + stage[2] + 1.0,
-                    "{} at window width {width}",
-                    role.id()
-                );
-                assert!(node[1] >= stage[1] - 1.0);
-                assert!(node[1] + node[3] <= stage[1] + stage[3] + 1.0);
+            for key in [
+                "new-scan-graph-row",
+                "new-scan-agent-models-row",
+                "new-scan-subagent-models-row",
+                "graph-editor-model-control-main",
+            ] {
+                let (node, _) = runtime.presented(key).unwrap();
+                assert!(node[0] >= stage[0] - 1.0);
+                assert!(node[0] + node[2] <= stage[0] + stage[2] + 1.0);
             }
         }
     }
 
     #[test]
-    fn peer_graphs_render_every_role_at_wide_and_narrow_widths() {
+    fn peer_graph_forms_render_every_role_at_wide_and_narrow_widths() {
         for (variant, graph) in [
             ("graph-cloudflare", &beale_graphs::CLOUDFLARE_GRAPH),
             ("graph-openai", &beale_graphs::OPENAI_GRAPH),
@@ -10537,11 +10463,9 @@ mod tests {
         ] {
             for width in [1200.0, 600.0] {
                 let state = visual_preview::fixture(variant);
-                let mut runtime = Runtime::new(state, view, (width, 800.0), Env::new(true, 1.0));
+                let mut runtime = Runtime::new(state, view, (width, 1800.0), Env::new(true, 1.0));
                 runtime.frame(0.0);
-                let (stage, _) = runtime
-                    .presented(&format!("new-research-{}-graph", graph.id))
-                    .unwrap();
+                let (stage, _) = runtime.presented("new-research-flow-graph").unwrap();
                 if graph.id == beale_graphs::SEQUENTIAL_ID {
                     assert!(
                         runtime
@@ -10550,32 +10474,32 @@ mod tests {
                     );
                     assert_eq!(runtime.state.new_research_stage_duration_minutes.text, "60");
                 }
-                for role in graph.nodes {
-                    let (node, _) = runtime
-                        .presented(&format!("new-research-graph-node-{}", role.id()))
-                        .unwrap();
-                    assert!(
-                        node[0] >= stage[0] - 1.0 && node[0] + node[2] <= stage[0] + stage[2] + 1.0,
-                        "{} at {width}",
-                        role.id()
-                    );
-                    assert!(
-                        node[1] >= stage[1] - 1.0 && node[1] + node[3] <= stage[1] + stage[3] + 1.0,
-                        "{} at {width}",
-                        role.id()
-                    );
+                assert!(runtime.find("new-scan-agent-models-edit").is_some());
+                assert!(runtime.find("new-scan-subagent-models-edit").is_some());
+                assert!(runtime.find("graph-editor-model-control-main").is_none());
+                assert!(stage[2] <= 640.0);
+                assert_eq!(
+                    new_research::graph_model_config(&runtime.state).len(),
+                    graph.nodes.len()
+                );
+                if width == 1200.0 {
+                    let (x, y) = runtime.find("new-scan-agent-models-edit").unwrap();
+                    runtime.pointer_down(x, y);
+                    runtime.pointer_up(x, y);
+                    runtime.frame(0.1);
+                    assert_eq!(runtime.state.graph_models_group, Some(true));
+                    assert!(runtime.find("graph-models-group-dialog").is_some());
                 }
             }
         }
     }
 
     #[test]
-    fn peer_graph_configs_include_each_top_level_model_and_limit() {
+    fn peer_graph_configs_include_each_top_level_model() {
         for variant in ["graph-cloudflare", "graph-openai", "graph-sequential"] {
             let state = visual_preview::fixture(variant);
             let graph = beale_graphs::graph_definition(&state.new_research_graph_id).unwrap();
             let models = new_research::graph_model_config(&state);
-            let limits = new_research::graph_concurrency_config(&state);
             assert_eq!(models.len(), graph.nodes.len());
             assert!(
                 models
@@ -10590,11 +10514,6 @@ mod tests {
                         .count(),
                     1
                 );
-                assert!(
-                    limits
-                        .iter()
-                        .any(|limit| limit.node_id == role.id() && limit.max_concurrent == 1)
-                );
             }
             assert!(models.iter().all(|model| model.node_id != "main"));
         }
@@ -10605,6 +10524,7 @@ mod tests {
         let state = State {
             primary_view: PrimaryView::NewResearch,
             workspaces: vec![WorkspaceSummary {
+                logo_rgba: Vec::new(),
                 id: "00000000-0000-4000-8000-000000000011".to_owned(),
                 name: "Example Workspace".to_owned(),
                 directory: "example-directory".to_owned(),
@@ -10626,11 +10546,13 @@ mod tests {
             primary_view: PrimaryView::NewResearch,
             workspaces: vec![
                 WorkspaceSummary {
+                    logo_rgba: Vec::new(),
                     id: first_id.to_owned(),
                     name: "Example First".to_owned(),
                     directory: "example-first".to_owned(),
                 },
                 WorkspaceSummary {
+                    logo_rgba: Vec::new(),
                     id: second_id.to_owned(),
                     name: "Example Second".to_owned(),
                     directory: "example-second".to_owned(),
@@ -10646,6 +10568,16 @@ mod tests {
                 .find("new-research-heading-workspace-chevron")
                 .is_some()
         );
+        let (prompt, _) = runtime.presented("new-research-heading-prompt").unwrap();
+        let (picker, _) = runtime
+            .presented("new-research-heading-workspace-control")
+            .unwrap();
+        let (heading, _) = runtime.presented("new-research-workspace-heading").unwrap();
+        assert!(picker[0] >= prompt[0] + prompt[2]);
+        assert!((picker[1] - prompt[1]).abs() < 8.0);
+        let sentence_center = (prompt[0] + picker[0] + picker[2]) / 2.0;
+        let heading_center = heading[0] + heading[2] / 2.0;
+        assert!((sentence_center - heading_center).abs() < 2.0);
         let (x, y) = runtime
             .find("new-research-heading-workspace-control")
             .unwrap();
@@ -10718,6 +10650,8 @@ mod tests {
             graph_models: vec![],
             graph_node_concurrency: vec![],
             stage_duration_minutes: 0,
+            graph_template_json: String::new(),
+            max_concurrent_workers: 0,
             total_duration_ms: 0,
             has_campaign_activity: false,
             token_usage: None,
@@ -10762,6 +10696,7 @@ mod tests {
             workspaces: [(first, "Example One"), (second, "Example Two")]
                 .into_iter()
                 .map(|(id, name)| WorkspaceSummary {
+                    logo_rgba: Vec::new(),
                     id: id.to_owned(),
                     name: name.to_owned(),
                     directory: "example-directory".to_owned(),
@@ -10854,6 +10789,7 @@ mod tests {
         let state = State {
             primary_view: PrimaryView::NewResearch,
             workspaces: vec![WorkspaceSummary {
+                logo_rgba: Vec::new(),
                 id: workspace_id.to_owned(),
                 name: "Example Workspace".to_owned(),
                 directory: "example-directory".to_owned(),
@@ -10940,6 +10876,7 @@ mod tests {
         let mut state = State {
             primary_view: PrimaryView::NewResearch,
             workspaces: vec![WorkspaceSummary {
+                logo_rgba: Vec::new(),
                 id: workspace_id.to_owned(),
                 name: "Example Workspace".to_owned(),
                 directory: "example-directory".to_owned(),
@@ -10986,6 +10923,8 @@ mod tests {
             graph_models: vec![],
             graph_node_concurrency: vec![],
             stage_duration_minutes: 0,
+            graph_template_json: String::new(),
+            max_concurrent_workers: 0,
             total_duration_ms: 1_234,
             has_campaign_activity: false,
             token_usage: None,
@@ -11070,6 +11009,7 @@ mod tests {
             State {
                 primary_view: PrimaryView::NewResearch,
                 workspaces: vec![WorkspaceSummary {
+                    logo_rgba: Vec::new(),
                     id: workspace_id.to_owned(),
                     name: "Example Workspace".to_owned(),
                     directory: "example-directory".to_owned(),
@@ -11109,6 +11049,8 @@ mod tests {
                     graph_models: vec![],
                     graph_node_concurrency: vec![],
                     stage_duration_minutes: 0,
+                    graph_template_json: String::new(),
+                    max_concurrent_workers: 0,
                     total_duration_ms: 0,
                     has_campaign_activity: false,
                     token_usage: None,
@@ -11273,6 +11215,8 @@ mod tests {
                 graph_models: vec![],
                 graph_node_concurrency: vec![],
                 stage_duration_minutes: 0,
+                graph_template_json: String::new(),
+            max_concurrent_workers: 0,
                 total_duration_ms: 1_000,
                 has_campaign_activity: false,
                 token_usage: None,
@@ -11352,6 +11296,8 @@ active_runbook_count: 0,
                 graph_models: vec![],
                 graph_node_concurrency: vec![],
                 stage_duration_minutes: 0,
+                graph_template_json: String::new(),
+            max_concurrent_workers: 0,
                 total_duration_ms: 0,
                 has_campaign_activity: false,
                 token_usage: None,
@@ -11472,6 +11418,8 @@ active_runbook_count: 0,
                 graph_models: vec![],
                 graph_node_concurrency: vec![],
                 stage_duration_minutes: 0,
+                graph_template_json: String::new(),
+                max_concurrent_workers: 0,
                 total_duration_ms: 2_345,
                 has_campaign_activity: false,
                 token_usage: None,
@@ -11854,6 +11802,7 @@ active_runbook_count: 0,
     #[test]
     fn host_workspaces_appear_in_home_sidebar_and_creation_result_returns_home() {
         let summary = WorkspaceSummary {
+            logo_rgba: Vec::new(),
             id: "00000000-0000-4000-8000-000000000001".to_owned(),
             name: "Example Workspace".to_owned(),
             directory: std::env::temp_dir()
@@ -11921,6 +11870,7 @@ active_runbook_count: 0,
         let state = State {
             primary_view: PrimaryView::Home,
             workspaces: vec![WorkspaceSummary {
+                logo_rgba: Vec::new(),
                 id: workspace_id.to_owned(),
                 name: "Example Workspace".to_owned(),
                 directory: "example-directory".to_owned(),
@@ -11963,7 +11913,7 @@ active_runbook_count: 0,
     fn surface_view_toggle_sits_beside_title_at_wide_and_narrow_widths() {
         for (width, compact) in [(840.0, true), (1440.0, false)] {
             let state = visual_preview::fixture("surfaces");
-            let mut runtime = Runtime::new(state, view, (width, 800.0), Env::new(true, 1.0));
+            let mut runtime = Runtime::new(state, view, (width, 1800.0), Env::new(true, 1.0));
             runtime.frame(0.0);
             let (header, _) = runtime.presented("workspace-view-header").unwrap();
             let (title, _) = runtime.presented("workspace-title-squircle").unwrap();
@@ -12261,6 +12211,7 @@ active_runbook_count: 0,
         };
         let id = uuid::Uuid::parse_str("00000000-0000-4000-8000-000000000002").unwrap();
         let summary = WorkspaceSummary {
+            logo_rgba: Vec::new(),
             id: id.to_string(),
             name: "Example Workspace".to_owned(),
             directory: std::env::temp_dir()
@@ -12694,6 +12645,7 @@ active_runbook_count: 0,
     fn workspace_identity_and_agents_saves_keep_other_pending_edits() {
         let id = uuid::Uuid::parse_str("00000000-0000-4000-8000-000000000020").unwrap();
         let summary = WorkspaceSummary {
+            logo_rgba: Vec::new(),
             id: id.to_string(),
             name: "Example Workspace".to_owned(),
             directory: "/example/workspace".to_owned(),
@@ -12707,14 +12659,20 @@ active_runbook_count: 0,
                 ..Default::default()
             }),
             workspace_foundation_revision: 1,
+            workspace_logo_edit: vec![100; beale_contracts::workspace_logo::BYTE_LEN],
             workspace_name_edit: TextEdit::new("Pending name"),
             workspace_guidance_edit: TextEdit::new("Pending instructions"),
             ..State::default()
         };
         let identity = foundation_request(&state, FoundationSaveTarget::Identity);
+        assert_eq!(
+            identity.logo_rgba.as_ref(),
+            Some(&state.workspace_logo_edit)
+        );
         assert_eq!(identity.name, "Pending name");
         assert_eq!(identity.guidance, "Saved instructions");
         let agents = foundation_request(&state, FoundationSaveTarget::Agents);
+        assert!(agents.logo_rgba.is_none());
         assert_eq!(agents.name, "Example Workspace");
         assert_eq!(agents.guidance, "Pending instructions");
 
@@ -12732,6 +12690,10 @@ active_runbook_count: 0,
             )),
         );
         assert_eq!(state.workspace_name_edit.text, "Pending name");
+        assert_eq!(
+            state.workspace_logo_edit,
+            vec![100; beale_contracts::workspace_logo::BYTE_LEN]
+        );
         assert_eq!(state.workspace_save_message, "AGENTS.md saved.");
 
         state.workspace_guidance_edit = TextEdit::new("Another pending instruction");
@@ -12742,6 +12704,7 @@ active_runbook_count: 0,
             Ok(WorkspaceSaveResult::Foundation(
                 WorkspaceFoundation {
                     summary: Some(WorkspaceSummary {
+                        logo_rgba: Vec::new(),
                         name: "Pending name".to_owned(),
                         ..summary
                     }),
@@ -12961,7 +12924,7 @@ active_runbook_count: 0,
     fn surface_list_has_readable_flat_rows_at_wide_and_narrow_widths() {
         for (width, row_height) in [(1440.0, 76.0), (840.0, 84.0)] {
             let state = visual_preview::fixture("surface-manage");
-            let mut runtime = Runtime::new(state, view, (width, 800.0), Env::new(true, 1.0));
+            let mut runtime = Runtime::new(state, view, (width, 1800.0), Env::new(true, 1.0));
             runtime.frame(0.0);
             if width > 1000.0 {
                 assert!(
@@ -13237,6 +13200,7 @@ active_runbook_count: 0,
 
         let id = uuid::Uuid::parse_str("00000000-0000-4000-8000-000000000004").unwrap();
         let summary = WorkspaceSummary {
+            logo_rgba: Vec::new(),
             id: id.to_string(),
             name: "Example Workspace".to_owned(),
             directory: std::env::temp_dir()
@@ -14741,6 +14705,7 @@ active_runbook_count: 0,
         let workspace_id = uuid::Uuid::from_u128(31).to_string();
         let state = State {
             workspaces: vec![WorkspaceSummary {
+                logo_rgba: Vec::new(),
                 id: workspace_id.clone(),
                 name: "Example Research Workspace".to_owned(),
                 directory: "example-directory".to_owned(),
@@ -15115,6 +15080,7 @@ active_runbook_count: 0,
         let state = State {
             primary_view: PrimaryView::Home,
             workspaces: vec![WorkspaceSummary {
+                logo_rgba: Vec::new(),
                 id: workspace_id.to_owned(),
                 name: "Example Workspace".to_owned(),
                 directory: "example-directory".to_owned(),
@@ -15217,7 +15183,7 @@ active_runbook_count: 0,
             let label = runtime
                 .elements()
                 .into_iter()
-                .find(|item| item.text.as_deref() == Some("New Research"))
+                .find(|item| item.text.as_deref() == Some("New Scan"))
                 .unwrap();
             assert_eq!(title[0], label.rect[0]);
         } else {

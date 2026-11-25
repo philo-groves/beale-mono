@@ -742,7 +742,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
         );
         let message = match AutomationRunStatus::try_from(run.status) {
             Ok(AutomationRunStatus::Active) => {
-                "This job is running. Its session will open after the first turn is saved."
+                "This job is running. Its scan will open after the first turn is saved."
             }
             Ok(AutomationRunStatus::Failed | AutomationRunStatus::Interrupted) => {
                 run.error.as_str()
@@ -768,7 +768,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
         );
     } else if state.automations.jobs.is_empty() {
         body = body.child(
-            crate::design::empty_state(&AUTOMATIONS, "Keep research moving", "Schedule a recurring research session. Upcoming runs and completed work stay organized here.", theme),
+            crate::design::empty_state(&AUTOMATIONS, "Keep research moving", "Schedule a recurring security scan. Upcoming runs and completed work stay organized here.", theme),
         );
     } else {
         body = body.child(

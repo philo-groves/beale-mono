@@ -3,16 +3,16 @@ use beale_contracts::v1::{
     AuthMethod, GoalStatus, ReasoningEffort, SessionRole, SessionStreamKind, SessionToolSummary,
 };
 use rune::{
-    Align, Color, El, Key, KeyEvent, LineCap, Path, ScrollSpec, Shape, Side, TextEdit, Transition,
-    Tx, auto_grow, canvas, col, el, icon, row, text, text_input,
+    Align, Color, El, Key, KeyEvent, ScrollSpec, Side, TextEdit, Transition, Tx, auto_grow, col,
+    el, icon, row, text, text_input,
 };
 use rune_kit::{Markdown, MarkdownStyle};
 
 use crate::{
     Provider, SelectionMenu, State, ThemeStyle, catalog_index, effective_model_method, form_button,
     icons::{
-        AGENT, ARROW_RIGHT, BRAIN, CHECK, CHEVRON_DOWN, CHEVRON_RIGHT, CHEVRON_UP, FOLDER_OPEN,
-        REPEAT, STOP, TARGET, TERMINAL, WRENCH,
+        ARROW_RIGHT, BRAIN, CHECK, CHEVRON_DOWN, CHEVRON_RIGHT, CHEVRON_UP, PEN, REPEAT, STOP,
+        TARGET, TERMINAL, WRENCH,
     },
     in_place_menu, input_history, load_tool_detail_page, modal_dialog, selection_button,
     settings_form_card, start_session_turn, toggle_selection_menu, toggle_tool_detail, ui_font,
@@ -27,7 +27,7 @@ pub(crate) struct ModelSelection {
 }
 
 pub(crate) struct GraphEditor {
-    pub(crate) role: beale_graphs::Role,
+    pub(crate) role: beale_graphs::ProfileId,
     pub(crate) models: Vec<ModelSelection>,
     pub(crate) model_menu: Option<GraphModelMenu>,
 }
@@ -518,20 +518,35 @@ impl ModelMenuTarget {
                     self.close(state);
                 } else if let Some(index) = editor.models.iter().position(|item| *item == selection)
                 {
-                    editor.models.remove(index);
+                    if editor.models.len() > 1 {
+                        editor.models.remove(index);
+                    }
                 } else if editor.models.len() < editor.role.max_models() {
                     editor.models.push(selection);
+                }
+                if section == MenuSection::Model {
+                    let editor = state.graph_editor.as_ref().expect("menu requires editor");
+                    let role = editor.role;
+                    let models = editor.models.clone();
+                    if Some(role) == beale_graphs::entry_role(&state.new_research_graph_id)
+                        || (state.new_research_graph_id.is_empty()
+                            && role == beale_graphs::ProfileId::Main)
+                    {
+                        state.new_research_model = models.first().cloned();
+                    }
+                    state.new_research_graph_models.insert(role, models);
                 }
                 return;
             }
             MenuChoice::Model(selection) => {
                 state.new_research_model = Some(selection.clone());
-                if let Some(models) =
-                    state.new_research_graph_models[beale_graphs::Role::Main.index()].as_mut()
+                if let Some(models) = state
+                    .new_research_graph_models
+                    .get_mut(&beale_graphs::ProfileId::Main)
                 {
                     models.retain(|item| *item != selection);
                     models.insert(0, selection);
-                    models.truncate(beale_graphs::Role::Main.max_models());
+                    models.truncate(beale_graphs::ProfileId::Main.max_models());
                 }
             }
             MenuChoice::Effort(effort) => state.new_research_effort = effort,
@@ -851,9 +866,27 @@ fn render_model_menu(state: &State, target: ModelMenuTarget, theme: ThemeStyle<'
         theme.color("#242424"),
     );
     let (anchor, side, align, gap) = if is_graph {
-        ("graph-editor-model-control", Side::Bottom, Align::End, 4.0)
+        (
+            format!(
+                "graph-editor-model-control-{}",
+                state
+                    .graph_editor
+                    .as_ref()
+                    .expect("menu requires editor")
+                    .role
+                    .id()
+            ),
+            Side::Bottom,
+            Align::End,
+            4.0,
+        )
     } else {
-        ("new-research-model-control", Side::Top, Align::Start, 6.0)
+        (
+            "new-research-model-control".to_owned(),
+            Side::Top,
+            Align::Start,
+            6.0,
+        )
     };
     let menu = row()
         .key(format!("{prefix}-model-menu"))
@@ -895,7 +928,17 @@ pub(crate) fn transcript_markdown(
     streaming: bool,
     muted: bool,
 ) -> El {
-    let body = ui_font(if muted { 13.0 } else { 14.0 }, 400.0);
+    transcript_markdown_sized(content, theme, streaming, muted, false)
+}
+
+fn transcript_markdown_sized(
+    content: String,
+    theme: ThemeStyle<'_>,
+    streaming: bool,
+    muted: bool,
+    compact: bool,
+) -> El {
+    let body = ui_font(if muted || compact { 13.0 } else { 14.0 }, 400.0);
     let heading_weight = if muted { 400.0 } else { 600.0 };
     let mut style = MarkdownStyle::neutral(theme.is_dark())
         .text(theme.color(if muted { "#969696" } else { "#eeeeee" }))
@@ -910,10 +953,28 @@ pub(crate) fn transcript_markdown(
         .rule(theme.color("#323232"))
         .quote_rule(theme.color("#777777"))
         .body_font(body)
-        .heading_font(1, ui_font(if muted { 16.0 } else { 20.0 }, heading_weight))
-        .heading_font(2, ui_font(if muted { 15.0 } else { 18.0 }, heading_weight))
-        .heading_font(3, ui_font(if muted { 14.0 } else { 16.0 }, heading_weight))
-        .code_block_font(ui_font(13.0, 400.0).mono());
+        .heading_font(
+            1,
+            ui_font(
+                if muted {
+                    16.0
+                } else if compact {
+                    17.0
+                } else {
+                    20.0
+                },
+                heading_weight,
+            ),
+        )
+        .heading_font(
+            2,
+            ui_font(if muted || compact { 15.0 } else { 18.0 }, heading_weight),
+        )
+        .heading_font(
+            3,
+            ui_font(if muted || compact { 14.0 } else { 16.0 }, heading_weight),
+        )
+        .code_block_font(ui_font(if compact { 12.0 } else { 13.0 }, 400.0).mono());
     if muted {
         style = style.strong_weight(400.0);
     }
@@ -928,9 +989,11 @@ pub(crate) fn transcript_markdown(
         .render(&style)
 }
 
-fn role_models(state: &State, role: beale_graphs::Role) -> Vec<ModelSelection> {
-    let mut models: Vec<_> = state.new_research_graph_models[role.index()]
-        .clone()
+fn role_models(state: &State, role: beale_graphs::ProfileId) -> Vec<ModelSelection> {
+    let mut models: Vec<_> = state
+        .new_research_graph_models
+        .get(&role)
+        .cloned()
         .map(|models| {
             let available = choices(state);
             models
@@ -943,27 +1006,6 @@ fn role_models(state: &State, role: beale_graphs::Role) -> Vec<ModelSelection> {
         models.truncate(role.max_models());
     }
     models
-}
-
-pub(crate) fn graph_concurrency_config(
-    state: &State,
-) -> Vec<beale_contracts::v1::GraphNodeConcurrency> {
-    beale_graphs::graph_definition(&state.new_research_graph_id)
-        .unwrap_or(&beale_graphs::SIMPLE_GRAPH)
-        .nodes
-        .iter()
-        .filter_map(|role| {
-            (if role.is_top_level() {
-                Some(1)
-            } else {
-                state.new_research_graph_concurrency[role.index()]
-            })
-            .map(|max_concurrent| beale_contracts::v1::GraphNodeConcurrency {
-                node_id: role.id().to_owned(),
-                max_concurrent,
-            })
-        })
-        .collect()
 }
 
 pub(crate) fn graph_model_config(state: &State) -> Vec<beale_contracts::v1::GraphNodeModel> {
@@ -985,18 +1027,8 @@ pub(crate) fn graph_model_config(state: &State) -> Vec<beale_contracts::v1::Grap
         .collect()
 }
 
-#[derive(Clone, Copy)]
-struct GraphNodePlacement {
-    role: beale_graphs::Role,
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-}
-
-const GRAPH_TOP_INSET: f32 = 8.0;
-
-pub(crate) fn graph_model_label(state: &State, role: beale_graphs::Role) -> String {
+#[cfg(test)]
+pub(crate) fn graph_model_label(state: &State, role: beale_graphs::ProfileId) -> String {
     let models = role_models(state, role);
     let choices = choices(state);
     let name = models.first().map_or("No model", |selection| {
@@ -1013,333 +1045,288 @@ pub(crate) fn graph_model_label(state: &State, role: beale_graphs::Role) -> Stri
     }
 }
 
-fn graph_node_width(state: &State, role: beale_graphs::Role, max_width: f32) -> f32 {
-    let role_width = rune::text::measure(role.label(), &[], ui_font(12.0, 400.0), None).0
-        + 19.0
-        + (if role.is_top_level() {
-            Some(1)
-        } else {
-            state.new_research_graph_concurrency[role.index()]
-        })
-        .map_or(0.0, |max| {
-            rune::text::measure(&format!("{max} Max"), &[], ui_font(11.0, 400.0), None).0 + 4.0
-        });
-    let model_width = rune::text::measure(
-        &graph_model_label(state, role),
-        &[],
-        ui_font(12.0, 400.0),
-        None,
-    )
-    .0 + if role_models(state, role).is_empty() {
-        0.0
-    } else {
-        18.0
-    };
-    (role_width.max(model_width) + 20.0).ceil().min(max_width)
+fn open_graph_profile(state: &mut State, role: beale_graphs::ProfileId) {
+    if state
+        .graph_editor
+        .as_ref()
+        .is_some_and(|editor| editor.role == role && editor.model_menu.is_some())
+    {
+        ModelMenuTarget::Graph.close(state);
+        return;
+    }
+    state.graph_editor = Some(GraphEditor {
+        role,
+        models: role_models(state, role),
+        model_menu: None,
+    });
+    toggle_graph_model_menu(state);
 }
 
-fn graph_node(state: &State, placement: GraphNodePlacement, theme: ThemeStyle<'_>) -> El {
-    let role = placement.role;
-    let models = role_models(state, role);
-    let model = models.first();
-    let model_label = graph_model_label(state, role);
-    let mut model_row = row().w_full().min_w(0.0).center_y().gap(5.0);
-    if let Some(selection) = model {
-        model_row =
-            model_row.child(icon(selection.provider.logo(), 13.0).color(theme.color("#999999")));
+fn graph_profiles(state: &State, top_level: bool) -> Vec<beale_graphs::ProfileId> {
+    beale_graphs::graph_definition(&state.new_research_graph_id)
+        .map_or_else(
+            || vec![beale_graphs::ProfileId::Main],
+            |graph| graph.nodes.to_vec(),
+        )
+        .into_iter()
+        .filter(|role| role.is_top_level() == top_level)
+        .collect()
+}
+
+fn model_summary(state: &State, roles: &[beale_graphs::ProfileId], theme: ThemeStyle<'_>) -> El {
+    let mut models = Vec::new();
+    for model in roles.iter().flat_map(|role| role_models(state, *role)) {
+        if !models.contains(&model) {
+            models.push(model);
+        }
     }
-    model_row = model_row.child(
-        text(model_label)
-            .key(format!("new-research-graph-model-label-{}", role.id()))
+    let count = models.len();
+    let label = match count {
+        0 if roles.is_empty() => "No subagents".to_owned(),
+        0 => "Choose models".to_owned(),
+        1 => choices(state)
+            .iter()
+            .find(|choice| choice.selection == models[0])
+            .map_or_else(|| models[0].id.clone(), |choice| choice.name.clone()),
+        _ => format!("{count} models selected"),
+    };
+    let mut summary = row().min_w(0.0).center_y().gap(7.0);
+    if count == 1 {
+        summary = summary.child(
+            icon(models[0].provider.logo(), 15.0)
+                .key("new-research-single-model-provider")
+                .color(theme.color("#b8b8b8")),
+        );
+    }
+    summary.child(
+        text(label)
             .min_w(0.0)
-            .grow(1.0)
             .fade_truncate()
-            .font(ui_font(12.0, 400.0))
-            .color(theme.color("#999999")),
-    );
-    let max_concurrent = if role.is_top_level() {
-        Some(1)
-    } else {
-        state.new_research_graph_concurrency[role.index()]
-    };
-    let mut role_row = row().w_full().h(18.0).center_y().gap(4.0).child(
-        icon(&AGENT, 15.0)
-            .key(format!("new-research-graph-agent-icon-{}", role.id()))
-            .color(theme.color("#eeeeee")),
-    );
-    role_row = role_row.child(
-        text(role.label())
-            .grow(1.0)
-            .font(ui_font(12.0, 400.0))
-            .color(theme.color("#eeeeee")),
-    );
-    if let Some(max) = max_concurrent {
-        role_row = role_row.child(
-            text(format!("{max} Max"))
-                .key(format!("new-research-graph-node-{}-max", role.id()))
-                .font(ui_font(11.0, 400.0))
-                .color(theme.color("#999999")),
-        );
+            .font(ui_font(13.0, 450.0))
+            .color(theme.color("#bdbdbd")),
+    )
+}
+
+fn model_group_control(state: &State, top_level: bool, theme: ThemeStyle<'_>) -> El {
+    let roles = graph_profiles(state, top_level);
+    if let (true, [role]) = (top_level, roles.as_slice()) {
+        return graph_model_control(state, *role, theme);
     }
-    col()
-        .key(format!("new-research-graph-node-{}", role.id()))
+    let key = if top_level {
+        "new-scan-agent-models-edit"
+    } else {
+        "new-scan-subagent-models-edit"
+    };
+    let title = if top_level {
+        "Edit agent models"
+    } else {
+        "Edit subagent models"
+    };
+    let mut edit = el()
+        .key(key)
         .role("button")
-        .label(format!("Edit {} allowed models", role.label()))
-        .absolute(placement.x, placement.y)
-        .size(placement.width, placement.height)
-        .padding(9.0)
-        .gap(5.0)
-        .radius(16.0)
-        .continuous_corners()
-        .fill(theme.color("#202020"))
-        .border(1.0, theme.color("#3a3a3a"))
-        .hover(theme.color("#2a2a2a"))
-        .on_press(move |state: &mut State| {
-            state.graph_editor = Some(GraphEditor {
-                role,
-                models: role_models(state, role),
-                model_menu: None,
-            });
-            state.graph_editor_max_concurrent = TextEdit::new(
-                state.new_research_graph_concurrency[role.index()]
-                    .map_or_else(String::new, |value| value.to_string()),
-            );
-        })
-        .child(role_row)
-        .child(model_row)
+        .label(title)
+        .size(32.0, 32.0)
+        .center()
+        .radius(8.0)
+        .hover(theme.color("#303030"))
+        .child(icon(&PEN, 16.0).color(theme.color("#bdbdbd")));
+    if !roles.is_empty() {
+        edit = edit.on_press(move |state: &mut State| {
+            state.graph_models_group = Some(top_level);
+        });
+    } else {
+        edit = edit.opacity(0.45);
+    }
+    row()
+        .min_w(0.0)
+        .center_y()
+        .gap(8.0)
+        .child(model_summary(state, &roles, theme))
+        .child(edit)
 }
 
-fn graph_preview(state: &State, theme: ThemeStyle<'_>, available_width: f32) -> El {
-    let graph = &beale_graphs::SIMPLE_GRAPH;
-    let stage_width = available_width.clamp(180.0, 640.0);
-    let preferred_widths: Vec<_> = graph
-        .nodes
-        .iter()
-        .map(|role| graph_node_width(state, *role, stage_width))
-        .collect();
-    let columns = if stage_width >= 560.0
-        && preferred_widths[1..]
+fn close_graph_models_group(state: &mut State) {
+    state.graph_editor = None;
+    state.graph_models_group = None;
+}
+
+fn graph_model_control(state: &State, role: beale_graphs::ProfileId, theme: ThemeStyle<'_>) -> El {
+    let models = role_models(state, role);
+    let selected = models.first();
+    let label = match models.as_slice() {
+        [] => "Choose models".to_owned(),
+        [_] => choices(state)
             .iter()
-            .all(|width| *width <= (stage_width - 24.0) / 3.0)
-    {
-        3
-    } else if stage_width >= 380.0
-        && preferred_widths[1..3]
-            .iter()
-            .all(|width| *width <= (stage_width - 12.0) / 2.0)
-    {
-        2
-    } else {
-        1
+            .find(|choice| choice.selection == models[0])
+            .map_or_else(|| models[0].id.clone(), |choice| choice.name.clone()),
+        _ => format!("{} models selected", models.len()),
     };
-    let gap = 12.0;
-    let slot_width = (stage_width - gap * (columns - 1) as f32) / columns as f32;
-    let layout: Vec<_> = graph
-        .nodes
-        .iter()
-        .enumerate()
-        .map(|(index, role)| {
-            let width = preferred_widths[index].min(
-                if (columns == 3 && index > 0) || (columns == 2 && (index == 1 || index == 2)) {
-                    slot_width
-                } else {
-                    stage_width
-                },
-            );
-            let (x, y) = match (columns, index) {
-                (3, 0) => ((stage_width - width) / 2.0, GRAPH_TOP_INSET),
-                (3, _) => {
-                    let slot = index - 1;
-                    (
-                        slot as f32 * (slot_width + gap) + (slot_width - width) / 2.0,
-                        154.0 + GRAPH_TOP_INSET,
-                    )
-                }
-                (2, 1) => ((slot_width - width) / 2.0, 125.0 + GRAPH_TOP_INSET),
-                (2, 2) => (
-                    slot_width + gap + (slot_width - width) / 2.0,
-                    125.0 + GRAPH_TOP_INSET,
-                ),
-                (2, 3) => ((stage_width - width) / 2.0, 250.0 + GRAPH_TOP_INSET),
-                (2, _) => ((stage_width - width) / 2.0, GRAPH_TOP_INSET),
-                _ => (
-                    (stage_width - width) / 2.0,
-                    index as f32 * 85.0 + GRAPH_TOP_INSET,
-                ),
-            };
-            GraphNodePlacement {
-                role: *role,
-                x,
-                y,
-                width,
-                height: 56.0,
-            }
-        })
-        .collect();
-    let stage_height = if columns == 3 {
-        240.0 + GRAPH_TOP_INSET
-    } else if columns == 2 {
-        340.0 + GRAPH_TOP_INSET
-    } else {
-        315.0 + GRAPH_TOP_INSET
-    };
-    let mut shape = Shape::new();
-    for edge in graph.edges {
-        let (Some(from), Some(to)) = (
-            layout.iter().find(|node| node.role == edge.from),
-            layout.iter().find(|node| node.role == edge.to),
-        ) else {
-            continue;
-        };
-        let path = if stage_width < 380.0 {
-            let source = [from.x, from.y + from.height / 2.0];
-            let target = [to.x, to.y + to.height / 2.0];
-            let rail = (from.x - 9.0).max(0.0);
-            Path::new()
-                .move_to(source)
-                .cubic_to([rail, source[1]], [rail, target[1]], target)
+    let open = state
+        .graph_editor
+        .as_ref()
+        .is_some_and(|editor| editor.role == role && editor.model_menu.is_some());
+    row()
+        .key(format!("graph-editor-model-control-{}", role.id()))
+        .role("button")
+        .label(format!("Choose {} models", role.label()))
+        .h(34.0)
+        .min_w(0.0)
+        .max_w(190.0)
+        .px(10.0)
+        .center_y()
+        .gap(6.0)
+        .radius(8.0)
+        .fill(theme.color(if open { "#303030" } else { "#282828" }))
+        .border(1.0, theme.color("#353535"))
+        .on_press(move |state: &mut State| open_graph_profile(state, role))
+        .child(if models.len() == 1 {
+            icon(selected.expect("one model").provider.logo(), 15.0).color(theme.color("#b8b8b8"))
         } else {
-            let source = [from.x + from.width / 2.0, from.y + from.height];
-            let target = [to.x + to.width / 2.0, to.y];
-            let middle = (source[1] + target[1]) / 2.0;
-            Path::new()
-                .move_to(source)
-                .cubic_to([source[0], middle], [target[0], middle], target)
-        };
-        shape = shape.stroke_path(&path, 1.5, LineCap::Round, theme.color("#565656"));
-    }
-    let mut stage = el()
-        .key("new-research-simple-graph")
-        .size(stage_width, stage_height)
+            el().size(15.0, 15.0)
+        })
         .child(
-            canvas(shape)
-                .absolute(0.0, 0.0)
-                .size(stage_width, stage_height),
-        );
-    for placement in layout {
-        stage = stage.child(graph_node(state, placement, theme));
-    }
-    row().w_full().center().child(stage)
-}
-
-fn flow_graph_preview(state: &State, theme: ThemeStyle<'_>, available_width: f32) -> El {
-    let Some(graph) = beale_graphs::graph_definition(&state.new_research_graph_id) else {
-        return main_only_preview(state, theme, available_width);
-    };
-    let stage_width = available_width.clamp(180.0, 640.0);
-    let roots: Vec<_> = graph
-        .nodes
-        .iter()
-        .copied()
-        .filter(|role| role.is_top_level())
-        .collect();
-    let specialists: Vec<_> = graph
-        .nodes
-        .iter()
-        .copied()
-        .filter(|role| !role.is_top_level())
-        .collect();
-    let columns = if stage_width >= 420.0 { 2 } else { 1 };
-    let gap = 12.0;
-    let slot_width = (stage_width - gap * (columns - 1) as f32) / columns as f32;
-    let mut placements = Vec::new();
-    for (index, role) in roots.iter().enumerate() {
-        let width = graph_node_width(state, *role, slot_width).min(slot_width);
-        let column = index % columns;
-        let row = index / columns;
-        placements.push(GraphNodePlacement {
-            role: *role,
-            x: column as f32 * (slot_width + gap) + (slot_width - width) / 2.0,
-            y: GRAPH_TOP_INSET + row as f32 * 96.0,
-            width,
-            height: 56.0,
-        });
-    }
-    let root_rows = roots.len().div_ceil(columns);
-    let specialist_top = GRAPH_TOP_INSET + root_rows as f32 * 96.0 + 28.0;
-    let specialist_columns = if stage_width >= 570.0 {
-        3
-    } else if stage_width >= 360.0 {
-        2
-    } else {
-        1
-    };
-    let specialist_slot =
-        (stage_width - gap * (specialist_columns - 1) as f32) / specialist_columns as f32;
-    for (index, role) in specialists.iter().enumerate() {
-        let width = graph_node_width(state, *role, specialist_slot).min(specialist_slot);
-        let column = index % specialist_columns;
-        placements.push(GraphNodePlacement {
-            role: *role,
-            x: column as f32 * (specialist_slot + gap) + (specialist_slot - width) / 2.0,
-            y: specialist_top + (index / specialist_columns) as f32 * 78.0,
-            width,
-            height: 56.0,
-        });
-    }
-    let specialist_rows = specialists.len().div_ceil(specialist_columns);
-    let stage_height = specialist_top + specialist_rows as f32 * 78.0 + 8.0;
-    let mut shape = Shape::new();
-    for edge in graph
-        .edges
-        .iter()
-        .filter(|edge| edge.from.is_top_level() && edge.to.is_top_level())
-    {
-        let (Some(from), Some(to)) = (
-            placements.iter().find(|node| node.role == edge.from),
-            placements.iter().find(|node| node.role == edge.to),
-        ) else {
-            continue;
-        };
-        let source = [from.x + from.width / 2.0, from.y + from.height / 2.0];
-        let target = [to.x + to.width / 2.0, to.y + to.height / 2.0];
-        shape = shape.stroke_path(
-            &Path::new().move_to(source).line_to(target),
-            1.5,
-            LineCap::Round,
-            theme.color("#565656"),
-        );
-    }
-    let mut stage = el()
-        .key(format!("new-research-{}-graph", graph.id))
-        .size(stage_width, stage_height)
-        .child(
-            canvas(shape)
-                .absolute(0.0, 0.0)
-                .size(stage_width, stage_height),
+            text(label)
+                .min_w(0.0)
+                .fade_truncate()
+                .font(ui_font(13.0, 450.0))
+                .color(theme.color("#e2e2e2")),
         )
         .child(
-            text("SUBAGENTS FOR EACH STAGE")
-                .absolute(0.0, specialist_top - 30.0)
-                .font(ui_font(10.0, 600.0))
-                .color(theme.color("#888888")),
-        );
-    for placement in placements {
-        stage = stage.child(graph_node(state, placement, theme));
-    }
-    row().w_full().center().child(stage)
+            icon(if open { &CHEVRON_UP } else { &CHEVRON_DOWN }, 13.0)
+                .color(theme.color("#969696")),
+        )
 }
 
-fn main_only_preview(state: &State, theme: ThemeStyle<'_>, available_width: f32) -> El {
-    let stage_width = available_width.clamp(180.0, 640.0);
-    let width = graph_node_width(state, beale_graphs::Role::Main, stage_width);
-    let main = GraphNodePlacement {
-        role: beale_graphs::Role::Main,
-        x: (stage_width - width) / 2.0,
-        y: GRAPH_TOP_INSET,
-        width,
-        height: 56.0,
-    };
-    row().w_full().center().child(
-        el().key("new-research-no-graph")
-            .size(stage_width, 71.0 + GRAPH_TOP_INSET)
-            .child(graph_node(state, main, theme)),
+pub(crate) fn graph_models_group_dialog(state: &State, theme: ThemeStyle<'_>) -> [El; 2] {
+    let top_level = state
+        .graph_models_group
+        .expect("group dialog requires a selection");
+    let rows = graph_profiles(state, top_level).into_iter().map(|role| {
+        let purpose = if role == beale_graphs::ProfileId::Main {
+            "Leads the scan and coordinates specialist tasks."
+        } else if role.is_top_level() {
+            role.instruction()
+                .split_once(". ")
+                .map_or(role.instruction(), |(first, _)| first)
+        } else {
+            role.spawn_when()
+        };
+        row_with_control(
+            role.label(),
+            purpose,
+            graph_model_control(state, role, theme),
+            theme,
+        )
+        .key(format!("new-research-graph-node-{}", role.id()))
+    });
+    modal_dialog::render(
+        modal_dialog::DialogSpec {
+            key: "graph-models-group-dialog",
+            title: if top_level {
+                "Agent Models"
+            } else {
+                "Subagent Models"
+            },
+            width: 620.0,
+            focus_return: if top_level {
+                "new-scan-agent-models-edit"
+            } else {
+                "new-scan-subagent-models-edit"
+            },
+        },
+        settings_form_card(rows, theme),
+        row()
+            .w_full()
+            .child(el().grow(1.0))
+            .child(form_button("Done", theme).on_press(close_graph_models_group)),
+        theme,
+        close_graph_models_group,
     )
 }
 
-fn close_graph_editor(state: &mut State) {
-    state.graph_editor = None;
-    state.graph_editor_max_concurrent.clear();
+fn graph_profile_form(state: &State, theme: ThemeStyle<'_>, available_width: f32) -> El {
+    let selected = !state.new_research_graph_id.is_empty();
+    let active = state.selection_menu == Some(SelectionMenu::SessionGraph);
+    let label = beale_graphs::graph_definition(&state.new_research_graph_id)
+        .map_or("No Graph", |graph| graph.name);
+    let graph = selection_button(
+        label,
+        active,
+        |state: &mut State| toggle_selection_menu(state, SelectionMenu::SessionGraph),
+        theme,
+    )
+    .key("new-research-graph-control")
+    .role("button")
+    .label(format!("Scan graph: {label}"));
+    let mut rows = vec![
+        row_with_control("Graph", "Choose the scan workflow.", graph, theme)
+            .key("new-scan-graph-row"),
+    ];
+    let top_roles = graph_profiles(state, true);
+    let top_count = top_roles.len();
+    rows.push(
+        row_with_control(
+            if top_count == 1 {
+                "Agent Model"
+            } else {
+                "Agent Models"
+            },
+            match top_roles.as_slice() {
+                [beale_graphs::ProfileId::Main] => {
+                    "Leads the scan and coordinates specialist tasks."
+                }
+                [role] => role
+                    .instruction()
+                    .split_once(". ")
+                    .map_or(role.instruction(), |(first, _)| first),
+                _ => "Models used by persistent scan agents.",
+            },
+            model_group_control(state, true, theme),
+            theme,
+        )
+        .key("new-scan-agent-models-row"),
+    );
+    rows.push(
+        row_with_control(
+            "Subagent Models",
+            "Models used by task workers.",
+            model_group_control(state, false, theme),
+            theme,
+        )
+        .key("new-scan-subagent-models-row"),
+    );
+    if beale_graphs::is_rotating_graph(&state.new_research_graph_id) {
+        rows.push(
+            row_with_control(
+                "Minutes Per Stage",
+                "Time before the scan moves to the next stage.",
+                field(
+                    &state.new_research_stage_duration_minutes,
+                    "new-research-stage-duration-minutes",
+                    "60",
+                    theme,
+                    |state| &mut state.new_research_stage_duration_minutes,
+                )
+                .w(86.0)
+                .on_input_change(|state: &mut State, _| {
+                    normalize_goal_limit(&mut state.new_research_stage_duration_minutes, 1_440);
+                }),
+                theme,
+            )
+            .key("new-scan-stage-duration-row"),
+        );
+    }
+    settings_form_card(rows, theme)
+        .w(available_width.clamp(180.0, 640.0))
+        .self_center()
+        .key(if !selected {
+            "new-research-no-graph"
+        } else if state.new_research_graph_id == beale_graphs::SIMPLE_ID {
+            "new-research-simple-graph"
+        } else {
+            "new-research-flow-graph"
+        })
 }
 
 fn graph_editor_model_label(editor: &GraphEditor, model_choices: &[ModelChoice]) -> String {
@@ -1353,174 +1340,56 @@ fn graph_editor_model_label(editor: &GraphEditor, model_choices: &[ModelChoice])
     }
 }
 
-pub(crate) fn graph_editor_dialog(state: &State, theme: ThemeStyle<'_>) -> [El; 2] {
-    let editor = state.graph_editor.as_ref().expect("dialog requires editor");
-    let model_control = selection_button(
-        graph_editor_model_label(editor, &choices(state)),
-        editor.model_menu.is_some(),
-        toggle_graph_model_menu,
-        theme,
-    )
-    .key("graph-editor-model-control");
-    let max_concurrent = if editor.role.is_top_level() {
-        text("1")
-            .key("graph-editor-fixed-max-concurrent")
-            .font(ui_font(14.0, 400.0))
-            .color(theme.color("#bdbdbd"))
-    } else {
-        field(
-            &state.graph_editor_max_concurrent,
-            "graph-editor-max-concurrent",
-            "Unlimited",
-            theme,
-            |state| &mut state.graph_editor_max_concurrent,
-        )
-        .w(110.0)
-        .on_input_change(|state: &mut State, _| {
-            normalize_goal_limit(
-                &mut state.graph_editor_max_concurrent,
-                beale_graphs::MAX_CONCURRENT as u64,
-            );
-        })
-    };
-    let no_graph = state.new_research_graph_id.is_empty();
-    let mut rows = vec![
-        row_with_control(
-            "Role",
-            if no_graph {
-                "This session's agent."
-            } else {
-                "Role in this session graph."
-            },
-            text(editor.role.label())
-                .font(ui_font(14.0, 400.0))
-                .color(theme.color("#bdbdbd")),
-            theme,
-        ),
-        row_with_control(
-            if editor.role.is_top_level() {
-                "Model"
-            } else {
-                "Allowed Models"
-            },
-            if editor.role.is_top_level() {
-                "Choose one model for this top-level agent."
-            } else {
-                "Choose up to 16 models for this role."
-            },
-            model_control,
-            theme,
-        ),
-    ];
-    rows.push(row_with_control(
-        "Max Concurrent",
-        if editor.role.is_top_level() {
-            "This top-level agent runs one turn at a time."
-        } else {
-            "Maximum simultaneous agents for this role."
-        },
-        max_concurrent,
-        theme,
-    ));
-    let body = settings_form_card(rows, theme);
-    let mut save = form_button("Save", theme).key("graph-editor-save");
-    if !editor.models.is_empty() {
-        save = save.on_press(|state: &mut State| {
-            if let Some(editor) = state.graph_editor.take() {
-                if editor.role.is_top_level() {
-                    state.new_research_graph_concurrency[editor.role.index()] = Some(1);
-                } else if !state.new_research_graph_id.is_empty() {
-                    state.new_research_graph_concurrency[editor.role.index()] = state
-                        .graph_editor_max_concurrent
-                        .text
-                        .parse()
-                        .ok()
-                        .or_else(|| editor.role.default_max_concurrent());
-                }
-                state.graph_editor_max_concurrent.clear();
-                if Some(editor.role) == beale_graphs::entry_role(&state.new_research_graph_id)
-                    || (state.new_research_graph_id.is_empty()
-                        && editor.role == beale_graphs::Role::Main)
-                {
-                    state.new_research_model = editor.models.first().cloned();
-                }
-                state.new_research_graph_models[editor.role.index()] = Some(editor.models);
-            }
-        });
-    } else {
-        save = save.opacity(0.45);
-    }
-    modal_dialog::render(
-        modal_dialog::DialogSpec {
-            key: "graph-editor-dialog",
-            title: if no_graph {
-                "Edit Main Agent"
-            } else {
-                "Edit Graph Node"
-            },
-            width: 520.0,
-            focus_return: "new-research-graph-control",
-        },
-        body,
-        row()
-            .w_full()
-            .gap(8.0)
-            .child(el().grow(1.0))
-            .child(form_button("Cancel", theme).on_press(close_graph_editor))
-            .child(save),
-        theme,
-        close_graph_editor,
-    )
-}
-
 pub(crate) fn graph_editor_model_menu(state: &State, theme: ThemeStyle<'_>) -> El {
     render_model_menu(state, ModelMenuTarget::Graph, theme)
 }
 
-fn new_research_setup(state: &State, theme: ThemeStyle<'_>, available_width: f32) -> El {
+fn new_research_setup(state: &State, theme: ThemeStyle<'_>, _available_width: f32) -> El {
     let workspace_name = state
         .selected_research_workspace()
-        .map(|workspace| workspace.name.as_str());
-    let heading = if let Some(name) = workspace_name {
-        let workspace = row()
-            .key("new-research-heading-workspace-control")
-            .role("button")
-            .label(format!("Choose workspace: {name}"))
-            .help(name)
-            .min_w(0.0)
-            .center_y()
-            .gap(6.0)
-            .hover_group()
-            .on_press(|state: &mut State| {
-                toggle_selection_menu(state, SelectionMenu::ResearchWorkspaceHeading)
-            })
-            .child(
-                text(name)
-                    .min_w(0.0)
-                    .fade_truncate()
-                    .font(crate::view_title_font())
-                    .color(theme.color("#eeeeee"))
-                    .group_color(theme.color("#aaaaaa")),
-            )
-            .child(
-                icon(&CHEVRON_DOWN, 15.0)
-                    .key("new-research-heading-workspace-chevron")
-                    .color(theme.color("#969696")),
-            );
-        crate::design::breadcrumb_title("New Research", workspace, theme)
-            .key("new-research-workspace-heading")
-    } else {
-        crate::design::breadcrumb_title(
-            "Home",
-            text("New Research")
-                .role("heading")
+        .map_or("Select Workspace", |workspace| workspace.name.as_str());
+    let mut workspace = row()
+        .key("new-research-heading-workspace-control")
+        .role("button")
+        .label(format!("Choose workspace: {workspace_name}"))
+        .help(workspace_name)
+        .min_w(0.0)
+        .center_y()
+        .gap(6.0)
+        .hover_group()
+        .child(
+            text(workspace_name)
+                .min_w(0.0)
                 .fade_truncate()
                 .font(crate::view_title_font())
-                .color(theme.color("#eeeeee")),
-            theme,
+                .color(theme.color("#eeeeee"))
+                .group_color(theme.color("#aaaaaa")),
         )
+        .child(
+            icon(&CHEVRON_DOWN, 15.0)
+                .key("new-research-heading-workspace-chevron")
+                .color(theme.color("#969696")),
+        );
+    if !state.workspaces.is_empty() {
+        workspace = workspace.on_press(|state: &mut State| {
+            toggle_selection_menu(state, SelectionMenu::ResearchWorkspaceHeading)
+        });
+    }
+    let heading = row()
         .key("new-research-workspace-heading")
-    };
+        .w_full()
+        .min_w(0.0)
+        .justify_center()
+        .center_y()
+        .gap(8.0)
+        .child(
+            text("Scan the security of")
+                .key("new-research-heading-prompt")
+                .role("heading")
+                .font(crate::view_title_font())
+                .color(theme.color("#eeeeee")),
+        )
+        .child(workspace);
     let mut content = col()
         .key("new-research-setup")
         .w_full()
@@ -1530,58 +1399,7 @@ fn new_research_setup(state: &State, theme: ThemeStyle<'_>, available_width: f32
         .px(20.0)
         .child(heading);
     if crate::extensions_view::graphs_enabled(state) {
-        let selected = !state.new_research_graph_id.is_empty();
-        let active = state.selection_menu == Some(SelectionMenu::SessionGraph);
-        let label = beale_graphs::graph_definition(&state.new_research_graph_id)
-            .map_or("No Graph", |graph| graph.name);
-        let selector = selection_button(
-            label,
-            active,
-            |state: &mut State| toggle_selection_menu(state, SelectionMenu::SessionGraph),
-            theme,
-        )
-        .key("new-research-graph-control")
-        .role("button")
-        .label(format!("Session graph: {label}"));
-        content = content.child(row().w_full().py(6.0).center().child(selector));
-        if state.new_research_graph_id == beale_graphs::SEQUENTIAL_ID {
-            content = content.child(
-                row()
-                    .w_full()
-                    .center()
-                    .gap(10.0)
-                    .child(
-                        text("Minutes per stage")
-                            .font(ui_font(13.0, 450.0))
-                            .color(theme.color("#bdbdbd")),
-                    )
-                    .child(
-                        field(
-                            &state.new_research_stage_duration_minutes,
-                            "new-research-stage-duration-minutes",
-                            "60",
-                            theme,
-                            |state| &mut state.new_research_stage_duration_minutes,
-                        )
-                        .w(86.0)
-                        .on_input_change(|state: &mut State, _| {
-                            normalize_goal_limit(
-                                &mut state.new_research_stage_duration_minutes,
-                                1_440,
-                            );
-                        }),
-                    ),
-            );
-        }
-        content = content.child(
-            if selected && state.new_research_graph_id == beale_graphs::SIMPLE_ID {
-                graph_preview(state, theme, available_width)
-            } else if selected {
-                flow_graph_preview(state, theme, available_width)
-            } else {
-                main_only_preview(state, theme, available_width)
-            },
-        );
+        content = content.child(graph_profile_form(state, theme, _available_width));
     }
     col()
         .key("new-research-graph-scroll")
@@ -1601,26 +1419,48 @@ pub(crate) fn transcript_message(
     streaming: bool,
     theme: ThemeStyle<'_>,
 ) -> El {
+    transcript_message_sized(key, content, user, streaming, theme, false)
+}
+
+pub(crate) fn transcript_message_compact(
+    key: String,
+    content: String,
+    user: bool,
+    streaming: bool,
+    theme: ThemeStyle<'_>,
+) -> El {
+    transcript_message_sized(key, content, user, streaming, theme, true)
+}
+
+fn transcript_message_sized(
+    key: String,
+    content: String,
+    user: bool,
+    streaming: bool,
+    theme: ThemeStyle<'_>,
+    compact: bool,
+) -> El {
     let message = if user {
         text(content)
             .key(format!("{key}-text"))
-            .font(ui_font(14.0, 400.0))
+            .font(ui_font(if compact { 13.0 } else { 14.0 }, 400.0))
             .color(theme.color("#eeeeee"))
             .wrap()
             .selectable(true)
             .selection_color(rune_kit::Kit::neutral(theme.is_dark()).selection())
     } else {
-        transcript_markdown(content, theme, streaming, false).key(format!("{key}-markdown"))
+        transcript_markdown_sized(content, theme, streaming, false, compact)
+            .key(format!("{key}-markdown"))
     };
     if user {
         row().key(key.clone()).w_full().child(el().grow(1.0)).child(
             col()
                 .key(format!("{key}-bubble"))
-                .max_w(620.0)
+                .max_w(if compact { 310.0 } else { 620.0 })
                 .shrink()
-                .px(13.0)
-                .py(10.0)
-                .radius(14.0)
+                .px(if compact { 11.0 } else { 13.0 })
+                .py(if compact { 8.0 } else { 10.0 })
+                .radius(if compact { 12.0 } else { 14.0 })
                 .continuous_corners()
                 .fill(theme.color("#202020"))
                 .child(message),
@@ -1872,7 +1712,7 @@ fn tool_single_label(tool: &SessionToolSummary, active: bool) -> String {
     }
     if matches!(tool.name.as_str(), "memory_session_query" | "memory_query") {
         let (subject, prefix) = if tool.name == "memory_session_query" {
-            ("session", "Memory session query: ")
+            ("scan", "Memory session query: ")
         } else {
             ("memory", "Memory query: ")
         };
@@ -1998,8 +1838,8 @@ fn combined_tool_series_label(tools: &[&SessionToolSummary], active: bool) -> St
                 }
                 "findings_reject" => ("Rejecting", "Rejected", "finding", "findings"),
                 "memory_session_query" => (
-                    "Searching session for",
-                    "Searched session for",
+                    "Searching scan for",
+                    "Searched scan for",
                     "query",
                     "queries",
                 ),
@@ -2777,9 +2617,9 @@ fn composer_action(state: &State, theme: ThemeStyle<'_>, has_workspaces: bool) -
         })
         .role("button")
         .label(if state.session_busy && state.session_stopping {
-            "Stopping session"
+            "Stopping scan"
         } else if state.session_busy {
-            "Stop session"
+            "Stop scan"
         } else {
             "Send message"
         })
@@ -2835,15 +2675,12 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
             .py(5.0)
             .color(theme.color("#eeeeee"))
             .placeholder(
-                if state.active_session.as_ref().is_some_and(|detail| {
-                    matches!(
-                        detail.graph_id.as_str(),
-                        beale_graphs::CLOUDFLARE_ID
-                            | beale_graphs::OPENAI_ID
-                            | beale_graphs::SEQUENTIAL_ID
-                    )
-                }) {
-                    beale_graphs::Role::from_id(&state.session_agent_role)
+                if state
+                    .active_session
+                    .as_ref()
+                    .is_some_and(|detail| beale_graphs::is_peer_graph(&detail.graph_id))
+                {
+                    beale_graphs::ProfileId::from_id(&state.session_agent_role)
                         .map_or("Research with Beale", |role| role.label())
                 } else {
                     "Research with Beale"
@@ -2914,7 +2751,11 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
         } else {
             Color::TRANSPARENT
         })
-        .child(icon(&FOLDER_OPEN, 15.0).color(theme.color("#9d9d9d")))
+        .child(crate::workspace_logo::mark(
+            state.selected_research_workspace(),
+            15.0,
+            theme.color("#9d9d9d"),
+        ))
         .child(
             text(workspace_name)
                 .min_w(0.0)
@@ -2981,7 +2822,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
         .child(el().grow(1.0));
     if show_draft_controls
         && crate::extensions_view::goal_mode_enabled(state)
-        && state.new_research_graph_id != beale_graphs::SEQUENTIAL_ID
+        && !beale_graphs::is_rotating_graph(&state.new_research_graph_id)
     {
         ribbon = ribbon.child(
             row()
@@ -3018,7 +2859,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
                 }),
         );
     }
-    if show_draft_controls && state.new_research_graph_id != beale_graphs::SEQUENTIAL_ID {
+    if show_draft_controls && !beale_graphs::is_rotating_graph(&state.new_research_graph_id) {
         ribbon = ribbon.child(
             row()
                 .key("new-research-repeat-control")
@@ -3068,10 +2909,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
         .map_or(state.new_research_graph_id.as_str(), |detail| {
             detail.graph_id.as_str()
         });
-    let peer_graph = matches!(
-        graph_id,
-        beale_graphs::CLOUDFLARE_ID | beale_graphs::OPENAI_ID | beale_graphs::SEQUENTIAL_ID
-    );
+    let peer_graph = beale_graphs::is_peer_graph(graph_id);
     let selected_role = crate::research_header::selected_role(state, graph_id);
     let visible_role =
         |role: &str| !peer_graph || role == selected_role || role == "main" || role.is_empty();
@@ -3115,7 +2953,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
                 .take(4)
                 .enumerate()
             {
-                let source = beale_graphs::Role::from_id(&item.from_role)
+                let source = beale_graphs::ProfileId::from_id(&item.from_role)
                     .map_or_else(|| item.from_role.clone(), |role| role.label().to_owned());
                 transcript = transcript.child(
                     text(format!("From {source} · {}\n{}", item.status, item.task))
@@ -3839,11 +3677,11 @@ mod tests {
             (
                 "memory_session_query",
                 "Memory session query: parser",
-                "Searching session for \"parser\"",
-                "Searched session for \"parser\"",
-                "Searching session for 2 queries",
-                "Searched session for 2 queries",
-                "Searched session, edited a file",
+                "Searching scan for \"parser\"",
+                "Searched scan for \"parser\"",
+                "Searching scan for 2 queries",
+                "Searched scan for 2 queries",
+                "Searched scan, edited a file",
             ),
             (
                 "memory_query",

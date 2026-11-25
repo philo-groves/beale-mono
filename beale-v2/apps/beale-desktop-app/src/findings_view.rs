@@ -1178,6 +1178,7 @@ mod tests {
             workspace_id: Some(workspace_id),
             workspace_tab: WorkspaceTab::Findings,
             workspaces: vec![WorkspaceSummary {
+                logo_rgba: Vec::new(),
                 id: workspace_id.to_string(),
                 name: "Example Workspace".to_owned(),
                 directory: "example-directory".to_owned(),

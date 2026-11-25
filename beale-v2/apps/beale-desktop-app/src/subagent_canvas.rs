@@ -106,7 +106,7 @@ fn load_page(state: &mut State, offset: u64) {
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
-                .map_err(|_| "Could not initialize session connection".to_owned())?;
+                .map_err(|_| "Could not initialize scan connection".to_owned())?;
             runtime.block_on(crate::sessions::load_subagent(
                 &client,
                 addr,
@@ -149,7 +149,7 @@ fn load_page(state: &mut State, offset: u64) {
 
 pub(crate) fn tab_bar(state: &State, theme: ThemeStyle<'_>) -> Option<El> {
     let view = state.canvas_subagent.as_ref()?;
-    let role = beale_graphs::Role::from_id(&view.summary.role)
+    let role = beale_graphs::ProfileId::from_id(&view.summary.role)
         .map_or(view.summary.role.as_str(), |role| role.label())
         .to_owned();
     Some(

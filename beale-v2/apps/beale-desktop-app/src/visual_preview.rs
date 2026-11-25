@@ -34,6 +34,11 @@ pub(crate) fn initial_state() -> State {
 
 pub(crate) fn fixture(variant: &str) -> State {
     let name = match variant {
+        "workspace-logo" => "workspace",
+        "home-logo" => "home",
+        "research-logo" => "research",
+        "chat-logo" => "chat",
+        "chat-rich" => "chat",
         "home-collapsed" => "home",
         "home-usage" => "home",
         "session-insights"
@@ -115,6 +120,7 @@ pub(crate) fn fixture(variant: &str) -> State {
         .enumerate()
     {
         s.workspaces.push(WorkspaceSummary {
+            logo_rgba: Vec::new(),
             id: format!("00000000-0000-4000-8000-{:012}", i + 1),
             name: name.to_string(),
             directory: format!("/example/research/workspace-{}", i + 1),
@@ -238,7 +244,7 @@ pub(crate) fn fixture(variant: &str) -> State {
             9,
         ),
         (
-            "Session service",
+            "Scan service",
             "service",
             "url",
             "https://auth.example.test",
@@ -355,7 +361,7 @@ pub(crate) fn fixture(variant: &str) -> State {
     }
     for (source, target, label, type_id) in [
         (0, 1, "Parses input", "calls"),
-        (0, 2, "Checks session", "authenticates"),
+        (0, 2, "Checks scan", "authenticates"),
         (1, 3, "Persists data", "writes"),
         (1, 5, "Queues import", "dispatches"),
         (2, 4, "Federates login", "depends_on"),
@@ -484,7 +490,7 @@ pub(crate) fn fixture(variant: &str) -> State {
             None,
         ),
         (
-            "Example session boundary",
+            "Example scan boundary",
             FindingStatus::Validated,
             Some(52),
             None,
@@ -1133,11 +1139,7 @@ pub(crate) fn fixture(variant: &str) -> State {
             s.custom_models_edit = TextEdit::new("example-research, example-review");
         }
         "graph-editor" => {
-            s.graph_editor = Some(new_research::GraphEditor {
-                role: beale_graphs::Role::Main,
-                models: vec![],
-                model_menu: None,
-            })
+            s.graph_models_group = Some(true);
         }
         "model-menu" => {
             if let Some(graphs) = s
@@ -1209,6 +1211,31 @@ pub(crate) fn fixture(variant: &str) -> State {
                 ..Default::default()
             })
         });
+    }
+    if variant.ends_with("-logo") {
+        let side = beale_contracts::workspace_logo::SIDE;
+        let mut logo = vec![0; beale_contracts::workspace_logo::BYTE_LEN];
+        for y in 8..side - 8 {
+            for x in 8..side - 8 {
+                let offset = ((y * side + x) * 4) as usize;
+                logo[offset..offset + 4].copy_from_slice(&[80, 160, 240, 255]);
+            }
+        }
+        s.workspaces[0].logo_rgba = logo.clone();
+        s.workspace_logo_edit = logo.clone();
+        if let Some(summary) = s
+            .workspace_details
+            .as_mut()
+            .and_then(|details| details.summary.as_mut())
+        {
+            summary.logo_rgba = logo;
+        }
+    }
+    if variant == "chat-rich" {
+        s.quick_chat_messages = vec![
+            QuickChatMessage { role: SessionRole::User as i32, text: "Summarize the example review notes and next steps.".into() },
+            QuickChatMessage { role: SessionRole::Assistant as i32, text: "## Review notes\n\nThe **example scope** contains a saved runbook and one open question.\n\n- Check the recorded evidence.\n- Keep assumptions separate from observations.\n\n`example.test` is a synthetic placeholder.".into() },
+        ];
     }
     s
 }

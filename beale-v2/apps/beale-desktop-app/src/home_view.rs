@@ -184,10 +184,7 @@ fn workspace_card(
         .map(|session| session.last_message_at_ms)
         .max()
         .unwrap_or(0);
-    let mut activity = format!(
-        "{count} {}",
-        if count == 1 { "session" } else { "sessions" }
-    );
+    let mut activity = format!("{count} {}", if count == 1 { "scan" } else { "scans" });
     if let Some(when) = relative_time(last, now) {
         activity.push_str(&format!(" · Active {}", when.to_lowercase()));
     }
@@ -219,7 +216,11 @@ fn workspace_card(
                             .radius(10.0)
                             .continuous_corners()
                             .fill(theme.subtle_accent())
-                            .child(icon(&FOLDER_OPEN, 18.0).color(theme.accent())),
+                            .child(crate::workspace_logo::mark(
+                                Some(workspace),
+                                18.0,
+                                theme.accent(),
+                            )),
                     )
                     .child(
                         col()
@@ -264,7 +265,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> E
         .key("overview-header")
         .gap(10.0)
         .child(
-            design::primary_button("New research", theme)
+            design::primary_button("New Scan", theme)
                 .key("overview-new-research")
                 .on_press(State::start_new_research),
         )
@@ -284,7 +285,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> E
         page = page.child(design::empty_state(
             &FOLDER_OPEN,
             "Set the boundary for your research",
-            "Create a workspace to keep authorized scope, sessions, surfaces, and findings together. Start with a directory and a scope rule.",
+            "Create a workspace to keep authorized scope, scans, surfaces, and findings together. Start with a directory and a scope rule.",
             theme,
         ));
         return scroll(page, state, theme);
@@ -306,7 +307,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> E
                 .continuous_corners()
                 .border(1.0, theme.color("#2a2a2a"))
                 .child(design::subtitle(
-                    "No sessions yet. Start New research to open the first one.",
+                    "No scans yet. Start New Scan to open the first one.",
                     theme,
                 )),
         );

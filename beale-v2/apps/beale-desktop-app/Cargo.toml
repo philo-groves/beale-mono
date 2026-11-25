@@ -18,7 +18,7 @@ beale-surfaces = { path = "../../extensions/features/beale-surfaces" }
 chrono = "0.4"
 beale-contracts = { path = "../beale-app-server/beale-harness/beale-contracts" }
 futures-util.workspace = true
-image = { version = "0.25", default-features = false, features = ["png"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 prost.workspace = true
 qrcodegen = "1.8"
 reqwest.workspace = true

@@ -136,30 +136,22 @@ fn tab(
     item
 }
 
-fn role_tab_label(role: beale_graphs::Role, narrow: bool) -> &'static str {
+fn role_tab_label(role: beale_graphs::ProfileId, narrow: bool) -> &'static str {
     match role {
-        beale_graphs::Role::DiscoveryHarness | beale_graphs::Role::Discovery => {
-            if narrow {
-                "Disc"
-            } else {
-                "Discovery"
-            }
+        beale_graphs::ProfileId::DiscoveryHarness | beale_graphs::ProfileId::Discovery => {
+            if narrow { "Disc" } else { "Discovery" }
         }
-        beale_graphs::Role::ValidationSystem | beale_graphs::Role::Validation => {
-            if narrow {
-                "Valid"
-            } else {
-                "Validation"
-            }
+        beale_graphs::ProfileId::ValidationSystem | beale_graphs::ProfileId::Validation => {
+            if narrow { "Valid" } else { "Validation" }
         }
-        beale_graphs::Role::Reporter => {
+        beale_graphs::ProfileId::Reporter => {
             if narrow {
                 "Report"
             } else {
                 "Reporter"
             }
         }
-        beale_graphs::Role::PatchGeneration => "Patch",
+        beale_graphs::ProfileId::PatchGeneration => "Patch",
         _ => role.label(),
     }
 }
@@ -175,7 +167,7 @@ pub(crate) fn selected_role(state: &State, graph_id: &str) -> String {
         .filter(|role| role.is_top_level())
         .find(|role| role.id() == state.session_agent_role)
         .or_else(|| beale_graphs::entry_role(graph_id))
-        .unwrap_or(beale_graphs::Role::Main)
+        .unwrap_or(beale_graphs::ProfileId::Main)
         .id()
         .to_owned()
 }
@@ -256,16 +248,8 @@ pub(crate) fn tabs(state: &State, theme: ThemeStyle<'_>, window_width: f32) -> O
         .filter(|_| active_here)
         .map(|session| session.graph_id.as_str())
         .unwrap_or(&state.new_research_graph_id);
-    let peer_graph = started
-        && matches!(
-            graph_id,
-            beale_graphs::CLOUDFLARE_ID | beale_graphs::OPENAI_ID | beale_graphs::SEQUENTIAL_ID
-        );
-    let session_label = if started {
-        "Main Agent"
-    } else {
-        "New Research"
-    };
+    let peer_graph = started && beale_graphs::is_peer_graph(graph_id);
+    let session_label = if started { "Main Agent" } else { "New Scan" };
     let compact = peer_graph && window_width < 1250.0;
     let narrow = peer_graph && window_width < 950.0;
     let selected_role = peer_graph.then(|| selected_role(state, graph_id));
@@ -294,7 +278,7 @@ pub(crate) fn tabs(state: &State, theme: ThemeStyle<'_>, window_width: f32) -> O
     let mut workspace_tab = tab(
         "header-view-tab".to_owned(),
         &format!("{name}, {}", section.label()),
-        Some(&icons::FOLDER_OPEN),
+        None,
         in_workspace,
         peer_graph,
         TabSeparators {
@@ -305,6 +289,14 @@ pub(crate) fn tabs(state: &State, theme: ThemeStyle<'_>, window_width: f32) -> O
         },
         theme,
     )
+    .child(crate::workspace_logo::mark(
+        state
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.id == workspace_id),
+        if peer_graph { 14.0 } else { 16.0 },
+        theme.color(if in_workspace { "#dddddd" } else { "#aaaaaa" }),
+    ))
     // Longer workspace labels can use extra room before the name fades.
     .max_w(workspace_tab_max_width)
     .min_w(0.0);
@@ -576,12 +568,7 @@ mod tests {
             runtime.state.session_busy = true;
             runtime.state.session_pending_prompt = Some("Synthetic prompt".into());
             runtime.frame(0.0);
-            assert!(
-                runtime
-                    .elements()
-                    .iter()
-                    .any(|item| item.text.as_deref() == Some("Main Agent"))
-            );
+            assert!(runtime.find("header-session-tab").is_some());
             click(&mut runtime, "header-view-tab");
             click(&mut runtime, "header-session-tab");
             assert!(runtime.state.session_busy);
@@ -607,7 +594,7 @@ mod tests {
             runtime
                 .elements()
                 .iter()
-                .any(|item| item.text.as_deref() == Some("New Research"))
+                .any(|item| item.text.as_deref() == Some("New Scan"))
         );
 
         click(&mut runtime, "header-session-tab");
@@ -648,7 +635,7 @@ mod tests {
             runtime
                 .elements()
                 .iter()
-                .any(|item| item.text.as_deref() == Some("New Research"))
+                .any(|item| item.text.as_deref() == Some("New Scan"))
         );
         click(&mut runtime, "header-session-tab");
         assert!(runtime.state.active_session.is_none());
@@ -683,7 +670,7 @@ mod tests {
                 let label = if scene == "session" {
                     "Main Agent"
                 } else {
-                    "New Research"
+                    "New Scan"
                 };
                 assert!(
                     runtime
@@ -707,10 +694,10 @@ mod tests {
         let mut runtime = Runtime::new(state, view, (1100.0, 720.0), Env::new(true, 1.0));
         runtime.frame(0.0);
         for role in [
-            beale_graphs::Role::Discovery,
-            beale_graphs::Role::Validation,
-            beale_graphs::Role::Reporter,
-            beale_graphs::Role::PatchGeneration,
+            beale_graphs::ProfileId::Discovery,
+            beale_graphs::ProfileId::Validation,
+            beale_graphs::ProfileId::Reporter,
+            beale_graphs::ProfileId::PatchGeneration,
         ] {
             assert!(
                 runtime

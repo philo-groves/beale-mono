@@ -6,6 +6,9 @@
 
 #### Fixed
 
+- V2 New Scan counts distinct models in agent and subagent summaries, so agents sharing one model show its name instead of a repeated assignment count.
+- V2 Quick Chat messages use the session transcript's user and assistant styling with smaller text, headings, code, and bubble spacing for the narrow panel.
+- V2 Surfaces Graph uses a theme-aware dot grid, including behind its fixed header and footer.
 - V2 macOS window controls align vertically with the sidenav title. The windowed header stays stable with a rounded lower corner above a compact icon rail when the sidenav collapses; fullscreen restores the toggle-first header while the controls are hidden.
 - V2 header sidebar and history icons use the rail icons' muted color; unavailable history actions remain dimmed.
 - V2 segmented button groups now have even left and right padding, including compact workspace and Findings controls.
@@ -31,6 +34,11 @@
 
 #### Changed
 
+- V2 New Scan consolidates graph selection, agent and subagent model summaries, and optional stage duration into one settings form. A single top-level agent's model is selectable in the form; other agent models use modals. The Main Agent row describes its coordinating role, the background is plain, and hidden concurrency controls use host and profile defaults.
+- V2 Graphs replaces bundled Scout, Reviewer, and Prover workers with declarative Mapper, Investigator, Experimenter, Challenger, and Builder profiles. New Scan configures their models; legacy profiles remain available for saved custom templates.
+- V2 desktop calls research sessions scans throughout the interface and renames New Research to New Scan. New Scan centers “Scan the security of” and the workspace picker together in one row instead of a breadcrumb.
+- V2 Graphs now loads its four bundled graph layouts, delegation routes, peer handoffs, scheduler settings, and versioned role profiles from validated definitions. Existing graph IDs are retained.
+- V2 Graphs loads validated custom peer templates from the app-server's `graph-templates/` directory and lists them in New Scan. Custom sessions save the selected definition so changes to the source file do not alter running sessions. Protocol 2.33 adds the template catalog and saved definition fields; update connected desktops and app-servers together.
 - V2 Providers marks configured provider tabs with a green status dot, including Custom when at least one custom provider has a saved API key.
 - V2 Fleet gives App Servers, Virtual Machines, and Research Tools view titles beside their tabs. Research Tools adds All Research Tools, Allowed Locally, and Allowed in VMs filters for the selected app-server.
 - V2 Settings title rows no longer leave extra space below the tabs. Providers moves Default selection from the header dropdown to a switch on each provider's card.
@@ -130,6 +138,8 @@
 - Findings now stores a summary, multiple surface IDs, and five states under `FindingState`, each with optional typed evidence references. Changing surface IDs requires screening again. App-server schema 42 migrates existing findings, and protocol 2.6 updates the client contract.
 
 #### Added
+
+- V2 workspace Identity supports optional logo upload, replacement, and removal. Saved logos replace workspace folder icons throughout the desktop; workspaces without logos keep the folder icon.
 
 - V2 Fleet has a Research Tools sidenav view listing ripgrep, Opengrep, Git, radare2, Ghidra, LLVM tools, JADX, ipsw, Python 3, Java JDK, and Node.js in divided rows with column headers. Each connected app-server has separate Local and VM approval checkboxes. Allowed tools appear in the app-server details and in applicable research prompts.
 - Added a Findings workspace view with Candidate, Validated, Screened, and Reported lanes, a compact rejected list, paged loading, and read-only finding details.
@@ -377,6 +387,9 @@
 - V2 redacts exact occurrences of host-held secrets (control token, saved API keys, OAuth tokens, Codex sign-in tokens, and credential-named environment values) from tool output before it is saved, shown, or returned to a model. Encoded or transformed values are not detected.
 
 #### Added
+
+- V2 protocol 2.34 persists a scan-wide worker concurrency budget shared across graph parents. Worker contracts enforce bounded assignments, context policy, and model-turn/time limits; structured results separate completion from evidence assessment. Old budgets default to 8, with no storage migration; update desktops and app-servers together.
+- V2 protocol 2.32 persists optional workspace logo thumbnails through revision-checked Identity updates and returns them in workspace summaries. Existing workspaces need no migration; update desktops and app-servers together.
 
 - Protocol 2.31 adds an authenticated, workspace-scoped Findings create endpoint for operator-entered Candidates. Creation uses the same host validation and durable history as the Findings tool; update connected desktops and app-servers together.
 - V2 Findings adds `findings_verify`, which reruns a declared proof command twice in fresh workspace processes and records whether a host-evaluated oracle (exit code, exit nonzero, or stdout/stderr text) held on every run. Oracle text that appears in the command is rejected. The verification, run digests, and requesting role are saved on the finding; a verified call can be cited as validation evidence. Summaries gain `verified`. Verification is recorded but not required to complete validation.

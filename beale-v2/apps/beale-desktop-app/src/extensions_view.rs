@@ -2425,6 +2425,7 @@ mod tests {
         state.workspaces = [(&first, "Example A"), (&second, "Example B")]
             .into_iter()
             .map(|(id, name)| beale_contracts::v1::WorkspaceSummary {
+                logo_rgba: Vec::new(),
                 id: id.clone(),
                 name: name.to_owned(),
                 directory: format!("example-{name}"),

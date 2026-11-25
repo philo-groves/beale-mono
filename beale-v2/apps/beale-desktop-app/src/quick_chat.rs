@@ -10,9 +10,9 @@ use std::{net::SocketAddr, time::Duration};
 
 use crate::{
     AUTH_HANDLE, ConnectionStatus, SelectionMenu, State, ThemeStyle,
-    icons::{ARROW_UP, CHEVRON_DOWN, CHEVRON_UP, CLOSE, FOLDER_OPEN},
+    icons::{ARROW_UP, CHEVRON_DOWN, CHEVRON_UP, CLOSE},
     input_history,
-    new_research::transcript_message,
+    new_research::{transcript_message, transcript_message_compact},
     provider_auth, toggle_selection_menu, ui_font,
 };
 
@@ -409,10 +409,14 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, cx: &mut Cx<State>) -
             .on_press(|state: &mut State| {
                 toggle_selection_menu(state, SelectionMenu::QuickChatWorkspace)
             })
-            .child(
-                icon(&FOLDER_OPEN, 15.0)
-                    .color(rune::color::hex(palette.muted).unwrap_or(rune::Color::BLACK)),
-            )
+            .child(crate::workspace_logo::mark(
+                state
+                    .quick_chat_workspace_id
+                    .as_deref()
+                    .and_then(|id| state.workspaces.iter().find(|workspace| workspace.id == id)),
+                15.0,
+                rune::color::hex(palette.muted).unwrap_or(rune::Color::BLACK),
+            ))
             .child(
                 text(workspace_name)
                     .font(ui_font(13.0, 500.0))
@@ -454,7 +458,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, cx: &mut Cx<State>) -
             .px(14.0)
             .py(14.0);
         for (index, message) in state.quick_chat_messages.iter().enumerate() {
-            content = content.child(transcript_message(
+            content = content.child(transcript_message_compact(
                 format!("quick-chat-message-{index}"),
                 message.text.clone(),
                 message.role == SessionRole::User as i32,
@@ -463,7 +467,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, cx: &mut Cx<State>) -
             ));
         }
         if let Some(prompt) = &state.quick_chat_pending {
-            content = content.child(transcript_message(
+            content = content.child(transcript_message_compact(
                 "quick-chat-pending".to_owned(),
                 prompt.clone(),
                 true,
@@ -571,6 +575,26 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, cx: &mut Cx<State>) -
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rune::{Env, Runtime};
+
+    #[test]
+    fn compact_transcript_keeps_messages_inside_the_chat_panel() {
+        let mut runtime = Runtime::new(
+            crate::visual_preview::fixture("chat-rich"),
+            crate::view,
+            (840.0, 600.0),
+            Env::new(true, 1.0),
+        );
+        runtime.frame(0.0);
+        runtime.frame(1.0);
+        let (panel, _) = runtime.presented("quick-chat-content").unwrap();
+        let (bubble, _) = runtime.presented("quick-chat-message-0-bubble").unwrap();
+        let (assistant, _) = runtime.presented("quick-chat-message-1-markdown").unwrap();
+        assert!(runtime.find("quick-chat-message-0-text").is_some());
+        assert!(bubble[0] >= panel[0] && bubble[0] + bubble[2] <= panel[0] + panel[2]);
+        assert!(assistant[0] >= panel[0] && assistant[0] + assistant[2] <= panel[0] + panel[2]);
+        assert!(bubble[2] <= 310.0);
+    }
     #[test]
     fn client_rejects_malformed_quick_chat_transcripts() {
         let mut detail = QuickChatDetail {

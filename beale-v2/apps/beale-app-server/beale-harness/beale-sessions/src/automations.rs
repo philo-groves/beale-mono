@@ -98,6 +98,7 @@ async fn execute_claim(state: SessionState, claim: AutomationClaim) {
         graph_node_concurrency: graph_config.concurrency,
         agent_role: String::new(),
         stage_duration_minutes: graph_config.stage_duration_minutes,
+        max_concurrent_workers: graph_config.max_concurrent_workers,
     };
     let heartbeat_state = state.clone();
     let heartbeat_id = claim.run_id.clone();

@@ -1322,7 +1322,7 @@ fn rules(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
         },
         [row_with_control(
             "New Rule",
-            "Operating constraint for research sessions.",
+            "Operating constraint for security scans.",
             field(
                 &state.workspace_draft.rule_value,
                 "workspace-rule-input",

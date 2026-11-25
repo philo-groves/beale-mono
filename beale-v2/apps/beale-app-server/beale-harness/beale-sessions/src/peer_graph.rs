@@ -4,14 +4,14 @@ use beale_graphs::GraphHandoffRow;
 use tokio::task::JoinSet;
 
 struct Work {
-    role: beale_graphs::Role,
+    role: beale_graphs::ProfileId,
     prompt: String,
     handoff_id: Option<String>,
     soft_reminder: Option<watch::Receiver<bool>>,
 }
 
 type WorkResult = (
-    beale_graphs::Role,
+    beale_graphs::ProfileId,
     Option<String>,
     i64,
     Result<SessionDetail, TurnError>,
@@ -28,10 +28,7 @@ struct StartContext<'a> {
 }
 
 fn is_peer_graph(id: &str) -> bool {
-    matches!(
-        id,
-        beale_graphs::CLOUDFLARE_ID | beale_graphs::OPENAI_ID | beale_graphs::SEQUENTIAL_ID
-    )
+    beale_graphs::is_peer_graph(id)
 }
 
 pub(super) fn applies(
@@ -61,7 +58,7 @@ fn start(
         .map_err(|_| TurnError::Conflict)?;
     let fallback = GraphNodeModel {
         node_id: beale_graphs::entry_role(&context.base.graph_id)
-            .unwrap_or(beale_graphs::Role::Main)
+            .unwrap_or(beale_graphs::ProfileId::Main)
             .id()
             .to_owned(),
         provider: context.base.provider,
@@ -127,11 +124,13 @@ pub(super) async fn run(
                 && (request.goal_max_turns != 0 || request.goal_max_duration_minutes != 0))
             || request.goal_max_turns > i64::MAX as u64
             || request.goal_max_duration_minutes > i64::MAX as u64 / 60_000
-            || (request.graph_id == beale_graphs::SEQUENTIAL_ID
+            || (beale_graphs::graph_definition(&request.graph_id)
+                .is_some_and(|graph| graph.mode == beale_graphs::GraphMode::RotatingStages)
                 && (request.stage_duration_minutes > 1_440
                     || request.goal_mode
                     || !request.repeat_preset.is_empty()))
-            || (request.graph_id != beale_graphs::SEQUENTIAL_ID
+            || (beale_graphs::graph_definition(&request.graph_id)
+                .is_none_or(|graph| graph.mode != beale_graphs::GraphMode::RotatingStages)
                 && request.stage_duration_minutes != 0)
             || (!request.repeat_preset.is_empty()
                 && !matches!(
@@ -252,7 +251,7 @@ pub(super) async fn run(
         .ok_or(TurnError::Invalid)?;
     let (notify, mut notified) = mpsc::unbounded_channel();
     let mut tasks = JoinSet::new();
-    let mut active = [false; 11];
+    let mut active = HashSet::new();
     request.graph_id = graph_id.clone();
     let context = StartContext {
         state,
@@ -263,7 +262,7 @@ pub(super) async fn run(
         notify: &notify,
         stop: stop.clone(),
     };
-    if graph_id == beale_graphs::SEQUENTIAL_ID {
+    if graph.mode == beale_graphs::GraphMode::RotatingStages {
         let minutes = config.stage_duration_minutes;
         if !(1..=1_440).contains(&minutes) {
             return Err(TurnError::Invalid);
@@ -280,7 +279,7 @@ pub(super) async fn run(
             })
             .await;
     }
-    if graph_id == beale_graphs::SEQUENTIAL_ID {
+    if graph.mode == beale_graphs::GraphMode::RotatingStages {
         return run_sequential(&context, role, request.prompt.clone(), &mut notified).await;
     }
     start(
@@ -294,7 +293,7 @@ pub(super) async fn run(
         },
         None,
     )?;
-    active[role.index()] = true;
+    active.insert(role);
     if let Some(tx) = &progress {
         let (session, turns) = load_persisted(&state.db, parse_id(&request.session_id)?)?;
         let _ = tx
@@ -313,13 +312,16 @@ pub(super) async fn run(
                 .pending_graph_handoffs(&request.session_id)
                 .map_err(|_| TurnError::Internal)?
             {
+                if active.len() >= graph.max_active_top_level {
+                    break;
+                }
                 if item.status != "pending" {
                     continue;
                 }
-                let Some(target) = beale_graphs::Role::from_id(&item.to_role) else {
+                let Some(target) = beale_graphs::ProfileId::from_id(&item.to_role) else {
                     continue;
                 };
-                if active[target.index()] {
+                if active.contains(&target) {
                     continue;
                 }
                 state
@@ -344,7 +346,7 @@ pub(super) async fn run(
                         .map_err(|_| TurnError::Internal)?;
                     return Err(error);
                 }
-                active[target.index()] = true;
+                active.insert(target);
                 if let Some(tx) = &progress {
                     let (session, turns) =
                         load_persisted(&state.db, parse_id(&request.session_id)?)?;
@@ -368,7 +370,7 @@ pub(super) async fn run(
                 let (role, handoff_id, turn_number, result) = finished
                     .ok_or(TurnError::Internal)?
                     .map_err(|_| TurnError::Internal)?;
-                active[role.index()] = false;
+                active.remove(&role);
                 if let Some(id) = handoff_id {
                     state.db.set_graph_handoff_status(&id, if result.is_ok() { "completed" } else { "failed" })
                         .map_err(|_| TurnError::Internal)?;
@@ -398,41 +400,30 @@ pub(super) async fn run(
     Ok(detail(&state.db, &session, &turns)?)
 }
 
-fn discovery_stage(role: beale_graphs::Role) -> bool {
-    matches!(
-        role,
-        beale_graphs::Role::AuditTargets | beale_graphs::Role::Discovery
-    )
-}
-
 fn stage_should_advance(
-    role: beale_graphs::Role,
+    stage: beale_graphs::Stage,
     queue_empty: bool,
     deadline_reached: bool,
 ) -> bool {
-    deadline_reached || (queue_empty && !discovery_stage(role))
+    deadline_reached || (queue_empty && stage.when_empty == beale_graphs::WhenEmpty::Advance)
 }
-
-const SEQUENTIAL_STAGES: [beale_graphs::Role; 5] = [
-    beale_graphs::Role::AuditTargets,
-    beale_graphs::Role::Discovery,
-    beale_graphs::Role::Validation,
-    beale_graphs::Role::Reporter,
-    beale_graphs::Role::PatchGeneration,
-];
 
 fn stage_deadlines(
     started: tokio::time::Instant,
     duration_minutes: u32,
+    grace_minutes: u32,
 ) -> (tokio::time::Instant, tokio::time::Instant) {
     let soft = started + std::time::Duration::from_secs(u64::from(duration_minutes) * 60);
-    (soft, soft + std::time::Duration::from_secs(10 * 60))
+    (
+        soft,
+        soft + std::time::Duration::from_secs(u64::from(grace_minutes) * 60),
+    )
 }
 
 fn queued_for_stage(
     db: &HostDatabase,
     session_id: &str,
-    role: beale_graphs::Role,
+    role: beale_graphs::ProfileId,
 ) -> Result<Option<GraphHandoffRow>, TurnError> {
     Ok(db
         .pending_graph_handoffs(session_id)
@@ -443,7 +434,7 @@ fn queued_for_stage(
 
 async fn sequential_started(
     context: &StartContext<'_>,
-    role: beale_graphs::Role,
+    role: beale_graphs::ProfileId,
 ) -> Result<(), TurnError> {
     if let Some(tx) = &context.progress {
         let (session, turns) =
@@ -511,20 +502,24 @@ async fn sequential_finished(
 
 async fn run_sequential(
     context: &StartContext<'_>,
-    initial_role: beale_graphs::Role,
+    initial_role: beale_graphs::ProfileId,
     initial_prompt: String,
     notified: &mut mpsc::UnboundedReceiver<()>,
 ) -> Result<SessionDetail, TurnError> {
-    let mut stage_index = SEQUENTIAL_STAGES
+    let graph = beale_graphs::graph_definition(&context.base.graph_id).ok_or(TurnError::Invalid)?;
+    let stages = graph.stages;
+    let mut stage_index = stages
         .iter()
-        .position(|role| *role == initial_role)
+        .position(|stage| stage.role == initial_role)
         .ok_or(TurnError::Invalid)?;
     let mut first_prompt = Some(initial_prompt);
     loop {
-        let role = SEQUENTIAL_STAGES[stage_index];
+        let stage = stages[stage_index];
+        let role = stage.role;
         let (deadline, hard_deadline) = stage_deadlines(
             tokio::time::Instant::now(),
             context.config.stage_duration_minutes,
+            graph.grace_minutes,
         );
         let (soft_tx, soft_rx) = watch::channel(false);
         let (hard_tx, hard_rx) = watch::channel(false);
@@ -561,7 +556,7 @@ async fn run_sequential(
                 }
                 let handoff = queued_for_stage(&context.state.db, &context.base.session_id, role)?;
                 if stage_should_advance(
-                    role,
+                    stage,
                     first_prompt.is_none() && handoff.is_none(),
                     now >= deadline,
                 ) {
@@ -586,7 +581,7 @@ async fn run_sequential(
                         handoff_id: Some(item.id),
                         soft_reminder: Some(soft_rx.clone()),
                     }
-                } else if discovery_stage(role) {
+                } else if stage.when_empty == beale_graphs::WhenEmpty::Continue {
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                     if tokio::time::Instant::now() >= deadline || stop_requested(&context.stop) {
                         continue;
@@ -630,7 +625,7 @@ async fn run_sequential(
         if stop_requested(&context.stop) {
             break;
         }
-        stage_index = (stage_index + 1) % SEQUENTIAL_STAGES.len();
+        stage_index = (stage_index + 1) % stages.len();
     }
     let (session, turns) = load_persisted(&context.state.db, parse_id(&context.base.session_id)?)?;
     Ok(detail(&context.state.db, &session, &turns)?)
@@ -643,34 +638,28 @@ mod sequential_tests {
     #[test]
     fn deadline_has_ten_minute_grace_after_configured_stage() {
         let started = tokio::time::Instant::now();
-        let (soft, hard) = stage_deadlines(started, 60);
+        let (soft, hard) = stage_deadlines(started, 60, 10);
         assert_eq!(soft - started, std::time::Duration::from_secs(60 * 60));
         assert_eq!(hard - soft, std::time::Duration::from_secs(10 * 60));
     }
 
     #[test]
     fn cycle_returns_to_audit_targets_and_only_downstream_empty_queues_advance() {
-        assert_eq!(SEQUENTIAL_STAGES[0], beale_graphs::Role::AuditTargets);
-        assert_eq!(SEQUENTIAL_STAGES[1], beale_graphs::Role::Discovery);
-        assert_eq!(SEQUENTIAL_STAGES[4], beale_graphs::Role::PatchGeneration);
+        let stages = beale_graphs::SEQUENTIAL_GRAPH.stages;
+        assert_eq!(stages[0].role, beale_graphs::ProfileId::AuditTargets);
+        assert_eq!(stages[1].role, beale_graphs::ProfileId::Discovery);
+        assert_eq!(stages[4].role, beale_graphs::ProfileId::PatchGeneration);
         assert_eq!(
-            SEQUENTIAL_STAGES[(4 + 1) % SEQUENTIAL_STAGES.len()],
-            beale_graphs::Role::AuditTargets
+            stages[(4 + 1) % stages.len()].role,
+            beale_graphs::ProfileId::AuditTargets
         );
-        for role in [
-            beale_graphs::Role::AuditTargets,
-            beale_graphs::Role::Discovery,
-        ] {
-            assert!(!stage_should_advance(role, true, false));
-            assert!(stage_should_advance(role, true, true));
+        for stage in &stages[..2] {
+            assert!(!stage_should_advance(*stage, true, false));
+            assert!(stage_should_advance(*stage, true, true));
         }
-        for role in [
-            beale_graphs::Role::Validation,
-            beale_graphs::Role::Reporter,
-            beale_graphs::Role::PatchGeneration,
-        ] {
-            assert!(!stage_should_advance(role, false, false));
-            assert!(stage_should_advance(role, true, false));
+        for stage in &stages[2..] {
+            assert!(!stage_should_advance(*stage, false, false));
+            assert!(stage_should_advance(*stage, true, false));
         }
     }
 }
