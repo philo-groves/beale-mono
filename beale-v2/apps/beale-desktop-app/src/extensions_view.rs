@@ -2,11 +2,12 @@ use crate::design::{FadeText, SIDENAV_ACTIVE_FOREGROUND};
 use beale_contracts::{
     FEATURE_DETAILS_PATH, FEATURE_SCOPE_PATH, FEATURE_SET_ENABLED_PATH, FEATURES_PATH,
     PLUGIN_INSTALL_PATH, PLUGIN_MANIFEST_PATH, PLUGIN_SCOPE_PATH, PLUGIN_UNINSTALL_PATH,
-    PLUGINS_PATH, PROTOBUF_CONTENT_TYPE,
+    PLUGINS_PATH, PROTOBUF_CONTENT_TYPE, RESEARCH_KIT_SET_ENABLED_PATH, RESEARCH_KITS_PATH,
     v1::{
         FeatureDetailsResponse, FeatureSummary, GetFeatureDetailsRequest, GetPluginManifestRequest,
-        InstallPluginRequest, ListFeaturesResponse, ListPluginsResponse, PluginManifestResponse,
-        PluginSummary, SetExtensionWorkspaceScopeRequest, SetFeatureEnabledRequest,
+        InstallPluginRequest, ListFeaturesResponse, ListPluginsResponse, ListResearchKitsResponse,
+        PluginManifestResponse, PluginSummary, ResearchKitSummary,
+        SetExtensionWorkspaceScopeRequest, SetFeatureEnabledRequest, SetResearchKitEnabledRequest,
         UninstallPluginRequest,
     },
 };
@@ -857,6 +858,7 @@ fn start_manifest(state: &mut State, name: String) {
 
 pub(crate) fn start_load(state: &mut State) {
     start_feature_load(state);
+    start_research_kit_load(state);
     if state.plugin_loading
         || state.plugin_installing.is_some()
         || state.plugin_uninstalling.is_some()
@@ -892,6 +894,128 @@ pub(crate) fn start_load(state: &mut State) {
             match result {
                 Ok(plugins) => state.plugins = plugins,
                 Err(error) => state.plugin_error = error,
+            }
+        });
+    });
+}
+
+async fn load_research_kit(client: &Client, addr: SocketAddr) -> Result<bool, String> {
+    let token = crate::provider_auth::authenticated_token(client, addr).await?;
+    let response: ListResearchKitsResponse = decode(
+        client
+            .get(format!("http://{addr}{RESEARCH_KITS_PATH}"))
+            .bearer_auth(token)
+            .send()
+            .await
+            .map_err(|_| "Could not load Research Kits".to_owned())?,
+    )
+    .await?;
+    if response.kits.len() != 1 || response.kits[0].id != "hackerone" {
+        return Err("Invalid Research Kit catalog".to_owned());
+    }
+    Ok(response.kits[0].enabled)
+}
+
+pub(crate) fn start_research_kit_load(state: &mut State) {
+    if state.research_kit_busy || !matches!(state.connection, ConnectionStatus::Connected { .. }) {
+        return;
+    }
+    let Some(handle) = AUTH_HANDLE.get().cloned() else {
+        return;
+    };
+    state.research_kit_busy = true;
+    state.research_kit_generation = state.research_kit_generation.wrapping_add(1);
+    let generation = state.research_kit_generation;
+    std::thread::spawn(move || {
+        let result = (|| {
+            let addr = connection::configured_addr()
+                .map_err(|_| "Invalid app-server address".to_owned())?;
+            let client = connection::http_client()
+                .map_err(|_| "Could not initialize connection".to_owned())?;
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|_| "Could not initialize connection".to_owned())?;
+            runtime.block_on(load_research_kit(&client, addr))
+        })();
+        handle.update(move |state, _| {
+            if state.research_kit_generation != generation {
+                return;
+            }
+            state.research_kit_busy = false;
+            match result {
+                Ok(enabled) => {
+                    state.research_kit_enabled = enabled;
+                    state.research_kit_error.clear();
+                    if !enabled
+                        && state.workspace_draft.import_source
+                            == crate::workspace_creation::ImportSource::ResearchKit
+                    {
+                        state.workspace_draft.import_source =
+                            crate::workspace_creation::ImportSource::None;
+                    }
+                }
+                Err(error) => state.research_kit_error = error,
+            }
+        });
+    });
+}
+
+fn start_research_kit_toggle(state: &mut State) {
+    if state.research_kit_busy || !matches!(state.connection, ConnectionStatus::Connected { .. }) {
+        return;
+    }
+    let Some(handle) = AUTH_HANDLE.get().cloned() else {
+        return;
+    };
+    let enabled = !state.research_kit_enabled;
+    state.research_kit_busy = true;
+    state.research_kit_error.clear();
+    state.research_kit_generation = state.research_kit_generation.wrapping_add(1);
+    let generation = state.research_kit_generation;
+    std::thread::spawn(move || {
+        let result = (|| {
+            let addr = connection::configured_addr()
+                .map_err(|_| "Invalid app-server address".to_owned())?;
+            let client = connection::http_client()
+                .map_err(|_| "Could not initialize connection".to_owned())?;
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|_| "Could not initialize connection".to_owned())?;
+            runtime.block_on(async {
+                let token = crate::provider_auth::authenticated_token(&client, addr).await?;
+                let response: ResearchKitSummary = decode(
+                    client
+                        .post(format!("http://{addr}{RESEARCH_KIT_SET_ENABLED_PATH}"))
+                        .bearer_auth(token)
+                        .header("content-type", PROTOBUF_CONTENT_TYPE)
+                        .body(
+                            SetResearchKitEnabledRequest {
+                                id: "hackerone".to_owned(),
+                                enabled,
+                            }
+                            .encode_to_vec(),
+                        )
+                        .send()
+                        .await
+                        .map_err(|_| "Could not update Research Kit".to_owned())?,
+                )
+                .await?;
+                if response.id != "hackerone" || response.enabled != enabled {
+                    return Err("Invalid Research Kit update".to_owned());
+                }
+                Ok(enabled)
+            })
+        })();
+        handle.update(move |state, _| {
+            if state.research_kit_generation != generation {
+                return;
+            }
+            state.research_kit_busy = false;
+            match result {
+                Ok(enabled) => state.research_kit_enabled = enabled,
+                Err(error) => state.research_kit_error = error,
             }
         });
     });
@@ -1965,16 +2089,61 @@ fn features(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> Vec<El> {
     content
 }
 
+fn research_kits(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> Vec<El> {
+    let mut toggle = toggle_button(
+        "research-kit-toggle-hackerone".to_owned(),
+        "HackerOne Research Kit".to_owned(),
+        state.research_kit_enabled,
+        matches!(state.connection, ConnectionStatus::Connected { .. }) && !state.research_kit_busy,
+        theme,
+    );
+    if matches!(state.connection, ConnectionStatus::Connected { .. }) && !state.research_kit_busy {
+        toggle = toggle.on_press(start_research_kit_toggle);
+    }
+    let card = col()
+        .key("research-kit-item-hackerone")
+        .w_full().min_w(0.0).px(12.0).pt(16.0).pb(14.0)
+        .radius(crate::design::CARD_RADIUS).continuous_corners()
+        .fill(theme.color("#191919")).border(1.0, theme.color("#2a2a2a"))
+        .child(row().w_full().h(40.0).gap(10.0).center_y()
+            .child(feature_mark("hackerone", theme))
+            .child(text("HackerOne").font(ui_font(16.0, 600.0)).color(theme.color("#f2f2f2"))))
+        .child(crate::design::faded_lines(
+            "Import a public HackerOne program's complete structured scope, policy, and rules into a new workspace draft.",
+            ui_font(13.0, 400.0), theme.color("#969696"), 3, card_text_width(page_width),
+        ).mt(10.0))
+        .child(el().grow(1.0))
+        .child(stat_block([
+            stat_row("Source", "Public program", theme),
+            stat_row("Model Review", "Yes", theme),
+            stat_row("Availability", if state.research_kit_enabled { "Enabled" } else { "Disabled" }, theme),
+        ], theme))
+        .child(row().w_full().pt(12.0).center_y().child(toggle));
+    let mut content = vec![crate::tab_view_title("Research Kits", theme)];
+    if !state.research_kit_error.is_empty() {
+        content.push(
+            text(state.research_kit_error.clone())
+                .font(ui_font(13.0, 400.0))
+                .color(theme.color("#e07676")),
+        );
+    }
+    content.push(
+        row()
+            .key("research-kit-cards")
+            .w_full()
+            .mt(6.0)
+            .gaps(16.0, 16.0)
+            .equal_columns(plugin_columns(page_width))
+            .child(card),
+    );
+    content
+}
+
 pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> Vec<El> {
     match state.extensions_section {
         ExtensionSection::Plugins => plugins(state, theme, page_width),
         ExtensionSection::Features => features(state, theme, page_width),
-        ExtensionSection::ResearchKits => vec![crate::design::empty_state(
-            &crate::icons::EXTENSIONS,
-            "Research kits are not available yet",
-            "Use Features and Plugins to configure your research toolkit. Kits will appear here when available.",
-            theme,
-        )],
+        ExtensionSection::ResearchKits => research_kits(state, theme, page_width),
     }
 }
 

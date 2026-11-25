@@ -171,6 +171,27 @@ pub(crate) fn request_from_draft(
             })
             .collect(),
         rules: draft.rules.clone(),
+        research_kit_id: if draft.import_source
+            == crate::workspace_creation::ImportSource::ResearchKit
+        {
+            "hackerone".to_owned()
+        } else {
+            String::new()
+        },
+        source_identifier: if draft.import_source
+            == crate::workspace_creation::ImportSource::ResearchKit
+        {
+            draft.import_identifier.text.trim().to_owned()
+        } else {
+            String::new()
+        },
+        source_policy: if draft.import_source
+            == crate::workspace_creation::ImportSource::ResearchKit
+        {
+            draft.import_policy.clone()
+        } else {
+            String::new()
+        },
     })
 }
 
@@ -564,6 +585,36 @@ mod tests {
                 .surfaces,
             request.surfaces
         );
+    }
+
+    #[test]
+    fn hackerone_draft_carries_policy_snapshot_to_creation_request() {
+        let mut draft = WorkspaceDraft::default();
+        draft.import_source = crate::workspace_creation::ImportSource::ResearchKit;
+        let policy = "Synthetic program policy.\n".repeat(3_000);
+        draft
+            .apply_import(beale_contracts::v1::WorkspaceImportResult {
+                name: "Example Program".to_owned(),
+                guidance: "Read references/hackerone-policy.md.".to_owned(),
+                surfaces: Vec::new(),
+                rules: vec!["Stay within authorized scope.".to_owned()],
+                research_kit_id: "hackerone".to_owned(),
+                source_identifier: "example-program".to_owned(),
+                source_policy: policy.clone(),
+            })
+            .unwrap();
+        draft.directory = TextEdit::new(
+            std::env::temp_dir()
+                .join("example-kit-workspace")
+                .to_string_lossy(),
+        );
+        let request = request_from_draft(&draft).unwrap();
+        assert_eq!(request.research_kit_id, "hackerone");
+        assert_eq!(request.source_identifier, "example-program");
+        assert_eq!(request.source_policy, policy);
+        assert!(request.guidance.len() < 20_000);
+        let decoded = CreateWorkspaceRequest::decode(request.encode_to_vec().as_slice()).unwrap();
+        assert_eq!(decoded.source_policy, policy);
     }
 
     #[test]

@@ -440,6 +440,12 @@ pub mod v1 {
         pub surfaces: Vec<WorkspaceSurfaceInput>,
         #[prost(string, repeated, tag = "5")]
         pub rules: Vec<String>,
+        #[prost(string, tag = "6")]
+        pub research_kit_id: String,
+        #[prost(string, tag = "7")]
+        pub source_identifier: String,
+        #[prost(string, tag = "8")]
+        pub source_policy: String,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -452,6 +458,36 @@ pub mod v1 {
         pub model: String,
         #[prost(string, tag = "4")]
         pub instructions: String,
+        #[prost(string, tag = "5")]
+        pub research_kit_id: String,
+        #[prost(string, tag = "6")]
+        pub source_identifier: String,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct ResearchKitSummary {
+        #[prost(string, tag = "1")]
+        pub id: String,
+        #[prost(string, tag = "2")]
+        pub name: String,
+        #[prost(string, tag = "3")]
+        pub description: String,
+        #[prost(bool, tag = "4")]
+        pub enabled: bool,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct ListResearchKitsResponse {
+        #[prost(message, repeated, tag = "1")]
+        pub kits: Vec<ResearchKitSummary>,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct SetResearchKitEnabledRequest {
+        #[prost(string, tag = "1")]
+        pub id: String,
+        #[prost(bool, tag = "2")]
+        pub enabled: bool,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -464,6 +500,12 @@ pub mod v1 {
         pub surfaces: Vec<WorkspaceSurfaceInput>,
         #[prost(string, repeated, tag = "4")]
         pub rules: Vec<String>,
+        #[prost(string, tag = "5")]
+        pub research_kit_id: String,
+        #[prost(string, tag = "6")]
+        pub source_identifier: String,
+        #[prost(string, tag = "7")]
+        pub source_policy: String,
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq, ::prost::Enumeration)]
@@ -1683,7 +1725,7 @@ mod fleet_virtual_machine_tests {
 }
 
 pub const PROTOCOL_MAJOR: u32 = 2;
-pub const PROTOCOL_MINOR: u32 = 34;
+pub const PROTOCOL_MINOR: u32 = 36;
 pub const SERVICE_NAME: &str = "beale-app-server";
 pub const HEALTH_PATH: &str = "/v1/health";
 pub const AUTH_STATUS_PATH: &str = "/v1/providers/status";
@@ -1703,6 +1745,8 @@ pub const CUSTOM_PROVIDER_API_KEY_PATH: &str = "/v1/providers/custom/api-key";
 pub const CUSTOM_PROVIDER_DISCOVER_PATH: &str = "/v1/providers/custom/discover";
 pub const WORKSPACES_PATH: &str = "/v1/workspaces";
 pub const WORKSPACE_IMPORT_STREAM_PATH: &str = "/v1/workspaces/import/stream";
+pub const RESEARCH_KITS_PATH: &str = "/v1/research-kits";
+pub const RESEARCH_KIT_SET_ENABLED_PATH: &str = "/v1/research-kits/set-enabled";
 pub const WORKSPACE_DETAILS_PATH: &str = "/v1/workspaces/{id}";
 pub const WORKSPACE_CAMPAIGN_PATH: &str = "/v1/workspaces/{id}/campaign";
 pub const WORKSPACE_FOUNDATION_PATH: &str = "/v1/workspaces/{id}/foundation";

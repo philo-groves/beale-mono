@@ -33,6 +33,7 @@ use uuid::Uuid;
 
 mod http;
 mod import;
+mod research_kits;
 mod threat_model;
 use http::{authorized, checked_body, response};
 
@@ -75,6 +76,10 @@ struct WorkspaceManifest {
     schema_version: u32,
     workspace_id: String,
     name: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    research_kit_id: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    research_kit_source_identifier: String,
     directories: &'static [&'static str],
     surfaces: Vec<StoredSurface>,
     retired_surfaces: Vec<StoredSurface>,
@@ -95,6 +100,10 @@ struct StoredManifest {
     schema_version: u32,
     workspace_id: String,
     name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    research_kit_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    research_kit_source_identifier: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     logo_rgba: Vec<u8>,
     directories: Vec<String>,
@@ -224,6 +233,9 @@ struct ValidatedWorkspace {
     name: String,
     directory: PathBuf,
     guidance: String,
+    research_kit_id: String,
+    research_kit_source_identifier: String,
+    source_policy: String,
     surfaces: Vec<StoredSurface>,
     next_surface_number: u64,
     rules: Vec<String>,
@@ -784,6 +796,8 @@ impl WorkspaceStore {
             schema_version: 7,
             workspace_id: id.clone(),
             name: input.name.clone(),
+            research_kit_id: input.research_kit_id,
+            research_kit_source_identifier: input.research_kit_source_identifier.clone(),
             directories: &DIRECTORIES,
             surfaces: input.surfaces,
             retired_surfaces: Vec::new(),
@@ -799,6 +813,23 @@ impl WorkspaceStore {
         }
         fs::create_dir(input.directory.join(".beale"))
             .map_err(|_| WorkspaceError::Internal("create workspace metadata directory"))?;
+        if manifest.research_kit_id == research_kits::HACKERONE_ID {
+            let source = format!(
+                "https://hackerone.com/{}",
+                manifest.research_kit_source_identifier
+            );
+            let snapshot = format!(
+                "# HackerOne program policy snapshot\n\nSource: {source}\n\n{}\n",
+                input.source_policy
+            );
+            write_new(
+                &input
+                    .directory
+                    .join("references")
+                    .join("hackerone-policy.md"),
+                snapshot.as_bytes(),
+            )?;
+        }
         let guidance = if input.guidance.is_empty() {
             DEFAULT_GUIDANCE.to_owned()
         } else {
@@ -1777,6 +1808,23 @@ fn validate(request: CreateWorkspaceRequest) -> Result<ValidatedWorkspace, Works
     {
         return Err(WorkspaceError::Invalid);
     }
+    if request.research_kit_id.is_empty() {
+        if !request.source_identifier.is_empty() || !request.source_policy.is_empty() {
+            return Err(WorkspaceError::Invalid);
+        }
+    } else if request.research_kit_id != research_kits::HACKERONE_ID
+        || research_kits::normalize_identifier(&request.source_identifier)
+            .ok()
+            .as_deref()
+            != Some(request.source_identifier.as_str())
+        || request.source_policy.len() > 256_000
+        || request
+            .source_policy
+            .chars()
+            .any(|character| character.is_control() && !matches!(character, '\n' | '\t'))
+    {
+        return Err(WorkspaceError::Invalid);
+    }
     let directory = normalize_directory(&request.directory)?;
     let (mut surfaces, next_surface_number) =
         validate_surface_update_with_counter(request.surfaces, &[], 1)?;
@@ -1808,6 +1856,9 @@ fn validate(request: CreateWorkspaceRequest) -> Result<ValidatedWorkspace, Works
         name: name.to_owned(),
         directory,
         guidance: guidance.trim().to_owned(),
+        research_kit_id: request.research_kit_id,
+        research_kit_source_identifier: request.source_identifier,
+        source_policy: request.source_policy,
         surfaces,
         next_surface_number,
         rules,
@@ -1851,6 +1902,14 @@ pub fn router(token: String, store: WorkspaceStore) -> Router {
         .route(
             beale_contracts::WORKSPACE_IMPORT_STREAM_PATH,
             axum::routing::post(import::stream),
+        )
+        .route(
+            beale_contracts::RESEARCH_KITS_PATH,
+            get(research_kits::list),
+        )
+        .route(
+            beale_contracts::RESEARCH_KIT_SET_ENABLED_PATH,
+            axum::routing::post(research_kits::set_enabled),
         )
         .route(WORKSPACE_DETAILS_PATH, get(details))
         .route(WORKSPACE_CAMPAIGN_PATH, get(campaign))
@@ -2117,7 +2176,35 @@ mod tests {
                 example_input("excluded.example.test", SurfaceScope::OutOfScope),
             ],
             rules: vec!["Do not contact excluded third parties.".to_owned()],
+            research_kit_id: String::new(),
+            source_identifier: String::new(),
+            source_policy: String::new(),
         }
+    }
+
+    #[test]
+    fn hackerone_workspace_saves_full_policy_outside_guidance() {
+        let base =
+            std::env::temp_dir().join(format!("beale-kit-policy-example-{}", Uuid::new_v4()));
+        fs::create_dir_all(&base).unwrap();
+        let directory = base.join("workspace");
+        let store = WorkspaceStore::at(base.join("host")).unwrap();
+        let mut request = example_request(&directory);
+        request.research_kit_id = "hackerone".to_owned();
+        request.source_identifier = "example-program".to_owned();
+        request.source_policy = "Synthetic program policy.\n".repeat(3_000);
+        let original_policy = request.source_policy.clone();
+        let summary = store.create(request).unwrap();
+        let snapshot =
+            fs::read_to_string(directory.join("references/hackerone-policy.md")).unwrap();
+        assert!(snapshot.contains("https://hackerone.com/example-program"));
+        assert!(snapshot.ends_with(&format!("{original_policy}\n")));
+        assert!(store.details_for_host(&summary.id).unwrap().guidance.len() < 20_000);
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(directory.join("workspace.json")).unwrap()).unwrap();
+        assert_eq!(manifest["researchKitId"], "hackerone");
+        assert_eq!(manifest["researchKitSourceIdentifier"], "example-program");
+        fs::remove_dir_all(base).unwrap();
     }
 
     #[test]

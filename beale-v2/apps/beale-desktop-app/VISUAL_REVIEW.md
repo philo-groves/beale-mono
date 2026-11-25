@@ -35,7 +35,7 @@ The small-window pass found unreadable split Canvas panes, long dialogs outside 
 
 ## Final view scores
 
-Each row identifies a screenshot scene; all four themes were visually reviewed. Scores are out of 10 and describe the current synthetic states. The Campaign row covers a compatibility renderer that is not a current navigation tab. Research Kits and external plugin-source installation retain their existing unavailable states, with clear explanatory copy.
+Each row identifies a screenshot scene; all four themes were visually reviewed. Scores are out of 10 and describe the recorded synthetic states. The Campaign row covers a compatibility renderer that is not a current navigation tab. External plugin-source installation retains its unavailable state. The HackerOne Research Kit card was added after this visual review and is not scored here.
 
 | View | Scene | Light | Dark | Cream | Midnight |
 | --- | --- | ---: | ---: | ---: | ---: |
@@ -57,7 +57,6 @@ Each row identifies a screenshot scene; all four themes were visually reviewed. 
 | New workspace / Rules | `create-rules` | 8.0 | 8.0 | 8.0 | 8.0 |
 | Features | `features` | 8.5 | 8.5 | 8.5 | 8.5 |
 | Plugins | `plugins` | 8.0 | 8.0 | 8.0 | 8.0 |
-| Research Kits / empty state | `kits` | 8.0 | 8.0 | 8.0 | 8.0 |
 | Fleet / App Servers | `fleet` | 8.0 | 8.0 | 8.0 | 8.0 |
 | Fleet / Virtual Machines | `vms` | 8.0 | 8.0 | 8.0 | 8.0 |
 | Automation job | `automations` | 8.0 | 8.0 | 8.0 | 8.0 |

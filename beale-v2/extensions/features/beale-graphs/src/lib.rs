@@ -277,7 +277,7 @@ impl GraphRuntime for SimpleRuntime {
 
     fn system_section(&self, config: &SessionGraphConfig, fallback: &GraphNodeModel) -> String {
         let mut section = format!(
-            "## Simple Orchestra\n\n{PROMPT_EXTENSION}\n\nUse `{SPAWN_TOOL}` only when a specialist can help. Spawn at most {MAX_BATCH} tasks per batch. Model indices by role (omit `model_index` for the first):\n"
+            "## {SIMPLE_NAME}\n\n{PROMPT_EXTENSION}\n\nUse `{SPAWN_TOOL}` only when a specialist can help. Spawn at most {MAX_BATCH} tasks per batch. Model indices by role (omit `model_index` for the first):\n"
         );
         append_subagent_models(&mut section, config, fallback);
         section
@@ -659,7 +659,7 @@ pub fn is_peer_graph(id: &str) -> bool {
 pub fn is_rotating_graph(id: &str) -> bool {
     graph_definition(id).is_some_and(|graph| graph.mode == GraphMode::RotatingStages)
 }
-pub const SIMPLE_NAME: &str = "Simple Orchestra";
+pub const SIMPLE_NAME: &str = "Basic Subagents";
 pub const SIMPLE_DESCRIPTION: &str = "One main agent with a single layer of Mapper, Investigator, Experimenter, Challenger, and Builder subagents.";
 
 mod profiles;
@@ -745,9 +745,26 @@ pub fn known_graph(id: &str) -> bool {
     graph_definition(id).is_some()
 }
 
+/// The retired sequential flow remains available only to saved sessions.
+pub fn selectable_graph(id: &str) -> bool {
+    id != SEQUENTIAL_ID && known_graph(id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retired_sequential_flow_stays_loadable_but_cannot_be_selected() {
+        assert_eq!(SIMPLE_GRAPH.name, SIMPLE_NAME);
+        assert_eq!(CLOUDFLARE_GRAPH.name, "VDH VVS Swarm");
+        assert_eq!(OPENAI_GRAPH.name, "OAI 948 Swarm");
+        assert!(known_graph(SEQUENTIAL_ID));
+        assert!(!selectable_graph(SEQUENTIAL_ID));
+        assert!(selectable_graph(SIMPLE_ID));
+        assert!(selectable_graph(CLOUDFLARE_ID));
+        assert!(selectable_graph(OPENAI_ID));
+    }
 
     #[test]
     fn simple_graph_has_only_one_subagent_layer() {

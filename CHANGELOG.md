@@ -4,8 +4,13 @@
 
 ### Beale
 
+#### Added
+
+- V2 adds a globally enabled HackerOne Research Kit in Extensions and New Workspace, with streamed import and model review progress in the workspace quick chat.
+
 #### Fixed
 
+- V2 New Workspace and saved workspace guidance editors keep long AGENTS.md text inside a scrollable field instead of painting over the form actions.
 - V2 New Scan counts distinct models in agent and subagent summaries, so agents sharing one model show its name instead of a repeated assignment count.
 - V2 Quick Chat messages use the session transcript's user and assistant styling with smaller text, headings, code, and bubble spacing for the narrow panel.
 - V2 Surfaces Graph uses a theme-aware dot grid, including behind its fixed header and footer.
@@ -34,6 +39,7 @@
 
 #### Changed
 
+- V2 Graphs labels the selectable flows Basic Subagents, VDH VVS Swarm, OAI 948 Swarm, and No Subagents. Sequential Research Pipeline is retired for new scans; saved sessions retain its runtime and graph ID.
 - V2 New Scan consolidates graph selection, agent and subagent model summaries, and optional stage duration into one settings form. A single top-level agent's model is selectable in the form; other agent models use modals. The Main Agent row describes its coordinating role, the background is plain, and hidden concurrency controls use host and profile defaults.
 - V2 Graphs replaces bundled Scout, Reviewer, and Prover workers with declarative Mapper, Investigator, Experimenter, Challenger, and Builder profiles. New Scan configures their models; legacy profiles remain available for saved custom templates.
 - V2 desktop calls research sessions scans throughout the interface and renames New Research to New Scan. New Scan centers “Scan the security of” and the workspace picker together in one row instead of a breadcrumb.
@@ -388,6 +394,7 @@
 
 #### Added
 
+- Protocol 2.36 adds Research Kit state and HackerOne identifier imports. The host fetches the public program's complete paginated scope, preserves fetched assets through model review, and saves the full policy in a workspace reference file while keeping `AGENTS.md` concise.
 - V2 protocol 2.34 persists a scan-wide worker concurrency budget shared across graph parents. Worker contracts enforce bounded assignments, context policy, and model-turn/time limits; structured results separate completion from evidence assessment. Old budgets default to 8, with no storage migration; update desktops and app-servers together.
 - V2 protocol 2.32 persists optional workspace logo thumbnails through revision-checked Identity updates and returns them in workspace summaries. Existing workspaces need no migration; update desktops and app-servers together.
 

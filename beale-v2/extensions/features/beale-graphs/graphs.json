@@ -4,7 +4,7 @@
     {
       "id": "simple",
       "revision": 1,
-      "name": "Simple Orchestra",
+      "name": "Basic Subagents",
       "description": "One main agent with a single layer of Mapper, Investigator, Experimenter, Challenger, and Builder subagents.",
       "entry": "main",
       "scheduler": {
@@ -68,7 +68,7 @@
     {
       "id": "cloudflare_harness",
       "revision": 1,
-      "name": "Discovery and Validation",
+      "name": "VDH VVS Swarm",
       "description": "Two peer agents for vulnerability discovery and independent validation, each with subagents.",
       "entry": "discovery_harness",
       "scheduler": {
@@ -153,7 +153,7 @@
     {
       "id": "openai_pipeline",
       "revision": 1,
-      "name": "Concurrent Research Pipeline",
+      "name": "OAI 948 Swarm",
       "description": "Audit target scouting and ranking, vulnerability discovery, dynamic validation, reporting, and patch generation as peer agents with subagents.",
       "entry": "audit_targets",
       "scheduler": {

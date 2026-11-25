@@ -263,6 +263,9 @@ pub(crate) struct WorkspaceDraft {
     unlocked: usize,
     pub(crate) import_source: ImportSource,
     pub(crate) import_instructions: TextEdit,
+    pub(crate) import_identifier: TextEdit,
+    pub(crate) import_policy: String,
+    pub(crate) import_completed: bool,
     pub(crate) import_pending_id: Option<uuid::Uuid>,
     pub(crate) import_cancel: Option<tokio::sync::oneshot::Sender<()>>,
     pub(crate) import_log: String,
@@ -296,6 +299,9 @@ impl Default for WorkspaceDraft {
             unlocked: 0,
             import_source: ImportSource::None,
             import_instructions: TextEdit::new(""),
+            import_identifier: TextEdit::new(""),
+            import_policy: String::new(),
+            import_completed: false,
             import_pending_id: None,
             import_cancel: None,
             import_log: String::new(),
@@ -336,6 +342,13 @@ impl WorkspaceDraft {
             || result.guidance.len() > 20_000
             || result.surfaces.len() > 256
             || result.rules.len() > 128
+            || result.source_policy.len() > 256_000
+            || (self.import_source == ImportSource::ResearchKit
+                && (result.research_kit_id != "hackerone" || result.source_identifier.is_empty()))
+            || (self.import_source != ImportSource::ResearchKit
+                && (!result.research_kit_id.is_empty()
+                    || !result.source_identifier.is_empty()
+                    || !result.source_policy.is_empty()))
             || result
                 .rules
                 .iter()
@@ -387,6 +400,11 @@ impl WorkspaceDraft {
         }
         self.name = TextEdit::new(result.name);
         self.guidance = TextEdit::new(result.guidance);
+        if self.import_source == ImportSource::ResearchKit {
+            self.import_identifier = TextEdit::new(result.source_identifier);
+            self.import_policy = result.source_policy;
+        }
+        self.import_completed = true;
         self.surfaces = surfaces;
         self.rules = result.rules;
         self.unlocked = self.unlocked.max(CreationTab::Foundation.index());
@@ -468,8 +486,17 @@ impl WorkspaceDraft {
 
     fn validate_tab(&self, tab: CreationTab) -> Option<&'static str> {
         match tab {
-            CreationTab::Import if self.import_source == ImportSource::ResearchKit => {
-                Some("Research Kits are not available yet.")
+            CreationTab::Import
+                if self.import_source == ImportSource::ResearchKit
+                    && self.import_identifier.text.trim().is_empty() =>
+            {
+                Some("Enter a HackerOne program identifier.")
+            }
+            CreationTab::Import
+                if self.import_source == ImportSource::ResearchKit
+                    && self.import_identifier.text.len() > 200 =>
+            {
+                Some("HackerOne identifiers must be at most 200 characters.")
             }
             CreationTab::Import
                 if self.import_source == ImportSource::CustomInstructions
@@ -515,7 +542,9 @@ impl WorkspaceDraft {
     }
 
     pub(crate) fn validate_submission(&self) -> Option<&'static str> {
-        self.validate_tab(CreationTab::Foundation)
+        (self.import_source == ImportSource::ResearchKit && !self.import_completed)
+            .then_some("Import the HackerOne program before creating this workspace.")
+            .or_else(|| self.validate_tab(CreationTab::Foundation))
             .or_else(|| self.validate_tab(CreationTab::Rules))
     }
 
@@ -618,7 +647,10 @@ pub(crate) fn advance(state: &mut State, tx: &mut Tx) {
         return;
     }
     if state.workspace_draft.tab == CreationTab::Import
-        && state.workspace_draft.import_source == ImportSource::CustomInstructions
+        && matches!(
+            state.workspace_draft.import_source,
+            ImportSource::CustomInstructions | ImportSource::ResearchKit
+        )
     {
         crate::start_workspace_import(state);
         return;
@@ -676,6 +708,10 @@ fn import_source_option(state: &State, source: ImportSource, theme: ThemeStyle<'
         )
         .on_press(move |s: &mut State| {
             if s.workspace_draft.import_pending_id.is_none() {
+                if s.workspace_draft.import_source != source {
+                    s.workspace_draft.import_completed = false;
+                    s.workspace_draft.import_policy.clear();
+                }
                 s.workspace_draft.import_source = source;
                 s.workspace_draft.error = None;
             }
@@ -690,6 +726,7 @@ fn import(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
         },
         ImportSource::ALL
             .into_iter()
+            .filter(|source| *source != ImportSource::ResearchKit || state.research_kit_enabled)
             .map(|source| import_source_option(state, source, theme)),
         theme,
     )];
@@ -704,17 +741,27 @@ fn import(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
                 [col()
                     .w_full()
                     .py(12.0)
-                    .gap(6.0)
+                    .gap(8.0)
                     .child(
-                        text("Research Kit")
+                        text("HackerOne Program")
                             .font(form_label_font())
                             .color(theme.color("#e2e2e2")),
                     )
                     .child(
-                        text("No Research Kits available yet.")
+                        text("Enter the public program identifier or HackerOne URL. Beale imports the full structured scope, then reviews the draft with the default large model.")
                             .font(ui_font(14.0, 400.0))
-                            .color(theme.color("#969696")),
-                    )],
+                            .color(theme.color("#969696")).wrap(),
+                    )
+                    .child(text_input(&state.workspace_draft.import_identifier, ui_font(14.0, 400.0))
+                        .key("workspace-hackerone-identifier")
+                        .single_line().w_full().h(36.0).padding(9.0).radius(8.0)
+                        .fill(theme.color("#282828")).color(theme.color("#e2e2e2"))
+                        .placeholder("example-program", theme.color("#888888"))
+                        .on_edit(|s: &mut State| {
+                            s.workspace_draft.import_completed = false;
+                            s.workspace_draft.import_policy.clear();
+                            &mut s.workspace_draft.import_identifier
+                        }))],
                 theme,
             ));
         }
@@ -922,16 +969,25 @@ fn foundation(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
                         ),
                 )
                 .child(
-                    text_input(&state.workspace_draft.guidance, ui_font(14.0, 400.0))
-                        .key("workspace-guidance-input")
+                    col()
+                        .key("workspace-guidance-editor")
                         .w_full()
                         .h(130.0)
-                        .padding(10.0)
                         .radius(8.0)
+                        .clip_rounded(8.0)
                         .fill(theme.color("#282828"))
-                        .color(theme.color("#e2e2e2"))
-                        .placeholder("Add workspace guidance", theme.color("#888888"))
-                        .on_edit(|s: &mut State| &mut s.workspace_draft.guidance),
+                        .scroll(ScrollSpec {
+                            stick_bottom: false,
+                        })
+                        .child(
+                            text_input(&state.workspace_draft.guidance, ui_font(14.0, 400.0))
+                                .key("workspace-guidance-input")
+                                .w_full()
+                                .padding(10.0)
+                                .color(theme.color("#e2e2e2"))
+                                .placeholder("Add workspace guidance", theme.color("#888888"))
+                                .on_edit(|s: &mut State| &mut s.workspace_draft.guidance),
+                        ),
                 ),
         ],
         theme,
@@ -1598,6 +1654,9 @@ mod tests {
                     ..Default::default()
                 }],
                 rules: vec!["Stay within scope.".to_owned()],
+                research_kit_id: String::new(),
+                source_identifier: String::new(),
+                source_policy: String::new(),
             })
             .unwrap();
         assert_eq!(draft.name.text, "Example Workspace");

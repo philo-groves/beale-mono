@@ -638,7 +638,7 @@ fn validate_graph_selection(
     }
     #[cfg(feature = "graphs")]
     {
-        if !session_id.is_empty() || !beale_graphs::known_graph(graph_id) {
+        if !session_id.is_empty() || !beale_graphs::selectable_graph(graph_id) {
             return Err(StatusCode::BAD_REQUEST);
         }
         if graph_models.len() > 64 {
@@ -2869,6 +2869,10 @@ mod tests {
         }
         assert_eq!(
             validate_graph_selection(&db, "unknown", &[], &[], "", &workspace),
+            Err(StatusCode::BAD_REQUEST)
+        );
+        assert_eq!(
+            validate_graph_selection(&db, beale_graphs::SEQUENTIAL_ID, &[], &[], "", &workspace),
             Err(StatusCode::BAD_REQUEST)
         );
         assert_eq!(

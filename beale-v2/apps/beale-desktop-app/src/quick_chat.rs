@@ -326,7 +326,16 @@ pub(crate) fn render_import(state: &State, theme: ThemeStyle<'_>, cx: &mut Cx<St
         .py(14.0)
         .child(transcript_message(
             "workspace-import-chat-request".to_owned(),
-            state.workspace_draft.import_instructions.text.clone(),
+            if state.workspace_draft.import_source
+                == crate::workspace_creation::ImportSource::ResearchKit
+            {
+                format!(
+                    "Import HackerOne program: {}",
+                    state.workspace_draft.import_identifier.text.trim()
+                )
+            } else {
+                state.workspace_draft.import_instructions.text.clone()
+            },
             true,
             false,
             theme,

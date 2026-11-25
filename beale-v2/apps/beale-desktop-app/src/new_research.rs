@@ -1249,7 +1249,7 @@ fn graph_profile_form(state: &State, theme: ThemeStyle<'_>, available_width: f32
     let selected = !state.new_research_graph_id.is_empty();
     let active = state.selection_menu == Some(SelectionMenu::SessionGraph);
     let label = beale_graphs::graph_definition(&state.new_research_graph_id)
-        .map_or("No Graph", |graph| graph.name);
+        .map_or("No Subagents", |graph| graph.name);
     let graph = selection_button(
         label,
         active,

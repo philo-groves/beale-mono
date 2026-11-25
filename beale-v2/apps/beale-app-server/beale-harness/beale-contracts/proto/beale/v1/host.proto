@@ -268,6 +268,9 @@ message CreateWorkspaceRequest {
   string guidance = 3;
   repeated WorkspaceSurfaceInput surfaces = 4;
   repeated string rules = 5;
+  string research_kit_id = 6;
+  string source_identifier = 7;
+  string source_policy = 8;
 }
 
 message WorkspaceImportRequest {
@@ -275,6 +278,24 @@ message WorkspaceImportRequest {
   AuthMethod method = 2;
   string model = 3;
   string instructions = 4;
+  string research_kit_id = 5;
+  string source_identifier = 6;
+}
+
+message ResearchKitSummary {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  bool enabled = 4;
+}
+
+message ListResearchKitsResponse {
+  repeated ResearchKitSummary kits = 1;
+}
+
+message SetResearchKitEnabledRequest {
+  string id = 1;
+  bool enabled = 2;
 }
 
 message WorkspaceImportResult {
@@ -282,6 +303,9 @@ message WorkspaceImportResult {
   string guidance = 2;
   repeated WorkspaceSurfaceInput surfaces = 3;
   repeated string rules = 4;
+  string research_kit_id = 5;
+  string source_identifier = 6;
+  string source_policy = 7;
 }
 
 enum WorkspaceImportEventKind {

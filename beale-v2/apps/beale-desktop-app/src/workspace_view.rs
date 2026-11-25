@@ -436,15 +436,24 @@ fn agents_guidance(state: &State, theme: ThemeStyle<'_>) -> El {
                     .color(theme.color("#e2e2e2")),
             )
     } else {
-        text_input(&state.workspace_guidance_edit, ui_font(14.0, 400.0))
-            .key("saved-workspace-guidance-input")
+        col()
+            .key("saved-workspace-guidance-editor")
             .w_full()
             .h(130.0)
-            .padding(10.0)
             .radius(8.0)
+            .clip_rounded(8.0)
             .fill(theme.color("#282828"))
-            .color(theme.color("#e2e2e2"))
-            .on_edit(|state: &mut State| &mut state.workspace_guidance_edit)
+            .scroll(ScrollSpec {
+                stick_bottom: false,
+            })
+            .child(
+                text_input(&state.workspace_guidance_edit, ui_font(14.0, 400.0))
+                    .key("saved-workspace-guidance-input")
+                    .w_full()
+                    .padding(10.0)
+                    .color(theme.color("#e2e2e2"))
+                    .on_edit(|state: &mut State| &mut state.workspace_guidance_edit),
+            )
     };
     col()
         .key("saved-workspace-guidance-form")

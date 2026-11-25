@@ -783,6 +783,10 @@ struct State {
     plugin_uninstalling: Option<String>,
     plugin_generation: u64,
     features: Vec<extensions_view::FeatureEntry>,
+    research_kit_enabled: bool,
+    research_kit_busy: bool,
+    research_kit_error: String,
+    research_kit_generation: u64,
     feature_loading: bool,
     feature_busy: bool,
     feature_error: String,
@@ -1072,6 +1076,10 @@ impl Default for State {
             plugin_uninstalling: None,
             plugin_generation: 0,
             features: extensions_view::bundled_features(),
+            research_kit_enabled: true,
+            research_kit_busy: false,
+            research_kit_error: String::new(),
+            research_kit_generation: 0,
             feature_loading: false,
             feature_busy: false,
             feature_error: String::new(),
@@ -3089,12 +3097,37 @@ fn start_workspace_import(state: &mut State) {
         provider: model.provider.id() as i32,
         method: model.method as i32,
         model: model.id,
-        instructions: state
-            .workspace_draft
-            .import_instructions
-            .text
-            .trim()
-            .to_owned(),
+        instructions: if state.workspace_draft.import_source
+            == workspace_creation::ImportSource::CustomInstructions
+        {
+            state
+                .workspace_draft
+                .import_instructions
+                .text
+                .trim()
+                .to_owned()
+        } else {
+            String::new()
+        },
+        research_kit_id: if state.workspace_draft.import_source
+            == workspace_creation::ImportSource::ResearchKit
+        {
+            "hackerone".to_owned()
+        } else {
+            String::new()
+        },
+        source_identifier: if state.workspace_draft.import_source
+            == workspace_creation::ImportSource::ResearchKit
+        {
+            state
+                .workspace_draft
+                .import_identifier
+                .text
+                .trim()
+                .to_owned()
+        } else {
+            String::new()
+        },
     };
     state.workspace_draft.import_pending_id = Some(id);
     let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
@@ -3577,11 +3610,7 @@ fn selection_menu_items(state: &State, menu: SelectionMenu) -> Vec<in_place_menu
                 beale_graphs::CLOUDFLARE_GRAPH.name,
             ),
             (beale_graphs::OPENAI_ID, beale_graphs::OPENAI_GRAPH.name),
-            (
-                beale_graphs::SEQUENTIAL_ID,
-                beale_graphs::SEQUENTIAL_GRAPH.name,
-            ),
-            ("", "No Graph"),
+            ("", "No Subagents"),
         ]
         .into_iter()
         .map(|(value, label)| in_place_menu::MenuItem {
@@ -7537,6 +7566,7 @@ fn main() -> std::process::ExitCode {
             if poll_archive {
                 handle.update(|state, _| {
                     extensions_view::start_feature_load(state);
+                    extensions_view::start_research_kit_load(state);
                     if state.primary_view == PrimaryView::Settings
                         && state.settings_section == SettingsSection::Archive
                     {
@@ -7574,6 +7604,27 @@ fn main() -> std::process::ExitCode {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn session_graph_menu_uses_current_names_and_omits_retired_flow() {
+        let items = super::selection_menu_items(
+            &super::State::default(),
+            super::SelectionMenu::SessionGraph,
+        );
+        let choices: Vec<_> = items
+            .iter()
+            .map(|item| (item.value.as_str(), item.label.as_str()))
+            .collect();
+        assert_eq!(
+            choices,
+            [
+                (beale_graphs::SIMPLE_ID, "Basic Subagents"),
+                (beale_graphs::CLOUDFLARE_ID, "VDH VVS Swarm"),
+                (beale_graphs::OPENAI_ID, "OAI 948 Swarm"),
+                ("", "No Subagents"),
+            ]
+        );
+    }
+
     #[test]
     fn session_graph_menu_includes_custom_templates() {
         let template = beale_contracts::v1::GraphTemplate {
@@ -12760,6 +12811,16 @@ active_runbook_count: 0,
         assert!(label[1] + label[3] <= description[1]);
         assert!(description[1] + description[3] < input[1]);
         runtime.update(|state, _| {
+            state.workspace_guidance_edit = TextEdit::new("Example guidance line.\n".repeat(30));
+        });
+        runtime.frame(1.0);
+        let (editor, _) = runtime
+            .presented("saved-workspace-guidance-editor")
+            .unwrap();
+        let (input, _) = runtime.presented("saved-workspace-guidance-input").unwrap();
+        assert_eq!(editor[3], 130.0);
+        assert!(input[3] > editor[3], "input: {input:?}, editor: {editor:?}");
+        runtime.update(|state, _| {
             state.workspace_guidance_edit = TextEdit::new("Revised example instructions");
         });
         runtime.frame(0.0);
@@ -13293,6 +13354,36 @@ active_runbook_count: 0,
         click(&mut runtime, x, y);
         assert_eq!(runtime.state.workspace_surface_selected, None);
         assert!(!runtime.state.canvas_open);
+    }
+
+    #[test]
+    fn long_workspace_guidance_scrolls_inside_its_editor() {
+        let mut state = State {
+            primary_view: PrimaryView::WorkspaceCreation,
+            ..Default::default()
+        };
+        state.workspace_draft.tab = workspace_creation::CreationTab::Foundation;
+        state.workspace_draft.guidance = TextEdit::new("Example guidance line.\n".repeat(30));
+        let mut runtime = Runtime::new(state, view, (1040.0, 900.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+
+        let (editor, _) = runtime.presented("workspace-guidance-editor").unwrap();
+        let (input, _) = runtime.presented("workspace-guidance-input").unwrap();
+        let (card, _) = runtime.presented("workspace-details-form").unwrap();
+        let (actions, _) = runtime.presented("workspace-creation-actions").unwrap();
+        assert_eq!(editor[3], 130.0);
+        assert!(input[3] > editor[3]);
+        assert!(editor[1] + editor[3] <= card[1] + card[3]);
+        assert!(card[1] + card[3] < actions[1]);
+
+        runtime.wheel(editor[0] + 20.0, editor[1] + 40.0, -120.0);
+        runtime.frame(0.0);
+        let (scrolled_input, _) = runtime.presented("workspace-guidance-input").unwrap();
+        let (scrolled_editor, _) = runtime.presented("workspace-guidance-editor").unwrap();
+        let (scrolled_actions, _) = runtime.presented("workspace-creation-actions").unwrap();
+        assert!(scrolled_input[1] < input[1]);
+        assert_eq!(scrolled_editor, editor);
+        assert_eq!(scrolled_actions, actions);
     }
 
     #[test]
@@ -15988,6 +16079,41 @@ active_runbook_count: 0,
         runtime.state.go_back();
         runtime.frame(0.0);
         assert_eq!(runtime.state.feature_tab, extensions_view::FeatureTab::All);
+    }
+
+    #[test]
+    fn hackerone_kit_card_controls_new_workspace_availability() {
+        let mut runtime =
+            Runtime::new(State::default(), view, (1040.0, 720.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        runtime.update(|state, _| {
+            state.navigate_to(ViewLocation::Extensions(
+                extensions_view::ExtensionSection::ResearchKits,
+                extensions_view::PluginTab::All,
+                extensions_view::FeatureTab::All,
+            ))
+        });
+        runtime.frame(0.0);
+        assert!(runtime.find("research-kit-item-hackerone").is_some());
+        assert!(runtime.find("research-kit-toggle-hackerone").is_some());
+        runtime.update(|state, _| {
+            state.navigate_to(ViewLocation::WorkspaceCreation(
+                workspace_creation::CreationTab::Import,
+            ))
+        });
+        runtime.frame(0.0);
+        assert!(
+            runtime
+                .find("workspace-import-source-Research Kit")
+                .is_some()
+        );
+        runtime.update(|state, _| state.research_kit_enabled = false);
+        runtime.frame(0.0);
+        assert!(
+            runtime
+                .find("workspace-import-source-Research Kit")
+                .is_none()
+        );
     }
 
     #[test]

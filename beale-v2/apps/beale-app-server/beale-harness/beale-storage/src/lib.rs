@@ -1183,6 +1183,25 @@ impl HostDatabase {
         })
     }
 
+    /// Research Kit toggles share the host's global boolean settings table.
+    /// An absent row keeps bundled kits enabled on existing installations.
+    pub fn research_kit_enabled(&self, id: &str) -> Result<bool> {
+        self.with_connection(|connection| {
+            Ok(connection
+                .query_row(
+                    "SELECT enabled FROM feature_states WHERE id = ?1",
+                    [format!("research-kit:{id}")],
+                    |row| row.get::<_, bool>(0),
+                )
+                .optional()?
+                .unwrap_or(true))
+        })
+    }
+
+    pub fn set_research_kit_enabled(&self, id: &str, enabled: bool) -> Result<()> {
+        self.set_feature_enabled(&format!("research-kit:{id}"), enabled)
+    }
+
     pub fn extension_scope(&self, kind: &str, id: &str) -> Result<ExtensionWorkspaceScope> {
         ensure!(
             matches!(kind, "plugin" | "feature"),

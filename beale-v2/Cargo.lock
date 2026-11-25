@@ -578,6 +578,7 @@ dependencies = [
  "beale-tools",
  "futures-util",
  "prost",
+ "reqwest",
  "serde",
  "serde_json",
  "tokio",
