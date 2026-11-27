@@ -1077,6 +1077,9 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
         transport: sessionTransport(runtime, [...runtime.clientTokens][0]!)
       };
     } catch (error) {
+      if (sessions.get(sessionId) === runtime) {
+        fleetBrowser.closeSession(sessionId);
+      }
       runtime.state = 'failed';
       runtime.endedAt = new Date().toISOString();
       if (runtime.introspectionToken) introspectionBindings.delete(runtime.introspectionToken);
@@ -1361,6 +1364,10 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     }
     hostService.setWorkspaceSessionActive?.(runtime.request.launch.workspaceId, runtime.sessionId, true);
     if (runtime.stopRequested || sessions.get(runtime.sessionId) !== runtime) {
+      if (sessions.get(runtime.sessionId) === runtime) {
+        fleetBrowser.closeSession(runtime.sessionId);
+        void fleetBrowserSessions.closeSessionTargets(runtime.sessionId).catch(() => undefined);
+      }
       hostService.setWorkspaceSessionActive?.(runtime.request.launch.workspaceId, runtime.sessionId, false);
       return;
     }
@@ -1647,6 +1654,9 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     runtime.exitCode = exitCode;
     runtime.state = state;
     runtime.diagnostic = state === 'failed' ? boundedDiagnostic(diagnostic ?? '') : null;
+    if (sessions.get(runtime.sessionId) === runtime) {
+      fleetBrowser.closeSession(runtime.sessionId);
+    }
     void fleetBrowserSessions.closeSessionTargets(runtime.sessionId).catch(() => undefined);
     teardownRuntime(runtime, state === 'completed' ? 1000 : 1011);
     notifyChange();

@@ -564,7 +564,88 @@ test('a connected primary session gives its worker a session-scoped browser endp
   request.launch.browserRelay = true;
   await server.startSession(request);
   assert.match(browserEndpoint, /^http:\/\/127\.0\.0\.1:[0-9]+\/v1\/fleet-browser\/session-remote-browser-example\?token=/u);
+  const endpointUrl = new URL(browserEndpoint);
+  const openContextUrl = `${endpointUrl.origin}${endpointUrl.pathname}/contexts/default/open${endpointUrl.search}`;
+  const whileRunning = await fetch(openContextUrl, { method: 'POST' });
+  assert.equal(whileRunning.status, 200);
   upstream.complete();
+  await waitFor(() => server.listSessions()[0]?.state === 'completed');
+  const afterComplete = await fetch(openContextUrl, { method: 'POST' });
+  assert.equal(afterComplete.status, 403);
+});
+
+test('a failed browser-relay session launch closes its Fleet browser session', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'beale-remote-browser-fail-example-'));
+  temporaryDirectories.push(directory);
+  let browserEndpoint;
+  const server = await startAppServer({
+    hostService: testHostService(directory),
+    spawnSession: async (options) => {
+      browserEndpoint = options.env.BEALE_FLEET_BROWSER_ENDPOINT;
+      throw new Error('synthetic worker spawn failure');
+    },
+  });
+  servers.push(server);
+  const request = sessionLaunchRequest(directory, { sessionId: 'session-remote-browser-fail-example' });
+  request.launch.machineId = 'local';
+  request.launch.browserRelay = true;
+  await assert.rejects(() => server.startSession(request), /synthetic worker spawn failure/u);
+  assert.match(browserEndpoint, /^http:\/\/127\.0\.0\.1:[0-9]+\/v1\/fleet-browser\/session-remote-browser-fail-example\?token=/u);
+  const endpointUrl = new URL(browserEndpoint);
+  const openContextUrl = `${endpointUrl.origin}${endpointUrl.pathname}/contexts/default/open${endpointUrl.search}`;
+  const afterFailure = await fetch(openContextUrl, { method: 'POST' });
+  assert.equal(afterFailure.status, 403);
+});
+
+test('retrying a failed browser-relay session while failure persistence is pending keeps the replacement browser session', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'beale-remote-browser-retry-example-'));
+  temporaryDirectories.push(directory);
+  const upstream = await createFakeAppServerSessionHost();
+  const hostService = testHostService(directory);
+  let releaseFailureRecord;
+  let failureRecordStarted;
+  const failureStarted = new Promise((resolve) => { failureRecordStarted = resolve; });
+  hostService.recordSessionLaunchFailure = () => {
+    failureRecordStarted();
+    return new Promise((resolve) => { releaseFailureRecord = resolve; });
+  };
+  let attempt = 0;
+  const endpoints = [];
+  const server = await startAppServer({
+    hostService,
+    spawnSession: async (options) => {
+      endpoints.push(options.env.BEALE_FLEET_BROWSER_ENDPOINT);
+      attempt += 1;
+      if (attempt === 1) throw new Error('synthetic first launch failure');
+      return upstream.spawnSession(options);
+    },
+  });
+  servers.push(server);
+  const makeRequest = () => {
+    const request = sessionLaunchRequest(directory, { sessionId: 'session-remote-browser-retry-example' });
+    request.launch.machineId = 'local';
+    request.launch.browserRelay = true;
+    return request;
+  };
+  const firstAttempt = server.startSession(makeRequest());
+  await failureStarted;
+  const firstUrl = new URL(endpoints[0]);
+  const firstCheck = await fetch(`${firstUrl.origin}${firstUrl.pathname}/contexts/default/open${firstUrl.search}`, { method: 'POST' });
+  assert.equal(firstCheck.status, 403);
+
+  await server.startSession(makeRequest());
+  const secondUrl = new URL(endpoints[1]);
+  assert.notEqual(secondUrl.searchParams.get('token'), firstUrl.searchParams.get('token'));
+
+  releaseFailureRecord();
+  await assert.rejects(() => firstAttempt, /synthetic first launch failure/u);
+
+  const secondCheck = await fetch(`${secondUrl.origin}${secondUrl.pathname}/contexts/default/open${secondUrl.search}`, { method: 'POST' });
+  assert.equal(secondCheck.status, 200);
+  upstream.complete();
+  await waitFor(() => server.listSessions()[0]?.state === 'completed');
+  const afterComplete = await fetch(`${secondUrl.origin}${secondUrl.pathname}/contexts/default/open${secondUrl.search}`, { method: 'POST' });
+  assert.equal(afterComplete.status, 403);
 });
 
 test('fails stalled runtime initialization with a visible bounded diagnostic', async () => {

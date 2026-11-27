@@ -23,8 +23,10 @@ interface ChromeTarget { id: string; type: string; title: string; url: string; w
 interface BrowserSession {
   token: string;
   endpoint: string;
+  closed: boolean;
   child: ChildProcess | null;
   viewers: Set<WebSocket>;
+  agentSockets: Set<WebSocket>;
   page: WebSocket | null;
   pageLaunching: Promise<void> | null;
   targetId: string | null;
@@ -36,6 +38,12 @@ interface BrowserSession {
   lastWidth: number;
   lastHeight: number;
   pendingCommands: Map<number, (result: Record<string, unknown>) => void>;
+}
+
+export interface FleetBrowserLaunchOptions {
+  rootDir?: string;
+  resolveExecutable?: () => Promise<string>;
+  spawnBrowser?: (executable: string, args: readonly string[]) => ChildProcess;
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -60,16 +68,17 @@ export class FleetBrowserService {
 
   public constructor(
     private readonly endpointOverride?: (sessionId: string) => Promise<string | null>,
-    private readonly homePage: () => string = () => DEFAULT_BROWSER_HOME_PAGE
+    private readonly homePage: () => string = () => DEFAULT_BROWSER_HOME_PAGE,
+    private readonly launchOptions?: FleetBrowserLaunchOptions
   ) {}
 
   public tokenFor(sessionId: string): string {
     safeSessionId(sessionId);
     let session = this.sessions.get(sessionId);
     if (!session) {
-      session = { token: randomBytes(24).toString('base64url'), endpoint: '', child: null,
-        viewers: new Set(), page: null, pageLaunching: null, targetId: null, commandId: 1, controller: null,
-        leaseUntil: 0, lastFrame: null, lastUrl: this.homePage(), lastWidth: 1280,
+      session = { token: randomBytes(24).toString('base64url'), endpoint: '', closed: false, child: null,
+        viewers: new Set(), agentSockets: new Set(), page: null, pageLaunching: null, targetId: null, commandId: 1,
+        controller: null, leaseUntil: 0, lastFrame: null, lastUrl: this.homePage(), lastWidth: 1280,
         lastHeight: 800, pendingCommands: new Map() };
       this.sessions.set(sessionId, session);
     }
@@ -86,8 +95,10 @@ export class FleetBrowserService {
 
   public async discovery(sessionId: string, kind: 'list' | 'version' | 'contexts', baseUrl: string): Promise<unknown> {
     const session = await this.ensure(sessionId);
+    if (session.closed) throw new Error('Fleet browser session closed.');
     if (kind === 'contexts') return [{ id: 'default', label: 'Default' }];
     const targets = await this.targets(session);
+    if (session.closed) throw new Error('Fleet browser session closed.');
     const socketBase = new URL(baseUrl);
     socketBase.protocol = socketBase.protocol === 'https:' ? 'wss:' : 'ws:';
     const mapped = targets.map((target) => ({ id: target.id, type: target.type, title: target.title,
@@ -109,11 +120,27 @@ export class FleetBrowserService {
       early.push({ data: frame, binary });
     };
     client.on('message', onEarly);
-    const session = await this.ensure(sessionId);
-    if (client.readyState !== WebSocket.OPEN) return;
-    const target = (await this.targets(session)).find((entry) => entry.id === targetId);
-    if (!target) { client.close(1008, 'Browser page is unavailable'); return; }
+    let session: BrowserSession;
+    try { session = await this.ensure(sessionId); }
+    catch (error) { client.off('message', onEarly); throw error; }
+    if (session.closed || client.readyState !== WebSocket.OPEN) {
+      client.off('message', onEarly);
+      if (client.readyState === WebSocket.OPEN) client.close(1001);
+      return;
+    }
+    let targets: ChromeTarget[];
+    try { targets = await this.targets(session); }
+    catch (error) { client.off('message', onEarly); throw error; }
+    if (session.closed || client.readyState !== WebSocket.OPEN) {
+      client.off('message', onEarly);
+      if (client.readyState === WebSocket.OPEN) client.close(1001);
+      return;
+    }
+    const target = targets.find((entry) => entry.id === targetId);
+    if (!target) { client.off('message', onEarly); client.close(1008, 'Browser page is unavailable'); return; }
     const upstream = new WebSocket(target.webSocketDebuggerUrl, { maxPayload: MAX_AGENT_FRAME_BYTES });
+    session.agentSockets.add(client);
+    session.agentSockets.add(upstream);
     const queued: Array<{ data: Buffer; binary: boolean }> = [];
     let queuedBytes = 0;
     const forward = (data: unknown, binary: boolean): void => {
@@ -138,18 +165,31 @@ export class FleetBrowserService {
     for (const entry of early) forward(entry.data, entry.binary);
     upstream.on('open', () => { for (const entry of queued) upstream.send(entry.data, { binary: entry.binary }); queued.length = 0; });
     upstream.on('message', (data, binary) => { if (client.readyState === WebSocket.OPEN) client.send(data, { binary }); });
-    upstream.on('close', () => { if (client.readyState === WebSocket.OPEN) client.close(1001); });
+    upstream.on('close', () => {
+      session.agentSockets.delete(upstream);
+      if (client.readyState === WebSocket.OPEN) client.close(1001);
+    });
     upstream.on('error', () => { if (client.readyState === WebSocket.OPEN) client.close(1011); });
-    client.on('close', () => upstream.close());
+    client.on('close', () => {
+      session.agentSockets.delete(client);
+      if (upstream.readyState === WebSocket.CONNECTING || upstream.readyState === WebSocket.OPEN) upstream.close();
+    });
   }
 
   public async viewerSocket(sessionId: string, client: WebSocket): Promise<void> {
     const session = await this.ensure(sessionId);
-    if (client.readyState !== WebSocket.OPEN) return;
+    if (session.closed || client.readyState !== WebSocket.OPEN) {
+      if (client.readyState === WebSocket.OPEN) client.close(1001);
+      return;
+    }
     session.viewers.add(client);
     try { await this.ensurePageStream(session); }
     catch (error) { session.viewers.delete(client); throw error; }
-    if (client.readyState !== WebSocket.OPEN) { session.viewers.delete(client); return; }
+    if (session.closed || client.readyState !== WebSocket.OPEN) {
+      session.viewers.delete(client);
+      if (client.readyState === WebSocket.OPEN) client.close(1001);
+      return;
+    }
     send(client, { type: 'browser.ready', url: session.lastUrl, width: session.lastWidth, height: session.lastHeight });
     if (session.lastFrame) send(client, JSON.parse(session.lastFrame) as unknown);
     client.on('message', (raw) => { void this.handleViewerMessage(session, client, raw.toString()).catch((error: unknown) => {
@@ -158,22 +198,68 @@ export class FleetBrowserService {
     client.on('close', () => {
       session.viewers.delete(client);
       if (session.controller === client) { session.controller = null; session.leaseUntil = 0; }
-      if (session.viewers.size === 0 && session.page?.readyState === WebSocket.OPEN) {
+      if (!session.closed && session.viewers.size === 0 && session.page?.readyState === WebSocket.OPEN) {
         void this.command(session, 'Page.stopScreencast').catch(() => undefined);
       }
     });
   }
 
+  public closeSession(sessionId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    this.sessions.delete(sessionId);
+    this.launching.delete(sessionId);
+    this.teardownSession(session);
+  }
+
   public close(): void {
-    for (const session of this.sessions.values()) {
-      for (const viewer of session.viewers) viewer.close(1001);
-      session.page?.close();
-      session.child?.kill();
+    for (const sessionId of [...this.sessions.keys()]) {
+      this.closeSession(sessionId);
     }
-    this.sessions.clear();
+  }
+
+  private teardownSession(session: BrowserSession): void {
+    session.closed = true;
+    session.controller = null;
+    session.leaseUntil = 0;
+    session.lastFrame = null;
+    session.endpoint = '';
+    session.targetId = null;
+    const pending = [...session.pendingCommands.values()];
+    session.pendingCommands.clear();
+    for (const resolveCommand of pending) {
+      resolveCommand({ error: { message: 'Fleet browser session closed.' } });
+    }
+    const viewers = [...session.viewers];
+    session.viewers.clear();
+    for (const viewer of viewers) {
+      if (viewer.readyState === WebSocket.CONNECTING || viewer.readyState === WebSocket.OPEN) {
+        viewer.close(1001);
+      }
+    }
+    const agentSockets = [...session.agentSockets];
+    session.agentSockets.clear();
+    for (const socket of agentSockets) {
+      if (socket.readyState === WebSocket.CONNECTING) socket.on('error', () => undefined);
+      if (socket.readyState === WebSocket.CONNECTING || socket.readyState === WebSocket.OPEN) {
+        socket.close(1001);
+      }
+    }
+    const page = session.page;
+    session.page = null;
+    if (page && (page.readyState === WebSocket.CONNECTING || page.readyState === WebSocket.OPEN)) {
+      page.on('error', () => undefined);
+      page.close();
+    }
+    const child = session.child;
+    session.child = null;
+    if (child && child.exitCode === null && child.signalCode === null) {
+      child.kill();
+    }
   }
 
   private async handleViewerMessage(session: BrowserSession, client: WebSocket, raw: string): Promise<void> {
+    if (session.closed) throw new Error('Fleet browser session closed.');
     if (raw.length > 16_384) throw new Error('Browser input is too large.');
     const message: unknown = JSON.parse(raw);
     if (!record(message) || typeof message.type !== 'string' || !Number.isSafeInteger(message.id)) throw new Error('Invalid browser input.');
@@ -212,50 +298,80 @@ export class FleetBrowserService {
 
   private async ensure(sessionId: string): Promise<BrowserSession> {
     safeSessionId(sessionId);
-    this.tokenFor(sessionId);
-    const session = this.sessions.get(sessionId)!;
-    if (session.endpoint && await browserHealthy(session.endpoint)) return session;
+    const session = this.sessions.get(sessionId);
+    if (!session) throw new Error('Fleet browser session is unavailable.');
+    if (session.endpoint && await browserHealthy(session.endpoint)) {
+      if (session.closed) throw new Error('Fleet browser session closed.');
+      return session;
+    }
+    if (session.closed) throw new Error('Fleet browser session closed.');
     let pending = this.launching.get(sessionId);
     if (!pending) {
-      pending = this.launch(sessionId, session).finally(() => this.launching.delete(sessionId));
-      this.launching.set(sessionId, pending);
+      const launchPromise = this.launch(sessionId, session).finally(() => {
+        if (this.launching.get(sessionId) === launchPromise) this.launching.delete(sessionId);
+      });
+      this.launching.set(sessionId, launchPromise);
+      pending = launchPromise;
     }
     return pending;
   }
 
   private async launch(sessionId: string, session: BrowserSession): Promise<BrowserSession> {
+    if (session.closed) throw new Error('Fleet browser session closed.');
     if (this.endpointOverride) {
       const endpoint = await this.endpointOverride(sessionId);
+      if (session.closed) throw new Error('Fleet browser session closed.');
       if (endpoint) { session.endpoint = endpoint; return session; }
     }
-    const profile = join(ROOT, 'sessions', sessionId, 'profile');
+    const profile = join(this.launchOptions?.rootDir ?? ROOT, 'sessions', sessionId, 'profile');
     mkdirSync(profile, { recursive: true, mode: 0o700 });
     const activePort = join(profile, 'DevToolsActivePort');
     const existing = readChromePort(activePort);
     if (existing && await browserHealthy(`http://127.0.0.1:${existing}`)) {
+      if (session.closed) throw new Error('Fleet browser session closed.');
       session.endpoint = `http://127.0.0.1:${existing}`;
       return session;
     }
-    const executable = await chromeExecutable();
-    const child = spawn(executable, ['--headless=new', '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=0',
+    if (session.closed) throw new Error('Fleet browser session closed.');
+    const executable = await (this.launchOptions?.resolveExecutable ?? chromeExecutable)();
+    if (session.closed) throw new Error('Fleet browser session closed.');
+    const spawnBrowser = this.launchOptions?.spawnBrowser
+      ?? ((command: string, args: readonly string[]) => spawn(command, [...args], { stdio: 'ignore', windowsHide: true }));
+    const child = spawnBrowser(executable, ['--headless=new', '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=0',
       `--user-data-dir=${profile}`, '--no-first-run', '--no-default-browser-check', '--window-size=1280,800',
-      ...(process.getuid?.() === 0 ? ['--no-sandbox'] : []), this.homePage()],
-    { stdio: 'ignore', windowsHide: true });
+      ...(process.getuid?.() === 0 ? ['--no-sandbox'] : []), this.homePage()]);
     let launchError: Error | null = null;
     child.on('error', (error) => { launchError = error; });
     session.child = child;
     const deadline = Date.now() + BOOT_TIMEOUT_MS;
     while (Date.now() < deadline) {
-      if (launchError) throw launchError;
-      if (child.exitCode !== null) throw new Error('Fleet browser exited before its CDP endpoint became available.');
+      if (session.closed) {
+        if (session.child === child) session.child = null;
+        if (child.exitCode === null && child.signalCode === null) child.kill();
+        throw new Error('Fleet browser session closed.');
+      }
+      if (launchError) {
+        if (session.child === child) session.child = null;
+        throw launchError;
+      }
+      if (child.exitCode !== null || child.signalCode !== null) {
+        if (session.child === child) session.child = null;
+        throw new Error('Fleet browser exited before its CDP endpoint became available.');
+      }
       const port = readChromePort(activePort);
       if (port && await browserHealthy(`http://127.0.0.1:${port}`)) {
+        if (session.closed) {
+          if (session.child === child) session.child = null;
+          if (child.exitCode === null && child.signalCode === null) child.kill();
+          throw new Error('Fleet browser session closed.');
+        }
         session.endpoint = `http://127.0.0.1:${port}`;
         return session;
       }
       await new Promise((resolveDelay) => setTimeout(resolveDelay, 250));
     }
-    child.kill();
+    if (session.child === child) session.child = null;
+    if (child.exitCode === null && child.signalCode === null) child.kill();
     throw new Error('Fleet browser did not start within two minutes.');
   }
 
@@ -277,21 +393,43 @@ export class FleetBrowserService {
   }
 
   private async openPageStream(session: BrowserSession): Promise<void> {
+    if (session.closed) throw new Error('Fleet browser session closed.');
     if (session.page?.readyState === WebSocket.OPEN) {
       await this.command(session, 'Page.startScreencast', { format: 'jpeg', quality: 60, maxWidth: 1280, maxHeight: 800 });
       return;
     }
     const page = (await this.targets(session))[0];
+    if (session.closed) throw new Error('Fleet browser session closed.');
     if (!page) throw new Error('Fleet browser has no page target.');
     session.targetId = page.id;
     session.lastUrl = page.url;
     const socket = new WebSocket(page.webSocketDebuggerUrl, { maxPayload: MAX_AGENT_FRAME_BYTES });
-    await new Promise<void>((resolveOpen, rejectOpen) => {
-      socket.once('open', resolveOpen);
-      socket.once('error', rejectOpen);
-    });
     session.page = socket;
+    try {
+      await new Promise<void>((resolveOpen, rejectOpen) => {
+        const cleanup = (): void => {
+          socket.off('open', onOpen);
+          socket.off('error', onError);
+          socket.off('close', onClose);
+        };
+        const onOpen = (): void => { cleanup(); resolveOpen(); };
+        const onError = (error: Error): void => { cleanup(); rejectOpen(error); };
+        const onClose = (): void => { cleanup(); rejectOpen(new Error('Fleet browser CDP connection closed.')); };
+        socket.once('open', onOpen);
+        socket.once('error', onError);
+        socket.once('close', onClose);
+      });
+    } catch (error) {
+      if (session.page === socket) session.page = null;
+      throw error;
+    }
+    socket.on('error', () => undefined);
+    if (session.closed || session.page !== socket) {
+      socket.close();
+      throw new Error('Fleet browser session closed.');
+    }
     socket.on('message', (raw) => {
+      if (session.closed) return;
       let value: unknown;
       try { value = JSON.parse(String(raw)); } catch { return; }
       if (!record(value)) return;
@@ -325,16 +463,18 @@ export class FleetBrowserService {
     });
     socket.on('close', () => {
       if (session.page === socket) session.page = null;
-      for (const resolveCommand of session.pendingCommands.values()) resolveCommand({ error: { message: 'Browser CDP connection closed.' } });
+      const pending = [...session.pendingCommands.values()];
       session.pendingCommands.clear();
+      for (const resolveCommand of pending) resolveCommand({ error: { message: 'Browser CDP connection closed.' } });
       for (const viewer of session.viewers) send(viewer, { type: 'browser.disconnected' });
     });
     await this.command(session, 'Page.enable');
+    if (session.closed) throw new Error('Fleet browser session closed.');
     await this.command(session, 'Page.startScreencast', { format: 'jpeg', quality: 60, maxWidth: 1280, maxHeight: 800 });
   }
 
   private async command(session: BrowserSession, method: string, params: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
-    if (!session.page || session.page.readyState !== WebSocket.OPEN) throw new Error('Fleet browser is disconnected.');
+    if (session.closed || !session.page || session.page.readyState !== WebSocket.OPEN) throw new Error('Fleet browser is disconnected.');
     const id = session.commandId++;
     return new Promise((resolveCommand, rejectCommand) => {
       const timer = setTimeout(() => { session.pendingCommands.delete(id); rejectCommand(new Error('Fleet browser command timed out.')); }, 30_000);
