@@ -13,6 +13,10 @@
 - Research Track routes reportable verified claims with stale reproduction or review provenance to Investigators, then routes stale proof packets back to Triagers before reporting.
 - Research Track discovery and Reviewers stop standalone proof work when a claim is downrated to low or informational without a credible program-level impact path.
 
+#### Fixed
+
+- `shell.run` ignores `child.stdin` write errors such as `EPIPE` instead of crashing the worker, honors abort signals that fire before child spawn, closes and removes lease files on write failure, and reclaims stale empty or corrupt lease files after the grace window.
+
 ## 0.9.6
 
 ### Beale

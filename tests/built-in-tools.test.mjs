@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { access, mkdtemp, mkdir, readFile, realpath, rm, symlink, utimes, writeFile } from "node:fs/promises";
+import { access, mkdtemp, mkdir, open, readdir, readFile, realpath, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import test from "node:test";
@@ -778,6 +778,187 @@ test("shell tool reclaims an expired lease from a stopped worker in the same pro
     });
     assert.equal(result.result.status, "complete");
     assert.equal(result.result.output.stdout, "reclaimed");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("shell tool ignores child.stdin EPIPE errors on fast-exiting and missing utilities", async () => {
+  const root = await mkdtemp(join(tmpdir(), "app-server-shell-epipe-"));
+  try {
+    const registry = createResearchToolRegistry([
+      createShellTool({ workspaceRoot: root, authorize: allowShell }),
+    ]);
+    const fastExit = await registry.execute({
+      id: "shell_epipe_fast_exit",
+      actionClass: "inspect",
+      toolName: "shell.run",
+      input: {
+        utility: process.execPath,
+        args: ["-e", "process.exit(0)"],
+        stdin: "x".repeat(512 * 1024),
+      },
+    });
+    assert.equal(fastExit.result.status, "complete");
+    assert.equal(fastExit.result.output.exitCode, 0);
+
+    const missing = await registry.execute({
+      id: "shell_epipe_missing_utility",
+      actionClass: "inspect",
+      toolName: "shell.run",
+      input: {
+        utility: join(root, "missing-utility-example"),
+        stdin: "x".repeat(64 * 1024),
+      },
+    });
+    assert.equal(missing.result.status, "error");
+    assert.equal(missing.result.output.spawnErrorCode, "ENOENT");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("shell tool honors an abort signal that fires before child spawn", async () => {
+  const root = await mkdtemp(join(tmpdir(), "app-server-shell-prespawn-abort-"));
+  const leaseDirectory = join(root, "leases");
+  const optionsPath = join(root, "shell-options.json");
+  const marker = join(root, "spawned.txt");
+  await writeFile(optionsPath, JSON.stringify({
+    schemaVersion: 1,
+    defaultConcurrency: 1,
+    utilities: { [basename(process.execPath).toLowerCase().replace(/\.(?:bat|cmd|com|exe)$/u, "")]: 1 },
+    leaseDirectory,
+  }));
+  try {
+    const registry = createResearchToolRegistry([
+      createShellTool({ workspaceRoot: root, shellOptionsPath: optionsPath, authorize: allowShell }),
+    ]);
+    const controller = new AbortController();
+    let abortedReads = 0;
+    const signal = new Proxy(controller.signal, {
+      get(target, property) {
+        if (property === "aborted") {
+          abortedReads += 1;
+          if (abortedReads === 2) queueMicrotask(() => controller.abort());
+          return target.aborted;
+        }
+        const value = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const startedAt = Date.now();
+    const aborted = await registry.execute({
+      id: "shell_prespawn_abort",
+      actionClass: "experiment",
+      toolName: "shell.run",
+      input: {
+        utility: process.execPath,
+        args: [
+          "-e",
+          `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "spawned"); setInterval(() => {}, 1000);`,
+        ],
+        timeoutMs: 3_000,
+      },
+    }, { signal });
+
+    assert.equal(aborted.result.status, "error");
+    assert.equal(aborted.result.output.aborted, true);
+    assert.equal(aborted.result.output.timedOut, false);
+    assert.ok(Date.now() - startedAt < 1_000, "pre-spawn abort must not wait for command timeout");
+    await assert.rejects(access(marker));
+    assert.deepEqual(await readdir(leaseDirectory), []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("shell tool closes and removes the lease file when lease write fails", async () => {
+  const root = await mkdtemp(join(tmpdir(), "app-server-shell-lease-write-fail-"));
+  const leaseDirectory = join(root, "leases");
+  const optionsPath = join(root, "shell-options.json");
+  await writeFile(optionsPath, JSON.stringify({
+    schemaVersion: 1,
+    defaultConcurrency: 1,
+    utilities: { node: 1 },
+    leaseDirectory,
+  }));
+  const probe = await open(join(root, "probe"), "w");
+  const fileHandleProto = Object.getPrototypeOf(probe);
+  await probe.close();
+  const originalWriteFile = fileHandleProto.writeFile;
+  let failedHandle = null;
+  fileHandleProto.writeFile = async function () {
+    failedHandle = this;
+    fileHandleProto.writeFile = originalWriteFile;
+    throw Object.assign(new Error("ENOSPC: synthetic disk full"), { code: "ENOSPC" });
+  };
+  try {
+    const registry = createResearchToolRegistry([
+      createShellTool({ workspaceRoot: root, shellOptionsPath: optionsPath, authorize: allowShell }),
+    ]);
+    const result = await registry.execute({
+      id: "shell_lease_write_fail",
+      actionClass: "inspect",
+      toolName: "shell.run",
+      input: { utility: "node", args: ["-e", "process.stdout.write('ok')"] },
+    });
+    assert.equal(result.result.status, "error");
+    assert.match(result.result.error.message, /ENOSPC/);
+    assert.ok(failedHandle !== null);
+    assert.equal(failedHandle.fd, -1, "lease file handle must be closed on write failure");
+    assert.deepEqual(await readdir(leaseDirectory), [], "partial lease file must be unlinked on write failure");
+  } finally {
+    fileHandleProto.writeFile = originalWriteFile;
+    if (failedHandle && failedHandle.fd !== -1) await failedHandle.close().catch(() => undefined);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("shell tool reclaims stale empty or corrupt lease files after the grace window", async () => {
+  const root = await mkdtemp(join(tmpdir(), "app-server-shell-corrupt-lease-"));
+  const leaseDirectory = join(root, "leases");
+  const optionsPath = join(root, "shell-options.json");
+  await mkdir(leaseDirectory);
+  await writeFile(optionsPath, JSON.stringify({
+    schemaVersion: 1,
+    defaultConcurrency: 1,
+    utilities: { node: 1 },
+    leaseDirectory,
+  }));
+  const utilityKey = createHash("sha256").update("node").digest("hex").slice(0, 24);
+  const leasePath = join(leaseDirectory, `${utilityKey}.0.lease`);
+  try {
+    const registry = createResearchToolRegistry([
+      createShellTool({ workspaceRoot: root, shellOptionsPath: optionsPath, authorize: allowShell }),
+    ]);
+    for (const [id, content] of [
+      ["shell_reclaimed_empty_lease", ""],
+      ["shell_reclaimed_corrupt_lease", '{"pid":'],
+      ["shell_reclaimed_missing_expiry_lease", JSON.stringify({ pid: process.pid })],
+    ]) {
+      await writeFile(leasePath, content);
+      const stale = new Date(Date.now() - 10_000);
+      await utimes(leasePath, stale, stale);
+      const result = await registry.execute({
+        id,
+        actionClass: "inspect",
+        toolName: "shell.run",
+        input: { utility: "node", args: ["-e", "process.stdout.write('reclaimed')"], timeoutMs: 1_500 },
+      });
+      assert.equal(result.result.status, "complete");
+      assert.equal(result.result.output.stdout, "reclaimed");
+    }
+
+    await writeFile(leasePath, "");
+    const freshResult = await registry.execute({
+      id: "shell_fresh_empty_lease_preserved",
+      actionClass: "inspect",
+      toolName: "shell.run",
+      input: { utility: "node", args: ["-e", "process.stdout.write('unexpected')"], timeoutMs: 150 },
+    });
+    assert.equal(freshResult.result.status, "error");
+    assert.match(freshResult.result.error.message, /Timed out waiting for a node concurrency slot/);
+    await access(leasePath);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
