@@ -958,7 +958,7 @@ export class AppServerHostService {
       ? this.researchTrackSessionAssignment(storage.databasePath, workspace.workspaceId, sessionId)
       : null;
     if (request.launch.mode === 'research-track' && !trackAssignment) {
-      throw new Error('The research track has no active surface assigned to this session.');
+      throw new Error('The research track has no active surface or claim worker assigned to this session.');
     }
     const remoteShells: Record<string, Awaited<ReturnType<FleetService['prepareSessionTarget']>>> = {};
     try {
@@ -1663,15 +1663,24 @@ export class AppServerHostService {
   }
 
   private researchTrackSessionAssignment(databasePath: string, workspaceId: string, sessionId: string):
-    { surfaceName: string; theory: string; nextAction: string } | null {
+    ResearchTrackSessionAssignment | null {
     const store = new ResearchTrackStore({ databasePath, workspaceId });
+    let track: ReturnType<ResearchTrackStore['get']>;
     try {
-      const track = store.get();
-      if (track?.status !== 'running' || track.activeSessionId !== sessionId) return null;
+      track = store.get();
+    } finally { store.close(); }
+    if (track?.status !== 'running' || track.activeSessionId !== sessionId) return null;
+    if (track.activeSurfaceId) {
       const surface = track.surfaces.find((item) => item.surfaceId === track.activeSurfaceId);
       if (!surface) return null;
-      return { surfaceName: surface.name, theory: surface.theory, nextAction: surface.nextAction };
-    } finally { store.close(); }
+      return { kind: 'surface', surfaceName: surface.name, theory: surface.theory, nextAction: surface.nextAction };
+    }
+    const funnel = new TrackFunnelStore({ databasePath, workspaceId });
+    try {
+      const workers = funnel.activeForSession(sessionId);
+      if (workers.length === 0) return null;
+      return { kind: 'workers', workerCount: workers.length };
+    } finally { funnel.close(); }
   }
 
   public async recordResearchTrackEpochLaunchFailure(workspaceId: string, sessionId: string, reason: string): Promise<void> {
@@ -2669,7 +2678,14 @@ function generatedTitle(prompt: string): string {
   return normalized.slice(0, 120) || 'Beale research session';
 }
 
-function initialResearchTrackTitle(assignment: { nextAction: string; theory: string; surfaceName: string }): string {
+type ResearchTrackSessionAssignment =
+  | { kind: 'surface'; surfaceName: string; theory: string; nextAction: string }
+  | { kind: 'workers'; workerCount: number };
+
+function initialResearchTrackTitle(assignment: ResearchTrackSessionAssignment): string {
+  if (assignment.kind === 'workers') {
+    return assignment.workerCount === 1 ? 'Resolve queued claim' : 'Resolve queued claims';
+  }
   const text = assignment.nextAction || assignment.theory || assignment.surfaceName;
   return text.trim().replace(/\s+/gu, ' ').split(' ').slice(0, 6).join(' ').slice(0, 80) || 'Research Session';
 }

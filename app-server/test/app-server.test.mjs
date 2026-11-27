@@ -30,7 +30,14 @@ import {
   BEALE_APP_SERVER_CONTROL_VERSION,
   MANAGED_TOOL_PLUGIN_IDS,
 } from "@beale/app-server-runtime/protocol";
-import { AppServerSessionStore, ResearchTrackStore, WORKSPACE_DIRECTORIES } from "../../packages/research-agent/dist/index.js";
+import {
+  AppServerSessionStore,
+  MemoryGraphStore,
+  ResearchClaimStore,
+  ResearchTrackStore,
+  TrackFunnelStore,
+  WORKSPACE_DIRECTORIES,
+} from "../../packages/research-agent/dist/index.js";
 import {
   AppServerWorkerDatabaseBroker,
   AppServerWorkerDatabaseCoordinator,
@@ -2576,6 +2583,155 @@ test("research track launch retains collaboration settings and enabled browser t
   assert.ok(prepared.launch.pluginRuntime.managedPluginIds.includes("beale-browser"));
   assert.ok(appServerSessionArgs(prepared.launch, {}).includes("--managed-plugins"));
   assert.ok(appServerSessionArgs(prepared.launch, {}).includes(MANAGED_TOOL_PLUGIN_IDS.join(",")));
+});
+
+test("worker-only research track epoch prepares and launches while unassigned track sessions remain rejected", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "beale-track-worker-only-"));
+  temporaryDirectories.push(directory);
+  const databasePath = join(directory, "memory.sqlite");
+  const workspaceId = "workspace-test";
+  const surface = {
+    id: "surface-example-cooling",
+    parentId: null,
+    name: "Example cooling service",
+    coverageState: { covered: false, unmetRequirements: ["sinks"] },
+    progressBlocker: null,
+  };
+  const graph = new MemoryGraphStore({
+    workspaceRoot: directory,
+    databasePath,
+    context: {
+      workspaceId,
+      workspaceName: "Test workspace",
+      subjectId: "subject-example",
+      subjectName: "ExampleCo",
+      sessionId: "session-seed",
+    },
+  });
+  const claims = new ResearchClaimStore(graph);
+  const lead = claims.create({
+    title: "Example queued parser Lead",
+    classification: "security.vulnerability",
+    rating: "high",
+  });
+  claims.close();
+  graph.close();
+
+  const trackStore = new ResearchTrackStore({ databasePath, workspaceId });
+  const funnel = new TrackFunnelStore({ databasePath, workspaceId });
+  try {
+    const startedTrack = trackStore.start({
+      scopeId: "scope-example",
+      provider: { id: "openai-codex", model: "example-model" },
+      targetIds: ["local"],
+      surfaces: [surface],
+    });
+    const database = new DatabaseSync(databasePath);
+    try {
+      database.prepare(`UPDATE app_server_research_track_surfaces SET status='deferred', no_progress_epochs=2,
+        revisit_after=? WHERE workspace_id=? AND surface_id=?`).run(
+          new Date(Date.now() + 60 * 60_000).toISOString(), workspaceId, surface.id);
+    } finally { database.close(); }
+
+    const calls = [];
+    let canonicalSession = null;
+    const registry = hostRegistryFixture(directory);
+    registry.listWorkspaces = () => [{ workspaceId }];
+    const hostService = new AppServerHostService({
+      registry,
+      invokeProtocol: async (operation, options) => {
+        calls.push({ operation, options });
+        if (operation === "provider.describe") {
+          return {
+            defaultSmallModels: { "openai-codex": "example-small-model" },
+            sessionTitleEffort: "medium",
+            shellReviewEffort: "low",
+          };
+        }
+        if (operation === "plugin.runtime") {
+          return {
+            managedPluginIds: MANAGED_TOOL_PLUGIN_IDS,
+            skillDirs: [],
+            selectedSkillIds: [],
+            allowedMcpServers: [],
+          };
+        }
+        if (operation === "session.get") {
+          if (!canonicalSession) throw new Error(`Session not found: ${startedTrack.id}`);
+          return canonicalSession;
+        }
+        if (operation === "session.create") {
+          canonicalSession = { ...options.input, status: "active", attempts: [{ id: options.input.attemptId, parentAttemptId: null }], revision: 1 };
+          return canonicalSession;
+        }
+        if (operation === "session.transition") {
+          canonicalSession = { ...canonicalSession, status: options.input.status };
+          return canonicalSession;
+        }
+        if (operation === "session.append_event") return { revision: 2 };
+        throw new Error(`Unexpected operation: ${operation}`);
+      },
+    });
+    hostService.workspaceResearchTrackContext = async () => ({
+      scope: { id: "scope-example", expiresAt: null },
+      targets: [{ id: "local", ready: true }],
+      surfaceMap: { surfaces: [surface] },
+    });
+
+    const upstream = await createFakeAppServerSessionHost();
+    const server = await startAppServer({ hostService, spawnSession: upstream.spawnSession, longSessionRecovery: false });
+    servers.push(server);
+
+    await waitForCondition(() => {
+      const current = trackStore.get();
+      if (current?.status === "paused") {
+        throw new Error(`Research track paused unexpectedly: ${current.lastError}`);
+      }
+      return server.listSessions().some((session) => session.sessionId === startedTrack.id);
+    });
+    assert.equal(server.listSessions().find((session) => session.sessionId === startedTrack.id)?.state, "running");
+
+    const runningTrack = trackStore.get();
+    assert.equal(runningTrack?.status, "running");
+    assert.equal(runningTrack?.activeSessionId, startedTrack.id);
+    assert.equal(runningTrack?.activeSurfaceId, null);
+    assert.equal(runningTrack?.lastError, null);
+    const createCall = calls.find((call) => call.operation === "session.create");
+    assert.equal(createCall?.options.input.title, "Resolve queued claim");
+    assert.match(createCall?.options.input.prompt ?? "", /No discovery component is ready/u);
+
+    assert.deepEqual(funnel.activeForSession(startedTrack.id).map((item) => ({ role: item.role, claimId: item.claimId })), [
+      { role: "investigator", claimId: lead.id },
+    ]);
+
+    upstream.complete();
+    await waitFor(() => trackStore.get()?.activeSessionId === null);
+    const finishedTrack = trackStore.get();
+    assert.equal(finishedTrack?.status, "running");
+    assert.equal(finishedTrack?.lastError, null);
+    assert.deepEqual(funnel.activeForSession(startedTrack.id), []);
+
+    // A worker-only reservation without any reserved funnel workers must still be rejected.
+    trackStore.reserveWorkersOnly("track-unassigned-workers");
+    const unassignedRequest = sessionLaunchRequest(directory, { sessionId: "track-unassigned-workers" });
+    unassignedRequest.launch.mode = "research-track";
+    await assert.rejects(
+      () => hostService.prepareSession(unassignedRequest, "unused-generated-session"),
+      /The research track has no active surface or claim worker assigned to this session\./u,
+    );
+    trackStore.finishEpoch("track-unassigned-workers", true);
+
+    // An unrelated session id must also be rejected.
+    const unrelatedRequest = sessionLaunchRequest(directory, { sessionId: "track-unrelated-session" });
+    unrelatedRequest.launch.mode = "research-track";
+    await assert.rejects(
+      () => hostService.prepareSession(unrelatedRequest, "unused-generated-session"),
+      /The research track has no active surface or claim worker assigned to this session\./u,
+    );
+  } finally {
+    funnel.close();
+    trackStore.close();
+  }
 });
 
 test("app-server preserves launch options through restart metadata and runtime arguments", async () => {

@@ -13,6 +13,10 @@
 - Research Track routes reportable verified claims with stale reproduction or review provenance to Investigators, then routes stale proof packets back to Triagers before reporting.
 - Research Track discovery and Reviewers stop standalone proof work when a claim is downrated to low or informational without a credible program-level impact path.
 
+#### Fixed
+
+- Worker-only Research Track epochs now pass session preparation and launch their reserved claim workers instead of failing with a missing-surface error and pausing the track.
+
 ## 0.9.6
 
 ### Beale
