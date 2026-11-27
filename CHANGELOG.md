@@ -13,6 +13,10 @@
 - Research Track routes reportable verified claims with stale reproduction or review provenance to Investigators, then routes stale proof packets back to Triagers before reporting.
 - Research Track discovery and Reviewers stop standalone proof work when a claim is downrated to low or informational without a credible program-level impact path.
 
+#### Fixed
+
+- `finding.list` and `lead.list` catalog projections preserve evidence `verificationContext` in compact evidence reads so unqualified independent reviews are no longer counted as validated or reported as completion-ready.
+
 ## 0.9.6
 
 ### Beale

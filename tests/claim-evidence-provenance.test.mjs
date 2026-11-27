@@ -269,3 +269,132 @@ test("provenance migrations preserve old rows and do not backfill invented execu
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("compact catalogs preserve verificationContext and reject unqualified independent reviews", async (t) => {
+  const f = await fixture(t);
+  const execution = await f.run();
+  let claim = f.reproduce(execution.runId);
+  const tracking = (evidenceId) => ({
+    reachability: { state: "reachable", conditions: "Example request reaches the affected path.", evidenceIds: [evidenceId] },
+    affectedAssetIds: ["asset-example"],
+    cvssAssessment: {
+      version: "4.0",
+      vector: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:L/VI:H/VA:N/SC:N/SI:N/SA:N",
+      score: 8.7,
+      nomenclature: "CVSS-B",
+      assessedAt: "2026-01-01T00:00:00.000Z",
+      environmentFingerprint: f.environmentFingerprint,
+    },
+    externalReferences: [{ kind: "prior_art_search", identifier: "example state mismatch @ 2026-01-01: no matching advisory", url: null }],
+  });
+  claim = f.claims.revise(claim.id, {
+    expectedRevision: claim.revision,
+    reason: "Record example security tracking.",
+    impact: "Example state corruption across request boundaries.",
+    securityTracking: tracking(claim.evidence[0].id),
+  }, f.modelAuthor, "author-example");
+
+  const tools = new Map(createFindingTools(f.claims).map((tool) => [tool.descriptor.name, tool]));
+  const call = (toolName, input, context) => tools.get(toolName).execute({
+    id: `${toolName}-example`, toolName, actionClass: toolName.endsWith(".transition") ? "synthesize" : "recall", input,
+  }, context);
+
+  const unqualifiedAppend = await call("finding.transition", {
+    id: claim.id, expectedRevision: claim.revision, toStatus: "reproduced", reason: "Example inherited-context review.",
+    evidence: [{
+      kind: "independent_verification", independent: true, referenceId: execution.runId,
+      summary: "Example review from an inherited subagent.",
+      metadata: { verificationContext: "fresh_subagent", largeNote: "x".repeat(4096) },
+    }],
+  }, { agentId: "reviewer-example", modelAuthor: f.modelAuthor, freshSubagentContext: false });
+  assert.equal(unqualifiedAppend.status, "complete", unqualifiedAppend.error?.message);
+  claim = unqualifiedAppend.output;
+  const unqualifiedReview = claim.evidence.at(-1);
+  assert.equal(unqualifiedReview.metadata.verificationContext, "unqualified");
+  assert.equal(unqualifiedReview.validated, false);
+
+  const completionCheck = await call("finding.completion_check", { id: claim.id, targetStatus: "verified" });
+  assert.equal(completionCheck.status, "complete", completionCheck.error?.message);
+  assert.equal(completionCheck.output.ready, false);
+  assert.deepEqual(completionCheck.output.missingRequired, ["independent_verification"]);
+
+  const findingCatalog = f.claims.readCatalog({ projection: "finding", query: "", statuses: [], classifications: [], offset: 0, limit: 10 });
+  const compactFinding = findingCatalog.findings.find((item) => item.id === claim.id);
+  const compactReview = compactFinding.evidence.find((item) => item.id === unqualifiedReview.id);
+  assert.equal(compactReview.metadata.verificationContext, "unqualified");
+  assert.equal(compactReview.metadata.largeNote, undefined);
+  assert.equal(compactReview.validated, false);
+
+  const listedFindings = await call("finding.list", {});
+  assert.equal(listedFindings.status, "complete", listedFindings.error?.message);
+  const listedFinding = listedFindings.output.findings.find((item) => item.id === claim.id);
+  assert.equal(listedFinding.independentEvidenceCount, 0);
+  assert.equal(listedFinding.completion.ready, false);
+  assert.deepEqual(listedFinding.completion.missingRequired, ["independent_verification"]);
+
+  let lead = f.claims.create({
+    title: "Example unverified lead", summary: "Synthetic lead proof obligation.", impact: "Example lead impact.",
+    classification: "security.vulnerability", sourceRevision: f.sourceRevision, environmentFingerprint: f.environmentFingerprint,
+    stepsToReproduce: "Run the example setup, then execute the assertion against the sample target.",
+  }, f.modelAuthor, "author-example");
+  lead = f.claims.transition(lead.id, {
+    expectedRevision: lead.revision, toStatus: "hypothesis", reason: "Attach example reproduction evidence to lead.",
+    reproductionRunbookId: f.book.id,
+    evidence: [
+      { kind: "code", referenceId: "src/example.ts:2", summary: "Example clue." },
+      { kind: "runbook_execution", referenceId: execution.runId, summary: "Example run." },
+    ],
+  }, f.modelAuthor, "author-example");
+  lead = f.claims.revise(lead.id, {
+    expectedRevision: lead.revision, reason: "Record example lead tracking.",
+    securityTracking: tracking(lead.evidence[0].id),
+  }, f.modelAuthor, "author-example");
+  const unqualifiedLeadAppend = await call("finding.transition", {
+    id: lead.id, expectedRevision: lead.revision, toStatus: "hypothesis", reason: "Example inherited-context lead review.",
+    evidence: [{
+      kind: "independent_verification", independent: true, referenceId: execution.runId,
+      summary: "Example lead review from an inherited subagent.",
+    }],
+  }, { agentId: "reviewer-example", modelAuthor: f.modelAuthor, freshSubagentContext: false });
+  assert.equal(unqualifiedLeadAppend.status, "complete", unqualifiedLeadAppend.error?.message);
+  lead = unqualifiedLeadAppend.output;
+  const unqualifiedLeadReview = lead.evidence.at(-1);
+  assert.equal(unqualifiedLeadReview.metadata.verificationContext, "unqualified");
+  assert.equal(unqualifiedLeadReview.validated, false);
+
+  const leadCatalog = f.claims.readCatalog({ projection: "lead", query: "", statuses: [], classifications: [], offset: 0, limit: 10 });
+  const compactLead = leadCatalog.findings.find((item) => item.id === lead.id);
+  const compactLeadReview = compactLead.evidence.find((item) => item.id === unqualifiedLeadReview.id);
+  assert.equal(compactLeadReview.metadata.verificationContext, "unqualified");
+  assert.equal(compactLeadReview.validated, false);
+
+  const listedLeads = await call("lead.list", {});
+  assert.equal(listedLeads.status, "complete", listedLeads.error?.message);
+  const listedLead = listedLeads.output.leads.find((item) => item.id === lead.id);
+  assert.equal(listedLead.independentEvidenceCount, 0);
+  assert.equal(listedLead.completion.ready, false);
+  assert.deepEqual(listedLead.completion.missingRequired, ["independent_verification"]);
+
+  const qualifiedVerify = await call("finding.transition", {
+    id: claim.id, expectedRevision: claim.revision, toStatus: "verified", reason: "Example fresh independent review.",
+    evidence: [{
+      kind: "independent_verification", independent: true, referenceId: execution.runId,
+      summary: "Example review from a fresh subagent.",
+    }],
+  }, { agentId: "fresh-reviewer-example", modelAuthor: f.modelAuthor, freshSubagentContext: true });
+  assert.equal(qualifiedVerify.status, "complete", qualifiedVerify.error?.message);
+  const qualifiedReview = qualifiedVerify.output.evidence.at(-1);
+
+  const verifiedCatalog = f.claims.readCatalog({ projection: "finding", query: "", statuses: [], classifications: [], offset: 0, limit: 10 });
+  const compactVerified = verifiedCatalog.findings.find((item) => item.id === claim.id);
+  assert.equal(compactVerified.evidence.find((item) => item.id === unqualifiedReview.id).validated, false);
+  assert.equal(compactVerified.evidence.find((item) => item.id === qualifiedReview.id).metadata.verificationContext, "fresh_subagent");
+  assert.equal(compactVerified.evidence.find((item) => item.id === qualifiedReview.id).validated, true);
+
+  const listedVerified = await call("finding.list", {});
+  assert.equal(listedVerified.status, "complete", listedVerified.error?.message);
+  const listedVerifiedFinding = listedVerified.output.findings.find((item) => item.id === claim.id);
+  assert.equal(listedVerifiedFinding.independentEvidenceCount, 1);
+  assert.equal(listedVerifiedFinding.completion.ready, true);
+  assert.deepEqual(listedVerifiedFinding.completion.missingRequired, []);
+});
