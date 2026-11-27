@@ -1622,6 +1622,12 @@ const EVIDENCE_CONTROL_SQL = `CASE
   WHEN instr(lower(summary), 'negative control') > 0 THEN 'negative'
   ELSE NULL END`;
 
+const EVIDENCE_VERIFICATION_CONTEXT_SQL = `CASE
+  WHEN json_type(metadata_json, '$.verificationContext') = 'text'
+    AND json_extract(metadata_json, '$.verificationContext') IN ('human_operator','fresh_subagent','unqualified')
+    THEN json_extract(metadata_json, '$.verificationContext')
+  ELSE NULL END`;
+
 function stalenessReasons(finding: FindingSummary, sourceRevision: string | null, environmentFingerprint: string | null): string[] {
   const reasons: string[] = [];
   if (comparableIdentityChanged(finding.sourceRevision, sourceRevision, "source")) {
@@ -1700,7 +1706,7 @@ function groupedEvidence(database: DatabaseSync, findingIds: ReadonlySet<string>
   const columns = compact
     ? `id, claim_id, kind, reference_id, content_hash, '' AS summary, session_id, actor_id, independent,
       ${tableHasColumn(database, "app_server_claim_evidence", "claim_binding_hash") ? "claim_binding_hash" : "NULL AS claim_binding_hash"},
-      json_object('control', ${EVIDENCE_CONTROL_SQL}) AS metadata_json, created_at`
+      json_object('control', ${EVIDENCE_CONTROL_SQL}, 'verificationContext', ${EVIDENCE_VERIFICATION_CONTEXT_SQL}) AS metadata_json, created_at`
     : "*";
   const rows = compact ? [...findingIds].flatMap((id) => [...compactEvidenceRows(database, id, columns)])
     : scopedClaimRows(database, "app_server_claim_evidence", findingIds, columns, "created_at, id", page);
