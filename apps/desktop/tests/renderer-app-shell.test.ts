@@ -380,6 +380,8 @@ describe('renderer app shell view model', () => {
     const workspaceLabelStyles = styles.match(/\.app-header-workspace-title\s*\{([^}]*)\}/u)?.[1] ?? '';
     const secondaryLabelStyles = styles.match(/\.app-header-session-title\s*\{([^}]*)\}/u)?.[1] ?? '';
     const sharedSessionSurfaceStyles = styles.match(/\.app-header-session-title,\s*\.app-header-surface-title\s*\{([^}]*)\}/u)?.[1] ?? '';
+    const windowMenuStaticRowStyles = styles.match(/\.window-menu-static-row\s*\{([^}]*)\}/u)?.[1] ?? '';
+    const sideViewTabActivateStyles = styles.match(/(?:^|\n)\.research-side-view-tab-activate\s*\{([^}]*)\}/u)?.[1] ?? '';
     expect(styles).toContain('--main-content-inline-start: calc(var(--navigation-rail-width) + var(--sidebar-width))');
     expect(styles).toMatch(/\.window-menu \.sidebar-toggle-button\s*\{[^}]*margin-left: 6px;/u);
     expect(styles).toMatch(/\.app-shell\.sidebar-collapsed\s*\{\s*--main-content-inline-start: var\(--navigation-rail-width\);/u);
@@ -392,11 +394,13 @@ describe('renderer app shell view model', () => {
       expect(labelStyles).toContain('box-sizing: border-box');
       expect(labelStyles).toContain('padding: 0 6px');
     }
-    expect(workspaceLabelStyles).toContain('line-height: 1');
+    expect(workspaceLabelStyles).toContain('line-height: 1.35;');
     expect(workspaceLabelStyles).toContain('font-size: 1rem');
-    expect(sharedSessionSurfaceStyles).toContain('line-height: 1');
+    expect(sharedSessionSurfaceStyles).toContain('line-height: 1.35;');
     expect(sharedSessionSurfaceStyles).toContain('font-size: 1rem');
     expect(sharedSessionSurfaceStyles).toContain('font-weight: 400');
+    expect(windowMenuStaticRowStyles).toContain('line-height: 1.35;');
+    expect(sideViewTabActivateStyles).toContain('line-height: 1.35;');
     expect(styles).toMatch(/@media \(max-width: 820px\)[\s\S]*?\.app-shell\s*\{\s*--main-content-inline-start: var\(--navigation-rail-width\);/u);
     expect(styles).not.toContain('left: 180px;');
   });

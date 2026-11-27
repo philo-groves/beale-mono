@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Beale
+
+#### Fixed
+
+- Titlebar breadcrumb labels, window menu static rows, and view pill tabs now use sufficient line height so glyph descenders are not clipped by single-line truncation.
+
 ### app-server
 
 #### Changed
