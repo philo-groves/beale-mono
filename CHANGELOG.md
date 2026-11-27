@@ -13,6 +13,10 @@
 - Research Track routes reportable verified claims with stale reproduction or review provenance to Investigators, then routes stale proof packets back to Triagers before reporting.
 - Research Track discovery and Reviewers stop standalone proof work when a claim is downrated to low or informational without a credible program-level impact path.
 
+#### Fixed
+
+- Non-OpenAI-Responses sessions no longer trigger spurious initial context compaction and host research checkpoints when history is below the compaction threshold, and continue to compact proactively on later turns after a host research checkpoint is present.
+
 ## 0.9.6
 
 ### Beale

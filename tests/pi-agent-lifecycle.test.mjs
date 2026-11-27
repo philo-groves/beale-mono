@@ -1438,6 +1438,183 @@ test("Pi Agent checkpoints initial local compaction once without reconstructing 
   );
 });
 
+test("Pi Agent does not spuriously compact or checkpoint under-threshold non-OpenAI sessions", async () => {
+  const contexts = [];
+  const liveEvents = [];
+  const result = await runResearchAgent({
+    prompt: "Inspect the synthetic example target on a fresh non-OpenAI session.",
+    agentInstructions: WORKSPACE_AGENT_INSTRUCTIONS,
+    continuityContext: {
+      schemaVersion: 1,
+      workspacePath: "/workspaces/example-fresh-non-openai",
+    },
+    eventSink(event) {
+      liveEvents.push(event);
+    },
+    executor: createPiAgentExecutor({
+      provider: "faux",
+      model: "faux-model",
+      subagents: false,
+      models: createScriptedModels([
+        assistant("## Result\nCompleted without hitting the compaction threshold."),
+      ], contexts),
+      toolRegistry: createResearchToolRegistry([]),
+    }),
+  });
+
+  assert.equal(result.agentRun.status, "complete");
+  assert.equal(contexts.length, 1);
+  assert.equal(contexts[0].messageProviders.includes("app-server-runtime"), false);
+  assert.doesNotMatch(contexts[0].messageContents.join("\n"), /Research checkpoint after context compaction/);
+  assert.doesNotMatch(contexts[0].messageContents.join("\n"), /APP_SERVER_HOST_REHYDRATION_V1/);
+  assert.equal(
+    result.agentRun.output.raw.agentEvents.some((event) =>
+      event.type === "research_checkpoint" || event.type === "context_compacted"
+    ),
+    false,
+  );
+  assert.equal(
+    liveEvents.some((event) =>
+      event.kind === "agent.event"
+      && (event.payload.type === "research_checkpoint" || event.payload.type === "context_compacted")
+    ),
+    false,
+  );
+  assert.doesNotMatch(
+    JSON.stringify(result.agentRun.output.raw.resumableState.messages),
+    /Research checkpoint after context compaction/,
+  );
+
+  const resumeState = extractCompatiblePiAgentResumableState(
+    result.agentRun.output.raw,
+    "faux",
+    "faux-model",
+  );
+  assert.ok(resumeState);
+
+  const resumedContexts = [];
+  const resumed = await runResearchAgent({
+    prompt: "Continue the under-threshold non-OpenAI session.",
+    agentInstructions: WORKSPACE_AGENT_INSTRUCTIONS,
+    executor: createPiAgentExecutor({
+      provider: "faux",
+      model: "faux-model",
+      subagents: false,
+      resumableState: resumeState,
+      models: createScriptedModels([
+        assistant("## Result\nContinued without spurious compaction."),
+      ], resumedContexts),
+      toolRegistry: createResearchToolRegistry([]),
+    }),
+  });
+
+  assert.equal(resumed.agentRun.status, "complete");
+  assert.equal(resumedContexts.length, 1);
+  assert.equal(resumedContexts[0].messageProviders.includes("app-server-runtime"), false);
+  assert.doesNotMatch(resumedContexts[0].messageContents.join("\n"), /Research checkpoint after context compaction/);
+  assert.equal(
+    resumed.agentRun.output.raw.agentEvents.some((event) =>
+      event.type === "research_checkpoint" || event.type === "context_compacted"
+    ),
+    false,
+  );
+});
+
+test("Pi Agent proactively re-compacts non-OpenAI sessions after a prior host research checkpoint", async () => {
+  const initialMessages = [{ role: "user", content: "Earlier research objective", timestamp: Date.now() }];
+  for (let index = 0; index < 10; index += 1) {
+    initialMessages.push(assistant(
+      toolCall("fixture_inspect", { path: `initial-${index}.c` }, `initial_local_${index}`),
+      "toolUse",
+    ));
+    initialMessages.push({
+      role: "toolResult",
+      toolCallId: `initial_local_${index}`,
+      toolName: "fixture_inspect",
+      content: [{ type: "text", text: `initial-${index}\n${"x".repeat(30_000)}` }],
+      details: { summary: `Inspected initial-${index}.c.` },
+      isError: false,
+      timestamp: Date.now(),
+    });
+  }
+
+  const calls = [];
+  const contexts = [];
+  const liveEvents = [];
+  const tool = createFixtureInspectTool(calls);
+  const execute = tool.execute;
+  tool.execute = async (action) => {
+    const base = await execute(action);
+    return { ...base, output: { path: action.input.path, text: "y".repeat(30_000) } };
+  };
+
+  const result = await runResearchAgent({
+    prompt: "Continue investigating until a second proactive compaction occurs.",
+    tools: [tool.descriptor],
+    eventSink(event) {
+      liveEvents.push(event);
+    },
+    executor: createPiAgentExecutor({
+      provider: "faux",
+      model: "faux-model",
+      subagents: false,
+      initialMessages,
+      models: createScriptedModels([
+        assistant([
+          { type: "text", text: `turn-1 ${"a".repeat(35_000)}` },
+          toolCall("fixture_inspect", { path: "followup-1.c" }, "followup_1"),
+        ], "toolUse"),
+        assistant([
+          { type: "text", text: `turn-2 ${"b".repeat(35_000)}` },
+          toolCall("fixture_inspect", { path: "followup-2.c" }, "followup_2"),
+        ], "toolUse"),
+        assistant([
+          { type: "text", text: `turn-3 ${"c".repeat(35_000)}` },
+          toolCall("fixture_inspect", { path: "followup-3.c" }, "followup_3"),
+        ], "toolUse"),
+        assistant("## Result\nContinued after proactive recompaction."),
+      ], contexts),
+      toolRegistry: createResearchToolRegistry([tool]),
+    }),
+  });
+
+  assert.equal(result.agentRun.status, "complete");
+  assert.equal(calls.length, 3);
+  const proactiveCompactions = liveEvents.filter((event) =>
+    event.kind === "agent.event"
+    && event.payload.type === "context_compacted"
+    && event.payload.reason !== "context_window_error"
+  );
+  assert.ok(
+    proactiveCompactions.length >= 1,
+    "a non-OpenAI session with an existing host checkpoint must proactively compact again once context grows past the high-water mark",
+  );
+  assert.ok(proactiveCompactions.every((event) => event.payload.tokensAfter < event.payload.tokensBefore));
+
+  const localCheckpoints = result.agentRun.output.raw.agentEvents.filter((event) =>
+    event.type === "research_checkpoint" && event.reason === "local"
+  );
+  assert.ok(
+    localCheckpoints.some((event) => event.phase === "initial_context"),
+    "initial oversized history should emit the initial_context checkpoint",
+  );
+  assert.ok(
+    localCheckpoints.some((event) => event.phase === undefined && event.turn >= 1),
+    "subsequent proactive compaction should emit a fresh local research checkpoint",
+  );
+  assert.equal(
+    (contexts.at(-1).messageContents.join("\n").match(/Research checkpoint after context compaction/g) ?? []).length,
+    1,
+    "recompaction must replace the prior checkpoint instead of accumulating duplicates",
+  );
+  assert.equal(
+    result.agentRun.output.raw.resumableState.messages.filter((message) =>
+      message.role === "assistant" && message.provider === "app-server-runtime"
+    ).length,
+    1,
+  );
+});
+
 test("Pi Agent restores persisted goal turns across a resumed process", async () => {
   const objective = "Verify the persistent authorization boundary.";
   const recordedAt = new Date().toISOString();
