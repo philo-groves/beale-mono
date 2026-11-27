@@ -1345,7 +1345,7 @@ code {
   color: var(--gray-77);
   font-size: 0.74rem;
   font-weight: 760;
-  line-height: 1;
+  line-height: 1.35;
   pointer-events: none;
   user-select: none;
 }
@@ -1504,7 +1504,7 @@ code {
   font-size: 1rem;
   font-weight: 400;
   letter-spacing: 0;
-  line-height: 1;
+  line-height: 1.35;
   -webkit-app-region: no-drag;
 }
 
@@ -1520,7 +1520,7 @@ code {
   font-size: 1rem;
   font-weight: 400;
   letter-spacing: 0;
-  line-height: 1;
+  line-height: 1.35;
 }
 
 .app-header-session-title {
@@ -6548,7 +6548,7 @@ button.session-summary-item:hover:not(:disabled),
   padding: 0 5px 0 9px;
   font-size: 1rem;
   font-weight: 400;
-  line-height: 1;
+  line-height: 1.35;
   text-align: left;
 }
 
