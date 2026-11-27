@@ -13,6 +13,10 @@
 - Research Track routes reportable verified claims with stale reproduction or review provenance to Investigators, then routes stale proof packets back to Triagers before reporting.
 - Research Track discovery and Reviewers stop standalone proof work when a claim is downrated to low or informational without a credible program-level impact path.
 
+#### Fixed
+
+- Fleet browser relay sessions now tear down their per-session browser process, CDP and viewer/agent WebSockets, pending commands, cached frames, and in-flight launches when a session finishes or fails to start.
+
 ## 0.9.6
 
 ### Beale
