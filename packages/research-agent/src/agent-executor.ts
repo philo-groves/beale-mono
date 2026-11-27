@@ -3213,13 +3213,12 @@ function createResumableMessages(
 }
 
 function compactAgentContextForModel(
-  messages: readonly AgentMessage[],
+  messages: AgentMessage[],
   model: NativeOpenAiCompactionModel,
   forceCompaction = false,
 ): AgentMessage[] {
-  if (isNativeOpenAiResponsesModel(model) && !forceCompaction) return messages as AgentMessage[];
-  if (hasResearchCheckpoint(messages) && !forceCompaction) return messages as AgentMessage[];
-  return compactAgentContext([...messages], model.contextWindow, forceCompaction);
+  if (isNativeOpenAiResponsesModel(model) && !forceCompaction) return messages;
+  return compactAgentContext(messages, model.contextWindow, forceCompaction);
 }
 
 interface NativeCompactionBoundary {
