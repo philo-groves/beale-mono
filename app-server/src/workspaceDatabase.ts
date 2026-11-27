@@ -252,6 +252,8 @@ interface ProjectInventoryInsertInput {
   sha256: string | null;
   metadata: Record<string, unknown>;
   indexedAt: string;
+  searchPreview?: string;
+  structureText?: { text: string; truncated: boolean } | null;
 }
 
 interface ProjectInventoryScanState {
@@ -1032,45 +1034,25 @@ function languageForProjectPath(path: string): string {
   return byExtension[ext] ?? '';
 }
 
-function hashProjectFileIfCheap(path: string, sizeBytes: number): string | null {
-  if (sizeBytes > PROJECT_INVENTORY_HASH_MAX_BYTES) return null;
-  try {
-    return createHash('sha256').update(readFileSync(path)).digest('hex');
-  } catch {
-    return null;
-  }
+interface ProjectInventoryFileContent {
+  sha256: string | null;
+  searchPreview: string;
+  structureText: { text: string; truncated: boolean } | null;
 }
 
-function readProjectSearchPreview(path: string, resourceKind: string, sizeBytes: number): string {
-  if (sizeBytes <= 0) return '';
-  if (resourceKind === 'binary') return readProjectBinaryStringsPreview(path, sizeBytes);
-  if (sizeBytes > PROJECT_INVENTORY_PREVIEW_MAX_BYTES) return '';
-  if (resourceKind !== 'manifest' && resourceKind !== 'text') return '';
-  try {
-    const buffer = readFileSync(path);
-    if (!projectBufferLooksTextual(buffer)) return '';
-    return buffer.toString('utf8').slice(0, PROJECT_INVENTORY_PREVIEW_MAX_BYTES);
-  } catch {
-    return '';
-  }
-}
-
-function readProjectStructureText(path: string, resourceKind: string, sizeBytes: number): { text: string; truncated: boolean } | null {
-  if (resourceKind !== 'source' && resourceKind !== 'text' && resourceKind !== 'manifest') return null;
-  if (sizeBytes <= 0) return null;
-  const bytesToRead = Math.min(sizeBytes, PROJECT_STRUCTURE_MAX_FILE_BYTES);
+function readProjectFilePrefix(path: string, maxBytes: number): Buffer | null {
+  if (maxBytes <= 0) return Buffer.alloc(0);
   let fd: number | null = null;
   try {
     fd = openSync(path, 'r');
-    const buffer = Buffer.allocUnsafe(bytesToRead);
-    const bytesRead = readSync(fd, buffer, 0, bytesToRead, 0);
-    if (bytesRead <= 0) return null;
-    const sample = buffer.subarray(0, bytesRead);
-    if (!projectBufferLooksTextual(sample)) return null;
-    return {
-      text: sample.toString('utf8').replace(/\r\n?/g, '\n'),
-      truncated: sizeBytes > bytesRead
-    };
+    const buffer = Buffer.allocUnsafe(maxBytes);
+    let offset = 0;
+    while (offset < maxBytes) {
+      const bytesRead = readSync(fd, buffer, offset, maxBytes - offset, offset);
+      if (bytesRead <= 0) break;
+      offset += bytesRead;
+    }
+    return buffer.subarray(0, offset);
   } catch {
     return null;
   } finally {
@@ -1078,21 +1060,65 @@ function readProjectStructureText(path: string, resourceKind: string, sizeBytes:
   }
 }
 
-function readProjectBinaryStringsPreview(path: string, sizeBytes: number): string {
-  if (sizeBytes <= 0) return '';
-  const bytesToRead = Math.min(sizeBytes, PROJECT_INVENTORY_BINARY_SCAN_MAX_BYTES);
-  let fd: number | null = null;
-  try {
-    fd = openSync(path, 'r');
-    const buffer = Buffer.allocUnsafe(bytesToRead);
-    const bytesRead = readSync(fd, buffer, 0, bytesToRead, 0);
-    if (bytesRead <= 0) return '';
-    return extractProjectBinaryStrings(buffer.subarray(0, bytesRead)).join('\n');
-  } catch {
-    return '';
-  } finally {
-    if (fd !== null) closeSync(fd);
+function readProjectInventoryFileContent(path: string, resourceKind: string, sizeBytes: number): ProjectInventoryFileContent {
+  const needsHash = sizeBytes <= PROJECT_INVENTORY_HASH_MAX_BYTES;
+  const needsStructureText = (resourceKind === 'source' || resourceKind === 'text' || resourceKind === 'manifest') && sizeBytes > 0;
+  const needsTextPreview = (resourceKind === 'manifest' || resourceKind === 'text') && sizeBytes > 0 && sizeBytes <= PROJECT_INVENTORY_PREVIEW_MAX_BYTES;
+  const needsBinaryPreview = resourceKind === 'binary' && sizeBytes > 0;
+
+  if (!needsHash && !needsStructureText && !needsTextPreview && !needsBinaryPreview) {
+    return { sha256: null, searchPreview: '', structureText: null };
   }
+
+  let buffer: Buffer | null;
+  if (needsHash) {
+    try {
+      buffer = readFileSync(path);
+    } catch {
+      return { sha256: null, searchPreview: '', structureText: null };
+    }
+  } else {
+    const bytesToRead = needsStructureText
+      ? Math.min(sizeBytes, PROJECT_STRUCTURE_MAX_FILE_BYTES)
+      : Math.min(sizeBytes, PROJECT_INVENTORY_BINARY_SCAN_MAX_BYTES);
+    buffer = readProjectFilePrefix(path, bytesToRead);
+    if (!buffer) {
+      return { sha256: null, searchPreview: '', structureText: null };
+    }
+  }
+
+  const sha256 = needsHash ? createHash('sha256').update(buffer).digest('hex') : null;
+
+  if (needsBinaryPreview) {
+    const sample =
+      buffer.byteLength > PROJECT_INVENTORY_BINARY_SCAN_MAX_BYTES
+        ? buffer.subarray(0, PROJECT_INVENTORY_BINARY_SCAN_MAX_BYTES)
+        : buffer;
+    const searchPreview = sample.byteLength > 0 ? extractProjectBinaryStrings(sample).join('\n') : '';
+    return { sha256, searchPreview, structureText: null };
+  }
+
+  if (!needsStructureText && !needsTextPreview) {
+    return { sha256, searchPreview: '', structureText: null };
+  }
+
+  const sample =
+    buffer.byteLength > PROJECT_STRUCTURE_MAX_FILE_BYTES
+      ? buffer.subarray(0, PROJECT_STRUCTURE_MAX_FILE_BYTES)
+      : buffer;
+  if (sample.byteLength === 0 || !projectBufferLooksTextual(sample)) {
+    return { sha256, searchPreview: '', structureText: null };
+  }
+
+  const utf8 = sample.toString('utf8');
+  const searchPreview = needsTextPreview ? utf8.slice(0, PROJECT_INVENTORY_PREVIEW_MAX_BYTES) : '';
+  const structureText = needsStructureText
+    ? {
+        text: utf8.replace(/\r\n?/g, '\n'),
+        truncated: Math.max(sizeBytes, buffer.byteLength) > sample.byteLength
+      }
+    : null;
+  return { sha256, searchPreview, structureText };
 }
 
 function extractProjectBinaryStrings(buffer: Buffer): string[] {
@@ -5703,9 +5729,9 @@ export class WorkspaceDatabase {
 
   public rebuildProjectSearchIndex(options: { includeInventory?: boolean } = {}): void {
     this.transaction(() => {
-      const workspaceDocumentIds = `SELECT id FROM project_search_documents WHERE scope_version_id IN (SELECT id FROM scope_versions WHERE workspace_id = ?)`;
-      this.db.prepare(`DELETE FROM project_search_fts WHERE document_id IN (${workspaceDocumentIds})`).run(this.workspaceId);
-      this.db.prepare(`DELETE FROM project_search_documents WHERE id IN (${workspaceDocumentIds})`).run(this.workspaceId);
+      const workspaceDocumentRowIds = `SELECT rowid FROM project_search_documents WHERE scope_version_id IN (SELECT id FROM scope_versions WHERE workspace_id = ?)`;
+      this.db.prepare(`DELETE FROM project_search_fts WHERE rowid IN (${workspaceDocumentRowIds})`).run(this.workspaceId);
+      this.db.prepare(`DELETE FROM project_search_documents WHERE scope_version_id IN (SELECT id FROM scope_versions WHERE workspace_id = ?)`).run(this.workspaceId);
       const scopeRows = rows(this.db.prepare('SELECT id FROM scope_versions WHERE workspace_id = ? ORDER BY version ASC').all(this.workspaceId));
       for (const scopeRow of scopeRows) {
         const scope = this.getScopeVersion(text(scopeRow, 'id'));
@@ -5756,7 +5782,7 @@ export class WorkspaceDatabase {
             .prepare(
               `SELECT d.*, bm25(project_search_fts) AS rank
                FROM project_search_fts
-               JOIN project_search_documents d ON d.id = project_search_fts.document_id
+               JOIN project_search_documents d ON d.rowid = project_search_fts.rowid
                WHERE project_search_fts MATCH ?
                  AND ${visibleDocumentSql}
                ORDER BY rank ASC, d.updated_at DESC
@@ -6670,6 +6696,20 @@ export class WorkspaceDatabase {
             updateLegacy.run(toJson(attributes), text(row, 'id'));
           }
         }
+      },
+      {
+        version: 27,
+        name: 'align_project_search_fts_rowids',
+        up: (database) => {
+          database.exec(`
+            DELETE FROM project_search_fts;
+            INSERT INTO project_search_fts (
+              rowid, document_id, scope_version_id, run_id, entity_type, entity_id, title, body
+            )
+            SELECT rowid, id, scope_version_id, run_id, entity_type, entity_id, title, body
+            FROM project_search_documents;
+          `);
+        }
       }
     ]);
   }
@@ -6871,49 +6911,95 @@ export class WorkspaceDatabase {
         )
         .all(scopeVersionId)
     );
+    if (unresolved.length === 0) return;
+
+    const entityRows = rows(
+      this.db
+        .prepare(
+          `SELECT id, name, entity_kind, path, line_start, line_end
+           FROM project_structure_entities
+           WHERE scope_version_id = ?
+           ORDER BY
+             CASE entity_kind
+               WHEN 'function' THEN 0
+               WHEN 'method' THEN 0
+               WHEN 'class' THEN 1
+               WHEN 'type' THEN 1
+               WHEN 'export' THEN 2
+               WHEN 'route' THEN 3
+               ELSE 4
+             END,
+             line_start ASC,
+             rowid ASC`
+        )
+        .all(scopeVersionId)
+    );
+    if (entityRows.length === 0) return;
+
+    const entitiesByLowerName = new Map<string, Array<{
+      id: string;
+      entityKind: string;
+      path: string;
+      lineStart: number;
+      lineEnd: number;
+    }>>();
+    for (const row of entityRows) {
+      const lowerName = text(row, 'name').toLowerCase();
+      let bucket = entitiesByLowerName.get(lowerName);
+      if (!bucket) {
+        bucket = [];
+        entitiesByLowerName.set(lowerName, bucket);
+      }
+      bucket.push({
+        id: text(row, 'id'),
+        entityKind: text(row, 'entity_kind'),
+        path: text(row, 'path'),
+        lineStart: numberValue(row, 'line_start'),
+        lineEnd: numberValue(row, 'line_end')
+      });
+    }
+
+    const targetEntityKindSets = new Map<string, Set<string>>();
+    const updateRelation = this.db.prepare('UPDATE project_structure_relations SET target_entity_id = ?, metadata_json = ? WHERE id = ?');
 
     for (const relation of unresolved) {
       const targetKind = text(relation, 'target_kind');
       const targetName = text(relation, 'target_name');
-      const entityKinds = projectStructureTargetEntityKinds(targetKind);
-      if (entityKinds.length === 0 || !targetName.trim()) continue;
-      const placeholders = entityKinds.map(() => '?').join(', ');
-      const candidates = rows(
-        this.db
-          .prepare(
-            `SELECT *
-             FROM project_structure_entities
-             WHERE scope_version_id = ?
-               AND LOWER(name) = LOWER(?)
-               AND entity_kind IN (${placeholders})
-             ORDER BY
-               CASE WHEN path = ? THEN 0 ELSE 1 END,
-               CASE entity_kind
-                 WHEN 'function' THEN 0
-                 WHEN 'method' THEN 0
-                 WHEN 'class' THEN 1
-                 WHEN 'type' THEN 1
-                 WHEN 'export' THEN 2
-                 WHEN 'route' THEN 3
-                 ELSE 4
-               END,
-               line_start ASC
-             LIMIT 1`
-          )
-          .all(scopeVersionId, targetName, ...entityKinds, text(relation, 'source_path'))
-      );
-      const target = candidates[0];
+      if (!targetName.trim()) continue;
+      let entityKindSet = targetEntityKindSets.get(targetKind);
+      if (!entityKindSet) {
+        entityKindSet = new Set(projectStructureTargetEntityKinds(targetKind));
+        targetEntityKindSets.set(targetKind, entityKindSet);
+      }
+      if (entityKindSet.size === 0) continue;
+
+      const bucket = entitiesByLowerName.get(targetName.toLowerCase());
+      if (!bucket) continue;
+
+      const sourcePath = text(relation, 'source_path');
+      let sameFileMatch: (typeof bucket)[number] | null = null;
+      let scopeMatch: (typeof bucket)[number] | null = null;
+      for (const candidate of bucket) {
+        if (!entityKindSet.has(candidate.entityKind)) continue;
+        if (candidate.path === sourcePath) {
+          sameFileMatch = candidate;
+          break;
+        }
+        if (!scopeMatch) {
+          scopeMatch = candidate;
+        }
+      }
+      const target = sameFileMatch ?? scopeMatch;
       if (!target) continue;
+
       const metadata = {
         ...parseJson(relation.metadata_json),
-        targetResolution: text(target, 'path') === text(relation, 'source_path') ? 'same_file_name_match' : 'scope_name_match',
-        targetPath: text(target, 'path'),
-        targetLineStart: numberValue(target, 'line_start'),
-        targetLineEnd: numberValue(target, 'line_end')
+        targetResolution: target.path === sourcePath ? 'same_file_name_match' : 'scope_name_match',
+        targetPath: target.path,
+        targetLineStart: target.lineStart,
+        targetLineEnd: target.lineEnd
       };
-      this.db
-        .prepare('UPDATE project_structure_relations SET target_entity_id = ?, metadata_json = ? WHERE id = ?')
-        .run(text(target, 'id'), toJson(metadata), text(relation, 'id'));
+      updateRelation.run(target.id, toJson(metadata), text(relation, 'id'));
     }
   }
 
@@ -6968,7 +7054,8 @@ export class WorkspaceDatabase {
     state.scannedFiles += 1;
     const resourceKind = classifyProjectResourceKind(path, false);
     const sizeBytes = stat.size;
-    const preview = readProjectSearchPreview(path, resourceKind, sizeBytes);
+    const fileContent = readProjectInventoryFileContent(path, resourceKind, sizeBytes);
+    const preview = fileContent.searchPreview;
     const manifestMetadata = resourceKind === 'manifest' ? parseProjectManifestMetadata(path, preview) : {};
     this.insertProjectInventoryItem({
       scopeVersionId: asset.scopeVersionId,
@@ -6979,7 +7066,7 @@ export class WorkspaceDatabase {
       language: languageForProjectPath(path),
       sizeBytes,
       mtimeMs: Math.round(stat.mtimeMs),
-      sha256: hashProjectFileIfCheap(path, sizeBytes),
+      sha256: fileContent.sha256,
       metadata: {
         relativePath: safeRelativePath(asset.value, path),
         extension: extname(path).toLowerCase(),
@@ -6989,7 +7076,9 @@ export class WorkspaceDatabase {
         hashIndexed: sizeBytes <= PROJECT_INVENTORY_HASH_MAX_BYTES,
         manifest: manifestMetadata
       },
-      indexedAt: state.indexedAt
+      indexedAt: state.indexedAt,
+      searchPreview: preview,
+      structureText: fileContent.structureText
     });
   }
 
@@ -7048,7 +7137,7 @@ export class WorkspaceDatabase {
       input.language,
       input.sha256,
       JSON.stringify(metadata),
-      readProjectSearchPreview(input.absolutePath, input.resourceKind, input.sizeBytes ?? 0)
+      input.searchPreview ?? ''
     ]
       .filter(Boolean)
       .join('\n');
@@ -7072,7 +7161,7 @@ export class WorkspaceDatabase {
   }
 
   private indexProjectBinaryStructureForFile(input: ProjectInventoryInsertInput, inventoryItemId: string): void {
-    const preview = readProjectBinaryStringsPreview(input.absolutePath, input.sizeBytes ?? 0);
+    const preview = input.searchPreview ?? '';
     if (!preview.trim()) return;
     const indexedAt = input.indexedAt;
     const seen = new Set<string>();
@@ -7121,7 +7210,7 @@ export class WorkspaceDatabase {
   }
 
   private indexProjectStructureForFile(input: ProjectInventoryInsertInput, inventoryItemId: string): void {
-    const text = readProjectStructureText(input.absolutePath, input.resourceKind, input.sizeBytes ?? 0);
+    const text = input.structureText ?? null;
     if (!text) return;
     const candidates = extractProjectStructureCandidates(input.absolutePath, input.language, text.text, text.truncated);
     const inserted: Array<{ candidate: ProjectStructureCandidate; entityId: string }> = [];
@@ -7282,15 +7371,10 @@ export class WorkspaceDatabase {
   }
 
   private deleteProjectSearchDocuments(whereSql: string, params: SqlPrimitive[]): void {
-    const docRows = rows(this.db.prepare(`SELECT id, scope_version_id FROM project_search_documents WHERE ${whereSql}`).all(...params));
-    const affectedScopeVersionIds = new Set<string>();
-    for (const row of docRows) {
-      this.db.prepare('DELETE FROM project_search_fts WHERE document_id = ?').run(text(row, 'id'));
-      affectedScopeVersionIds.add(text(row, 'scope_version_id'));
-    }
+    this.db
+      .prepare(`DELETE FROM project_search_fts WHERE rowid IN (SELECT rowid FROM project_search_documents WHERE ${whereSql})`)
+      .run(...params);
     this.db.prepare(`DELETE FROM project_search_documents WHERE ${whereSql}`).run(...params);
-    for (const scopeVersionId of affectedScopeVersionIds) {
-    }
   }
 
   private upsertProjectSearchDocument(input: ProjectSearchDocumentInput): void {
@@ -7301,51 +7385,50 @@ export class WorkspaceDatabase {
     const title = input.title.trim() || `${input.entityType} ${input.entityId}`;
     const sourcePath = input.sourcePath && input.sourcePath.length > 0 ? input.sourcePath : null;
     const metadataJson = toJson(input.metadata);
-    const existing = rowOrUndefined(this.db.prepare('SELECT title, body, source_path, metadata_json FROM project_search_documents WHERE id = ?').get(id));
-    const meaningfulChange =
-      !existing ||
-      text(existing, 'title') !== title ||
-      text(existing, 'body') !== body ||
-      (nullableText(existing, 'source_path') ?? null) !== sourcePath ||
-      text(existing, 'metadata_json') !== metadataJson;
-    this.db
-      .prepare(
-        `INSERT INTO project_search_documents (
-          id, scope_version_id, run_id, entity_type, entity_id, title, body,
-          source_path, metadata_json, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(id)
-        DO UPDATE SET
-          run_id = excluded.run_id,
-          title = excluded.title,
-          body = excluded.body,
-          source_path = excluded.source_path,
-          metadata_json = excluded.metadata_json,
-          updated_at = excluded.updated_at`
-      )
-      .run(
-        id,
-        input.scopeVersionId,
-        input.runId ?? null,
-        input.entityType,
-        input.entityId,
-        title,
-        body,
-        sourcePath,
-        metadataJson,
-        createdAt,
-        updatedAt
-      );
-    this.db.prepare('DELETE FROM project_search_fts WHERE document_id = ?').run(id);
+    const existing = rowOrUndefined(this.db.prepare('SELECT rowid FROM project_search_documents WHERE id = ?').get(id));
+    const upserted = rowOrUndefined(
+      this.db
+        .prepare(
+          `INSERT INTO project_search_documents (
+            id, scope_version_id, run_id, entity_type, entity_id, title, body,
+            source_path, metadata_json, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id)
+          DO UPDATE SET
+            run_id = excluded.run_id,
+            title = excluded.title,
+            body = excluded.body,
+            source_path = excluded.source_path,
+            metadata_json = excluded.metadata_json,
+            updated_at = excluded.updated_at
+          RETURNING rowid`
+        )
+        .get(
+          id,
+          input.scopeVersionId,
+          input.runId ?? null,
+          input.entityType,
+          input.entityId,
+          title,
+          body,
+          sourcePath,
+          metadataJson,
+          createdAt,
+          updatedAt
+        )
+    );
+    if (!upserted) throw new Error(`Failed to upsert project search document: ${id}`);
+    const documentRowId = upserted.rowid;
+    if (existing) {
+      this.db.prepare('DELETE FROM project_search_fts WHERE rowid = ?').run(documentRowId);
+    }
     this.db
       .prepare(
         `INSERT INTO project_search_fts (
-          document_id, scope_version_id, run_id, entity_type, entity_id, title, body
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)`
+          rowid, document_id, scope_version_id, run_id, entity_type, entity_id, title, body
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
       )
-      .run(id, input.scopeVersionId, input.runId ?? null, input.entityType, input.entityId, title, body);
-    if (meaningfulChange) {
-    }
+      .run(documentRowId, id, input.scopeVersionId, input.runId ?? null, input.entityType, input.entityId, title, body);
   }
 
   private indexRunSearchDocument(run: RunRecord): void {
