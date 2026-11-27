@@ -25,7 +25,7 @@ pub(super) fn snapshot(data_root: &Path) -> FleetSystemResources {
 }
 
 #[cfg(windows)]
-fn disk_space(data_root: &Path) -> Option<(u64, u64)> {
+pub(crate) fn disk_space(data_root: &Path) -> Option<(u64, u64)> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
 
@@ -50,7 +50,7 @@ fn disk_space(data_root: &Path) -> Option<(u64, u64)> {
 }
 
 #[cfg(unix)]
-fn disk_space(data_root: &Path) -> Option<(u64, u64)> {
+pub(crate) fn disk_space(data_root: &Path) -> Option<(u64, u64)> {
     use std::{ffi::CString, os::unix::ffi::OsStrExt};
 
     fn to_u64(value: impl TryInto<u64>) -> Option<u64> {
@@ -73,6 +73,6 @@ fn disk_space(data_root: &Path) -> Option<(u64, u64)> {
 }
 
 #[cfg(not(any(windows, unix)))]
-fn disk_space(_data_root: &Path) -> Option<(u64, u64)> {
+pub(crate) fn disk_space(_data_root: &Path) -> Option<(u64, u64)> {
     None
 }

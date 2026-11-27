@@ -34,6 +34,11 @@ pub(crate) fn initial_state() -> State {
 
 pub(crate) fn fixture(variant: &str) -> State {
     let name = match variant {
+        "stage9-destinations" | "stage9-local" | "stage9-pacing" => "research",
+        "stage9-containers" | "stage9-container-form" | "stage9-retention" | "stage9-empty" => {
+            "vms"
+        }
+        "stage9-status" => "session",
         "workspace-logo" => "workspace",
         "home-logo" => "home",
         "research-logo" => "research",
@@ -76,8 +81,9 @@ pub(crate) fn fixture(variant: &str) -> State {
         "typography-compact" => "typography",
         "anthropic" | "openrouter" | "xai" | "zai" | "api-key" => "providers",
         "custom-editor" => "custom",
-        "graph-editor" | "model-menu" | "goal-menu" | "graph-cloudflare" | "graph-openai"
-        | "graph-sequential" => "research",
+        "swarm-editor" | "model-menu" | "goal-menu" | "swarm-vdh-vvs" | "swarm-oai-948" => {
+            "research"
+        }
         "graph-session" | "session-activity" | "subagent-canvas" | "subagent-popup" => "session",
         "surface-add" | "surface-delete" | "relationship" => "surface-manage",
         "workspace-name" => "workspace",
@@ -610,17 +616,16 @@ pub(crate) fn fixture(variant: &str) -> State {
         }
         "research" | "session" | "canvas" => {
             s.primary_view = PrimaryView::NewResearch;
-            if variant == "graph-cloudflare" {
-                s.new_research_graph_id = beale_graphs::CLOUDFLARE_ID.to_owned();
+            if variant == "swarm-vdh-vvs" {
+                s.new_research_swarm_id = beale_swarms::VDH_VVS_ID.to_owned();
             }
-            if variant == "graph-openai" {
-                s.new_research_graph_id = beale_graphs::OPENAI_ID.to_owned();
+            if variant == "swarm-oai-948" {
+                s.new_research_swarm_id = beale_swarms::OAI_948_ID.to_owned();
             }
-            if variant == "graph-sequential" {
-                s.new_research_graph_id = beale_graphs::SEQUENTIAL_ID.to_owned();
-            }
+
             if name != "research" {
                 s.active_session = Some(SessionDetail {
+        scoped_review_rules: Vec::new(),
                     summary: Some(s.session_summaries[0].clone()), model: "example-lead".into(), provider: ProviderId::Openai as i32, method: AuthMethod::ApiKey as i32,
                     total_duration_ms: 142_000,
                     messages: vec![
@@ -658,7 +663,9 @@ pub(crate) fn fixture(variant: &str) -> State {
                 }
                 if variant == "graph-session" {
                     let detail = s.active_session.as_mut().unwrap();
-                    detail.graph_id = beale_graphs::OPENAI_ID.to_owned();
+                    detail.swarm_id = beale_swarms::OAI_948_ID.to_owned();
+                    detail.swarm_template_json =
+                        beale_swarms::template_snapshot(beale_swarms::OAI_948_ID).unwrap();
                     detail.messages[1].agent_role = "discovery".to_owned();
                     detail.messages[1].tools = vec![SessionToolSummary {
                         id: "tool-example".to_owned(),
@@ -679,8 +686,13 @@ pub(crate) fn fixture(variant: &str) -> State {
                         status: "completed".into(), completed_at_ms: 1_800_000_000_000,
                     };
                     let detail = s.active_session.as_mut().unwrap();
-                    detail.graph_id = beale_graphs::OPENAI_ID.to_owned();
-                    detail.graph_agents = vec![SessionGraphAgent {
+                    detail.swarm_id = beale_swarms::OAI_948_ID.to_owned();
+                    detail.swarm_template_json =
+                        beale_swarms::template_snapshot(beale_swarms::OAI_948_ID).unwrap();
+                    detail.swarm_agents = vec![SessionSwarmAgent {
+                        id: String::new(),
+                        parent_id: String::new(),
+                        agent_kind: String::new(),
                         role: "discovery".into(),
                         status: "idle".into(),
                     }];
@@ -1138,14 +1150,14 @@ pub(crate) fn fixture(variant: &str) -> State {
             s.custom_url_edit = TextEdit::new("https://models.example.test/v1");
             s.custom_models_edit = TextEdit::new("example-research, example-review");
         }
-        "graph-editor" => {
-            s.graph_models_group = Some(true);
+        "swarm-editor" => {
+            s.swarm_models_group = Some(true);
         }
         "model-menu" => {
             if let Some(graphs) = s
                 .features
                 .iter_mut()
-                .find(|feature| feature.id == beale_graphs::FEATURE_ID)
+                .find(|feature| feature.id == beale_swarms::FEATURE_ID)
             {
                 graphs.enabled = false;
             }
@@ -1237,5 +1249,6 @@ pub(crate) fn fixture(variant: &str) -> State {
             QuickChatMessage { role: SessionRole::Assistant as i32, text: "## Review notes\n\nThe **example scope** contains a saved runbook and one open question.\n\n- Check the recorded evidence.\n- Keep assumptions separate from observations.\n\n`example.test` is a synthetic placeholder.".into() },
         ];
     }
+    crate::swarm_controls::preview(&mut s, variant);
     s
 }

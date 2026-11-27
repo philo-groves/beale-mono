@@ -17,22 +17,20 @@ use beale_contracts::{
     SESSION_TURN_STOP_PATH, SESSION_TURN_STREAM_PATH, SESSION_TURNS_PATH, SESSIONS_PATH,
     session_stream_frame,
     v1::{
-        ArchiveEntry, AuthMethod, GoalStatus, GraphNodeConcurrency, GraphNodeModel,
-        ListArchiveResponse, ListSessionsResponse, ProviderId, ReasoningEffort,
-        SessionAgentMetrics, SessionCommentary, SessionDetail, SessionGoal, SessionGraphAgent,
-        SessionGraphConfig, SessionGraphHandoff, SessionMessage, SessionModelUsage,
-        SessionReasoningSummary, SessionRole, SessionStreamEvent, SessionStreamKind,
-        SessionSubagentDetail, SessionSubagentItem, SessionSubagentSummary, SessionSummary,
-        SessionTokenUsage, SessionToolDetailPage, SessionToolSummary, SessionUsageSnapshot,
-        SubmitSessionTurnRequest, SurfaceScopeState, WorkspaceSurface,
+        ArchiveEntry, AuthMethod, GoalStatus, ListArchiveResponse, ListSessionsResponse,
+        ProviderId, ReasoningEffort, SessionAgentMetrics, SessionCommentary, SessionDetail,
+        SessionGoal, SessionMessage, SessionModelUsage, SessionReasoningSummary, SessionRole,
+        SessionStreamEvent, SessionStreamKind, SessionSubagentDetail, SessionSubagentItem,
+        SessionSubagentSummary, SessionSummary, SessionSwarmAgent, SessionSwarmConfig,
+        SessionSwarmHandoff, SessionTokenUsage, SessionToolDetailPage, SessionToolSummary,
+        SessionUsageSnapshot, SubmitSessionTurnRequest, SurfaceScopeState, SwarmNodeConcurrency,
+        SwarmNodeModel, WorkspaceSurface,
     },
 };
-#[cfg(feature = "graphs")]
-use beale_contracts::{GRAPH_TEMPLATES_PATH, v1::ListGraphTemplatesResponse};
+
 use beale_extender::PluginRuntime;
 use beale_goals::{GoalRow, GoalStore};
-#[cfg(feature = "graphs")]
-use beale_graphs::GraphStore;
+
 use beale_providers::{
     AuthMode, CredentialStore, OpenAiConnection, Provider, ProviderClient, ProviderProgress,
     TextMessage, TextRole, ToolStepRequest, input_messages, provider_error_message,
@@ -54,8 +52,7 @@ use beale_tools::{
 use futures_util::stream;
 use prost::Message;
 use serde_json::{Value, json};
-#[cfg(feature = "graphs")]
-use std::sync::atomic::AtomicU32;
+
 use std::{
     collections::{HashMap, HashSet},
     future::Future,
@@ -92,83 +89,76 @@ impl Drop for ActiveRunbookRun {
 
 use beale_workspaces::WorkspaceStore;
 mod automations;
+#[cfg(feature = "swarms")]
+pub mod distributed;
 pub mod features;
+#[cfg(feature = "swarms")]
+mod hierarchy;
 #[cfg(feature = "memories")]
 mod memory_worker;
+#[cfg(feature = "swarms")]
+mod research_files;
+#[cfg(feature = "swarms")]
+mod swarm_templates;
 
 /// Goal Mode state saved for a session; always empty without Goal Mode.
 fn saved_goal(db: &HostDatabase, session_id: &str) -> anyhow::Result<Option<GoalRow>> {
     db.goal(session_id)
 }
 
-/// Inert stand-in for Goal Mode state in builds without the feature, so
-/// shared session code can treat an absent goal uniformly.
-/// Graph records read by shared session code. Builds without Graphs have no
-/// graph tables, so every session reads as an ordinary session.
-#[cfg(feature = "graphs")]
-mod graph_records {
-    use beale_graphs::GraphStore;
-    use beale_storage::HostDatabase;
-
-    pub(crate) fn graph_id(db: &HostDatabase, session_id: &str) -> anyhow::Result<Option<String>> {
-        db.session_graph_id(session_id)
-    }
-
-    pub(crate) fn graph_config(
-        db: &HostDatabase,
-        session_id: &str,
-    ) -> anyhow::Result<Option<Vec<u8>>> {
-        db.session_graph_config(session_id)
-    }
-
-    pub(crate) fn is_peer_session(db: &HostDatabase, session_id: &str) -> anyhow::Result<bool> {
-        db.is_peer_graph_session(session_id)
-    }
-
-    pub(crate) fn turn_role(
-        db: &HostDatabase,
-        session_id: &str,
-        turn_number: i64,
-    ) -> anyhow::Result<Option<String>> {
-        db.graph_turn_role(session_id, turn_number)
-    }
-
-    pub(crate) fn recover(db: &HostDatabase) -> anyhow::Result<()> {
-        db.recover_abandoned_graph_work()
-    }
+fn is_swarm_child(db: &HostDatabase, id: &str) -> Result<bool, TurnError> {
+    db.with_connection(|c| {
+        let exists: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='swarm_local')", [], |r| r.get(0))?;
+        if !exists { return Ok(false); }
+        Ok(c.query_row("SELECT EXISTS(SELECT 1 FROM swarm_local, json_each(swarm_local.document,'$.controls') AS agent WHERE json_extract(agent.value,'$.agent_id')=?1 AND scan_id != ?1)", [id], |r| r.get(0))?)
+    }).map_err(|_| TurnError::Internal)
 }
 
-#[cfg(not(feature = "graphs"))]
-mod graph_records {
-    use beale_storage::HostDatabase;
-
-    pub(crate) fn graph_id(
-        _db: &HostDatabase,
-        _session_id: &str,
-    ) -> anyhow::Result<Option<String>> {
-        Ok(None)
+fn ensure_local_execution(
+    db: &HostDatabase,
+    request: &SubmitSessionTurnRequest,
+) -> Result<(), TurnError> {
+    if !request.swarm_destinations.is_empty()
+        || request.swarm_retention.is_some()
+        || !request.swarm_pacing.is_empty()
+    {
+        return Err(TurnError::Invalid);
     }
-
-    pub(crate) fn graph_config(
-        _db: &HostDatabase,
-        _session_id: &str,
-    ) -> anyhow::Result<Option<Vec<u8>>> {
-        Ok(None)
+    if !request.swarm_id.is_empty() || !request.agent_role.is_empty() {
+        return Err(TurnError::UnsupportedSwarm);
     }
-
-    pub(crate) fn is_peer_session(_db: &HostDatabase, _session_id: &str) -> anyhow::Result<bool> {
-        Ok(false)
+    if request.session_id.is_empty() {
+        return Ok(());
     }
-
-    pub(crate) fn turn_role(
-        _db: &HostDatabase,
-        _session_id: &str,
-        _turn_number: i64,
-    ) -> anyhow::Result<Option<String>> {
-        Ok(None)
+    #[cfg(not(feature = "swarms"))]
+    if is_swarm_child(db, &request.session_id)? {
+        return Err(TurnError::UnsupportedSwarm);
     }
-
-    pub(crate) fn recover(_db: &HostDatabase) -> anyhow::Result<()> {
+    #[cfg(feature = "swarms")]
+    if hierarchy::saved(db, &request.session_id) {
+        return Ok(());
+    }
+    let saved = db
+        .with_connection(|connection| {
+            for (table, column) in [("swarm_scans", "id"), ("session_graphs", "session_id")] {
+                let exists: bool = connection.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
+                    [table],
+                    |r| r.get(0),
+                )?;
+                if exists {
+                    let sql = format!("SELECT EXISTS(SELECT 1 FROM {table} WHERE {column}=?1)");
+                    if connection.query_row(&sql, [&request.session_id], |r| r.get::<_, bool>(0))? {
+                        return Ok(true);
+                    }
+                }
+            }
+            Ok(false)
+        })
+        .map_err(|_| TurnError::Internal)?;
+    if saved {
+        Err(TurnError::UnsupportedSwarm)
+    } else {
         Ok(())
     }
 }
@@ -438,120 +428,6 @@ fn scope_state_name(value: i32) -> &'static str {
     }
 }
 
-#[cfg(feature = "graphs")]
-fn requested_top_level_role(
-    graph: Option<&beale_graphs::GraphDefinition>,
-    id: &str,
-) -> Result<Option<beale_graphs::ProfileId>, StatusCode> {
-    if id.is_empty() {
-        return Ok(None);
-    }
-    beale_graphs::ProfileId::from_id(id)
-        .filter(|role| role.is_top_level())
-        .filter(|role| graph.is_some_and(|graph| graph.nodes.contains(role)))
-        .map(Some)
-        .ok_or(StatusCode::BAD_REQUEST)
-}
-
-#[cfg(feature = "graphs")]
-fn validate_delegations(
-    runtime: &dyn beale_graphs::GraphRuntime,
-    parent: beale_graphs::ProfileId,
-    arguments: &Value,
-    config: &SessionGraphConfig,
-    fallback: &GraphNodeModel,
-) -> Result<(), String> {
-    let assignments = runtime
-        .assignments(arguments, config, fallback)
-        .map_err(|error| format!("Invalid delegation: {error}"))?;
-    let graph = beale_graphs::graph_definition(runtime.id())
-        .ok_or_else(|| "Invalid delegation graph".to_owned())?;
-    if assignments.iter().any(|assignment| {
-        !graph
-            .edges
-            .iter()
-            .any(|edge| edge.from == parent && edge.to == assignment.role)
-    }) {
-        return Err("Invalid delegation: role is not permitted for this parent".to_owned());
-    }
-    Ok(())
-}
-
-#[cfg(feature = "graphs")]
-async fn graph_child_role_label(
-    state: &SessionState,
-    session_id: &str,
-    parent_role: beale_graphs::ProfileId,
-    groups: &HashMap<beale_graphs::ProfileId, graphs::Subagents>,
-    id: &str,
-) -> Option<&'static str> {
-    if let Some(role) = match groups.get(&parent_role) {
-        Some(group) => group.role_of(id).await,
-        None => None,
-    } {
-        return Some(role.label());
-    }
-    let child = state.db.session_child(session_id, id).ok().flatten()?;
-    if child.parent_role != parent_role.id() {
-        return None;
-    }
-    beale_graphs::ProfileId::from_id(&child.turn.role).map(beale_graphs::ProfileId::label)
-}
-
-#[cfg(feature = "graphs")]
-async fn graph_tool_summary(
-    state: &SessionState,
-    session_id: &str,
-    parent_role: beale_graphs::ProfileId,
-    groups: &HashMap<beale_graphs::ProfileId, graphs::Subagents>,
-    name: &str,
-    args: &Value,
-) -> String {
-    match name {
-        beale_graphs::SPAWN_TOOL => format!(
-            "Graph spawn count: {}",
-            args.get("assignments")
-                .and_then(Value::as_array)
-                .map_or(0, Vec::len)
-        ),
-        beale_graphs::LIST_TOOL => "Graph list".to_owned(),
-        beale_graphs::INSPECT_TOOL | beale_graphs::MESSAGE_TOOL | beale_graphs::KILL_TOOL => {
-            let target = if name == beale_graphs::MESSAGE_TOOL {
-                "recipient"
-            } else {
-                "subagent_id"
-            };
-            let role = match args.get(target).and_then(Value::as_str) {
-                Some(id) => {
-                    graph_child_role_label(state, session_id, parent_role, groups, id).await
-                }
-                None => None,
-            };
-            let action = match name {
-                beale_graphs::INSPECT_TOOL => "inspect",
-                beale_graphs::MESSAGE_TOOL => "message",
-                _ => "kill",
-            };
-            role.map_or_else(
-                || format!("Graph {action}"),
-                |role| format!("Graph {action} role: {role}"),
-            )
-        }
-        beale_graphs::HANDOFF_TOOL => {
-            let role = args
-                .get("role")
-                .and_then(Value::as_str)
-                .and_then(beale_graphs::ProfileId::from_id)
-                .map(beale_graphs::ProfileId::label);
-            role.map_or_else(
-                || "Graph handoff".to_owned(),
-                |role| format!("Graph handoff role: {role}"),
-            )
-        }
-        _ => base_tool_summary(name, args),
-    }
-}
-
 #[cfg(feature = "runbooks")]
 fn runbook_review_context(state: &SessionState, workspace_id: &str) -> Result<String, StatusCode> {
     let details = state.workspaces.details_for_host(workspace_id)?;
@@ -563,13 +439,9 @@ fn runbook_review_context(state: &SessionState, workspace_id: &str) -> Result<St
     ))
 }
 mod engine;
-#[cfg(feature = "graphs")]
-mod graph_templates;
-#[cfg(feature = "graphs")]
-mod graphs;
+
 mod http;
-#[cfg(feature = "graphs")]
-mod peer_graph;
+
 mod quick_chat;
 mod system_prompt;
 mod tool_runtime;
@@ -621,147 +493,32 @@ fn close_unanswered_openai_calls(input: &mut Vec<Value>) {
     }
 }
 
-fn validate_graph_selection(
+fn validate_swarm_selection(
     db: &HostDatabase,
-    graph_id: &str,
-    graph_models: &[GraphNodeModel],
-    graph_node_concurrency: &[GraphNodeConcurrency],
+    swarm_id: &str,
+    swarm_models: &[SwarmNodeModel],
+    swarm_node_concurrency: &[SwarmNodeConcurrency],
     session_id: &str,
     workspace_id: &str,
 ) -> Result<(), StatusCode> {
-    if graph_id.is_empty() {
-        return if graph_models.is_empty() && graph_node_concurrency.is_empty() {
+    if swarm_id.is_empty() {
+        return if swarm_models.is_empty() && swarm_node_concurrency.is_empty() {
             Ok(())
         } else {
             Err(StatusCode::BAD_REQUEST)
         };
     }
-    #[cfg(feature = "graphs")]
-    {
-        if !session_id.is_empty() || !beale_graphs::selectable_graph(graph_id) {
-            return Err(StatusCode::BAD_REQUEST);
-        }
-        if graph_models.len() > 64 {
-            return Err(StatusCode::BAD_REQUEST);
-        }
-        let graph = beale_graphs::graph_definition(graph_id).ok_or(StatusCode::BAD_REQUEST)?;
-        if graph_node_concurrency.len() > graph.nodes.len() {
-            return Err(StatusCode::BAD_REQUEST);
-        }
-        let mut seen = std::collections::HashSet::new();
-        let mut per_role = HashMap::<beale_graphs::ProfileId, usize>::new();
-        for item in graph_models {
-            let Some(role) = beale_graphs::ProfileId::from_id(&item.node_id) else {
-                return Err(StatusCode::BAD_REQUEST);
-            };
-            if !graph.nodes.contains(&role) {
-                return Err(StatusCode::BAD_REQUEST);
-            }
-            *per_role.entry(role).or_default() += 1;
-            if per_role[&role] > role.max_models()
-                || item.model.is_empty()
-                || item.model.len() > 256
-                || !item.model.bytes().all(|byte| {
-                    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':' | b'/')
-                })
-                || !matches!(ProviderId::try_from(item.provider), Ok(provider) if provider != ProviderId::Unspecified)
-                || !matches!(AuthMethod::try_from(item.method), Ok(method) if method != AuthMethod::Unspecified)
-                || !seen.insert((
-                    item.node_id.as_str(),
-                    item.provider,
-                    item.method,
-                    item.model.as_str(),
-                ))
-            {
-                return Err(StatusCode::BAD_REQUEST);
-            }
-        }
-        let mut limited_roles = std::collections::HashSet::new();
-        for item in graph_node_concurrency {
-            let Some(role) = beale_graphs::ProfileId::from_id(&item.node_id) else {
-                return Err(StatusCode::BAD_REQUEST);
-            };
-            if !graph.nodes.contains(&role) {
-                return Err(StatusCode::BAD_REQUEST);
-            }
-            if item.max_concurrent == 0
-                || item.max_concurrent > role.runtime_max_concurrent()
-                || (role.is_top_level() && item.max_concurrent != 1)
-                || !limited_roles.insert(item.node_id.as_str())
-            {
-                return Err(StatusCode::BAD_REQUEST);
-            }
-        }
-        if !db
-            .feature_enabled(beale_graphs::FEATURE_ID)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-            || !db
-                .extension_applies_to("feature", beale_graphs::FEATURE_ID, workspace_id)
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        {
-            return Err(StatusCode::CONFLICT);
-        }
-        Ok(())
-    }
-    #[cfg(not(feature = "graphs"))]
+
     {
         let _ = (
             db,
-            graph_models,
-            graph_node_concurrency,
+            swarm_models,
+            swarm_node_concurrency,
             session_id,
             workspace_id,
         );
         Err(StatusCode::BAD_REQUEST)
     }
-}
-
-fn encoded_graph_config(request: &SubmitSessionTurnRequest) -> Option<Vec<u8>> {
-    if request.graph_id.is_empty() {
-        return None;
-    }
-    let concurrency = request.graph_node_concurrency.clone();
-    #[cfg(feature = "graphs")]
-    let mut concurrency = concurrency;
-    #[cfg(feature = "graphs")]
-    if request.graph_id == beale_graphs::SIMPLE_ID
-        && !concurrency
-            .iter()
-            .any(|item| item.node_id == beale_graphs::ProfileId::Main.id())
-        && let Some(max_concurrent) = beale_graphs::ProfileId::Main.default_max_concurrent()
-    {
-        concurrency.push(GraphNodeConcurrency {
-            node_id: beale_graphs::ProfileId::Main.id().to_owned(),
-            max_concurrent,
-        });
-    }
-    #[cfg(feature = "graphs")]
-    let default_stage_minutes = beale_graphs::graph_definition(&request.graph_id)
-        .map_or(0, |graph| graph.default_stage_minutes);
-    #[cfg(not(feature = "graphs"))]
-    let default_stage_minutes = 0;
-    #[cfg(feature = "graphs")]
-    let template_json = beale_graphs::template_snapshot(&request.graph_id).unwrap_or_default();
-    #[cfg(not(feature = "graphs"))]
-    let template_json = String::new();
-    Some(
-        SessionGraphConfig {
-            models: request.graph_models.clone(),
-            concurrency,
-            stage_duration_minutes: if request.stage_duration_minutes == 0 {
-                default_stage_minutes
-            } else {
-                request.stage_duration_minutes
-            },
-            template_json,
-            max_concurrent_workers: if request.max_concurrent_workers == 0 {
-                8
-            } else {
-                request.max_concurrent_workers
-            },
-        }
-        .encode_to_vec(),
-    )
 }
 
 fn append_tool_result(
@@ -851,10 +608,13 @@ struct SessionState {
     credentials: Arc<CredentialStore>,
     provider: Arc<ProviderClient>,
     session_locks: Arc<Mutex<HashMap<String, Weak<Mutex<()>>>>>,
-    #[cfg(feature = "graphs")]
-    scan_worker_budgets: Arc<Mutex<HashMap<String, Weak<graphs::ScanBudget>>>>,
+
     turn_stops: Arc<Mutex<HashMap<Uuid, watch::Sender<bool>>>>,
     quick_chat_lock: Arc<Mutex<()>>,
+    #[cfg(feature = "swarms")]
+    worker_recovery: Arc<std::sync::Mutex<Vec<distributed::WorkerRecovery>>>,
+    #[cfg(feature = "swarms")]
+    fleet_origin: Option<String>,
 }
 
 struct StoredSession {
@@ -877,40 +637,6 @@ struct StoredTurn {
     agent_role: String,
 }
 
-#[cfg(feature = "graphs")]
-#[derive(Clone)]
-struct PeerRun {
-    role: beale_graphs::ProfileId,
-    turn_number: i64,
-    notify: mpsc::UnboundedSender<()>,
-    handoff: bool,
-    soft_reminder: Option<watch::Receiver<bool>>,
-}
-
-#[cfg(feature = "graphs")]
-fn peer_input_messages(
-    turns: &[StoredTurn],
-    role: beale_graphs::ProfileId,
-    prompt: &str,
-) -> Vec<TextMessage> {
-    let mut messages = Vec::new();
-    for turn in turns.iter().filter(|turn| turn.agent_role == role.id()) {
-        messages.push(TextMessage {
-            role: TextRole::User,
-            text: turn.prompt.clone(),
-        });
-        messages.push(TextMessage {
-            role: TextRole::Assistant,
-            text: turn.answer.clone(),
-        });
-    }
-    messages.push(TextMessage {
-        role: TextRole::User,
-        text: prompt.to_owned(),
-    });
-    messages
-}
-
 pub fn router(token: String, workspaces: WorkspaceStore) -> anyhow::Result<Router> {
     let db = HostDatabase::open(workspaces.root())?;
     let plugins = PluginRuntime::new(db, workspaces.root().to_path_buf())?;
@@ -922,8 +648,43 @@ pub fn router_with_runtime(
     workspaces: WorkspaceStore,
     plugins: PluginRuntime,
 ) -> anyhow::Result<Router> {
-    let state = build_state_with_runtime(token, workspaces, plugins)?;
-    graph_records::recover(&state.db)?;
+    Ok(SessionRuntime::new(token, workspaces, plugins)?.router())
+}
+
+/// One host-owned session service shared by HTTP requests and maintenance.
+/// Retained execution handles must outlive individual requests and remain
+/// accessible to the scheduler after the originating request has finished.
+pub struct SessionRuntime {
+    state: SessionState,
+}
+
+impl SessionRuntime {
+    #[cfg(feature = "swarms")]
+    pub fn with_fleet_origin(mut self, origin: String) -> anyhow::Result<Self> {
+        beale_contracts::swarm_host::validate_origin(&origin).map_err(anyhow::Error::msg)?;
+        self.state.fleet_origin = Some(origin);
+        Ok(self)
+    }
+    pub fn new(
+        token: String,
+        workspaces: WorkspaceStore,
+        plugins: PluginRuntime,
+    ) -> anyhow::Result<Self> {
+        Ok(Self {
+            state: build_state_with_runtime(token, workspaces, plugins)?,
+        })
+    }
+
+    pub fn router(&self) -> Router {
+        session_router(self.state.clone())
+    }
+
+    pub fn start_automation_scheduler(&self) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(automations::run_worker(self.state.clone()))
+    }
+}
+
+fn session_router(state: SessionState) -> Router {
     let router = Router::new()
         .route(SESSIONS_PATH, get(list))
         .route(SESSION_DETAIL_PATH, get(details))
@@ -941,26 +702,19 @@ pub fn router_with_runtime(
         .route(QUICK_CHAT_DETAIL_PATH, get(quick_chat::details));
     #[cfg(feature = "runbooks")]
     let router = router.route(runbooks::CELL_RUN_PATH, post(run_runbook_cell));
-    #[cfg(feature = "graphs")]
-    let router = router.route(GRAPH_TEMPLATES_PATH, get(list_graph_templates));
-    Ok(router
-        .layer(DefaultBodyLimit::max(20_000))
-        .with_state(state))
+
+    #[cfg(feature = "swarms")]
+    let router = router.route(
+        beale_contracts::SWARM_TEMPLATES_PATH,
+        get(list_swarm_templates),
+    );
+    let router = router.layer(DefaultBodyLimit::max(20_000));
+    #[cfg(feature = "swarms")]
+    let router = router.merge(distributed::router());
+    router.with_state(state)
 }
 
-#[cfg(feature = "graphs")]
-async fn list_graph_templates(
-    State(state): State<SessionState>,
-    headers: HeaderMap,
-) -> Result<impl axum::response::IntoResponse, StatusCode> {
-    if !authorized(&headers, &state.token) {
-        return Err(StatusCode::UNAUTHORIZED);
-    }
-    Ok(response(ListGraphTemplatesResponse {
-        templates: graph_templates::load(state.workspaces.root()),
-    }))
-}
-
+#[cfg(test)]
 fn build_state(token: String, workspaces: WorkspaceStore) -> anyhow::Result<SessionState> {
     let db = HostDatabase::open(workspaces.root())?;
     let plugins = PluginRuntime::new(db, workspaces.root().to_path_buf())?;
@@ -984,26 +738,14 @@ fn build_state_with_runtime(
         credentials,
         provider: Arc::new(ProviderClient::new()?),
         session_locks: Arc::new(Mutex::new(HashMap::new())),
-        #[cfg(feature = "graphs")]
-        scan_worker_budgets: Arc::new(Mutex::new(HashMap::new())),
+
         turn_stops: Arc::new(Mutex::new(HashMap::new())),
         quick_chat_lock: Arc::new(Mutex::new(())),
+        #[cfg(feature = "swarms")]
+        worker_recovery: Arc::new(std::sync::Mutex::new(Vec::new())),
+        #[cfg(feature = "swarms")]
+        fleet_origin: None,
     })
-}
-
-pub fn start_automation_scheduler(
-    workspaces: WorkspaceStore,
-) -> anyhow::Result<tokio::task::JoinHandle<()>> {
-    let state = build_state(String::new(), workspaces)?;
-    Ok(tokio::spawn(automations::run_worker(state)))
-}
-
-pub fn start_automation_scheduler_with_runtime(
-    workspaces: WorkspaceStore,
-    plugins: PluginRuntime,
-) -> anyhow::Result<tokio::task::JoinHandle<()>> {
-    let state = build_state_with_runtime(String::new(), workspaces, plugins)?;
-    Ok(tokio::spawn(automations::run_worker(state)))
 }
 
 #[cfg(feature = "memories")]
@@ -1046,19 +788,20 @@ fn load_persisted(
     db: &HostDatabase,
     id: Uuid,
 ) -> Result<(StoredSession, Vec<StoredTurn>), StatusCode> {
+    ensure_local_execution(
+        db,
+        &SubmitSessionTurnRequest {
+            session_id: id.to_string(),
+            ..Default::default()
+        },
+    )
+    .map_err(TurnError::status)?;
     let item = db
         .session(&id.to_string())
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
-    let peer_graph = graph_records::is_peer_session(db, &id.to_string())
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let rows = if peer_graph {
-        db.graph_recent_turns(&id.to_string())
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    } else {
-        item.turns
-    };
-    if (rows.is_empty() && !peer_graph)
+    let rows = item.turns;
+    if rows.is_empty()
         || rows.len() > RECENT_TURNS
         || item.session.created_at_ms < 0
         || item.session.last_message_at_ms < 0
@@ -1079,16 +822,10 @@ fn load_persisted(
             if row.duration_ms < 0 || row.number < expected {
                 return Err(StatusCode::INTERNAL_SERVER_ERROR);
             }
-            let agent_role = if let Some(role) =
-                graph_records::turn_role(db, &id.to_string(), row.number)
-                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-            {
-                role
-            } else {
-                db.session_turn_role(&id.to_string(), row.number)
-                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-                    .unwrap_or_else(|| "main".to_owned())
-            };
+            let agent_role = db
+                .session_turn_role(&id.to_string(), row.number)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+                .unwrap_or_else(|| "main".into());
             Ok(StoredTurn {
                 number: row.number,
                 provider: row.provider,
@@ -1138,94 +875,13 @@ fn summary(session: &StoredSession) -> SessionSummary {
     }
 }
 
-fn graph_state(
+fn swarm_state(
     db: &HostDatabase,
     session_id: &str,
-) -> Result<(Vec<SessionGraphAgent>, Vec<SessionGraphHandoff>), StatusCode> {
-    #[cfg(feature = "graphs")]
-    {
-        if !graph_records::is_peer_session(db, session_id)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        {
-            return Ok((Vec::new(), Vec::new()));
-        }
-        let id = graph_records::graph_id(db, session_id)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-            .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
-        restore_graph_template(db, session_id).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        let graph = beale_graphs::graph_definition(&id).ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
-        let agents = graph
-            .nodes
-            .iter()
-            .filter(|role| role.is_top_level())
-            .map(|role| {
-                Ok(SessionGraphAgent {
-                    role: role.id().to_owned(),
-                    status: db
-                        .graph_role_status(session_id, role.id())
-                        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
-                })
-            })
-            .collect::<Result<Vec<_>, StatusCode>>()?;
-        let handoffs = db
-            .graph_handoffs(session_id)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-            .into_iter()
-            .map(|item| SessionGraphHandoff {
-                id: item.id,
-                from_role: item.from_role,
-                to_role: item.to_role,
-                task: item.task,
-                status: item.status,
-            })
-            .collect();
-        Ok((agents, handoffs))
-    }
-    #[cfg(not(feature = "graphs"))]
+) -> Result<(Vec<SessionSwarmAgent>, Vec<SessionSwarmHandoff>), StatusCode> {
     {
         let _ = (db, session_id);
         Ok((Vec::new(), Vec::new()))
-    }
-}
-
-#[cfg(feature = "graphs")]
-fn restore_graph_template(db: &HostDatabase, session_id: &str) -> Result<(), ()> {
-    let Some(id) = db.session_graph_id(session_id).map_err(|_| ())? else {
-        return Ok(());
-    };
-    if !id.starts_with("custom:") {
-        return Ok(());
-    }
-    let bytes = db
-        .session_graph_config(session_id)
-        .map_err(|_| ())?
-        .ok_or(())?;
-    let config = SessionGraphConfig::decode(bytes.as_slice()).map_err(|_| ())?;
-    let restored = beale_graphs::register_template(&config.template_json).map_err(|_| ())?;
-    if restored != id {
-        return Err(());
-    }
-    Ok(())
-}
-
-fn recent_peer_turns(
-    turns: &[StoredTurn],
-    mut tool_count: impl FnMut(&[i64]) -> Result<usize, StatusCode>,
-) -> Result<&[StoredTurn], StatusCode> {
-    let mut start = turns.len().saturating_sub(8);
-    loop {
-        let recent = &turns[start..];
-        let numbers = recent.iter().map(|turn| turn.number).collect::<Vec<_>>();
-        let history_bytes = recent.iter().fold(0_usize, |total, turn| {
-            total.saturating_add(turn.prompt.len().saturating_add(turn.answer.len()))
-        });
-        if (tool_count(&numbers)? <= SESSION_DETAIL_MAX_TOOL_SUMMARIES
-            && history_bytes <= MAX_HISTORY_BYTES)
-            || recent.len() <= 1
-        {
-            return Ok(recent);
-        }
-        start += 1;
     }
 }
 
@@ -1247,90 +903,19 @@ fn detail(
     turns: &[StoredTurn],
 ) -> Result<SessionDetail, StatusCode> {
     if turns.is_empty() {
-        #[cfg(not(feature = "graphs"))]
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
-        #[cfg(feature = "graphs")]
-        {
-            let (graph_agents, graph_handoffs) = graph_state(db, &session.id)?;
-            let graph_id = graph_records::graph_id(db, &session.id)
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-                .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
-            let graph_config = graph_records::graph_config(db, &session.id)
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-                .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
-            let config = SessionGraphConfig::decode(graph_config.as_slice())
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-            let model = config
-                .models
-                .iter()
-                .find(|model| {
-                    beale_graphs::entry_role_for_config(&graph_id, &config)
-                        .is_some_and(|role| model.node_id == role.id())
-                })
-                .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
-            return Ok(SessionDetail {
-                summary: Some(summary(session)),
-                provider: model.provider,
-                method: model.method,
-                model: model.model.clone(),
-                first_turn_number: 1,
-                graph_id,
-                graph_models: config.models,
-                graph_node_concurrency: config.concurrency,
-                stage_duration_minutes: config.stage_duration_minutes,
-                graph_template_json: config.template_json,
-                max_concurrent_workers: config.max_concurrent_workers,
-                token_usage: Some(SessionTokenUsage::default()),
-                agent_metrics: graph_agents
-                    .iter()
-                    .map(|agent| SessionAgentMetrics {
-                        role: agent.role.clone(),
-                        token_usage: Some(SessionTokenUsage::default()),
-                        model_usage: Vec::new(),
-                        usage_snapshots: Vec::new(),
-                        duration_ms: 0,
-                    })
-                    .collect(),
-                graph_agents,
-                graph_handoffs,
-                ..Default::default()
-            });
-        }
     }
-    // Graph roles keep their own provider history. Bound the combined UI transcript
-    // separately so a busy team cannot exceed the detail protocol's tool cap.
-    let peer_graph = graph_records::is_peer_session(db, &session.id)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let turns = if peer_graph {
-        recent_peer_turns(turns, |numbers| {
-            db.tool_summaries_for_turns(&session.id, numbers)
-                .map(|rows| rows.len())
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
-        })?
-    } else {
-        turns
-    };
     let first_turn = turns[0].number;
-    let (graph_agents, graph_handoffs) = graph_state(db, &session.id)?;
-    let selected_turns = turns.iter().map(|turn| turn.number).collect::<Vec<_>>();
-    let mut tools = if peer_graph {
-        db.tool_summaries_for_turns(&session.id, &selected_turns)
-    } else {
-        db.tool_summaries_since(&session.id, first_turn)
-    }
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let reasoning = if peer_graph {
-        db.reasoning_summaries_for_turns(&session.id, &selected_turns)
-    } else {
-        db.reasoning_summaries_since(&session.id, first_turn)
-    }
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let commentary = if peer_graph {
-        db.commentary_for_turns(&session.id, &selected_turns)
-    } else {
-        db.commentary_since(&session.id, first_turn)
-    }
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let (swarm_agents, swarm_handoffs) = swarm_state(db, &session.id)?;
+    let mut tools = db
+        .tool_summaries_since(&session.id, first_turn)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let reasoning = db
+        .reasoning_summaries_since(&session.id, first_turn)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let commentary = db
+        .commentary_since(&session.id, first_turn)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     if tools.len() > SESSION_DETAIL_MAX_TOOL_SUMMARIES {
         let keep_from = tools.len() - SESSION_DETAIL_MAX_TOOL_SUMMARIES;
         tools.drain(..keep_from);
@@ -1450,13 +1035,7 @@ fn detail(
             })
         })
         .transpose()?;
-    let graph_config = graph_records::graph_config(db, &session.id)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .filter(|bytes| !bytes.is_empty())
-        .map(|bytes| SessionGraphConfig::decode(bytes.as_slice()))
-        .transpose()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .unwrap_or_default();
+    let swarm_config = SessionSwarmConfig::default();
     let usage = db
         .session_usage_totals(&session.id)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -1499,8 +1078,8 @@ fn detail(
         })
         .collect::<Result<Vec<_>, StatusCode>>()?;
     let (runbook_count, active_runbook_count, runbooks) = session_runbook_summary(db, session)?;
-    let mut agent_metrics = Vec::with_capacity(graph_agents.len());
-    for agent in &graph_agents {
+    let mut agent_metrics = Vec::with_capacity(swarm_agents.len());
+    for agent in &swarm_agents {
         let role = agent.role.as_str();
         let totals = db
             .session_usage_totals_for_role(&session.id, Some(role))
@@ -1548,9 +1127,17 @@ fn detail(
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
         });
     }
-    Ok(SessionDetail {
-        graph_agents,
-        graph_handoffs,
+    #[allow(unused_mut)]
+    let mut result = SessionDetail {
+        committed_turn_number: u64::try_from(latest.number)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+        pacing_warnings: beale_storage::provider_accounting::AccountingStore::open(db.clone())
+            .and_then(|s| s.warnings(&session.id))
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+        swarm_overview_json: String::new(),
+        scoped_review_rules: Vec::new(),
+        swarm_agents,
+        swarm_handoffs,
         agent_metrics,
         subagents: db
             .session_children(&session.id)
@@ -1567,14 +1154,11 @@ fn detail(
         goal,
         first_turn_number: u64::try_from(first_turn)
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
-        graph_id: graph_records::graph_id(db, &session.id)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-            .unwrap_or_default(),
-        graph_models: graph_config.models,
-        graph_node_concurrency: graph_config.concurrency,
-        stage_duration_minutes: graph_config.stage_duration_minutes,
-        graph_template_json: graph_config.template_json,
-        max_concurrent_workers: graph_config.max_concurrent_workers,
+        swarm_id: String::new(),
+        swarm_models: swarm_config.models,
+        swarm_node_concurrency: swarm_config.concurrency,
+        swarm_template_json: swarm_config.template_json,
+        max_concurrent_workers: swarm_config.max_concurrent_workers,
         total_duration_ms: db
             .session_total_duration_ms(&session.id)
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
@@ -1610,7 +1194,10 @@ fn detail(
         runbook_count,
         active_runbook_count,
         runbooks,
-    })
+    };
+    #[cfg(feature = "swarms")]
+    hierarchy::enrich(db, &session.id, &mut result)?;
+    Ok(result)
 }
 
 fn title(prompt: &str) -> String {
@@ -1639,6 +1226,10 @@ async fn list(
     }
     let mut sessions = Vec::new();
     for row in rows {
+        #[cfg(feature = "swarms")]
+        if is_swarm_child(&state.db, &row.id).map_err(TurnError::status)? {
+            continue;
+        }
         if state.workspaces.contains(&row.workspace_id)? {
             sessions.push(SessionSummary {
                 id: row.id,
@@ -1765,11 +1356,17 @@ async fn details(
         return Err(StatusCode::UNAUTHORIZED);
     }
     let id = parse_id(&id)?;
-    let (session, turns) = load_persisted(&state.db, id)?;
+    beale_storage::provider_accounting::AccountingStore::open(state.db.clone())
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let snapshot = state
+        .db
+        .read_snapshot()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let (session, turns) = load_persisted(&snapshot, id)?;
     if !state.workspaces.contains(&session.workspace_id)? {
         return Err(StatusCode::NOT_FOUND);
     }
-    Ok(response(detail(&state.db, &session, &turns)?))
+    Ok(response(detail(&snapshot, &session, &turns)?))
 }
 
 async fn subagent_details(
@@ -2198,12 +1795,163 @@ async fn stream_turn(
     ))
 }
 
+#[cfg(feature = "swarms")]
+async fn list_swarm_templates(
+    State(state): State<SessionState>,
+    headers: HeaderMap,
+) -> Result<impl axum::response::IntoResponse, StatusCode> {
+    if !authorized(&headers, &state.token) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    let response = beale_contracts::v1::ListSwarmTemplatesResponse {
+        templates: swarm_templates::load(state.workspaces.root()),
+    };
+    Ok((
+        [(header::CONTENT_TYPE, beale_contracts::PROTOBUF_CONTENT_TYPE)],
+        response.encode_to_vec(),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use axum::body::to_bytes;
     use axum::{body::Body, http::Request};
     use beale_fleet::FleetStore;
+
+    #[cfg(feature = "swarms")]
+    #[tokio::test]
+    async fn swarm_template_route_requires_auth_and_has_no_graph_alias() {
+        use tower::ServiceExt;
+        let root = std::env::temp_dir().join(format!("beale-swarm-route-test-{}", Uuid::new_v4()));
+        let app = router(
+            "example-token".into(),
+            WorkspaceStore::at(root.clone()).unwrap(),
+        )
+        .unwrap();
+        for (path, token, status) in [
+            (
+                beale_contracts::SWARM_TEMPLATES_PATH,
+                "wrong",
+                StatusCode::UNAUTHORIZED,
+            ),
+            (
+                "/v1/graphs/templates",
+                "example-token",
+                StatusCode::NOT_FOUND,
+            ),
+            (
+                beale_contracts::SWARM_TEMPLATES_PATH,
+                "example-token",
+                StatusCode::OK,
+            ),
+        ] {
+            let reply = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(path)
+                        .header("authorization", format!("Bearer {token}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(reply.status(), status);
+            if status == StatusCode::OK {
+                let bytes = to_bytes(reply.into_body(), 65536).await.unwrap();
+                assert!(
+                    beale_contracts::v1::ListSwarmTemplatesResponse::decode(bytes)
+                        .unwrap()
+                        .templates
+                        .is_empty()
+                );
+            }
+        }
+        drop(app);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn unsupported_hierarchy_never_falls_back_to_local_or_rewrites_saved_state() {
+        let root =
+            std::env::temp_dir().join(format!("beale-swarm-boundary-test-{}", Uuid::new_v4()));
+        let db = HostDatabase::open(&root).unwrap();
+        assert!(ensure_local_execution(&db, &SubmitSessionTurnRequest::default()).is_ok());
+        for request in [
+            SubmitSessionTurnRequest {
+                swarm_destinations: vec![beale_contracts::v1::SwarmDestination {
+                    host_id: "host-example".into(),
+                    configuration_id: "image-example".into(),
+                }],
+                ..Default::default()
+            },
+            SubmitSessionTurnRequest {
+                swarm_retention: Some(beale_contracts::v1::SwarmRetentionPolicy {
+                    ended_scan_seconds: 604800,
+                    storage_reserve_bytes: beale_contracts::swarm_allocation::STORAGE_RESERVE,
+                }),
+                ..Default::default()
+            },
+        ] {
+            assert_eq!(
+                ensure_local_execution(&db, &request),
+                Err(TurnError::Invalid)
+            );
+            assert!(engine::validate_request(&request).is_err());
+        }
+        for request in [
+            SubmitSessionTurnRequest {
+                swarm_id: "basic".into(),
+                ..Default::default()
+            },
+            SubmitSessionTurnRequest {
+                agent_role: "discovery".into(),
+                ..Default::default()
+            },
+        ] {
+            assert_eq!(
+                ensure_local_execution(&db, &request),
+                Err(TurnError::UnsupportedSwarm)
+            );
+        }
+        // Detection rejects retired development state without interpreting or migrating it.
+        db.with_connection(|c| {c.execute_batch("CREATE TABLE session_graphs(session_id TEXT PRIMARY KEY, document TEXT); INSERT INTO session_graphs VALUES('session-example','synthetic-unchanged-state');")?;Ok(())}).unwrap();
+        let request = SubmitSessionTurnRequest {
+            session_id: "session-example".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            ensure_local_execution(&db, &request),
+            Err(TurnError::UnsupportedSwarm)
+        );
+        db.with_connection(|c| {
+            assert_eq!(
+                c.query_row("SELECT document FROM session_graphs", [], |r| r
+                    .get::<_, String>(0))?,
+                "synthetic-unchanged-state"
+            );
+            Ok(())
+        })
+        .unwrap();
+        db.with_connection(|c|{c.execute_batch("CREATE TABLE swarm_scans(id TEXT PRIMARY KEY,document TEXT);INSERT INTO swarm_scans VALUES('saved-swarm-example','synthetic-snapshot');")?;Ok(())}).unwrap();
+        assert_eq!(
+            ensure_local_execution(
+                &db,
+                &SubmitSessionTurnRequest {
+                    session_id: "saved-swarm-example".into(),
+                    ..Default::default()
+                }
+            ),
+            Err(TurnError::UnsupportedSwarm)
+        );
+        assert_eq!(
+            TurnError::UnsupportedSwarm.status(),
+            StatusCode::NOT_IMPLEMENTED
+        );
+        drop(db);
+        let _ = std::fs::remove_dir_all(root);
+    }
     #[cfg(any(feature = "agent-feedback", feature = "webfetch"))]
     use beale_storage::WorkspaceRow;
 
@@ -2213,14 +1961,18 @@ mod tests {
             std::env::temp_dir().join(format!("beale-fleet-prompt-example-{}", Uuid::new_v4()));
         let db = HostDatabase::open(&root).unwrap();
         crate::features::migrate(&db).unwrap();
-        assert_eq!(fleet_prompt_note(&db).unwrap(), None);
-        db.set_research_tool_settings("ripgrep", true, false)
-            .unwrap();
         assert!(
             fleet_prompt_note(&db)
                 .unwrap()
                 .unwrap()
-                .contains("ripgrep (locally)")
+                .contains("Allow: may install/use")
+        );
+        db.set_research_tool_settings("ripgrep", 1).unwrap();
+        assert!(
+            fleet_prompt_note(&db)
+                .unwrap()
+                .unwrap()
+                .contains("ripgrep (Recommend: preferred, optional)")
         );
         drop(db);
         std::fs::remove_dir_all(root).unwrap();
@@ -2245,7 +1997,7 @@ mod tests {
     #[test]
     fn repository_scope_context_keeps_every_named_repo() {
         let locator = format!(
-            "OSS Tier 1: {}, github.com/nitrojs/nitro",
+            "OSS Tier 1: {}, github.com/example-org/example-framework",
             "github.com/example/project, ".repeat(10)
         );
         assert!(locator.len() > 200);
@@ -2264,7 +2016,7 @@ mod tests {
             ..Default::default()
         };
         let context = surface_context_line(&surface);
-        assert!(context.contains("github.com/nitrojs/nitro"));
+        assert!(context.contains("github.com/example-org/example-framework"));
         assert!(context.contains("[in scope"));
     }
 
@@ -2347,59 +2099,6 @@ mod tests {
             "{}"
         );
         std::fs::remove_dir_all(files.root()).unwrap();
-    }
-
-    #[cfg(all(feature = "graphs", feature = "findings"))]
-    #[test]
-    fn pipeline_finding_stages_follow_top_level_responsibilities() {
-        use beale_graphs::ProfileId;
-        for name in [
-            "findings_create",
-            "findings_update",
-            "findings_complete_state",
-            "findings_reject",
-        ] {
-            assert!(!tool_runtime::pipeline_finding_allowed(
-                ProfileId::AuditTargets,
-                name,
-                &json!({"state":"candidate"})
-            ));
-        }
-        assert!(tool_runtime::pipeline_finding_allowed(
-            ProfileId::Discovery,
-            "findings_create",
-            &json!({})
-        ));
-        assert!(tool_runtime::pipeline_finding_allowed(
-            ProfileId::Discovery,
-            "findings_update",
-            &json!({"state":"candidate"})
-        ));
-        assert!(!tool_runtime::pipeline_finding_allowed(
-            ProfileId::Discovery,
-            "findings_complete_state",
-            &json!({"state":"validated"})
-        ));
-        assert!(tool_runtime::pipeline_finding_allowed(
-            ProfileId::Validation,
-            "findings_complete_state",
-            &json!({"state":"validated"})
-        ));
-        assert!(!tool_runtime::pipeline_finding_allowed(
-            ProfileId::Validation,
-            "findings_complete_state",
-            &json!({"state":"screened"})
-        ));
-        assert!(tool_runtime::pipeline_finding_allowed(
-            ProfileId::Reporter,
-            "findings_complete_state",
-            &json!({"state":"screened"})
-        ));
-        assert!(!tool_runtime::pipeline_finding_allowed(
-            ProfileId::Reporter,
-            "findings_create",
-            &json!({})
-        ));
     }
 
     #[test]
@@ -2619,16 +2318,6 @@ mod tests {
         let unreviewed: Vec<&str> = vec![
             #[cfg(feature = "agent-feedback")]
             beale_agent_feedback::TOOL_NAME,
-            #[cfg(feature = "graphs")]
-            beale_graphs::SPAWN_TOOL,
-            #[cfg(feature = "graphs")]
-            beale_graphs::LIST_TOOL,
-            #[cfg(feature = "graphs")]
-            beale_graphs::INSPECT_TOOL,
-            #[cfg(feature = "graphs")]
-            beale_graphs::MESSAGE_TOOL,
-            #[cfg(feature = "graphs")]
-            beale_graphs::KILL_TOOL,
             "plugin_call",
         ];
         for name in unreviewed {
@@ -2643,7 +2332,7 @@ mod tests {
         feature = "findings",
         feature = "memories",
         feature = "runbooks",
-        feature = "graphs"
+        feature = "swarms"
     ))]
     #[test]
     fn built_in_tool_counts_include_optional_features() {
@@ -2657,414 +2346,9 @@ mod tests {
             + beale_agent_feedback::TOOL_COUNT as usize
             + beale_webfetch::TOOL_COUNT as usize
             + beale_fleet::TOOL_COUNT as usize
-            + beale_graphs::TOOL_COUNT as usize
+            + beale_swarms::TOOL_COUNT as usize
             + beale_goals::TOOL_COUNT as usize;
-        assert_eq!(all, 36);
-    }
-
-    #[cfg(feature = "graphs")]
-    #[test]
-    fn graph_selection_requires_an_enabled_in_scope_feature_and_new_session() {
-        let root = std::env::temp_dir().join(format!("beale-graph-example-{}", Uuid::new_v4()));
-        let db = HostDatabase::open(&root).unwrap();
-        crate::features::migrate(&db).unwrap();
-        let workspace = Uuid::new_v4().to_string();
-        let other = Uuid::new_v4().to_string();
-        db.replace_workspaces(
-            &[workspace.as_str(), other.as_str()]
-                .into_iter()
-                .map(|id| beale_storage::WorkspaceRow {
-                    id: id.to_owned(),
-                    name: "Example workspace".to_owned(),
-                    directory: format!("example-directory-{id}"),
-                })
-                .collect::<Vec<_>>(),
-        )
-        .unwrap();
-        assert_eq!(
-            validate_graph_selection(&db, "simple", &[], &[], "", &workspace),
-            Err(StatusCode::CONFLICT)
-        );
-        db.set_feature_enabled(beale_graphs::FEATURE_ID, true)
-            .unwrap();
-        assert_eq!(
-            validate_graph_selection(&db, "simple", &[], &[], "", &workspace),
-            Ok(())
-        );
-        let model = GraphNodeModel {
-            node_id: "mapper".to_owned(),
-            provider: ProviderId::Openai as i32,
-            method: AuthMethod::Subscription as i32,
-            model: "model-example".to_owned(),
-        };
-        assert_eq!(
-            validate_graph_selection(
-                &db,
-                "simple",
-                std::slice::from_ref(&model),
-                &[],
-                "",
-                &workspace
-            ),
-            Ok(())
-        );
-        assert_eq!(
-            validate_graph_selection(
-                &db,
-                "simple",
-                &[model.clone(), model.clone()],
-                &[],
-                "",
-                &workspace
-            ),
-            Err(StatusCode::BAD_REQUEST)
-        );
-        let invalid_model = GraphNodeModel {
-            model: "example-model\nignore-instructions".to_owned(),
-            ..model.clone()
-        };
-        assert_eq!(
-            validate_graph_selection(&db, "simple", &[invalid_model], &[], "", &workspace),
-            Err(StatusCode::BAD_REQUEST)
-        );
-        assert_eq!(
-            validate_graph_selection(&db, "", std::slice::from_ref(&model), &[], "", &workspace),
-            Err(StatusCode::BAD_REQUEST)
-        );
-        let main = GraphNodeModel {
-            node_id: "main".to_owned(),
-            ..model.clone()
-        };
-        let another_main = GraphNodeModel {
-            model: "model-example-two".to_owned(),
-            ..main.clone()
-        };
-        assert_eq!(
-            validate_graph_selection(&db, "simple", &[main, another_main], &[], "", &workspace),
-            Err(StatusCode::BAD_REQUEST)
-        );
-        let limit = GraphNodeConcurrency {
-            node_id: "mapper".to_owned(),
-            max_concurrent: 2,
-        };
-        let main_limit = GraphNodeConcurrency {
-            node_id: "main".to_owned(),
-            max_concurrent: 1,
-        };
-        assert_eq!(
-            validate_graph_selection(
-                &db,
-                "simple",
-                &[],
-                std::slice::from_ref(&main_limit),
-                "",
-                &workspace
-            ),
-            Ok(())
-        );
-        assert_eq!(
-            validate_graph_selection(
-                &db,
-                "simple",
-                &[],
-                &[GraphNodeConcurrency {
-                    max_concurrent: 2,
-                    ..main_limit
-                }],
-                "",
-                &workspace
-            ),
-            Err(StatusCode::BAD_REQUEST)
-        );
-        assert_eq!(
-            validate_graph_selection(
-                &db,
-                "simple",
-                &[],
-                std::slice::from_ref(&limit),
-                "",
-                &workspace
-            ),
-            Ok(())
-        );
-        assert_eq!(
-            validate_graph_selection(
-                &db,
-                "simple",
-                &[],
-                &[limit.clone(), limit.clone()],
-                "",
-                &workspace
-            ),
-            Err(StatusCode::BAD_REQUEST)
-        );
-        assert_eq!(
-            validate_graph_selection(
-                &db,
-                "simple",
-                &[],
-                &[GraphNodeConcurrency {
-                    max_concurrent: 0,
-                    ..limit
-                }],
-                "",
-                &workspace
-            ),
-            Err(StatusCode::BAD_REQUEST)
-        );
-        let mut unknown_role = model.clone();
-        unknown_role.node_id = "unknown".to_owned();
-        assert_eq!(
-            validate_graph_selection(&db, "simple", &[unknown_role], &[], "", &workspace),
-            Err(StatusCode::BAD_REQUEST)
-        );
-        for graph_id in [beale_graphs::CLOUDFLARE_ID, beale_graphs::OPENAI_ID] {
-            assert_eq!(
-                validate_graph_selection(&db, graph_id, &[], &[], "", &workspace),
-                Ok(())
-            );
-            let entry = beale_graphs::entry_role(graph_id).unwrap();
-            assert_eq!(
-                validate_graph_selection(
-                    &db,
-                    graph_id,
-                    &[GraphNodeModel {
-                        node_id: entry.id().to_owned(),
-                        ..model.clone()
-                    }],
-                    &[],
-                    "",
-                    &workspace
-                ),
-                Ok(())
-            );
-            assert_eq!(
-                validate_graph_selection(
-                    &db,
-                    graph_id,
-                    &[GraphNodeModel {
-                        node_id: "main".to_owned(),
-                        ..model.clone()
-                    }],
-                    &[],
-                    "",
-                    &workspace
-                ),
-                Err(StatusCode::BAD_REQUEST)
-            );
-            assert_eq!(
-                validate_graph_selection(
-                    &db,
-                    graph_id,
-                    &[],
-                    &[GraphNodeConcurrency {
-                        node_id: entry.id().to_owned(),
-                        max_concurrent: 2
-                    }],
-                    "",
-                    &workspace
-                ),
-                Err(StatusCode::BAD_REQUEST)
-            );
-        }
-        assert_eq!(
-            validate_graph_selection(&db, "unknown", &[], &[], "", &workspace),
-            Err(StatusCode::BAD_REQUEST)
-        );
-        assert_eq!(
-            validate_graph_selection(&db, beale_graphs::SEQUENTIAL_ID, &[], &[], "", &workspace),
-            Err(StatusCode::BAD_REQUEST)
-        );
-        assert_eq!(
-            validate_graph_selection(&db, "simple", &[], &[], "session-example", &workspace),
-            Err(StatusCode::BAD_REQUEST)
-        );
-        db.set_extension_scope("feature", beale_graphs::FEATURE_ID, false, &[other])
-            .unwrap();
-        assert_eq!(
-            validate_graph_selection(&db, "simple", &[], &[], "", &workspace),
-            Err(StatusCode::CONFLICT)
-        );
-        drop(db);
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[cfg(feature = "graphs")]
-    #[test]
-    fn addressed_graph_role_must_be_a_top_level_node_in_this_flow() {
-        let pipeline = beale_graphs::graph_definition(beale_graphs::OPENAI_ID);
-        assert_eq!(
-            requested_top_level_role(pipeline, "reporter").unwrap(),
-            Some(beale_graphs::ProfileId::Reporter)
-        );
-        assert_eq!(requested_top_level_role(pipeline, "").unwrap(), None);
-        for role in ["scout", "validation_system", "unknown"] {
-            assert_eq!(
-                requested_top_level_role(pipeline, role).unwrap_err(),
-                StatusCode::BAD_REQUEST
-            );
-        }
-        assert_eq!(
-            requested_top_level_role(None, "reporter").unwrap_err(),
-            StatusCode::BAD_REQUEST
-        );
-    }
-
-    #[cfg(feature = "graphs")]
-    #[test]
-    fn peer_agent_context_excludes_other_top_level_turns() {
-        let make = |number, role: &str, prompt: &str, answer: &str| StoredTurn {
-            number,
-            provider: ProviderId::Openai as i32,
-            method: AuthMethod::ApiKey as i32,
-            model: "example-model".to_owned(),
-            prompt: prompt.to_owned(),
-            answer: answer.to_owned(),
-            duration_ms: 1,
-            internal_prompt: false,
-            agent_role: role.to_owned(),
-        };
-        let turns = vec![
-            make(1, "discovery", "Find an example issue", "Example lead"),
-            make(2, "validation", "Check the lead", "Example check"),
-            make(3, "discovery", "Continue", "Example follow-up"),
-        ];
-        let messages =
-            peer_input_messages(&turns, beale_graphs::ProfileId::Validation, "Next check");
-        let text: Vec<_> = messages
-            .iter()
-            .map(|message| message.text.as_str())
-            .collect();
-        assert_eq!(text, ["Check the lead", "Example check", "Next check"]);
-    }
-
-    #[cfg(feature = "graphs")]
-    #[test]
-    fn peer_detail_keeps_the_newest_complete_turns_within_tool_limit() {
-        let turns = (1..=3)
-            .map(|number| StoredTurn {
-                number,
-                provider: ProviderId::Openai as i32,
-                method: AuthMethod::ApiKey as i32,
-                model: "example-model".to_owned(),
-                prompt: "Example prompt".to_owned(),
-                answer: "Example answer".to_owned(),
-                duration_ms: 1,
-                internal_prompt: false,
-                agent_role: "discovery".to_owned(),
-            })
-            .collect::<Vec<_>>();
-        let selected = recent_peer_turns(&turns, |numbers| {
-            Ok(numbers
-                .iter()
-                .map(|number| match number {
-                    1 => 3_000,
-                    2 => 1_500,
-                    _ => 708,
-                })
-                .sum())
-        })
-        .unwrap();
-        assert_eq!(
-            selected.iter().map(|turn| turn.number).collect::<Vec<_>>(),
-            [2, 3]
-        );
-    }
-
-    #[cfg(feature = "graphs")]
-    #[test]
-    fn delegation_validation_accepts_repeated_valid_batches() {
-        let runtime = beale_graphs::runtime(beale_graphs::OPENAI_ID).unwrap();
-        let config = SessionGraphConfig::default();
-        let fallback = GraphNodeModel {
-            node_id: "discovery".to_owned(),
-            provider: ProviderId::Openai as i32,
-            method: AuthMethod::ApiKey as i32,
-            model: "example-model".to_owned(),
-        };
-        let invalid =
-            json!({"assignments":[{"role":"scout","task":"Inspect example","model_index":7}]});
-        assert!(
-            validate_delegations(
-                runtime,
-                beale_graphs::ProfileId::Discovery,
-                &invalid,
-                &config,
-                &fallback
-            )
-            .is_err()
-        );
-        let valid = json!({"assignments":[{"role":"investigator","contract":{
-            "question":"Inspect example", "scope":["example module"], "evidence_refs":[],
-            "deliverable":"Trace the boundary", "completion_criteria":["Explain the observed path"],
-            "context_policy":"shared", "budget":{"max_model_turns":4,"max_duration_minutes":5}
-        }}]});
-        for _ in 0..20 {
-            validate_delegations(
-                runtime,
-                beale_graphs::ProfileId::Discovery,
-                &valid,
-                &config,
-                &fallback,
-            )
-            .unwrap();
-        }
-    }
-
-    #[cfg(feature = "graphs")]
-    #[test]
-    fn graph_config_persists_worker_budget_and_profile_limits() {
-        let request = SubmitSessionTurnRequest {
-            graph_id: beale_graphs::SIMPLE_ID.to_owned(),
-            graph_node_concurrency: vec![GraphNodeConcurrency {
-                node_id: "mapper".to_owned(),
-                max_concurrent: 3,
-            }],
-            ..Default::default()
-        };
-        let bytes = encoded_graph_config(&request).unwrap();
-        let saved = SessionGraphConfig::decode(bytes.as_slice()).unwrap();
-        assert_eq!(saved.max_concurrent_workers, 8);
-        let explicit = SubmitSessionTurnRequest {
-            max_concurrent_workers: 3,
-            ..request.clone()
-        };
-        assert_eq!(
-            SessionGraphConfig::decode(encoded_graph_config(&explicit).unwrap().as_slice())
-                .unwrap()
-                .max_concurrent_workers,
-            3
-        );
-        assert_eq!(saved.concurrency.len(), 2);
-        assert!(
-            saved
-                .concurrency
-                .iter()
-                .any(|item| item.node_id == "main" && item.max_concurrent == 1)
-        );
-        assert!(
-            saved
-                .concurrency
-                .iter()
-                .any(|item| item.node_id == "mapper" && item.max_concurrent == 3)
-        );
-        assert!(encoded_graph_config(&SubmitSessionTurnRequest::default()).is_none());
-        let sequential = SubmitSessionTurnRequest {
-            graph_id: beale_graphs::SEQUENTIAL_ID.to_owned(),
-            ..Default::default()
-        };
-        let saved =
-            SessionGraphConfig::decode(encoded_graph_config(&sequential).unwrap().as_slice())
-                .unwrap();
-        assert_eq!(saved.stage_duration_minutes, 60);
-        let sequential = SubmitSessionTurnRequest {
-            stage_duration_minutes: 25,
-            ..sequential
-        };
-        let saved =
-            SessionGraphConfig::decode(encoded_graph_config(&sequential).unwrap().as_slice())
-                .unwrap();
-        assert_eq!(saved.stage_duration_minutes, 25);
+        assert_eq!(all, 35);
     }
 
     #[test]
@@ -3132,6 +2416,9 @@ mod tests {
     #[test]
     fn session_effort_contract_rejects_unknown_values() {
         let request = SubmitSessionTurnRequest {
+            swarm_destinations: vec![],
+            swarm_retention: None,
+            swarm_pacing: Vec::new(),
             max_concurrent_workers: 0,
             workspace_id: Uuid::new_v4().to_string(),
             session_id: String::new(),
@@ -3144,27 +2431,26 @@ mod tests {
             goal_max_turns: 0,
             goal_max_duration_minutes: 0,
             repeat_preset: String::new(),
-            graph_id: "simple".to_owned(),
-            graph_models: vec![GraphNodeModel {
+            swarm_id: "basic".to_owned(),
+            swarm_models: vec![SwarmNodeModel {
                 node_id: "scout".to_owned(),
                 provider: ProviderId::Openai as i32,
                 method: AuthMethod::Subscription as i32,
                 model: "model-example".to_owned(),
             }],
-            graph_node_concurrency: vec![GraphNodeConcurrency {
+            swarm_node_concurrency: vec![SwarmNodeConcurrency {
                 node_id: "main".to_owned(),
                 max_concurrent: 1,
             }],
             agent_role: "main".to_owned(),
-            stage_duration_minutes: 0,
         };
         let decoded = SubmitSessionTurnRequest::decode(request.encode_to_vec().as_slice()).unwrap();
-        assert_eq!(decoded.graph_id, "simple");
+        assert_eq!(decoded.swarm_id, "basic");
         assert_eq!(decoded.agent_role, "main");
-        assert_eq!(decoded.graph_models, request.graph_models);
+        assert_eq!(decoded.swarm_models, request.swarm_models);
         assert_eq!(
-            decoded.graph_node_concurrency,
-            request.graph_node_concurrency
+            decoded.swarm_node_concurrency,
+            request.swarm_node_concurrency
         );
         assert_eq!(
             reasoning_effort_name(decoded.reasoning_effort),
@@ -3180,6 +2466,9 @@ mod tests {
     #[test]
     fn goal_contract_round_trips_as_an_opt_in() {
         let request = SubmitSessionTurnRequest {
+            swarm_destinations: vec![],
+            swarm_retention: None,
+            swarm_pacing: Vec::new(),
             max_concurrent_workers: 0,
             workspace_id: Uuid::new_v4().to_string(),
             session_id: String::new(),
@@ -3192,11 +2481,10 @@ mod tests {
             goal_max_turns: 12,
             goal_max_duration_minutes: 45,
             repeat_preset: String::new(),
-            graph_id: String::new(),
-            graph_models: vec![],
-            graph_node_concurrency: vec![],
+            swarm_id: String::new(),
+            swarm_models: vec![],
+            swarm_node_concurrency: vec![],
             agent_role: String::new(),
-            stage_duration_minutes: 0,
         };
         let decoded = SubmitSessionTurnRequest::decode(request.encode_to_vec().as_slice()).unwrap();
         assert!(decoded.goal_mode);
@@ -3549,74 +2837,6 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
-    #[cfg(feature = "graphs")]
-    #[test]
-    fn saved_graph_models_return_in_session_detail() {
-        let root = std::env::temp_dir().join(format!("beale-graph-example-{}", Uuid::new_v4()));
-        let id = Uuid::new_v4();
-        let session = SessionRow {
-            id: id.to_string(),
-            workspace_id: Uuid::new_v4().to_string(),
-            title: "Example".to_owned(),
-            created_at_ms: 1,
-            last_message_at_ms: 1,
-        };
-        let turn = TurnRow {
-            number: 1,
-            provider: ProviderId::Openai as i32,
-            method: AuthMethod::Subscription as i32,
-            model: "model-example".to_owned(),
-            prompt: "Example prompt".to_owned(),
-            answer: "Example answer".to_owned(),
-            duration_ms: 1,
-            internal_prompt: false,
-        };
-        let graph_model = GraphNodeModel {
-            node_id: "scout".to_owned(),
-            provider: ProviderId::Openai as i32,
-            method: AuthMethod::Subscription as i32,
-            model: "model-example".to_owned(),
-        };
-        let encoded = SessionGraphConfig {
-            models: vec![graph_model.clone()],
-            concurrency: vec![GraphNodeConcurrency {
-                node_id: "main".to_owned(),
-                max_concurrent: 1,
-            }],
-            stage_duration_minutes: 0,
-            template_json: String::new(),
-            max_concurrent_workers: 0,
-        }
-        .encode_to_vec();
-        let db = HostDatabase::open(&root).unwrap();
-        crate::features::migrate(&db).unwrap();
-        db.append_turn_with_metadata(
-            &session,
-            &turn,
-            true,
-            TurnActivity {
-                tools: &[],
-                reasoning: &[],
-                commentary: &[],
-            },
-            None,
-            TurnMetadata {
-                extensions: &[&beale_graphs::GraphCommit {
-                    selection: Some((beale_graphs::SIMPLE_ID, &encoded)),
-                }],
-                ..TurnMetadata::default()
-            },
-        )
-        .unwrap();
-        let (loaded, turns) = load_persisted(&db, id).unwrap();
-        let detail = detail(&db, &loaded, &turns).unwrap();
-        assert_eq!(detail.graph_id, beale_graphs::SIMPLE_ID);
-        assert_eq!(detail.graph_models, [graph_model]);
-        assert_eq!(detail.graph_node_concurrency[0].max_concurrent, 1);
-        drop(db);
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
     #[test]
     fn transcript_keeps_full_tool_details_on_host_until_requested() {
         let root = std::env::temp_dir().join(format!("beale-session-example-{}", Uuid::new_v4()));
@@ -3770,113 +2990,6 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
-    #[cfg(feature = "graphs")]
-    #[test]
-    fn saved_subagent_messages_stay_in_child_detail() {
-        let root = std::env::temp_dir().join(format!("beale-session-example-{}", Uuid::new_v4()));
-        let db = HostDatabase::open(&root).unwrap();
-        crate::features::migrate(&db).unwrap();
-        let session = SessionRow {
-            id: Uuid::new_v4().to_string(),
-            workspace_id: Uuid::new_v4().to_string(),
-            title: "Example".to_owned(),
-            created_at_ms: 1,
-            last_message_at_ms: 1,
-        };
-        let child = ChildTurnRow {
-            agent_id: Uuid::new_v4().to_string(),
-            role: "scout".to_owned(),
-            task: "Inspect example input".to_owned(),
-            result: "Example result".to_owned(),
-            is_error: false,
-            messages_json: json!([
-                {"role":"assistant","text":"Checking the example input."},
-                {"role":"tool","tool_call_id":"tool-example-child","name":"read","summary":"Read example.txt","is_error":false},
-                {"role":"assistant","text":"Example result"}
-            ])
-            .to_string(),
-            reasoning_json: "[]".to_owned(),
-            completed_at_ms: 2,
-        };
-        let child_tool = ToolCallRow {
-            id: "tool-example-child".to_owned(),
-            turn_number: 1,
-            ordinal: 0,
-            name: "read".to_owned(),
-            summary: "Read example.txt".to_owned(),
-            arguments: json!({"path":"example.txt"}).to_string(),
-            output: "Example file contents".to_owned(),
-            is_error: false,
-            agent_role: "main".to_owned(),
-            created_at_ms: 0,
-        };
-        db.append_turn_with_metadata(
-            &session,
-            &TurnRow {
-                number: 1,
-                provider: ProviderId::Openai as i32,
-                method: AuthMethod::ApiKey as i32,
-                model: "example-model".to_owned(),
-                prompt: "Example prompt".to_owned(),
-                answer: "Example answer".to_owned(),
-                duration_ms: 1,
-                internal_prompt: false,
-            },
-            true,
-            TurnActivity {
-                tools: &[child_tool],
-                reasoning: &[],
-                commentary: &[],
-            },
-            None,
-            TurnMetadata {
-                child_turns: std::slice::from_ref(&child),
-                ..TurnMetadata::default()
-            },
-        )
-        .unwrap();
-        let (loaded, turns) = load_persisted(&db, Uuid::parse_str(&session.id).unwrap()).unwrap();
-        let detail = detail(&db, &loaded, &turns).unwrap();
-        assert!(detail.messages[1].commentary.is_empty());
-        assert_eq!(detail.subagents.len(), 1);
-        assert_eq!(detail.subagents[0].role, "scout");
-        assert_eq!(detail.subagents[0].parent_role, "main");
-        assert_eq!(detail.subagents[0].status, "completed");
-        let stored = db
-            .session_child(&session.id, &detail.subagents[0].id)
-            .unwrap()
-            .unwrap();
-        assert!(
-            stored
-                .turn
-                .messages_json
-                .contains("Checking the example input.")
-        );
-        let inspect =
-            graphs::InspectRequest::parse(&json!({"subagent_id":child.agent_id})).unwrap();
-        let page: Value = serde_json::from_str(
-            &graphs::inspect_saved(&db, &session.id, beale_graphs::ProfileId::Main, &inspect)
-                .unwrap()
-                .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(page["status"], "completed");
-        assert_eq!(page["items"][1]["name"], "read");
-        assert_eq!(page["items"][1]["output"], "Example file contents");
-        assert!(
-            graphs::inspect_saved(
-                &db,
-                &session.id,
-                beale_graphs::ProfileId::Discovery,
-                &inspect
-            )
-            .unwrap()
-            .is_none()
-        );
-        drop(db);
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
     #[tokio::test]
     async fn routes_require_host_auth_and_a_registered_workspace() {
         let root = std::env::temp_dir().join(format!("beale-session-example-{}", Uuid::new_v4()));
@@ -3902,26 +3015,7 @@ mod tests {
             app.clone().oneshot(request).await.unwrap().status(),
             StatusCode::OK
         );
-        #[cfg(feature = "graphs")]
-        {
-            let request = Request::builder()
-                .uri(GRAPH_TEMPLATES_PATH)
-                .body(Body::empty())
-                .unwrap();
-            assert_eq!(
-                app.clone().oneshot(request).await.unwrap().status(),
-                StatusCode::UNAUTHORIZED
-            );
-            let request = Request::builder()
-                .uri(GRAPH_TEMPLATES_PATH)
-                .header("authorization", "Bearer example-token")
-                .body(Body::empty())
-                .unwrap();
-            assert_eq!(
-                app.clone().oneshot(request).await.unwrap().status(),
-                StatusCode::OK
-            );
-        }
+
         #[cfg(feature = "runbooks")]
         {
             let cell_request = |token: &str, session_id: String| {
@@ -3988,6 +3082,9 @@ mod tests {
             StatusCode::NOT_FOUND
         );
         let request = SubmitSessionTurnRequest {
+            swarm_destinations: vec![],
+            swarm_retention: None,
+            swarm_pacing: Vec::new(),
             max_concurrent_workers: 0,
             workspace_id: Uuid::new_v4().to_string(),
             session_id: String::new(),
@@ -4000,11 +3097,10 @@ mod tests {
             goal_max_turns: 0,
             goal_max_duration_minutes: 0,
             repeat_preset: String::new(),
-            graph_id: String::new(),
-            graph_models: vec![],
-            graph_node_concurrency: vec![],
+            swarm_id: String::new(),
+            swarm_models: vec![],
+            swarm_node_concurrency: vec![],
             agent_role: String::new(),
-            stage_duration_minutes: 0,
         };
         let payload = request.encode_to_vec();
         let invalid_id = Request::builder()
@@ -4430,6 +3526,9 @@ mod tests {
         )
         .unwrap();
         let request = SubmitSessionTurnRequest {
+            swarm_destinations: vec![],
+            swarm_retention: None,
+            swarm_pacing: Vec::new(),
             max_concurrent_workers: 0,
             workspace_id: Uuid::new_v4().to_string(),
             session_id: String::new(),
@@ -4442,11 +3541,10 @@ mod tests {
             goal_max_turns: 0,
             goal_max_duration_minutes: 0,
             repeat_preset: String::new(),
-            graph_id: String::new(),
-            graph_models: vec![],
-            graph_node_concurrency: vec![],
+            swarm_id: String::new(),
+            swarm_models: vec![],
+            swarm_node_concurrency: vec![],
             agent_role: String::new(),
-            stage_duration_minutes: 0,
         };
         let request = Request::builder()
             .method("POST")
@@ -4547,3 +3645,6 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 }
+
+#[cfg(all(test, feature = "swarms"))]
+mod hierarchy_tests;

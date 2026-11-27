@@ -72,7 +72,7 @@ async fn fetch(client: &Client, addr: SocketAddr) -> Result<TrackingResponse, St
         || value.model_days.iter().any(|day| {
             day.day_start_ms % DAY_MS != 0
                 || day.model.len() > 200
-                || day.role.len() > 20
+                || day.role.len() > beale_contracts::swarms::MAX_ID_BYTES
                 || day.measured_calls > day.total_calls
                 || !tracking_data::valid_cache(day)
         })

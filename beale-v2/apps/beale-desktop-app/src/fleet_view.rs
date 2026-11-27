@@ -41,14 +41,14 @@ impl FleetTab {
         match self {
             Self::All => match section {
                 FleetSection::AppServers => "All App Servers",
-                FleetSection::VirtualMachines => "All Virtual Machines",
+                FleetSection::VirtualMachines => "All VMs / Containers",
                 FleetSection::ResearchTools => "All Research Tools",
             },
-            Self::Available if section == FleetSection::ResearchTools => "Allowed Locally",
-            Self::Enabled if section == FleetSection::ResearchTools => "Allowed in VMs",
-            Self::Available if section == FleetSection::VirtualMachines => "Running",
+            Self::Available if section == FleetSection::ResearchTools => "Recommended",
+            Self::Enabled if section == FleetSection::ResearchTools => "Priority",
+            Self::Available if section == FleetSection::VirtualMachines => "VMs",
             Self::Available => "Available",
-            Self::Enabled if section == FleetSection::VirtualMachines => "Not Running",
+            Self::Enabled if section == FleetSection::VirtualMachines => "Containers",
             Self::Enabled => "Enabled",
         }
     }
@@ -164,7 +164,7 @@ impl FleetSection {
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::AppServers => "App Servers",
-            Self::VirtualMachines => "Virtual Machines",
+            Self::VirtualMachines => "VMs / Containers",
             Self::ResearchTools => "Research Tools",
         }
     }
@@ -220,8 +220,13 @@ impl FleetState {
                     name: tool.name.into(),
                     category: tool.category.into(),
                     description: tool.description.into(),
-                    allow_locally: tool.id == "ripgrep",
-                    allow_in_vms: tool.id == "ghidra",
+                    preference: if tool.id == "ripgrep" {
+                        1
+                    } else if tool.id == "ghidra" {
+                        2
+                    } else {
+                        0
+                    },
                 })
                 .collect(),
         });
@@ -303,6 +308,7 @@ pub(crate) fn start_load(state: &mut State) {
     if state.primary_view == PrimaryView::Fleet
         && state.fleet_section == FleetSection::VirtualMachines
     {
+        crate::swarm_controls::refresh(state);
         start_virtual_machine_load(state);
         return;
     }
@@ -729,8 +735,8 @@ fn tab_button(
 ) -> El {
     let glyph = match (tab, section) {
         (FleetTab::All, _) => section.glyph(),
-        (FleetTab::Available, FleetSection::VirtualMachines) => &VM_RUN,
-        (FleetTab::Enabled, FleetSection::VirtualMachines) => &crate::icons::STOP,
+        (FleetTab::Available, FleetSection::VirtualMachines) => &FLEET_VIRTUAL_MACHINE,
+        (FleetTab::Enabled, FleetSection::VirtualMachines) => &crate::icons::PACKAGE,
         (FleetTab::Available, FleetSection::AppServers) => &PLUS,
         (FleetTab::Enabled, FleetSection::AppServers) => &crate::icons::CHECK,
         (FleetTab::Available, FleetSection::ResearchTools) => &FLEET,
@@ -1153,6 +1159,8 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> V
     let labeled_width = crate::design::segmented_group_width(&tab_widths);
     let add_width = if section == FleetSection::AppServers {
         38.0
+    } else if section == FleetSection::VirtualMachines {
+        150.0
     } else {
         0.0
     };
@@ -1165,7 +1173,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> V
     };
     let title_tabs_wrap =
         page_width < crate::titled_view_tabs_width(section.label(), displayed_width);
-    let add_wraps = section == FleetSection::AppServers
+    let add_wraps = section != FleetSection::ResearchTools
         && page_width
             < crate::titled_view_tabs_width(
                 section.label(),
@@ -1222,7 +1230,27 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> V
             header = header.child(add);
         }
     }
+    if section == FleetSection::VirtualMachines {
+        let add = crate::form_button("Add Container", theme)
+            .key("fleet-add-container")
+            .on_press(|s: &mut State| {
+                s.swarm_controls.add_open = !s.swarm_controls.add_open;
+                crate::swarm_controls::refresh(s);
+            });
+        header = if add_wraps {
+            col()
+                .w_full()
+                .gap(8.0)
+                .child(header)
+                .child(row().w_full().child(el().grow(1.0)).child(add))
+        } else {
+            header.child(add)
+        };
+    }
     let mut content = vec![header];
+    if section == FleetSection::VirtualMachines {
+        content.extend(crate::swarm_controls::fleet(state, theme));
+    }
     if section == FleetSection::ResearchTools {
         content.extend(render_research_tools(state, theme));
         return content;
@@ -1286,19 +1314,27 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> V
             .iter()
             .enumerate()
             .filter(|(_, item)| {
-                let running = item.machine.state.starts_with("Running");
-                match state.fleet.tab {
-                    FleetTab::All => true,
-                    FleetTab::Available => running,
-                    FleetTab::Enabled => !running,
-                }
+                let _ = item;
+                state.fleet.tab != FleetTab::Enabled
             })
         {
             count += 1;
             cards = cards.child(virtual_machine_card(index, item, state, text_width, theme));
         }
     }
-    if count == 0 {
+    let has_containers = !state.swarm_controls.choices.is_empty()
+        || state.swarm_controls.inventories.iter().any(|i| {
+            if state.fleet.tab == FleetTab::Enabled {
+                i.allocations.iter().any(|a| a.request.domain == "docker")
+            } else {
+                !i.allocations.is_empty() || !i.environments.is_empty()
+            }
+        });
+    if count == 0
+        && !(section == FleetSection::VirtualMachines
+            && state.fleet.tab != FleetTab::Available
+            && has_containers)
+    {
         let empty = match (section, state.fleet.tab) {
             (FleetSection::AppServers, FleetTab::All) if state.fleet.loading => {
                 "Loading app servers…"
@@ -1309,11 +1345,13 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> V
             (FleetSection::VirtualMachines, _) if state.fleet.vm_loading => {
                 "Loading virtual machines…"
             }
-            (FleetSection::VirtualMachines, FleetTab::Available) => "No running virtual machines.",
+            (FleetSection::VirtualMachines, FleetTab::Available) => "No virtual machines detected.",
             (FleetSection::VirtualMachines, FleetTab::Enabled) => {
-                "No virtual machines are stopped or paused."
+                "No container configurations or instances. Use Add Container to register an image."
             }
-            (FleetSection::VirtualMachines, _) => "No virtual machines detected.",
+            (FleetSection::VirtualMachines, _) => {
+                "No VMs or containers. Use Add Container to register an image."
+            }
             (FleetSection::ResearchTools, _) => "No research tools available.",
         };
         cards = cards.child(
@@ -1335,12 +1373,13 @@ fn research_tool_permission_button(
     theme: ThemeStyle<'_>,
 ) -> El {
     let mut button = el()
+        .focusable(enabled)
         .key(key)
-        .role("checkbox")
+        .role("radio")
         .label(format!(
             "{label} for {}: {}",
             action.id,
-            if selected { "allowed" } else { "not allowed" }
+            if selected { "selected" } else { "not selected" }
         ))
         .size(104.0, 36.0)
         .center()
@@ -1429,27 +1468,18 @@ fn render_research_tools(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
     let header_font = ui_font(12.5, 500.0);
     let header_color = theme.color("#969696");
     let headers = row()
-        .key("fleet-research-tool-headers")
         .w_full()
         .h(34.0)
         .px(12.0)
         .center_y()
         .gap(12.0)
         .child(text("Tool").grow(1.0).font(header_font).color(header_color))
-        .child(
-            row()
-                .gap(8.0)
-                .child(
-                    el().w(104.0)
-                        .center()
-                        .child(text("Allow Locally").font(header_font).color(header_color)),
-                )
-                .child(
-                    el().w(104.0)
-                        .center()
-                        .child(text("Allow in VMs").font(header_font).color(header_color)),
-                ),
+        .children(
+            ["Allow", "Recommend", "Priority"]
+                .into_iter()
+                .map(|label| text(label).w(104.0).font(header_font).color(header_color)),
         );
+    content.push(text("Guidance for local and remote execution. Allow: may install/use. Recommend: preferred but optional. Priority: top choice for a relevant task. Platform relevance follows the execution environment.").w_full().wrap().font(ui_font(13.0,400.0)).color(header_color));
     let mut tools = col()
         .key("fleet-research-tool-list")
         .w_full()
@@ -1458,42 +1488,31 @@ fn render_research_tools(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
         .child(divider());
     let visible_tools = host.tools.iter().filter(|tool| match state.fleet.tab {
         FleetTab::All => true,
-        FleetTab::Available => tool.allow_locally,
-        FleetTab::Enabled => tool.allow_in_vms,
+        FleetTab::Available => tool.preference == 1,
+        FleetTab::Enabled => tool.preference == 2,
     });
     let mut visible_count = 0;
     for tool in visible_tools {
         visible_count += 1;
-        let local_action = ResearchToolMutation {
-            host_id: host.id.clone(),
-            id: tool.id.clone(),
-            allow_locally: !tool.allow_locally,
-            allow_in_vms: tool.allow_in_vms,
-        };
-        let vm_action = ResearchToolMutation {
-            host_id: host.id.clone(),
-            id: tool.id.clone(),
-            allow_locally: tool.allow_locally,
-            allow_in_vms: !tool.allow_in_vms,
-        };
-        let buttons = row()
-            .gap(8.0)
-            .child(research_tool_permission_button(
-                format!("fleet-tool-local-{}-{}", host.id, tool.id),
-                "Allow Locally",
-                tool.allow_locally,
-                !state.fleet.tools_busy,
-                local_action,
-                theme,
-            ))
-            .child(research_tool_permission_button(
-                format!("fleet-tool-vms-{}-{}", host.id, tool.id),
-                "Allow in VMs",
-                tool.allow_in_vms,
-                !state.fleet.tools_busy,
-                vm_action,
-                theme,
-            ));
+        let buttons = row().gap(8.0).children(
+            ["Allow", "Recommend", "Priority"]
+                .into_iter()
+                .enumerate()
+                .map(|(value, label)| {
+                    research_tool_permission_button(
+                        format!("fleet-tool-preference-{}-{}-{value}", host.id, tool.id),
+                        label,
+                        tool.preference == value as i32,
+                        !state.fleet.tools_busy,
+                        ResearchToolMutation {
+                            host_id: host.id.clone(),
+                            id: tool.id.clone(),
+                            preference: value as i32,
+                        },
+                        theme,
+                    )
+                }),
+        );
         tools = tools
             .child(
                 row()
@@ -1517,8 +1536,8 @@ fn render_research_tools(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
     if visible_count == 0 {
         let message = match state.fleet.tab {
             FleetTab::All => "No research tools available on this app server.",
-            FleetTab::Available => "No research tools allowed locally on this app server.",
-            FleetTab::Enabled => "No research tools allowed in VMs on this app server.",
+            FleetTab::Available => "No research tools recommended on this app server.",
+            FleetTab::Enabled => "No priority research tools on this app server.",
         };
         tools = tools.child(
             text(message)
@@ -1915,11 +1934,10 @@ pub(crate) fn details_dialog(state: &State, theme: ThemeStyle<'_>) -> [El; 2] {
                 .allowed_research_tools
                 .iter()
                 .map(|tool| {
-                    let where_allowed = match (tool.allow_locally, tool.allow_in_vms) {
-                        (true, true) => "Local, VMs",
-                        (true, false) => "Local",
-                        (false, true) => "VMs",
-                        (false, false) => "",
+                    let where_allowed = match tool.preference {
+                        1 => "Recommend",
+                        2 => "Priority",
+                        _ => "Allow",
                     };
                     format!("{} ({where_allowed})", tool.name)
                 })
@@ -2107,24 +2125,21 @@ mod tests {
                     name: "ripgrep".to_owned(),
                     category: "Source".to_owned(),
                     description: "Fast search across source and artifacts.".to_owned(),
-                    allow_locally: true,
-                    allow_in_vms: false,
+                    preference: 1,
                 },
                 beale_contracts::v1::FleetResearchTool {
                     id: "example-vm-tool".to_owned(),
                     name: "Example VM Tool".to_owned(),
                     category: "Analysis".to_owned(),
                     description: "Example analysis tool.".to_owned(),
-                    allow_locally: false,
-                    allow_in_vms: true,
+                    preference: 2,
                 },
                 beale_contracts::v1::FleetResearchTool {
                     id: "example-disabled-tool".to_owned(),
                     name: "Example Disabled Tool".to_owned(),
                     category: "Analysis".to_owned(),
                     description: "Example unavailable tool.".to_owned(),
-                    allow_locally: false,
-                    allow_in_vms: false,
+                    preference: 0,
                 },
             ],
         });
@@ -2155,8 +2170,16 @@ mod tests {
                 .find("fleet-tool-row-local-example-disabled-tool")
                 .is_some()
         );
-        assert!(runtime.find("fleet-tool-local-local-ripgrep").is_some());
-        assert!(runtime.find("fleet-tool-vms-local-ripgrep").is_some());
+        assert!(
+            runtime
+                .find("fleet-tool-preference-local-ripgrep-1")
+                .is_some()
+        );
+        assert!(
+            runtime
+                .find("fleet-tool-preference-local-ripgrep-2")
+                .is_some()
+        );
         assert!(runtime.find("fleet-tool-install-local-ripgrep").is_none());
         assert_eq!(
             FleetTab::All.label(FleetSection::ResearchTools),
@@ -2164,11 +2187,11 @@ mod tests {
         );
         assert_eq!(
             FleetTab::Available.label(FleetSection::ResearchTools),
-            "Allowed Locally"
+            "Recommended"
         );
         assert_eq!(
             FleetTab::Enabled.label(FleetSection::ResearchTools),
-            "Allowed in VMs"
+            "Priority"
         );
 
         let (x, y) = runtime.find("fleet-tab-available").unwrap();
@@ -2280,11 +2303,11 @@ mod tests {
         assert!(runtime.find("fleet-vm-clone-0").is_none());
         assert_eq!(
             FleetTab::Available.label(FleetSection::VirtualMachines),
-            "Running"
+            "VMs"
         );
         assert_eq!(
             FleetTab::Enabled.label(FleetSection::VirtualMachines),
-            "Not Running"
+            "Containers"
         );
     }
 

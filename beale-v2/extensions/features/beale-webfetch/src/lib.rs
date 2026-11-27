@@ -111,6 +111,11 @@ fn validate_url(url: &Url) -> Result<()> {
     Ok(())
 }
 
+/// Validate without starting network IO or claiming an execution outcome.
+pub fn validate_arguments(args: &Value) -> Result<()> {
+    request(args.clone()).map(|_| ())
+}
+
 pub async fn execute(args: &Value) -> Result<String> {
     let request = request(args.clone())?;
     let (url, label) = match request {

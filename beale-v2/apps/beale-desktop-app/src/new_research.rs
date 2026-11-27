@@ -11,12 +11,12 @@ use rune_kit::{Markdown, MarkdownStyle};
 use crate::{
     Provider, SelectionMenu, State, ThemeStyle, catalog_index, effective_model_method, form_button,
     icons::{
-        ARROW_RIGHT, BRAIN, CHECK, CHEVRON_DOWN, CHEVRON_RIGHT, CHEVRON_UP, PEN, REPEAT, STOP,
-        TARGET, TERMINAL, WRENCH,
+        ARROW_RIGHT, BRAIN, CHECK, CHEVRON_DOWN, CHEVRON_LEFT, CHEVRON_RIGHT, CHEVRON_UP, PEN,
+        REPEAT, STOP, TARGET, TERMINAL, WRENCH,
     },
     in_place_menu, input_history, load_tool_detail_page, modal_dialog, selection_button,
     settings_form_card, start_session_turn, toggle_selection_menu, toggle_tool_detail, ui_font,
-    workspace_creation::{field, row_with_control},
+    workspace_creation::row_with_control,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -26,13 +26,13 @@ pub(crate) struct ModelSelection {
     pub(crate) id: String,
 }
 
-pub(crate) struct GraphEditor {
-    pub(crate) role: beale_graphs::ProfileId,
+pub(crate) struct SwarmEditor {
+    pub(crate) role: beale_swarms::ProfileId,
     pub(crate) models: Vec<ModelSelection>,
-    pub(crate) model_menu: Option<GraphModelMenu>,
+    pub(crate) model_menu: Option<SwarmModelMenu>,
 }
 
-pub(crate) struct GraphModelMenu {
+pub(crate) struct SwarmModelMenu {
     provider: Option<ModelSelection>,
     navigation: ModelMenuNavigation,
 }
@@ -413,14 +413,14 @@ fn options(state: &State, section: MenuSection) -> Vec<MenuOption> {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ModelMenuTarget {
     Composer,
-    Graph,
+    Swarm,
 }
 
 impl ModelMenuTarget {
     fn prefix(self) -> &'static str {
         match self {
             Self::Composer => "composer",
-            Self::Graph => "graph-editor",
+            Self::Swarm => "swarm-editor",
         }
     }
 
@@ -429,7 +429,7 @@ impl ModelMenuTarget {
             Self::Composer => state
                 .composer_menu_open
                 .then_some(&state.composer_menu_navigation),
-            Self::Graph => Some(&state.graph_editor.as_ref()?.model_menu.as_ref()?.navigation),
+            Self::Swarm => Some(&state.swarm_editor.as_ref()?.model_menu.as_ref()?.navigation),
         }
     }
 
@@ -438,15 +438,15 @@ impl ModelMenuTarget {
             Self::Composer => state
                 .composer_menu_open
                 .then_some(&mut state.composer_menu_navigation),
-            Self::Graph => Some(&mut state.graph_editor.as_mut()?.model_menu.as_mut()?.navigation),
+            Self::Swarm => Some(&mut state.swarm_editor.as_mut()?.model_menu.as_mut()?.navigation),
         }
     }
 
     fn options(self, state: &State, section: MenuSection) -> Vec<MenuOption> {
         match self {
             Self::Composer => options(state, section),
-            Self::Graph => {
-                let editor = state.graph_editor.as_ref().expect("menu requires editor");
+            Self::Swarm => {
+                let editor = state.swarm_editor.as_ref().expect("menu requires editor");
                 let provider = editor
                     .model_menu
                     .as_ref()
@@ -466,8 +466,8 @@ impl ModelMenuTarget {
     fn close(self, state: &mut State) {
         match self {
             Self::Composer => state.composer_menu_open = false,
-            Self::Graph => {
-                if let Some(editor) = &mut state.graph_editor {
+            Self::Swarm => {
+                if let Some(editor) = &mut state.swarm_editor {
                     editor.model_menu = None;
                 }
             }
@@ -507,8 +507,8 @@ impl ModelMenuTarget {
             return;
         };
         match option.choice {
-            MenuChoice::Model(selection) if self == Self::Graph => {
-                let editor = state.graph_editor.as_mut().expect("menu requires editor");
+            MenuChoice::Model(selection) if self == Self::Swarm => {
+                let editor = state.swarm_editor.as_mut().expect("menu requires editor");
                 if section == MenuSection::Provider {
                     editor.model_menu.as_mut().expect("menu is open").provider = Some(selection);
                     self.set_section(state, MenuSection::Model);
@@ -525,34 +525,34 @@ impl ModelMenuTarget {
                     editor.models.push(selection);
                 }
                 if section == MenuSection::Model {
-                    let editor = state.graph_editor.as_ref().expect("menu requires editor");
+                    let editor = state.swarm_editor.as_ref().expect("menu requires editor");
                     let role = editor.role;
                     let models = editor.models.clone();
-                    if Some(role) == beale_graphs::entry_role(&state.new_research_graph_id)
-                        || (state.new_research_graph_id.is_empty()
-                            && role == beale_graphs::ProfileId::Main)
+                    if Some(role) == beale_swarms::entry_role(&state.new_research_swarm_id)
+                        || (state.new_research_swarm_id.is_empty()
+                            && role == beale_swarms::ProfileId::Leader)
                     {
                         state.new_research_model = models.first().cloned();
                     }
-                    state.new_research_graph_models.insert(role, models);
+                    state.new_research_swarm_models.insert(role, models);
                 }
                 return;
             }
             MenuChoice::Model(selection) => {
                 state.new_research_model = Some(selection.clone());
                 if let Some(models) = state
-                    .new_research_graph_models
-                    .get_mut(&beale_graphs::ProfileId::Main)
+                    .new_research_swarm_models
+                    .get_mut(&beale_swarms::ProfileId::Leader)
                 {
                     models.retain(|item| *item != selection);
                     models.insert(0, selection);
-                    models.truncate(beale_graphs::ProfileId::Main.max_models());
+                    models.truncate(beale_swarms::ProfileId::Leader.max_models());
                 }
             }
             MenuChoice::Effort(effort) => state.new_research_effort = effort,
             MenuChoice::RetryModels(provider, method) => {
                 crate::start_model_list(state, provider, method);
-                if self == Self::Graph {
+                if self == Self::Swarm {
                     return;
                 }
             }
@@ -581,7 +581,7 @@ impl ModelMenuTarget {
                 state,
                 match section {
                     MenuSection::Provider => MenuSection::Model,
-                    MenuSection::Model if self == Self::Graph => MenuSection::Model,
+                    MenuSection::Model if self == Self::Swarm => MenuSection::Model,
                     MenuSection::Model | MenuSection::Effort => MenuSection::Effort,
                 },
             ),
@@ -615,12 +615,12 @@ pub(crate) fn toggle_menu(state: &mut State) {
     ModelMenuTarget::Composer.reset_cursor(state, section);
 }
 
-fn toggle_graph_model_menu(state: &mut State) {
-    let Some(editor) = state.graph_editor.as_ref() else {
+fn toggle_swarm_model_menu(state: &mut State) {
+    let Some(editor) = state.swarm_editor.as_ref() else {
         return;
     };
     if editor.model_menu.is_some() {
-        ModelMenuTarget::Graph.close(state);
+        ModelMenuTarget::Swarm.close(state);
         return;
     }
     let available = choices(state);
@@ -643,23 +643,23 @@ fn toggle_graph_model_menu(state: &mut State) {
     } else {
         MenuSection::Provider
     };
-    let editor = state.graph_editor.as_mut().expect("editor is open");
-    editor.model_menu = Some(GraphModelMenu {
+    let editor = state.swarm_editor.as_mut().expect("editor is open");
+    editor.model_menu = Some(SwarmModelMenu {
         provider,
         navigation: ModelMenuNavigation {
             section,
             ..Default::default()
         },
     });
-    ModelMenuTarget::Graph.reset_cursor(state, section);
+    ModelMenuTarget::Swarm.reset_cursor(state, section);
 }
 
 pub(crate) fn menu_key(state: &mut State, event: &KeyEvent, _: &mut Tx) -> bool {
     ModelMenuTarget::Composer.key(state, event)
 }
 
-pub(crate) fn graph_model_menu_key(state: &mut State, event: &KeyEvent) -> bool {
-    ModelMenuTarget::Graph.key(state, event)
+pub(crate) fn swarm_model_menu_key(state: &mut State, event: &KeyEvent) -> bool {
+    ModelMenuTarget::Swarm.key(state, event)
 }
 
 fn section_row(
@@ -670,7 +670,7 @@ fn section_row(
     active: bool,
     theme: ThemeStyle<'_>,
 ) -> El {
-    row()
+    let mut section_row = row()
         .key(format!(
             "{}-menu-{}",
             target.prefix(),
@@ -695,7 +695,11 @@ fn section_row(
         })
         .hover(theme.color("#424242"))
         .on_hover(move |state: &mut State| target.set_section(state, section))
-        .on_press(move |state: &mut State| target.set_section(state, section))
+        .on_press(move |state: &mut State| target.set_section(state, section));
+    if target == ModelMenuTarget::Swarm {
+        section_row = section_row.child(icon(&CHEVRON_LEFT, 13.0).color(theme.color("#969696")));
+    }
+    section_row = section_row
         .child(
             text(label)
                 .w(68.0)
@@ -709,8 +713,11 @@ fn section_row(
                 .fade_truncate()
                 .font(ui_font(13.5, 450.0))
                 .color(theme.color("#eeeeee")),
-        )
-        .child(icon(&CHEVRON_RIGHT, 13.0).color(theme.color("#969696")))
+        );
+    if target == ModelMenuTarget::Composer {
+        section_row = section_row.child(icon(&CHEVRON_RIGHT, 13.0).color(theme.color("#969696")));
+    }
+    section_row
 }
 
 pub(crate) fn model_menu(state: &State, theme: ThemeStyle<'_>) -> El {
@@ -719,11 +726,11 @@ pub(crate) fn model_menu(state: &State, theme: ThemeStyle<'_>) -> El {
 
 fn render_model_menu(state: &State, target: ModelMenuTarget, theme: ThemeStyle<'_>) -> El {
     let prefix = target.prefix();
-    let is_graph = target == ModelMenuTarget::Graph;
+    let is_swarm = target == ModelMenuTarget::Swarm;
     let navigation = target.navigation(state).expect("menu is open");
     let choices = choices(state);
-    let (provider_name, model_name, multiple_models) = if is_graph {
-        let editor = state.graph_editor.as_ref().expect("menu requires editor");
+    let (provider_name, model_name, multiple_models) = if is_swarm {
+        let editor = state.swarm_editor.as_ref().expect("menu requires editor");
         let provider_name = editor
             .model_menu
             .as_ref()
@@ -731,7 +738,7 @@ fn render_model_menu(state: &State, target: ModelMenuTarget, theme: ThemeStyle<'
             .map_or("None", |choice| provider_label(state, choice));
         (
             provider_name,
-            graph_editor_model_label(editor, &choices),
+            swarm_editor_model_label(editor, &choices),
             !editor.role.is_top_level(),
         )
     } else {
@@ -746,8 +753,8 @@ fn render_model_menu(state: &State, target: ModelMenuTarget, theme: ThemeStyle<'
     let mut main = col()
         .key(format!("{prefix}-model-main"))
         .role("menu")
-        .label(if is_graph {
-            "Graph node model settings"
+        .label(if is_swarm {
+            "Swarm node model settings"
         } else {
             "Lead model settings"
         })
@@ -770,7 +777,7 @@ fn render_model_menu(state: &State, target: ModelMenuTarget, theme: ThemeStyle<'
             navigation.section == MenuSection::Model,
             theme,
         ));
-    if !is_graph {
+    if !is_swarm {
         main = main.child(section_row(
             target,
             MenuSection::Effort,
@@ -782,10 +789,10 @@ fn render_model_menu(state: &State, target: ModelMenuTarget, theme: ThemeStyle<'
     }
     let main = in_place_menu::popup_surface(main, theme.color("#242424"));
     let options = target.options(state, navigation.section);
-    let menu_height = if is_graph { 236.0 } else { 300.0 };
+    let menu_height = if is_swarm { 236.0 } else { 300.0 };
     let height = (options.len() as f32 * 36.0 + 12.0).min(menu_height);
     let mut list = col().w_full().gap(2.0);
-    if is_graph && options.is_empty() {
+    if is_swarm && options.is_empty() {
         list = list.child(
             text(if navigation.section == MenuSection::Model {
                 "Choose a provider to see its models."
@@ -849,7 +856,7 @@ fn render_model_menu(state: &State, target: ModelMenuTarget, theme: ThemeStyle<'
                 MenuSection::Effort => "Effort options",
             })
             .w(230.0)
-            .h(if is_graph { height.max(66.0) } else { height })
+            .h(if is_swarm { height.max(66.0) } else { height })
             .min_h(0.0)
             .padding(6.0)
             .child(
@@ -865,12 +872,12 @@ fn render_model_menu(state: &State, target: ModelMenuTarget, theme: ThemeStyle<'
             ),
         theme.color("#242424"),
     );
-    let (anchor, side, align, gap) = if is_graph {
+    let (anchor, side, align, gap) = if is_swarm {
         (
             format!(
-                "graph-editor-model-control-{}",
+                "swarm-editor-model-control-{}",
                 state
-                    .graph_editor
+                    .swarm_editor
                     .as_ref()
                     .expect("menu requires editor")
                     .role
@@ -891,7 +898,7 @@ fn render_model_menu(state: &State, target: ModelMenuTarget, theme: ThemeStyle<'
     let menu = row()
         .key(format!("{prefix}-model-menu"))
         .w(486.0)
-        .h(if is_graph {
+        .h(if is_swarm {
             height.max(86.0)
         } else {
             menu_height
@@ -910,8 +917,8 @@ fn render_model_menu(state: &State, target: ModelMenuTarget, theme: ThemeStyle<'
                 );
             }
         });
-    if is_graph {
-        menu.child(main.self_start()).child(submenu.self_start())
+    if is_swarm {
+        menu.child(submenu.self_start()).child(main.self_start())
     } else {
         menu.child(main.self_end()).child(submenu.self_end())
     }
@@ -989,9 +996,9 @@ fn transcript_markdown_sized(
         .render(&style)
 }
 
-fn role_models(state: &State, role: beale_graphs::ProfileId) -> Vec<ModelSelection> {
+fn role_models(state: &State, role: beale_swarms::ProfileId) -> Vec<ModelSelection> {
     let mut models: Vec<_> = state
-        .new_research_graph_models
+        .new_research_swarm_models
         .get(&role)
         .cloned()
         .map(|models| {
@@ -1008,15 +1015,15 @@ fn role_models(state: &State, role: beale_graphs::ProfileId) -> Vec<ModelSelecti
     models
 }
 
-pub(crate) fn graph_model_config(state: &State) -> Vec<beale_contracts::v1::GraphNodeModel> {
-    beale_graphs::graph_definition(&state.new_research_graph_id)
-        .unwrap_or(&beale_graphs::SIMPLE_GRAPH)
+pub(crate) fn swarm_model_config(state: &State) -> Vec<beale_contracts::v1::SwarmNodeModel> {
+    beale_swarms::swarm_definition(&state.new_research_swarm_id)
+        .unwrap_or_else(|| std::sync::Arc::clone(&beale_swarms::BASIC_SWARM))
         .nodes
         .iter()
         .flat_map(|role| {
             role_models(state, *role)
                 .into_iter()
-                .map(|model| beale_contracts::v1::GraphNodeModel {
+                .map(|model| beale_contracts::v1::SwarmNodeModel {
                     node_id: role.id().to_owned(),
                     provider: model.provider.id() as i32,
                     method: model.method as i32,
@@ -1028,7 +1035,7 @@ pub(crate) fn graph_model_config(state: &State) -> Vec<beale_contracts::v1::Grap
 }
 
 #[cfg(test)]
-pub(crate) fn graph_model_label(state: &State, role: beale_graphs::ProfileId) -> String {
+pub(crate) fn swarm_model_label(state: &State, role: beale_swarms::ProfileId) -> String {
     let models = role_models(state, role);
     let choices = choices(state);
     let name = models.first().map_or("No model", |selection| {
@@ -1045,35 +1052,35 @@ pub(crate) fn graph_model_label(state: &State, role: beale_graphs::ProfileId) ->
     }
 }
 
-fn open_graph_profile(state: &mut State, role: beale_graphs::ProfileId) {
+fn open_swarm_profile(state: &mut State, role: beale_swarms::ProfileId) {
     if state
-        .graph_editor
+        .swarm_editor
         .as_ref()
         .is_some_and(|editor| editor.role == role && editor.model_menu.is_some())
     {
-        ModelMenuTarget::Graph.close(state);
+        ModelMenuTarget::Swarm.close(state);
         return;
     }
-    state.graph_editor = Some(GraphEditor {
+    state.swarm_editor = Some(SwarmEditor {
         role,
         models: role_models(state, role),
         model_menu: None,
     });
-    toggle_graph_model_menu(state);
+    toggle_swarm_model_menu(state);
 }
 
-fn graph_profiles(state: &State, top_level: bool) -> Vec<beale_graphs::ProfileId> {
-    beale_graphs::graph_definition(&state.new_research_graph_id)
+fn swarm_profiles(state: &State, top_level: bool) -> Vec<beale_swarms::ProfileId> {
+    beale_swarms::swarm_definition(&state.new_research_swarm_id)
         .map_or_else(
-            || vec![beale_graphs::ProfileId::Main],
-            |graph| graph.nodes.to_vec(),
+            || vec![beale_swarms::ProfileId::Leader],
+            |swarm| swarm.nodes.to_vec(),
         )
         .into_iter()
         .filter(|role| role.is_top_level() == top_level)
         .collect()
 }
 
-fn model_summary(state: &State, roles: &[beale_graphs::ProfileId], theme: ThemeStyle<'_>) -> El {
+fn model_summary(state: &State, roles: &[beale_swarms::ProfileId], theme: ThemeStyle<'_>) -> El {
     let mut models = Vec::new();
     for model in roles.iter().flat_map(|role| role_models(state, *role)) {
         if !models.contains(&model) {
@@ -1108,9 +1115,12 @@ fn model_summary(state: &State, roles: &[beale_graphs::ProfileId], theme: ThemeS
 }
 
 fn model_group_control(state: &State, top_level: bool, theme: ThemeStyle<'_>) -> El {
-    let roles = graph_profiles(state, top_level);
+    if top_level && state.new_research_swarm_id == beale_swarms::BASIC_ID {
+        return swarm_model_control(state, beale_swarms::ProfileId::Leader, theme);
+    }
+    let roles = swarm_profiles(state, top_level);
     if let (true, [role]) = (top_level, roles.as_slice()) {
-        return graph_model_control(state, *role, theme);
+        return swarm_model_control(state, *role, theme);
     }
     let key = if top_level {
         "new-scan-agent-models-edit"
@@ -1133,7 +1143,7 @@ fn model_group_control(state: &State, top_level: bool, theme: ThemeStyle<'_>) ->
         .child(icon(&PEN, 16.0).color(theme.color("#bdbdbd")));
     if !roles.is_empty() {
         edit = edit.on_press(move |state: &mut State| {
-            state.graph_models_group = Some(top_level);
+            state.swarm_models_group = Some(top_level);
         });
     } else {
         edit = edit.opacity(0.45);
@@ -1146,12 +1156,12 @@ fn model_group_control(state: &State, top_level: bool, theme: ThemeStyle<'_>) ->
         .child(edit)
 }
 
-fn close_graph_models_group(state: &mut State) {
-    state.graph_editor = None;
-    state.graph_models_group = None;
+fn close_swarm_models_group(state: &mut State) {
+    state.swarm_editor = None;
+    state.swarm_models_group = None;
 }
 
-fn graph_model_control(state: &State, role: beale_graphs::ProfileId, theme: ThemeStyle<'_>) -> El {
+fn swarm_model_control(state: &State, role: beale_swarms::ProfileId, theme: ThemeStyle<'_>) -> El {
     let models = role_models(state, role);
     let selected = models.first();
     let label = match models.as_slice() {
@@ -1163,23 +1173,29 @@ fn graph_model_control(state: &State, role: beale_graphs::ProfileId, theme: Them
         _ => format!("{} models selected", models.len()),
     };
     let open = state
-        .graph_editor
+        .swarm_editor
         .as_ref()
         .is_some_and(|editor| editor.role == role && editor.model_menu.is_some());
     row()
-        .key(format!("graph-editor-model-control-{}", role.id()))
+        .key(format!("swarm-editor-model-control-{}", role.id()))
         .role("button")
         .label(format!("Choose {} models", role.label()))
-        .h(34.0)
+        .h(crate::design::CONTROL_HEIGHT)
         .min_w(0.0)
-        .max_w(190.0)
-        .px(10.0)
+        .max_w(220.0)
+        .px(12.0)
         .center_y()
         .gap(6.0)
         .radius(8.0)
-        .fill(theme.color(if open { "#303030" } else { "#282828" }))
-        .border(1.0, theme.color("#353535"))
-        .on_press(move |state: &mut State| open_graph_profile(state, role))
+        .continuous_corners()
+        .fill(if open {
+            theme.color("#303030")
+        } else {
+            Color::TRANSPARENT
+        })
+        .border(1.0, theme.color("#2c2c2c"))
+        .hover(theme.color("#414141"))
+        .on_press(move |state: &mut State| open_swarm_profile(state, role))
         .child(if models.len() == 1 {
             icon(selected.expect("one model").provider.logo(), 15.0).color(theme.color("#b8b8b8"))
         } else {
@@ -1189,21 +1205,21 @@ fn graph_model_control(state: &State, role: beale_graphs::ProfileId, theme: Them
             text(label)
                 .min_w(0.0)
                 .fade_truncate()
-                .font(ui_font(13.0, 450.0))
-                .color(theme.color("#e2e2e2")),
+                .font(ui_font(13.0, 550.0))
+                .color(theme.color("#eeeeee")),
         )
         .child(
             icon(if open { &CHEVRON_UP } else { &CHEVRON_DOWN }, 13.0)
-                .color(theme.color("#969696")),
+                .color(theme.color("#b8b8b8")),
         )
 }
 
-pub(crate) fn graph_models_group_dialog(state: &State, theme: ThemeStyle<'_>) -> [El; 2] {
+pub(crate) fn swarm_models_group_dialog(state: &State, theme: ThemeStyle<'_>) -> [El; 2] {
     let top_level = state
-        .graph_models_group
+        .swarm_models_group
         .expect("group dialog requires a selection");
-    let rows = graph_profiles(state, top_level).into_iter().map(|role| {
-        let purpose = if role == beale_graphs::ProfileId::Main {
+    let rows = swarm_profiles(state, top_level).into_iter().map(|role| {
+        let purpose = if role == beale_swarms::ProfileId::Leader {
             "Leads the scan and coordinates specialist tasks."
         } else if role.is_top_level() {
             role.instruction()
@@ -1215,14 +1231,14 @@ pub(crate) fn graph_models_group_dialog(state: &State, theme: ThemeStyle<'_>) ->
         row_with_control(
             role.label(),
             purpose,
-            graph_model_control(state, role, theme),
+            swarm_model_control(state, role, theme),
             theme,
         )
-        .key(format!("new-research-graph-node-{}", role.id()))
+        .key(format!("new-research-swarm-node-{}", role.id()))
     });
     modal_dialog::render(
         modal_dialog::DialogSpec {
-            key: "graph-models-group-dialog",
+            key: "swarm-models-group-dialog",
             title: if top_level {
                 "Agent Models"
             } else {
@@ -1239,31 +1255,37 @@ pub(crate) fn graph_models_group_dialog(state: &State, theme: ThemeStyle<'_>) ->
         row()
             .w_full()
             .child(el().grow(1.0))
-            .child(form_button("Done", theme).on_press(close_graph_models_group)),
+            .child(form_button("Done", theme).on_press(close_swarm_models_group)),
         theme,
-        close_graph_models_group,
+        close_swarm_models_group,
     )
 }
 
-fn graph_profile_form(state: &State, theme: ThemeStyle<'_>, available_width: f32) -> El {
-    let selected = !state.new_research_graph_id.is_empty();
-    let active = state.selection_menu == Some(SelectionMenu::SessionGraph);
-    let label = beale_graphs::graph_definition(&state.new_research_graph_id)
-        .map_or("No Subagents", |graph| graph.name);
-    let graph = selection_button(
+fn swarm_profile_form(state: &State, theme: ThemeStyle<'_>, available_width: f32) -> El {
+    let selected = !state.new_research_swarm_id.is_empty();
+    let active = state.selection_menu == Some(SelectionMenu::SessionSwarm);
+    let selected_swarm = beale_swarms::swarm_definition(&state.new_research_swarm_id);
+    let label = selected_swarm
+        .as_ref()
+        .map_or("No Subagents", |swarm| swarm.name.as_str());
+    let swarm = selection_button(
         label,
         active,
-        |state: &mut State| toggle_selection_menu(state, SelectionMenu::SessionGraph),
+        |state: &mut State| toggle_selection_menu(state, SelectionMenu::SessionSwarm),
         theme,
     )
-    .key("new-research-graph-control")
+    .key("new-research-swarm-control")
     .role("button")
-    .label(format!("Scan graph: {label}"));
+    .label(format!("Scan swarm: {label}"));
     let mut rows = vec![
-        row_with_control("Graph", "Choose the scan workflow.", graph, theme)
-            .key("new-scan-graph-row"),
+        row_with_control("Swarm", "Choose the scan workflow.", swarm, theme)
+            .key("new-scan-swarm-row"),
     ];
-    let top_roles = graph_profiles(state, true);
+    let top_roles = if state.new_research_swarm_id == beale_swarms::BASIC_ID {
+        vec![beale_swarms::ProfileId::Leader]
+    } else {
+        swarm_profiles(state, true)
+    };
     let top_count = top_roles.len();
     rows.push(
         row_with_control(
@@ -1273,7 +1295,7 @@ fn graph_profile_form(state: &State, theme: ThemeStyle<'_>, available_width: f32
                 "Agent Models"
             },
             match top_roles.as_slice() {
-                [beale_graphs::ProfileId::Main] => {
+                [beale_swarms::ProfileId::Leader] => {
                     "Leads the scan and coordinates specialist tasks."
                 }
                 [role] => role
@@ -1287,6 +1309,17 @@ fn graph_profile_form(state: &State, theme: ThemeStyle<'_>, available_width: f32
         )
         .key("new-scan-agent-models-row"),
     );
+    if state.new_research_swarm_id == beale_swarms::BASIC_ID {
+        rows.push(
+            row_with_control(
+                "Research Deputy",
+                "Owns an assigned research area and delegates specialist work.",
+                swarm_model_control(state, beale_swarms::ProfileId::ResearchDeputy, theme),
+                theme,
+            )
+            .key("new-scan-deputy-model-row"),
+        );
+    }
     rows.push(
         row_with_control(
             "Subagent Models",
@@ -1296,40 +1329,20 @@ fn graph_profile_form(state: &State, theme: ThemeStyle<'_>, available_width: f32
         )
         .key("new-scan-subagent-models-row"),
     );
-    if beale_graphs::is_rotating_graph(&state.new_research_graph_id) {
-        rows.push(
-            row_with_control(
-                "Minutes Per Stage",
-                "Time before the scan moves to the next stage.",
-                field(
-                    &state.new_research_stage_duration_minutes,
-                    "new-research-stage-duration-minutes",
-                    "60",
-                    theme,
-                    |state| &mut state.new_research_stage_duration_minutes,
-                )
-                .w(86.0)
-                .on_input_change(|state: &mut State, _| {
-                    normalize_goal_limit(&mut state.new_research_stage_duration_minutes, 1_440);
-                }),
-                theme,
-            )
-            .key("new-scan-stage-duration-row"),
-        );
-    }
+
     settings_form_card(rows, theme)
         .w(available_width.clamp(180.0, 640.0))
         .self_center()
         .key(if !selected {
-            "new-research-no-graph"
-        } else if state.new_research_graph_id == beale_graphs::SIMPLE_ID {
-            "new-research-simple-graph"
+            "new-research-no-swarm"
+        } else if state.new_research_swarm_id == beale_swarms::BASIC_ID {
+            "new-research-basic-swarm"
         } else {
-            "new-research-flow-graph"
+            "new-research-workflow-swarm"
         })
 }
 
-fn graph_editor_model_label(editor: &GraphEditor, model_choices: &[ModelChoice]) -> String {
+fn swarm_editor_model_label(editor: &SwarmEditor, model_choices: &[ModelChoice]) -> String {
     match editor.models.as_slice() {
         [] => "Choose models".to_owned(),
         [selection] => model_choices
@@ -1340,8 +1353,8 @@ fn graph_editor_model_label(editor: &GraphEditor, model_choices: &[ModelChoice])
     }
 }
 
-pub(crate) fn graph_editor_model_menu(state: &State, theme: ThemeStyle<'_>) -> El {
-    render_model_menu(state, ModelMenuTarget::Graph, theme)
+pub(crate) fn swarm_editor_model_menu(state: &State, theme: ThemeStyle<'_>) -> El {
+    render_model_menu(state, ModelMenuTarget::Swarm, theme)
 }
 
 fn new_research_setup(state: &State, theme: ThemeStyle<'_>, _available_width: f32) -> El {
@@ -1395,21 +1408,27 @@ fn new_research_setup(state: &State, theme: ThemeStyle<'_>, _available_width: f3
         .w_full()
         .max_w(750.0)
         .self_center()
-        .gap(18.0)
+        .gap(28.0)
         .px(20.0)
         .child(heading);
-    if crate::extensions_view::graphs_enabled(state) {
-        content = content.child(graph_profile_form(state, theme, _available_width));
+    if crate::extensions_view::swarms_enabled(state) {
+        content = content.child(swarm_profile_form(state, theme, _available_width));
     }
     col()
-        .key("new-research-graph-scroll")
+        .key("new-research-swarm-scroll")
         .w_full()
         .grow(1.0)
         .min_h(0.0)
         .scroll(ScrollSpec {
             stick_bottom: false,
         })
-        .child(col().w_full().min_h(0.0).py(28.0).child(content))
+        .child(
+            col()
+                .w_full()
+                .min_h(0.0)
+                .py(28.0)
+                .child(content.child(crate::swarm_controls::new_scan(state, theme))),
+        )
 }
 
 pub(crate) fn transcript_message(
@@ -1535,13 +1554,13 @@ fn tool_series_kind(tool: &SessionToolSummary) -> Option<&'static str> {
         "runbook_edit" => Some("runbook_edit"),
         "runbook_run" => Some("runbook_run"),
         "runbook_status" => Some("runbook_status"),
-        "graph_subagents_spawn" => Some("graph_subagents_spawn"),
-        "graph_subagents_list" => Some("graph_subagents_list"),
-        "graph_subagents_inspect" => Some("graph_subagents_inspect"),
-        "graph_subagents_message" => Some("graph_subagents_message"),
-        "graph_subagents_receive" => Some("graph_subagents_receive"),
-        "graph_subagents_kill" => Some("graph_subagents_kill"),
-        "graph_handoff" => Some("graph_handoff"),
+        "swarm_spawn_subagent" => Some("swarm_spawn_subagent"),
+        "swarm_list_subagents" => Some("swarm_list_subagents"),
+        "swarm_inspect_subagent" => Some("swarm_inspect_subagent"),
+        "swarm_message_subagent" => Some("swarm_message_subagent"),
+        "swarm_receive" => Some("swarm_receive"),
+        "swarm_stop_subagent" => Some("swarm_stop_subagent"),
+        "swarm_handoff" => Some("swarm_handoff"),
         "agent_feedback" => Some("agent_feedback"),
         "goal_status" => Some("goal_status"),
         _ => None,
@@ -1570,17 +1589,17 @@ fn tool_single_label(tool: &SessionToolSummary, active: bool) -> String {
         return summary_detail_value(&tool.summary, "Goal status: ")
             .map_or_else(|| verb.to_owned(), |status| format!("{verb} as {status}"));
     }
-    let graph_label = match tool.name.as_str() {
-        "graph_subagents_spawn" => {
+    let swarm_label = match tool.name.as_str() {
+        "swarm_spawn_subagent" => {
             let verb = if active { "Spawning" } else { "Spawned" };
-            let count = summary_detail_value(&tool.summary, "Graph spawn count: ")
+            let count = summary_detail_value(&tool.summary, "Swarm spawn count: ")
                 .and_then(|value| value.parse::<usize>().ok());
             Some(count.map_or_else(
                 || format!("{verb} subagents"),
                 |count| format!("{verb} {count} subagents"),
             ))
         }
-        "graph_subagents_list" => Some(
+        "swarm_list_subagents" => Some(
             if active {
                 "Checking subagents"
             } else {
@@ -1588,42 +1607,42 @@ fn tool_single_label(tool: &SessionToolSummary, active: bool) -> String {
             }
             .to_owned(),
         ),
-        "graph_subagents_inspect"
-        | "graph_subagents_message"
-        | "graph_subagents_kill"
-        | "graph_subagents_receive"
-        | "graph_handoff" => {
+        "swarm_inspect_subagent"
+        | "swarm_message_subagent"
+        | "swarm_stop_subagent"
+        | "swarm_receive"
+        | "swarm_handoff" => {
             let (prefix, present, past, suffix, fallback) = match tool.name.as_str() {
-                "graph_subagents_inspect" => (
-                    "Graph inspect role: ",
+                "swarm_inspect_subagent" => (
+                    "Swarm inspect role: ",
                     "Inspecting",
                     "Inspected",
                     " subagent",
                     "a subagent",
                 ),
-                "graph_subagents_message" => (
-                    "Graph message role: ",
+                "swarm_message_subagent" => (
+                    "Swarm message role: ",
                     "Sending message to",
                     "Sent message to",
                     "",
                     "a subagent",
                 ),
-                "graph_subagents_receive" => (
-                    "Graph receive role: ",
+                "swarm_receive" => (
+                    "Swarm receive role: ",
                     "Receiving message from",
                     "Received message from",
                     "",
                     "a subagent",
                 ),
-                "graph_subagents_kill" => (
-                    "Graph kill role: ",
+                "swarm_stop_subagent" => (
+                    "Swarm kill role: ",
                     "Stopping",
                     "Stopped",
                     " subagent",
                     "a subagent",
                 ),
                 _ => (
-                    "Graph handoff role: ",
+                    "Swarm handoff role: ",
                     "Handing off to",
                     "Handed off to",
                     " agent",
@@ -1632,7 +1651,7 @@ fn tool_single_label(tool: &SessionToolSummary, active: bool) -> String {
             };
             let verb = if active { present } else { past };
             let role = summary_detail_value(&tool.summary, prefix).or_else(|| {
-                (tool.name == "graph_handoff")
+                (tool.name == "swarm_handoff")
                     .then(|| summary_detail_value(&tool.summary, "Hand off to "))
                     .flatten()
             });
@@ -1643,7 +1662,7 @@ fn tool_single_label(tool: &SessionToolSummary, active: bool) -> String {
         }
         _ => None,
     };
-    if let Some(label) = graph_label {
+    if let Some(label) = swarm_label {
         return label;
     }
     if let Some((kind, value)) = webfetch_input(tool) {
@@ -1862,13 +1881,13 @@ fn combined_tool_series_label(tools: &[&SessionToolSummary], active: bool) -> St
                 "runbook_edit" => ("Editing", "Edited", "runbook", "runbooks"),
                 "runbook_run" => ("Running", "Ran", "runbook", "runbooks"),
                 "runbook_status" => ("Checking", "Checked", "runbook", "runbooks"),
-                "graph_subagents_spawn" => ("Spawning", "Spawned", "subagent", "subagents"),
-                "graph_subagents_list" => ("Checking", "Checked", "subagent", "subagents"),
-                "graph_subagents_inspect" => ("Inspecting", "Inspected", "subagent", "subagents"),
-                "graph_subagents_message" => ("Sending", "Sent", "message", "messages"),
-                "graph_subagents_receive" => ("Receiving", "Received", "message", "messages"),
-                "graph_subagents_kill" => ("Stopping", "Stopped", "subagent", "subagents"),
-                "graph_handoff" => ("Handing off", "Handed off", "agent", "agents"),
+                "swarm_spawn_subagent" => ("Spawning", "Spawned", "subagent", "subagents"),
+                "swarm_list_subagents" => ("Checking", "Checked", "subagent", "subagents"),
+                "swarm_inspect_subagent" => ("Inspecting", "Inspected", "subagent", "subagents"),
+                "swarm_message_subagent" => ("Sending", "Sent", "message", "messages"),
+                "swarm_receive" => ("Receiving", "Received", "message", "messages"),
+                "swarm_stop_subagent" => ("Stopping", "Stopped", "subagent", "subagents"),
+                "swarm_handoff" => ("Handing off", "Handed off", "agent", "agents"),
                 "agent_feedback" => ("Providing", "Provided", "feedback", "feedback"),
                 "goal_status" => ("Marking", "Marked", "status", "times"),
                 _ => unreachable!("only supported tools can form a series"),
@@ -1879,12 +1898,12 @@ fn combined_tool_series_label(tools: &[&SessionToolSummary], active: bool) -> St
             } else {
                 verb.to_lowercase()
             };
-            if name == "graph_subagents_spawn" {
+            if name == "swarm_spawn_subagent" {
                 let per_call: Vec<_> = tools
                     .iter()
                     .filter(|tool| tool.name == name)
                     .filter_map(|tool| {
-                        summary_detail_value(&tool.summary, "Graph spawn count: ")
+                        summary_detail_value(&tool.summary, "Swarm spawn count: ")
                             .and_then(|value| value.parse::<usize>().ok())
                     })
                     .collect();
@@ -1893,7 +1912,7 @@ fn combined_tool_series_label(tools: &[&SessionToolSummary], active: bool) -> St
                 } else {
                     format!("{verb} subagents")
                 }
-            } else if name == "graph_subagents_list" {
+            } else if name == "swarm_list_subagents" {
                 format!("{verb} subagents")
             } else if name == "agent_feedback" {
                 format!("{verb} agent feedback")
@@ -1912,7 +1931,7 @@ fn combined_tool_series_label(tools: &[&SessionToolSummary], active: bool) -> St
                 } else {
                     format!("{verb} goal status {count} times")
                 }
-            } else if name == "graph_subagents_message" {
+            } else if name == "swarm_message_subagent" {
                 if count == 1 {
                     format!("{verb} a message to a subagent")
                 } else if active {
@@ -1920,13 +1939,13 @@ fn combined_tool_series_label(tools: &[&SessionToolSummary], active: bool) -> St
                 } else {
                     format!("{verb} {count} messages to subagents")
                 }
-            } else if name == "graph_subagents_receive" {
+            } else if name == "swarm_receive" {
                 if count == 1 {
                     format!("{verb} a subagent message")
                 } else {
                     format!("{verb} {count} subagent messages")
                 }
-            } else if name == "graph_handoff" {
+            } else if name == "swarm_handoff" {
                 if count == 1 {
                     format!("{verb} to an agent")
                 } else {
@@ -2498,7 +2517,7 @@ fn ribbon_status_dot(key: &'static str, theme: ThemeStyle<'_>) -> El {
 }
 
 pub(crate) fn show_composer_model_selector(state: &State) -> bool {
-    !crate::extensions_view::graphs_enabled(state)
+    !crate::extensions_view::swarms_enabled(state)
         && (!state.auth_loaded || has_configured_provider(state))
 }
 
@@ -2678,9 +2697,9 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
                 if state
                     .active_session
                     .as_ref()
-                    .is_some_and(|detail| beale_graphs::is_peer_graph(&detail.graph_id))
+                    .is_some_and(|detail| crate::sessions::swarm_definition(detail).is_some())
                 {
-                    beale_graphs::ProfileId::from_id(&state.session_agent_role)
+                    beale_swarms::ProfileId::from_id(&state.session_agent_role)
                         .map_or("Research with Beale", |role| role.label())
                 } else {
                     "Research with Beale"
@@ -2820,10 +2839,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
         .children(show_draft_controls.then_some(workspace_control))
         .children(model_control)
         .child(el().grow(1.0));
-    if show_draft_controls
-        && crate::extensions_view::goal_mode_enabled(state)
-        && !beale_graphs::is_rotating_graph(&state.new_research_graph_id)
-    {
+    if show_draft_controls && crate::extensions_view::goal_mode_enabled(state) {
         ribbon = ribbon.child(
             row()
                 .key("new-research-goal-control")
@@ -2859,7 +2875,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
                 }),
         );
     }
-    if show_draft_controls && !beale_graphs::is_rotating_graph(&state.new_research_graph_id) {
+    if show_draft_controls {
         ribbon = ribbon.child(
             row()
                 .key("new-research-repeat-control")
@@ -2903,20 +2919,22 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
         .px(14.0)
         .pt(22.0)
         .pb(24.0);
-    let graph_id = state
+    let swarm_id = state
         .active_session
         .as_ref()
-        .map_or(state.new_research_graph_id.as_str(), |detail| {
-            detail.graph_id.as_str()
+        .map_or(state.new_research_swarm_id.as_str(), |detail| {
+            detail.swarm_id.as_str()
         });
-    let peer_graph = beale_graphs::is_peer_graph(graph_id);
-    let selected_role = crate::research_header::selected_role(state, graph_id);
+    let peer_graph = state.active_session.is_some()
+        && crate::research_header::swarm_definition(state, swarm_id).is_some();
+    let selected_role = crate::research_header::selected_role(state, swarm_id);
     let visible_role =
         |role: &str| !peer_graph || role == selected_role || role == "main" || role.is_empty();
     if let Some(detail) = &state.active_session {
+        transcript = transcript.child(crate::swarm_controls::session(detail, theme));
         if peer_graph {
             if let Some(agent) = detail
-                .graph_agents
+                .swarm_agents
                 .iter()
                 .find(|agent| agent.role == selected_role)
             {
@@ -2947,13 +2965,13 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
                 }
             }
             for (index, item) in detail
-                .graph_handoffs
+                .swarm_handoffs
                 .iter()
                 .filter(|item| item.to_role == selected_role)
                 .take(4)
                 .enumerate()
             {
-                let source = beale_graphs::ProfileId::from_id(&item.from_role)
+                let source = beale_swarms::ProfileId::from_id(&item.from_role)
                     .map_or_else(|| item.from_role.clone(), |role| role.label().to_owned());
                 transcript = transcript.child(
                     text(format!("From {source} · {}\n{}", item.status, item.task))
@@ -2964,10 +2982,10 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
                 );
             }
         }
-        if detail.graph_id == beale_graphs::SIMPLE_ID {
+        if let Some(graph) = crate::sessions::swarm_definition(detail) {
             transcript = transcript.child(
-                text(beale_graphs::SIMPLE_NAME)
-                    .key("session-graph-label")
+                text(graph.name.clone())
+                    .key("session-swarm-label")
                     .font(ui_font(12.0, 500.0))
                     .color(theme.color("#969696")),
             );
@@ -3841,7 +3859,7 @@ mod tests {
     }
 
     #[test]
-    fn graph_series_labels_cover_tools_and_received_messages() {
+    fn swarm_series_labels_cover_tools_and_received_messages() {
         let edit = SessionToolSummary {
             name: "edit".to_owned(),
             summary: "Edit example.txt".to_owned(),
@@ -3849,8 +3867,8 @@ mod tests {
         };
         for (name, summary, active, past, active_plural, past_plural, joined) in [
             (
-                "graph_subagents_list",
-                "Graph list",
+                "swarm_list_subagents",
+                "Swarm list",
                 "Checking subagents",
                 "Checked subagents",
                 "Checking subagents",
@@ -3858,8 +3876,8 @@ mod tests {
                 "Checked subagents, edited a file",
             ),
             (
-                "graph_subagents_inspect",
-                "Graph inspect role: Scout",
+                "swarm_inspect_subagent",
+                "Swarm inspect role: Scout",
                 "Inspecting Scout subagent",
                 "Inspected Scout subagent",
                 "Inspecting 2 subagents",
@@ -3867,8 +3885,8 @@ mod tests {
                 "Inspected a subagent, edited a file",
             ),
             (
-                "graph_subagents_message",
-                "Graph message role: Reviewer",
+                "swarm_message_subagent",
+                "Swarm message role: Reviewer",
                 "Sending message to Reviewer",
                 "Sent message to Reviewer",
                 "Sending 2 subagent messages",
@@ -3876,8 +3894,8 @@ mod tests {
                 "Sent a message to a subagent, edited a file",
             ),
             (
-                "graph_subagents_receive",
-                "Graph receive role: Scout",
+                "swarm_receive",
+                "Swarm receive role: Scout",
                 "Receiving message from Scout",
                 "Received message from Scout",
                 "Receiving 2 subagent messages",
@@ -3885,8 +3903,8 @@ mod tests {
                 "Received a subagent message, edited a file",
             ),
             (
-                "graph_subagents_kill",
-                "Graph kill role: Scout",
+                "swarm_stop_subagent",
+                "Swarm kill role: Scout",
                 "Stopping Scout subagent",
                 "Stopped Scout subagent",
                 "Stopping 2 subagents",
@@ -3894,8 +3912,8 @@ mod tests {
                 "Stopped a subagent, edited a file",
             ),
             (
-                "graph_handoff",
-                "Graph handoff role: Discovery",
+                "swarm_handoff",
+                "Swarm handoff role: Discovery",
                 "Handing off to Discovery agent",
                 "Handed off to Discovery agent",
                 "Handing off to 2 agents",
@@ -3921,8 +3939,8 @@ mod tests {
             assert_eq!(combined_tool_series_label(&[&tool, &edit], false), joined);
         }
         let spawn = SessionToolSummary {
-            name: "graph_subagents_spawn".to_owned(),
-            summary: "Graph spawn count: 2".to_owned(),
+            name: "swarm_spawn_subagent".to_owned(),
+            summary: "Swarm spawn count: 2".to_owned(),
             ..Default::default()
         };
         assert_eq!(tool_single_label(&spawn, true), "Spawning 2 subagents");
@@ -3940,7 +3958,7 @@ mod tests {
             "Spawned 2 subagents, edited a file"
         );
         let old_spawn = SessionToolSummary {
-            summary: "Spawn graph subagents".to_owned(),
+            summary: "Spawn swarm subagents".to_owned(),
             ..spawn
         };
         assert_eq!(
@@ -3948,8 +3966,8 @@ mod tests {
             "Spawned subagents"
         );
         let prefixed = SessionToolSummary {
-            name: "graph_subagents_inspect".to_owned(),
-            summary: "Discovery: Graph inspect role: Prover".to_owned(),
+            name: "swarm_inspect_subagent".to_owned(),
+            summary: "Discovery: Swarm inspect role: Prover".to_owned(),
             ..Default::default()
         };
         assert_eq!(

@@ -121,6 +121,22 @@ fn base32(secret: &[u8]) -> String {
 }
 
 pub fn router(token: String, db: HostDatabase, data_root: PathBuf) -> Router {
+    router_with_backend(
+        token,
+        db,
+        data_root,
+        Arc::new(crate::worker_host::UnavailableBackend),
+    )
+}
+pub fn router_with_backend(
+    token: String,
+    db: HostDatabase,
+    data_root: PathBuf,
+    backend: Arc<dyn crate::worker_host::HostExecutionBackend>,
+) -> Router {
+    let containers = crate::docker::router(token.clone(), db.clone());
+    let executions =
+        crate::worker_host::router(token.clone(), db.clone(), data_root.clone(), backend);
     Router::new()
         .route(FLEET_DESCRIPTOR_PATH, get(descriptor))
         .route(FLEET_TOTP_PROVISION_PATH, get(provision))
@@ -146,6 +162,8 @@ pub fn router(token: String, db: HostDatabase, data_root: PathBuf) -> Router {
             data_root,
             attempts: Arc::new(Mutex::new(Attempts::default())),
         })
+        .merge(executions)
+        .merge(containers)
 }
 
 fn require_fleet_access(state: &HttpState, headers: &HeaderMap) -> Result<(), StatusCode> {
@@ -189,12 +207,14 @@ async fn set_research_tool_settings(
     protobuf_request(&headers)?;
     let request =
         FleetSetResearchToolSettingsRequest::decode(body).map_err(|_| StatusCode::BAD_REQUEST)?;
-    if !crate::research_tools::contains(&request.id) {
+    if !crate::research_tools::contains(&request.id)
+        || beale_contracts::v1::ResearchToolPreference::try_from(request.preference).is_err()
+    {
         return Err(StatusCode::BAD_REQUEST);
     }
     state
         .db
-        .set_research_tool_settings(&request.id, request.allow_locally, request.allow_in_vms)
+        .set_research_tool_settings(&request.id, request.preference)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -452,7 +472,7 @@ async fn set_preferred_browser(
     Ok(StatusCode::NO_CONTENT)
 }
 
-fn authorized(headers: &HeaderMap, token: &str) -> bool {
+pub(crate) fn authorized(headers: &HeaderMap, token: &str) -> bool {
     let Some(presented) = headers
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
@@ -643,8 +663,7 @@ mod tests {
         );
         let unknown = FleetSetResearchToolSettingsRequest {
             id: "unknown".to_owned(),
-            allow_locally: true,
-            allow_in_vms: true,
+            preference: 2,
         };
         assert_eq!(
             app.clone()
@@ -661,10 +680,14 @@ mod tests {
         );
         let setting = FleetSetResearchToolSettingsRequest {
             id: "subfinder".to_owned(),
-            allow_locally: false,
-            allow_in_vms: true,
+            preference: 2,
         };
-        assert!(crate::allowed_tools(&db).unwrap().is_empty());
+        assert!(
+            crate::allowed_tools(&db)
+                .unwrap()
+                .iter()
+                .all(|t| t.preference == 0)
+        );
         assert_eq!(
             app.clone()
                 .oneshot(request(
@@ -716,11 +739,11 @@ mod tests {
             catalog
                 .tools
                 .iter()
-                .any(|tool| tool.id == "subfinder" && !tool.allow_locally && tool.allow_in_vms)
+                .any(|tool| tool.id == "subfinder" && tool.preference == 2)
         );
         for id in ["nmap", "httpx", "katana", "ffuf", "nuclei", "zap", "ghidra"] {
             let tool = catalog.tools.iter().find(|tool| tool.id == id).unwrap();
-            assert!(!tool.allow_locally && !tool.allow_in_vms, "{id}");
+            assert!(tool.preference == 0, "{id}");
         }
         for id in [
             "jq",
@@ -735,9 +758,18 @@ mod tests {
             assert!(!catalog.tools.iter().any(|tool| tool.id == id), "{id}");
         }
         let allowed = crate::allowed_tools(&db).unwrap();
-        assert_eq!(allowed.len(), 1);
-        assert_eq!(allowed[0].id, "subfinder");
-        assert!(!allowed[0].allow_locally && allowed[0].allow_in_vms);
+        assert_eq!(
+            allowed.len(),
+            beale_contracts::research_tools::CATALOG.len()
+        );
+        assert_eq!(
+            allowed
+                .iter()
+                .find(|t| t.id == "subfinder")
+                .unwrap()
+                .preference,
+            2
+        );
         drop(db);
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -1152,10 +1184,8 @@ mod tests {
             StatusCode::OK
         );
         assert!(db.fleet_totp_secret().unwrap().is_some());
-        db.set_research_tool_settings("ripgrep", true, false)
-            .unwrap();
-        db.set_research_tool_settings("ghidra", false, true)
-            .unwrap();
+        db.set_research_tool_settings("ripgrep", 1).unwrap();
+        db.set_research_tool_settings("ghidra", 2).unwrap();
         let response = app.clone().oneshot(request()).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let descriptor = FleetAppServerDescriptor::decode(
@@ -1169,13 +1199,28 @@ mod tests {
         assert!(!descriptor.os_name.is_empty());
         assert!(!descriptor.os_vendor.is_empty());
         assert_eq!(descriptor.protocol_minor, PROTOCOL_MINOR);
-        assert_eq!(descriptor.allowed_research_tools.len(), 2);
-        assert_eq!(descriptor.allowed_research_tools[0].id, "ripgrep");
-        assert!(descriptor.allowed_research_tools[0].allow_locally);
-        assert!(!descriptor.allowed_research_tools[0].allow_in_vms);
-        assert_eq!(descriptor.allowed_research_tools[1].id, "ghidra");
-        assert!(!descriptor.allowed_research_tools[1].allow_locally);
-        assert!(descriptor.allowed_research_tools[1].allow_in_vms);
+        assert_eq!(
+            descriptor.allowed_research_tools.len(),
+            beale_contracts::research_tools::CATALOG.len()
+        );
+        assert_eq!(
+            descriptor
+                .allowed_research_tools
+                .iter()
+                .find(|t| t.id == "ripgrep")
+                .unwrap()
+                .preference,
+            1
+        );
+        assert_eq!(
+            descriptor
+                .allowed_research_tools
+                .iter()
+                .find(|t| t.id == "ghidra")
+                .unwrap()
+                .preference,
+            2
+        );
         let resources = descriptor.resources.expect("host resources");
         assert!(resources.cpu_logical_cores > 0);
         assert!(resources.memory_total_bytes > 0);

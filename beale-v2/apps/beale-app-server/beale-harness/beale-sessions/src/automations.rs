@@ -3,12 +3,12 @@ use axum::{
     extract::State,
     http::{HeaderMap, StatusCode},
 };
+use beale_contracts::v1::SubmitSessionTurnRequest;
 use beale_contracts::v1::{
     AutomationJob, AutomationRun, CancelAutomationRequest, ListAutomationJobsResponse,
 };
-use beale_contracts::v1::{SessionGraphConfig, SubmitSessionTurnRequest};
 use beale_storage::{AutomationClaim, AutomationJobRow, AutomationRunRow};
-use prost::Message;
+
 use std::{
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -30,8 +30,56 @@ fn now_ms() -> i64 {
 pub(super) async fn run_worker(state: SessionState) {
     let permits = Arc::new(Semaphore::new(4));
     let mut timer = tokio::time::interval(Duration::from_secs(5));
+    #[cfg(feature = "swarms")]
+    let mut recovery_cursor = (String::new(), String::new());
+    #[cfg(feature = "swarms")]
+    let mut retention = tokio::task::JoinSet::new();
+    #[cfg(feature = "swarms")]
+    let mut peer_recovery = super::distributed::peer_recovery::PeerRecovery::new(
+        state.db.clone(),
+        state.workspaces.root().to_path_buf(),
+    );
     loop {
         timer.tick().await;
+        #[cfg(feature = "swarms")]
+        {
+            while retention.try_join_next().is_some() {}
+            if retention.is_empty() {
+                let state = state.clone();
+                retention.spawn(async move {
+                    if let Err(error) =
+                        super::distributed::placement::lifecycle_maintenance(&state).await
+                    {
+                        beale_host_log::error!("Retention maintenance pending: {error:#}");
+                    }
+                });
+            }
+        }
+        #[cfg(feature = "swarms")]
+        if let Err(error) = peer_recovery.tick() {
+            beale_host_log::error!("Peer recovery discovery remains pending: {error:#}");
+        }
+        #[cfg(feature = "swarms")]
+        {
+            let recovery_state = state.clone();
+            let cursor = recovery_cursor.clone();
+            match tokio::task::spawn_blocking(move || {
+                let leaders =
+                    super::distributed::recover_coordinators(&recovery_state, None, &cursor.0)?;
+                super::distributed::LocalWorkerHost::recover_retained(&recovery_state, None)?;
+                let workers =
+                    super::distributed::recover_local_workers(&recovery_state, None, &cursor.1)?;
+                super::distributed::local_allocation::reconcile(&recovery_state)?;
+                anyhow::Ok((leaders, workers))
+            })
+            .await
+            {
+                Ok(Ok(next)) => recovery_cursor = next,
+                _ => {
+                    beale_host_log::error!("Saved worker maintenance could not read host storage.")
+                }
+            }
+        }
         let now = now_ms();
         if state.db.interrupt_automation_runs(now).is_err() {
             beale_host_log::error!("Beale automation recovery could not read host storage.");
@@ -57,31 +105,26 @@ pub(super) async fn run_worker(state: SessionState) {
 }
 
 async fn execute_claim(state: SessionState, claim: AutomationClaim) {
-    let graph_id = super::graph_records::graph_id(&state.db, &claim.job_id)
-        .ok()
-        .flatten()
-        .unwrap_or_default();
-    let graph_config = super::graph_records::graph_config(&state.db, &claim.job_id)
-        .ok()
-        .flatten()
-        .and_then(|bytes| SessionGraphConfig::decode(bytes.as_slice()).ok())
-        .unwrap_or_default();
-    let mut main_seen = false;
-    let graph_models = graph_config
-        .models
-        .into_iter()
-        .filter(|item| {
-            if item.node_id != "main" {
-                true
-            } else if main_seen {
-                false
-            } else {
-                main_seen = true;
-                true
-            }
-        })
-        .collect();
+    if let Err(error) = super::ensure_local_execution(
+        &state.db,
+        &SubmitSessionTurnRequest {
+            session_id: claim.job_id.clone(),
+            ..Default::default()
+        },
+    ) {
+        if let Err(save_error) =
+            state
+                .db
+                .finish_automation_run(&claim.run_id, None, 3, error.message(), now_ms())
+        {
+            beale_host_log::error!("Could not save unsupported automation outcome: {save_error:#}");
+        }
+        return;
+    }
     let request = SubmitSessionTurnRequest {
+        swarm_destinations: vec![],
+        swarm_retention: None,
+        swarm_pacing: Vec::new(),
         workspace_id: claim.workspace_id,
         session_id: String::new(),
         provider: claim.provider,
@@ -93,12 +136,11 @@ async fn execute_claim(state: SessionState, claim: AutomationClaim) {
         goal_max_turns: claim.options.goal_max_turns,
         goal_max_duration_minutes: claim.options.goal_max_duration_minutes,
         repeat_preset: String::new(),
-        graph_id,
-        graph_models,
-        graph_node_concurrency: graph_config.concurrency,
+        swarm_id: String::new(),
+        swarm_models: vec![],
+        swarm_node_concurrency: vec![],
         agent_role: String::new(),
-        stage_duration_minutes: graph_config.stage_duration_minutes,
-        max_concurrent_workers: graph_config.max_concurrent_workers,
+        max_concurrent_workers: 0,
     };
     let heartbeat_state = state.clone();
     let heartbeat_id = claim.run_id.clone();
@@ -256,6 +298,7 @@ mod tests {
     use beale_contracts::{AUTOMATIONS_CANCEL_PATH, AUTOMATIONS_PATH};
     use beale_storage::{HostDatabase, SessionRow, TurnRow};
     use prost::Message;
+
     use tower::ServiceExt;
     use uuid::Uuid;
 

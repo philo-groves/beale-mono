@@ -251,16 +251,22 @@ impl RunningServer {
         bail!("too many MCP tool pages")
     }
 
-    pub(super) async fn call_tool(&mut self, name: &str, arguments: Value) -> Result<Value> {
+    pub(super) async fn call_tool_guarded(
+        &mut self,
+        name: &str,
+        arguments: Value,
+        before_dispatch: impl FnOnce() -> Result<()>,
+    ) -> Result<crate::GuardedToolResult> {
         ensure!(
             self.tool_names.iter().any(|tool| tool == name),
             "MCP tool is unavailable"
         );
+        ensure!(
+            arguments.is_object(),
+            "MCP tool arguments must be an object"
+        );
         let id = self.next_request_id;
-        self.next_request_id = self
-            .next_request_id
-            .checked_add(1)
-            .context("MCP request ID exhausted")?;
+        self.next_request_id = id.checked_add(1).context("MCP request ID exhausted")?;
         let mut params = if self.modern_protocol {
             modern_params()
         } else {
@@ -268,19 +274,33 @@ impl RunningServer {
         };
         params["name"] = json!(name);
         params["arguments"] = arguments;
+        ensure!(
+            serde_json::to_vec(&params)?.len() <= MAX_MESSAGE_BYTES,
+            "MCP request is too large"
+        );
+        before_dispatch()?;
         let response = timeout(
             Duration::from_secs(60),
             self.request(id, "tools/call", params),
         )
         .await
-        .context("MCP tool call timed out")??;
+        .context("MCP tool call timed out")
+        .and_then(|result| result);
+        let response = match response {
+            Ok(response) => response,
+            Err(error) => return Ok(crate::GuardedToolResult::OutcomeUnknown(error)),
+        };
         if let Some(error) = response.get("error") {
-            bail!("MCP tool error: {error}");
+            return Ok(crate::GuardedToolResult::Completed(
+                json!({"isError":true,"content":[{"type":"text","text":format!("MCP tool error: {error}")}]}),
+            ));
         }
-        response
-            .get("result")
-            .cloned()
-            .context("MCP tool result is missing")
+        match response.get("result") {
+            Some(result) => Ok(crate::GuardedToolResult::Completed(result.clone())),
+            None => Ok(crate::GuardedToolResult::OutcomeUnknown(anyhow::anyhow!(
+                "MCP tool result is missing"
+            ))),
+        }
     }
 
     async fn request(&mut self, id: i64, method: &str, params: Value) -> Result<Value> {

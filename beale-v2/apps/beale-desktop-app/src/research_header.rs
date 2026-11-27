@@ -136,38 +136,52 @@ fn tab(
     item
 }
 
-fn role_tab_label(role: beale_graphs::ProfileId, narrow: bool) -> &'static str {
+fn role_tab_label(role: beale_swarms::ProfileId, narrow: bool) -> &'static str {
     match role {
-        beale_graphs::ProfileId::DiscoveryHarness | beale_graphs::ProfileId::Discovery => {
+        beale_swarms::ProfileId::DiscoveryHarness | beale_swarms::ProfileId::Discovery => {
             if narrow { "Disc" } else { "Discovery" }
         }
-        beale_graphs::ProfileId::ValidationSystem | beale_graphs::ProfileId::Validation => {
+        beale_swarms::ProfileId::ValidationSystem | beale_swarms::ProfileId::Validation => {
             if narrow { "Valid" } else { "Validation" }
         }
-        beale_graphs::ProfileId::Reporter => {
+        beale_swarms::ProfileId::Reporter => {
             if narrow {
                 "Report"
             } else {
                 "Reporter"
             }
         }
-        beale_graphs::ProfileId::PatchGeneration => "Patch",
+        beale_swarms::ProfileId::PatchGeneration => "Patch",
         _ => role.label(),
     }
 }
 
-pub(crate) fn selected_role(state: &State, graph_id: &str) -> String {
-    let Some(graph) = beale_graphs::graph_definition(graph_id) else {
+pub(crate) fn swarm_definition(
+    state: &State,
+    swarm_id: &str,
+) -> Option<std::sync::Arc<beale_swarms::SwarmDefinition>> {
+    match state
+        .active_session
+        .as_ref()
+        .filter(|detail| detail.swarm_id == swarm_id)
+    {
+        Some(detail) => crate::sessions::swarm_definition(detail),
+        None => beale_swarms::swarm_definition(swarm_id),
+    }
+}
+
+pub(crate) fn selected_role(state: &State, swarm_id: &str) -> String {
+    let Some(graph) = swarm_definition(state, swarm_id) else {
         return "main".to_owned();
     };
     graph
         .nodes
         .iter()
         .copied()
-        .filter(|role| role.is_top_level())
+        .filter(|role| graph.is_top_level(*role))
         .find(|role| role.id() == state.session_agent_role)
-        .or_else(|| beale_graphs::entry_role(graph_id))
-        .unwrap_or(beale_graphs::ProfileId::Main)
+        .or_else(|| graph.entry_role())
+        .unwrap_or(beale_swarms::ProfileId::Leader)
         .id()
         .to_owned()
 }
@@ -175,16 +189,18 @@ pub(crate) fn selected_role(state: &State, graph_id: &str) -> String {
 pub(crate) fn sync_model_for_role(state: &mut State, role: &str) {
     let model = state.active_session.as_ref().and_then(|detail| {
         detail
-            .graph_models
+            .swarm_models
             .iter()
             .find(|model| model.node_id == role)
             .or_else(|| {
-                beale_graphs::entry_role(&detail.graph_id).and_then(|entry| {
-                    detail
-                        .graph_models
-                        .iter()
-                        .find(|model| model.node_id == entry.id())
-                })
+                crate::sessions::swarm_definition(detail)
+                    .and_then(|graph| graph.entry_role())
+                    .and_then(|entry| {
+                        detail
+                            .swarm_models
+                            .iter()
+                            .find(|model| model.node_id == entry.id())
+                    })
             })
             .cloned()
     });
@@ -242,28 +258,30 @@ pub(crate) fn tabs(state: &State, theme: ThemeStyle<'_>, window_width: f32) -> O
             || state.session_loading_id.is_some()
             || state.session_pending_prompt.is_some());
     let started = active_here || (state.active_session.is_none() && pending_here);
-    let graph_id = state
+    let swarm_id = state
         .active_session
         .as_ref()
         .filter(|_| active_here)
-        .map(|session| session.graph_id.as_str())
-        .unwrap_or(&state.new_research_graph_id);
-    let peer_graph = started && beale_graphs::is_peer_graph(graph_id);
+        .map(|session| session.swarm_id.as_str())
+        .unwrap_or(&state.new_research_swarm_id);
+    let saved = swarm_definition(state, swarm_id);
+    let graph = saved.as_deref();
+    let peer_graph = active_here && graph.is_some();
     let session_label = if started { "Main Agent" } else { "New Scan" };
     let compact = peer_graph && window_width < 1250.0;
     let narrow = peer_graph && window_width < 950.0;
-    let selected_role = peer_graph.then(|| selected_role(state, graph_id));
+    let selected_role = peer_graph.then(|| selected_role(state, swarm_id));
     let next_tab_active = !in_workspace
         && if peer_graph {
-            beale_graphs::graph_definition(graph_id)
-                .and_then(|graph| graph.nodes.iter().find(|role| role.is_top_level()))
+            graph
+                .and_then(|graph| graph.nodes.iter().find(|role| graph.is_top_level(**role)))
                 .is_some_and(|role| selected_role.as_deref() == Some(role.id()))
         } else {
             true
         };
     let next_tab_key = if peer_graph {
-        beale_graphs::graph_definition(graph_id)
-            .and_then(|graph| graph.nodes.iter().find(|role| role.is_top_level()))
+        graph
+            .and_then(|graph| graph.nodes.iter().find(|role| graph.is_top_level(**role)))
             .map(|role| format!("header-agent-tab-{}", role.id()))
     } else {
         Some("header-session-tab".to_owned())
@@ -334,12 +352,12 @@ pub(crate) fn tabs(state: &State, theme: ThemeStyle<'_>, window_width: f32) -> O
         .gap(2.0)
         .child(workspace_tab);
     if peer_graph {
-        if let Some(graph) = beale_graphs::graph_definition(graph_id) {
+        if let Some(graph) = graph {
             let roles: Vec<_> = graph
                 .nodes
                 .iter()
                 .copied()
-                .filter(|role| role.is_top_level())
+                .filter(|role| graph.is_top_level(*role))
                 .collect();
             for (index, role) in roles.iter().copied().enumerate() {
                 let role_id = role.id().to_owned();
@@ -357,7 +375,7 @@ pub(crate) fn tabs(state: &State, theme: ThemeStyle<'_>, window_width: f32) -> O
                     .as_ref()
                     .and_then(|detail| {
                         detail
-                            .graph_agents
+                            .swarm_agents
                             .iter()
                             .find(|agent| agent.role == role_id)
                     })
@@ -463,7 +481,7 @@ mod tests {
     use super::*;
     use crate::{AppearanceTheme, TextSize, view, visual_preview};
     use beale_contracts::v1::{
-        SessionGraphAgent, SessionStreamEvent, SessionStreamKind, SessionSubagentSummary,
+        SessionStreamEvent, SessionStreamKind, SessionSubagentSummary, SessionSwarmAgent,
         SessionToolSummary,
     };
     use rune::{Env, Runtime, TextEdit};
@@ -490,7 +508,10 @@ mod tests {
     fn header_activity_labels_follow_live_role_scoped_subagents() {
         let mut state = visual_preview::fixture("graph-session");
         assert_eq!(agent_activity_label(&state, "discovery", false), "Inactive");
-        state.active_session.as_mut().unwrap().graph_agents = vec![SessionGraphAgent {
+        state.active_session.as_mut().unwrap().swarm_agents = vec![SessionSwarmAgent {
+            id: String::new(),
+            parent_id: String::new(),
+            agent_kind: String::new(),
             role: "discovery".to_owned(),
             status: "working".to_owned(),
         }];
@@ -689,15 +710,17 @@ mod tests {
     #[test]
     fn pipeline_roles_have_distinct_navigable_tabs() {
         let mut state = visual_preview::fixture("session");
-        state.active_session.as_mut().unwrap().graph_id = beale_graphs::OPENAI_ID.to_owned();
+        state.active_session.as_mut().unwrap().swarm_id = beale_swarms::OAI_948_ID.to_owned();
+        state.active_session.as_mut().unwrap().swarm_template_json =
+            beale_swarms::template_snapshot(beale_swarms::OAI_948_ID).unwrap();
         let workspace_id = state.workspace_id.unwrap();
         let mut runtime = Runtime::new(state, view, (1100.0, 720.0), Env::new(true, 1.0));
         runtime.frame(0.0);
         for role in [
-            beale_graphs::ProfileId::Discovery,
-            beale_graphs::ProfileId::Validation,
-            beale_graphs::ProfileId::Reporter,
-            beale_graphs::ProfileId::PatchGeneration,
+            beale_swarms::ProfileId::Discovery,
+            beale_swarms::ProfileId::Validation,
+            beale_swarms::ProfileId::Reporter,
+            beale_swarms::ProfileId::PatchGeneration,
         ] {
             assert!(
                 runtime
@@ -717,9 +740,100 @@ mod tests {
     }
 
     #[test]
-    fn two_stage_graph_has_one_tab_per_peer() {
+    fn saved_swarm_views_validate_and_render_their_own_snapshot() {
         let mut state = visual_preview::fixture("session");
-        state.active_session.as_mut().unwrap().graph_id = beale_graphs::CLOUDFLARE_ID.to_owned();
+        let mut saved = beale_swarms::VDH_VVS_SWARM.snapshot.clone();
+        // Simulate a saved bundle with a different topology and profile revision.
+        saved.id = beale_swarms::BASIC_ID.into();
+        saved.revision = 2;
+        let mut definition = beale_swarms::VDH_VVS_SWARM.snapshot.workflow().unwrap();
+        definition.id = saved.id.clone();
+        definition.revision = 2;
+        definition.name = "Saved Example Swarm".into();
+        for node in &mut definition.nodes {
+            node.profile.revision = 2;
+        }
+        saved.definition = serde_json::to_value(definition).unwrap();
+        for profile in &mut saved.profiles {
+            profile.profile.revision = 2;
+            profile.instruction = "Saved example research instructions".into();
+        }
+        saved.leader_rule.revision = 2;
+        saved.leader_rule.instruction = "Saved example coordinator rule".into();
+        let mut detail = beale_contracts::v1::SessionDetail {
+            scoped_review_rules: Vec::new(),
+            summary: state.active_session.as_ref().unwrap().summary.clone(),
+            provider: 1,
+            method: 1,
+            model: "example-model".into(),
+            first_turn_number: 1,
+            swarm_id: saved.id.clone(),
+            swarm_template_json: serde_json::to_string(&saved).unwrap(),
+            swarm_agents: vec![SessionSwarmAgent {
+                id: String::new(),
+                parent_id: String::new(),
+                agent_kind: String::new(),
+                role: "discovery_harness".into(),
+                status: "idle".into(),
+            }],
+            ..Default::default()
+        };
+        assert!(crate::sessions::valid_detail(&detail));
+        assert_eq!(
+            crate::sessions::swarm_definition(&detail).unwrap().snapshot,
+            saved
+        );
+        let valid_json = detail.swarm_template_json.clone();
+        for malformed in ["", "{}"] {
+            detail.swarm_template_json = malformed.into();
+            assert!(!crate::sessions::valid_detail(&detail));
+        }
+        detail.swarm_template_json = valid_json;
+        let mut invalid = saved.clone();
+        invalid.profiles[0].profile.revision = 3;
+        detail.swarm_template_json = serde_json::to_string(&invalid).unwrap();
+        assert!(!crate::sessions::valid_detail(&detail));
+        detail.swarm_template_json = serde_json::to_string(&saved).unwrap();
+        state.active_session = Some(detail);
+        let mut runtime = Runtime::new(state, view, (1100.0, 720.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        assert!(runtime.find("header-agent-tab-discovery_harness").is_some());
+        assert!(runtime.find("header-agent-tab-research_deputy").is_none());
+        let label = runtime
+            .elements()
+            .into_iter()
+            .find(|item| item.key.as_deref() == Some("session-swarm-label"))
+            .unwrap();
+        assert_eq!(label.text.as_deref(), Some("Saved Example Swarm"));
+        click(&mut runtime, "header-agent-tab-validation_system");
+        assert_eq!(runtime.state.session_agent_role, "validation_system");
+        // Switching to another scan with the same bundle ID resolves its own view.
+        let detail = runtime.state.active_session.as_mut().unwrap();
+        detail.swarm_template_json =
+            beale_swarms::template_snapshot(beale_swarms::BASIC_ID).unwrap();
+        detail.swarm_agents.clear();
+        assert!(crate::sessions::valid_detail(detail));
+        let mut runtime = Runtime::new(
+            std::mem::take(&mut runtime.state),
+            view,
+            (1100.0, 720.0),
+            Env::new(true, 1.0),
+        );
+        runtime.frame(0.0);
+        assert!(runtime.find("header-agent-tab-research_deputy").is_some());
+        assert_eq!(
+            selected_role(&runtime.state, beale_swarms::BASIC_ID),
+            "leader"
+        );
+        assert_eq!(beale_swarms::BASIC_SWARM.name, "Basic Subagents");
+    }
+
+    #[test]
+    fn two_stage_swarm_has_one_tab_per_peer() {
+        let mut state = visual_preview::fixture("session");
+        state.active_session.as_mut().unwrap().swarm_id = beale_swarms::VDH_VVS_ID.to_owned();
+        state.active_session.as_mut().unwrap().swarm_template_json =
+            beale_swarms::template_snapshot(beale_swarms::VDH_VVS_ID).unwrap();
         let mut runtime = Runtime::new(state, view, (840.0, 720.0), Env::new(true, 1.0));
         runtime.frame(0.0);
         assert!(runtime.find("header-agent-tab-discovery_harness").is_some());
@@ -732,7 +846,9 @@ mod tests {
     #[test]
     fn pipeline_tabs_show_their_own_live_tools() {
         let mut state = visual_preview::fixture("session");
-        state.active_session.as_mut().unwrap().graph_id = beale_graphs::OPENAI_ID.to_owned();
+        state.active_session.as_mut().unwrap().swarm_id = beale_swarms::OAI_948_ID.to_owned();
+        state.active_session.as_mut().unwrap().swarm_template_json =
+            beale_swarms::template_snapshot(beale_swarms::OAI_948_ID).unwrap();
         state.session_busy = true;
         for role in ["discovery", "validation"] {
             state.session_live_events.push(SessionStreamEvent {
@@ -788,7 +904,7 @@ mod tests {
                         && item.text.as_deref() == Some("Inactive")
                 })
                 .collect();
-            assert_eq!(activity_text.len(), 5);
+            assert_eq!(activity_text.len(), 6);
             assert!(
                 activity_text.iter().all(|item| item.visible[2] > 0.0),
                 "{theme:?}: {activity_text:?}"

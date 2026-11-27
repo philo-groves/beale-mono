@@ -2,8 +2,21 @@
 
 pub mod findings;
 pub mod memories;
+pub mod pacing;
 pub mod research_tools;
 pub mod runbooks;
+pub mod swarm_allocation;
+pub mod swarm_container;
+pub mod swarm_files;
+pub mod swarm_findings;
+pub mod swarm_host;
+pub mod swarm_local;
+pub mod swarm_plugins;
+pub mod swarm_runbooks;
+pub mod swarm_ui;
+pub mod swarm_worker;
+pub mod swarm_workflows;
+pub mod swarms;
 pub mod workspace_logo;
 
 pub mod v1 {
@@ -741,10 +754,14 @@ pub mod v1 {
         UsageUpdated = 13,
         SubagentStarted = 14,
         SubagentCompleted = 15,
+        SwarmUpdated = 16,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct SessionStreamEvent {
+        /// Durable leader-session turn owning this live event; zero outside tagged streams.
+        #[prost(uint64, tag = "12")]
+        pub turn_number: u64,
         #[prost(enumeration = "SessionStreamKind", tag = "1")]
         pub kind: i32,
         #[prost(string, tag = "2")]
@@ -873,6 +890,11 @@ pub mod v1 {
 
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct SessionDetail {
+        /// Highest committed transcript turn included by this projection.
+        #[prost(uint64, tag = "29")]
+        pub committed_turn_number: u64,
+        #[prost(message, repeated, tag = "26")]
+        pub scoped_review_rules: Vec<PermissionRule>,
         #[prost(message, optional, tag = "1")]
         pub summary: Option<SessionSummary>,
         #[prost(message, repeated, tag = "2")]
@@ -888,11 +910,11 @@ pub mod v1 {
         #[prost(uint64, tag = "7")]
         pub first_turn_number: u64,
         #[prost(string, tag = "8")]
-        pub graph_id: String,
+        pub swarm_id: String,
         #[prost(message, repeated, tag = "9")]
-        pub graph_models: Vec<GraphNodeModel>,
+        pub swarm_models: Vec<SwarmNodeModel>,
         #[prost(message, repeated, tag = "10")]
-        pub graph_node_concurrency: Vec<GraphNodeConcurrency>,
+        pub swarm_node_concurrency: Vec<SwarmNodeConcurrency>,
         #[prost(uint64, tag = "11")]
         pub total_duration_ms: u64,
         #[prost(bool, tag = "12")]
@@ -911,19 +933,21 @@ pub mod v1 {
         #[prost(message, repeated, tag = "18")]
         pub model_usage: Vec<SessionModelUsage>,
         #[prost(message, repeated, tag = "19")]
-        pub graph_agents: Vec<SessionGraphAgent>,
+        pub swarm_agents: Vec<SessionSwarmAgent>,
         #[prost(message, repeated, tag = "20")]
-        pub graph_handoffs: Vec<SessionGraphHandoff>,
+        pub swarm_handoffs: Vec<SessionSwarmHandoff>,
         #[prost(message, repeated, tag = "21")]
         pub agent_metrics: Vec<SessionAgentMetrics>,
         #[prost(message, repeated, tag = "22")]
         pub subagents: Vec<SessionSubagentSummary>,
-        #[prost(uint32, tag = "23")]
-        pub stage_duration_minutes: u32,
         #[prost(string, tag = "24")]
-        pub graph_template_json: String,
+        pub swarm_template_json: String,
         #[prost(uint32, tag = "25")]
         pub max_concurrent_workers: u32,
+        #[prost(string, repeated, tag = "27")]
+        pub pacing_warnings: Vec<String>,
+        #[prost(string, tag = "28")]
+        pub swarm_overview_json: String,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -985,7 +1009,13 @@ pub mod v1 {
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
-    pub struct SessionGraphAgent {
+    pub struct SessionSwarmAgent {
+        #[prost(string, tag = "3")]
+        pub id: String,
+        #[prost(string, tag = "4")]
+        pub parent_id: String,
+        #[prost(string, tag = "5")]
+        pub agent_kind: String,
         #[prost(string, tag = "1")]
         pub role: String,
         #[prost(string, tag = "2")]
@@ -993,7 +1023,7 @@ pub mod v1 {
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
-    pub struct SessionGraphHandoff {
+    pub struct SessionSwarmHandoff {
         #[prost(string, tag = "1")]
         pub id: String,
         #[prost(string, tag = "2")]
@@ -1081,7 +1111,7 @@ pub mod v1 {
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
-    pub struct GraphNodeModel {
+    pub struct SwarmNodeModel {
         #[prost(string, tag = "1")]
         pub node_id: String,
         #[prost(enumeration = "ProviderId", tag = "2")]
@@ -1093,7 +1123,7 @@ pub mod v1 {
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
-    pub struct GraphNodeConcurrency {
+    pub struct SwarmNodeConcurrency {
         #[prost(string, tag = "1")]
         pub node_id: String,
         #[prost(uint32, tag = "2")]
@@ -1101,13 +1131,11 @@ pub mod v1 {
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
-    pub struct SessionGraphConfig {
+    pub struct SessionSwarmConfig {
         #[prost(message, repeated, tag = "1")]
-        pub models: Vec<GraphNodeModel>,
+        pub models: Vec<SwarmNodeModel>,
         #[prost(message, repeated, tag = "2")]
-        pub concurrency: Vec<GraphNodeConcurrency>,
-        #[prost(uint32, tag = "3")]
-        pub stage_duration_minutes: u32,
+        pub concurrency: Vec<SwarmNodeConcurrency>,
         #[prost(string, tag = "4")]
         pub template_json: String,
         #[prost(uint32, tag = "5")]
@@ -1115,7 +1143,7 @@ pub mod v1 {
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
-    pub struct GraphTemplate {
+    pub struct SwarmTemplate {
         #[prost(string, tag = "1")]
         pub id: String,
         #[prost(string, tag = "2")]
@@ -1125,9 +1153,9 @@ pub mod v1 {
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
-    pub struct ListGraphTemplatesResponse {
+    pub struct ListSwarmTemplatesResponse {
         #[prost(message, repeated, tag = "1")]
-        pub templates: Vec<GraphTemplate>,
+        pub templates: Vec<SwarmTemplate>,
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq, ::prost::Enumeration)]
@@ -1196,17 +1224,49 @@ pub mod v1 {
         #[prost(string, tag = "11")]
         pub repeat_preset: String,
         #[prost(string, tag = "12")]
-        pub graph_id: String,
+        pub swarm_id: String,
         #[prost(message, repeated, tag = "13")]
-        pub graph_models: Vec<GraphNodeModel>,
+        pub swarm_models: Vec<SwarmNodeModel>,
         #[prost(message, repeated, tag = "14")]
-        pub graph_node_concurrency: Vec<GraphNodeConcurrency>,
+        pub swarm_node_concurrency: Vec<SwarmNodeConcurrency>,
         #[prost(string, tag = "15")]
         pub agent_role: String,
-        #[prost(uint32, tag = "16")]
-        pub stage_duration_minutes: u32,
         #[prost(uint32, tag = "17")]
         pub max_concurrent_workers: u32,
+        #[prost(message, repeated, tag = "18")]
+        pub swarm_destinations: Vec<SwarmDestination>,
+        #[prost(message, optional, tag = "19")]
+        pub swarm_retention: Option<SwarmRetentionPolicy>,
+        #[prost(message, repeated, tag = "20")]
+        pub swarm_pacing: Vec<SwarmPacingTarget>,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct SwarmPacingTarget {
+        #[prost(string, tag = "1")]
+        pub budget_group_id: String,
+        #[prost(uint32, tag = "2")]
+        pub interval_seconds: u32,
+        #[prost(string, tag = "3")]
+        pub unit: String,
+        #[prost(string, tag = "4")]
+        pub denomination: String,
+        #[prost(uint64, tag = "5")]
+        pub amount: u64,
+    }
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct SwarmDestination {
+        #[prost(string, tag = "1")]
+        pub host_id: String,
+        #[prost(string, tag = "2")]
+        pub configuration_id: String,
+    }
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct SwarmRetentionPolicy {
+        #[prost(uint64, tag = "1")]
+        pub ended_scan_seconds: u64,
+        #[prost(uint64, tag = "2")]
+        pub storage_reserve_bytes: u64,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1511,10 +1571,8 @@ pub mod v1 {
         pub id: String,
         #[prost(string, tag = "2")]
         pub name: String,
-        #[prost(bool, tag = "3")]
-        pub allow_locally: bool,
-        #[prost(bool, tag = "4")]
-        pub allow_in_vms: bool,
+        #[prost(enumeration = "ResearchToolPreference", tag = "5")]
+        pub preference: i32,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1649,6 +1707,14 @@ pub mod v1 {
         pub can_run: bool,
     }
 
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum ResearchToolPreference {
+        Allow = 0,
+        Recommend = 1,
+        Priority = 2,
+    }
+
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct FleetResearchTool {
         #[prost(string, tag = "1")]
@@ -1659,10 +1725,8 @@ pub mod v1 {
         pub category: String,
         #[prost(string, tag = "4")]
         pub description: String,
-        #[prost(bool, tag = "5")]
-        pub allow_locally: bool,
-        #[prost(bool, tag = "6")]
-        pub allow_in_vms: bool,
+        #[prost(enumeration = "ResearchToolPreference", tag = "8")]
+        pub preference: i32,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1675,10 +1739,8 @@ pub mod v1 {
     pub struct FleetSetResearchToolSettingsRequest {
         #[prost(string, tag = "1")]
         pub id: String,
-        #[prost(bool, tag = "2")]
-        pub allow_locally: bool,
-        #[prost(bool, tag = "3")]
-        pub allow_in_vms: bool,
+        #[prost(enumeration = "ResearchToolPreference", tag = "5")]
+        pub preference: i32,
     }
 }
 
@@ -1692,8 +1754,7 @@ mod fleet_allowed_tools_tests {
         let allowed = FleetAllowedResearchTool {
             id: "ripgrep".to_owned(),
             name: "ripgrep".to_owned(),
-            allow_locally: true,
-            allow_in_vms: false,
+            preference: 1,
         };
         let encoded = allowed.encode_to_vec();
         let mut bytes = vec![0x42, encoded.len() as u8];
@@ -1725,7 +1786,7 @@ mod fleet_virtual_machine_tests {
 }
 
 pub const PROTOCOL_MAJOR: u32 = 2;
-pub const PROTOCOL_MINOR: u32 = 36;
+pub const PROTOCOL_MINOR: u32 = 49;
 pub const SERVICE_NAME: &str = "beale-app-server";
 pub const HEALTH_PATH: &str = "/v1/health";
 pub const AUTH_STATUS_PATH: &str = "/v1/providers/status";
@@ -1755,7 +1816,7 @@ pub const WORKSPACE_SURFACE_THREAT_MODEL_PATH: &str =
     "/v1/workspaces/{id}/surfaces/{surface_id}/threat-model";
 pub const WORKSPACE_RULES_PATH: &str = "/v1/workspaces/{id}/rules";
 pub const SESSIONS_PATH: &str = "/v1/sessions";
-pub const GRAPH_TEMPLATES_PATH: &str = "/v1/graphs/templates";
+pub const SWARM_TEMPLATES_PATH: &str = "/v1/swarms/templates";
 pub const SESSION_DETAIL_PATH: &str = "/v1/sessions/{id}";
 pub const SESSION_ARCHIVE_PATH: &str = "/v1/sessions/{id}/archive";
 pub const SESSION_RESTORE_PATH: &str = "/v1/sessions/{id}/restore";
@@ -1822,7 +1883,7 @@ pub fn control_proof(token: &str, nonce: &[u8]) -> [u8; 32] {
 #[cfg(test)]
 mod tracking_tests {
     use super::v1::{
-        GraphTemplate, ListGraphTemplatesResponse, SessionDetail, SessionGraphConfig,
+        ListSwarmTemplatesResponse, SessionDetail, SessionSwarmConfig, SwarmTemplate,
         TrackingModelDay,
     };
     use prost::Message;
@@ -1855,6 +1916,7 @@ mod tracking_tests {
             event
         );
         let detail = SessionDetail {
+            scoped_review_rules: Vec::new(),
             subagents: vec![summary],
             ..Default::default()
         };
@@ -1974,12 +2036,12 @@ mod tracking_tests {
     #[test]
     fn scan_worker_budget_round_trips_and_old_messages_default_to_zero() {
         use crate::v1::SubmitSessionTurnRequest;
-        let config = SessionGraphConfig {
+        let config = SessionSwarmConfig {
             max_concurrent_workers: 7,
             ..Default::default()
         };
         assert_eq!(
-            SessionGraphConfig::decode(config.encode_to_vec().as_slice()).unwrap(),
+            SessionSwarmConfig::decode(config.encode_to_vec().as_slice()).unwrap(),
             config
         );
         let request = SubmitSessionTurnRequest {
@@ -1991,6 +2053,7 @@ mod tracking_tests {
             request
         );
         let detail = SessionDetail {
+            scoped_review_rules: Vec::new(),
             max_concurrent_workers: 7,
             ..Default::default()
         };
@@ -1999,7 +2062,7 @@ mod tracking_tests {
             detail
         );
         assert_eq!(
-            SessionGraphConfig::decode(&[][..])
+            SessionSwarmConfig::decode(&[][..])
                 .unwrap()
                 .max_concurrent_workers,
             0
@@ -2019,38 +2082,41 @@ mod tracking_tests {
     }
 
     #[test]
-    fn custom_graph_snapshot_round_trips_on_the_wire() {
+    fn custom_swarm_snapshot_round_trips_on_the_wire() {
         let snapshot = "{\"id\":\"example_review\"}".to_owned();
-        let config = SessionGraphConfig {
+        let config = SessionSwarmConfig {
             template_json: snapshot.clone(),
             ..Default::default()
         };
         assert_eq!(
-            SessionGraphConfig::decode(config.encode_to_vec().as_slice())
+            SessionSwarmConfig::decode(config.encode_to_vec().as_slice())
                 .unwrap()
                 .template_json,
             snapshot
         );
-        let listing = ListGraphTemplatesResponse {
-            templates: vec![GraphTemplate {
+        let listing = ListSwarmTemplatesResponse {
+            templates: vec![SwarmTemplate {
                 id: "custom:example_review:example".to_owned(),
                 name: "Example Review".to_owned(),
                 definition_json: snapshot.clone(),
             }],
         };
         assert_eq!(
-            ListGraphTemplatesResponse::decode(listing.encode_to_vec().as_slice()).unwrap(),
+            ListSwarmTemplatesResponse::decode(listing.encode_to_vec().as_slice()).unwrap(),
             listing
         );
         let detail = SessionDetail {
-            graph_template_json: snapshot,
+            scoped_review_rules: Vec::new(),
+            swarm_template_json: snapshot,
             ..Default::default()
         };
         assert_eq!(
             SessionDetail::decode(detail.encode_to_vec().as_slice())
                 .unwrap()
-                .graph_template_json,
-            detail.graph_template_json
+                .swarm_template_json,
+            detail.swarm_template_json
         );
     }
 }
+
+pub mod tool_error;

@@ -172,6 +172,80 @@ pub fn contained_command(program: impl AsRef<OsStr>) -> Command {
     command
 }
 
+/// Explicit Docker worker entry only. The container is the outer managed
+/// execution boundary; a dedicated group also retains normal command cleanup.
+#[cfg(target_os = "linux")]
+static CONTAINER_WORKER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(not(windows))]
+pub(crate) fn is_container_worker() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        CONTAINER_WORKER.load(std::sync::atomic::Ordering::Acquire)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub fn establish_container_worker_group() -> std::io::Result<()> {
+    // SAFETY: setpgid(0,0) changes only this process's group to its own PID.
+    if unsafe { libc::setpgid(0, 0) } != 0 {
+        // A container runtime may already have made this process a session
+        // leader; accept that case only after checking the exact group.
+        require_worker_group()?;
+    }
+    require_worker_group()?;
+    CONTAINER_WORKER.store(true, std::sync::atomic::Ordering::Release);
+    Ok(())
+}
+
+/// A dedicated worker must own its process group on Unix. Target commands stay
+/// in this group so the supervisor can confirm their termination with the worker.
+pub fn require_worker_group() -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        // SAFETY: these calls only read the current process and group IDs.
+        if unsafe { libc::getpgrp() != libc::getpid() } {
+            return Err(std::io::Error::other(
+                "worker must be launched in its own process group",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Retains normal environment scrubbing while keeping Unix worker commands in
+/// the dedicated worker group. Only the worker entry point uses this policy.
+pub fn retain_worker_group(command: &mut Command) -> std::io::Result<()> {
+    require_worker_group()?;
+    #[cfg(unix)]
+    {
+        command.process_group(std::process::id() as i32);
+    }
+    #[cfg(not(unix))]
+    let _ = command;
+    Ok(())
+}
+
+/// Finish the dedicated Unix worker's entire managed group, including any
+/// background commands. The supervisor observes termination independently.
+/// Windows workers rely on the owning supervisor's job-object termination.
+pub fn terminate_worker_group() -> std::io::Result<()> {
+    require_worker_group()?;
+    #[cfg(unix)]
+    {
+        // SAFETY: require_worker_group proved this process owns the group. This
+        // intentionally terminates the worker itself along with its descendants.
+        if unsafe { libc::killpg(libc::getpgrp(), libc::SIGKILL) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
 /// Removes inherited credential-like variables while keeping the rest of the
 /// environment. Used for operator-installed plugin servers, which may rely on
 /// toolchain variables outside the tool allowlist.
@@ -194,6 +268,67 @@ pub struct ProcessTree {
 }
 
 impl ProcessTree {
+    /// Requires a process-tree handle before a trusted worker is released from
+    /// its startup handshake. The caller must kill the child if this fails.
+    /// This tracks managed descendants; it is not an OS isolation boundary.
+    pub fn attach_required(child: &Child) -> std::io::Result<Self> {
+        let tree = Self::attach(child);
+        #[cfg(unix)]
+        if tree.group.is_some() {
+            return Ok(tree);
+        }
+        #[cfg(windows)]
+        if let Some(job) = &tree.job {
+            job.kill_on_close()?;
+            return Ok(tree);
+        }
+        Err(std::io::Error::other(
+            "worker process-tree ownership unavailable",
+        ))
+    }
+
+    /// A fresh host-generated name permits recovery after the supervisor exits.
+    /// The caller persists this identity and holds exclusive launch ownership
+    /// before starting a process. Never attach to an already existing named job.
+    pub fn attach_recoverable(child: &Child, key: uuid::Uuid) -> std::io::Result<Self> {
+        #[cfg(windows)]
+        {
+            let handle = child
+                .raw_handle()
+                .ok_or_else(|| std::io::Error::other("worker exited before attachment"))?;
+            let job = job::Job::assign_named(handle, key)?;
+            job.kill_on_close()?;
+            Ok(Self {
+                job: Some(job),
+                armed: true,
+            })
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = key;
+            Self::attach_required(child)
+        }
+    }
+
+    /// Only call while holding the saved launch's exclusive host lock. An absent
+    /// Windows job proves that no associated managed processes remain. Other
+    /// backends require their own durable termination evidence.
+    pub fn recover_terminated(key: uuid::Uuid) -> std::io::Result<bool> {
+        #[cfg(windows)]
+        {
+            let Some(job) = job::Job::open_named(key)? else {
+                return Ok(true);
+            };
+            job.terminate()?;
+            job.is_empty()
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = key;
+            Ok(false)
+        }
+    }
+
     /// Tracks the process tree rooted at a child started by [`contained_command`].
     pub fn attach(child: &Child) -> Self {
         Self {
@@ -205,9 +340,69 @@ impl ProcessTree {
         }
     }
 
-    /// Leaves background descendants running after the root exited normally.
+    /// Releases ordinary attachments after normal root exit. Strict worker
+    /// attachments retain Windows kill-on-close cleanup and must instead use
+    /// termination confirmation before releasing execution ownership.
     pub fn release(mut self) {
         self.armed = false;
+    }
+
+    /// Requests termination without discarding the handle needed to confirm it.
+    /// A successful request is not confirmation that descendants have exited.
+    pub fn request_termination(&self) -> std::io::Result<()> {
+        #[cfg(unix)]
+        if let Some(group) = self.group {
+            // SAFETY: the group belongs to the child created by contained_command.
+            if unsafe { libc::killpg(group, libc::SIGKILL) } == 0 {
+                return Ok(());
+            }
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::ESRCH) {
+                return Ok(());
+            }
+            return Err(error);
+        }
+        #[cfg(windows)]
+        if let Some(job) = &self.job {
+            return job.terminate();
+        }
+        Err(std::io::Error::other(
+            "worker process-tree ownership unavailable",
+        ))
+    }
+
+    /// Confirms an empty managed tree, then disarms its cleanup handle. Root
+    /// exit alone does not imply that background descendants have ended.
+    pub fn confirm_terminated(&mut self) -> std::io::Result<bool> {
+        if !self.armed {
+            return Ok(true);
+        }
+        #[cfg(unix)]
+        if let Some(group) = self.group {
+            // SAFETY: signal zero tests existence without signaling processes.
+            if unsafe { libc::killpg(group, 0) } == 0 {
+                return Ok(false);
+            }
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() != Some(libc::ESRCH) {
+                return Err(error);
+            }
+            self.group = None;
+            self.armed = false;
+            return Ok(true);
+        }
+        #[cfg(windows)]
+        if let Some(job) = &self.job {
+            if !job.is_empty()? {
+                return Ok(false);
+            }
+            self.job = None;
+            self.armed = false;
+            return Ok(true);
+        }
+        Err(std::io::Error::other(
+            "worker process-tree ownership unavailable",
+        ))
     }
 
     fn kill(&mut self) {
@@ -221,7 +416,7 @@ impl ProcessTree {
         }
         #[cfg(windows)]
         if let Some(job) = self.job.take() {
-            job.terminate();
+            let _ = job.terminate();
         }
     }
 }
@@ -238,9 +433,18 @@ impl Drop for ProcessTree {
 mod job {
     use std::os::windows::io::RawHandle;
     use windows_sys::Win32::{
-        Foundation::{CloseHandle, HANDLE},
-        System::JobObjects::{AssignProcessToJobObject, CreateJobObjectW, TerminateJobObject},
+        Foundation::{
+            CloseHandle, ERROR_ALREADY_EXISTS, ERROR_FILE_NOT_FOUND, GetLastError, HANDLE,
+        },
+        System::JobObjects::{
+            AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+            JobObjectBasicAccountingInformation, JobObjectExtendedLimitInformation, OpenJobObjectW,
+            QueryInformationJobObject, SetInformationJobObject, TerminateJobObject,
+        },
     };
+
+    use windows_sys::Win32::System::SystemServices::{JOB_OBJECT_QUERY, JOB_OBJECT_TERMINATE};
 
     /// An owned job object handle. Closing it does not end its processes.
     pub(super) struct Job(HANDLE);
@@ -267,11 +471,97 @@ mod job {
             Some(job)
         }
 
-        pub(super) fn terminate(&self) {
-            // SAFETY: the handle is a valid job object owned by this value.
-            unsafe {
-                TerminateJobObject(self.0, 1);
+        fn name(key: uuid::Uuid) -> Vec<u16> {
+            format!("Global\\BealeWorker-{}", key.simple())
+                .encode_utf16()
+                .chain(Some(0))
+                .collect()
+        }
+
+        pub(super) fn assign_named(process: RawHandle, key: uuid::Uuid) -> std::io::Result<Self> {
+            let name = Self::name(key);
+            // SAFETY: a terminated UTF-16 name and default non-inheritable security.
+            let handle = unsafe { CreateJobObjectW(std::ptr::null(), name.as_ptr()) };
+            if handle.is_null() {
+                return Err(std::io::Error::last_os_error());
             }
+            // SAFETY: capture the thread-local result before another Win32 call.
+            let existed = unsafe { GetLastError() } == ERROR_ALREADY_EXISTS;
+            let job = Self(handle);
+            if existed {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    "worker job identity already exists",
+                ));
+            }
+            // SAFETY: the process handle is borrowed from a live tokio child.
+            if unsafe { AssignProcessToJobObject(job.0, process as HANDLE) } == 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(job)
+        }
+
+        pub(super) fn open_named(key: uuid::Uuid) -> std::io::Result<Option<Self>> {
+            let name = Self::name(key);
+            // SAFETY: valid terminated name; the returned handle is owned here.
+            let handle = unsafe {
+                OpenJobObjectW(JOB_OBJECT_QUERY | JOB_OBJECT_TERMINATE, 0, name.as_ptr())
+            };
+            if !handle.is_null() {
+                return Ok(Some(Self(handle)));
+            }
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() == Some(ERROR_FILE_NOT_FOUND as i32) {
+                return Ok(None);
+            }
+            Err(error)
+        }
+
+        pub(super) fn terminate(&self) -> std::io::Result<()> {
+            // SAFETY: the handle is a valid job object owned by this value.
+            if unsafe { TerminateJobObject(self.0, 1) } == 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        }
+
+        pub(super) fn kill_on_close(&self) -> std::io::Result<()> {
+            // SAFETY: these plain Windows API structs accept all-zero initialization.
+            let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            // SAFETY: the owned handle and sized struct pointer are valid for the call.
+            if unsafe {
+                SetInformationJobObject(
+                    self.0,
+                    JobObjectExtendedLimitInformation,
+                    (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+                    std::mem::size_of_val(&limits) as u32,
+                )
+            } == 0
+            {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        }
+
+        pub(super) fn is_empty(&self) -> std::io::Result<bool> {
+            // SAFETY: the API writes this plain output struct after validating its size.
+            let mut accounting: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION =
+                unsafe { std::mem::zeroed() };
+            // SAFETY: output points to writable storage of the supplied size; the handle is owned.
+            if unsafe {
+                QueryInformationJobObject(
+                    self.0,
+                    JobObjectBasicAccountingInformation,
+                    (&mut accounting as *mut JOBOBJECT_BASIC_ACCOUNTING_INFORMATION).cast(),
+                    std::mem::size_of_val(&accounting) as u32,
+                    std::ptr::null_mut(),
+                )
+            } == 0
+            {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(accounting.ActiveProcesses == 0)
         }
     }
 
@@ -288,6 +578,19 @@ mod job {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_process_tree_handle_cannot_confirm_termination() {
+        let mut tree = ProcessTree {
+            #[cfg(unix)]
+            group: None,
+            #[cfg(windows)]
+            job: None,
+            armed: true,
+        };
+        assert!(tree.request_termination().is_err());
+        assert!(tree.confirm_terminated().is_err());
+    }
 
     fn vars(items: &[(&str, &str)]) -> Vec<(OsString, OsString)> {
         items

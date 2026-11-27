@@ -8,13 +8,20 @@ use std::{
     time::Duration,
 };
 
+pub mod fleet_allocation;
+pub mod fleet_coordination;
+pub mod fleet_executions;
+pub mod provider_accounting;
 mod schema;
+pub mod swarm_files;
+pub mod swarm_state;
+pub mod worker_spool;
 /// The SQLite binding features use for their own tables and turn hooks.
 pub use rusqlite;
 pub use schema::{HOST_MIGRATIONS, HOST_OWNER};
 
 #[derive(Clone)]
-pub struct HostDatabase(Arc<Mutex<Connection>>);
+pub struct HostDatabase(Arc<Mutex<Connection>>, bool);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WorkspaceRow {
@@ -363,6 +370,8 @@ pub struct TurnActivity<'a> {
 
 #[derive(Default)]
 pub struct TurnMetadata<'a> {
+    /// Full model input when it differs from the user-facing transcript text.
+    pub model_prompt: Option<&'a str>,
     pub provider_context_json: Option<&'a str>,
     /// Top-level role of a peer agent session turn; `None` for ordinary turns.
     pub agent_role: Option<&'a str>,
@@ -435,7 +444,25 @@ impl HostDatabase {
         connection.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;")?;
         schema::ensure_registry(&connection)?;
         schema::apply(&mut connection, schema::HOST_OWNER, schema::HOST_MIGRATIONS)?;
-        Ok(Self(Arc::new(Mutex::new(connection))))
+        Ok(Self(Arc::new(Mutex::new(connection)), false))
+    }
+
+    /// Pins a read-only WAL snapshot for a composite host projection. The separate
+    /// connection lets writers commit while all readers of this handle see one version.
+    pub fn read_snapshot(&self) -> Result<Self> {
+        let path = self.with_connection(|c| {
+            c.path()
+                .map(str::to_owned)
+                .context("host database has no file")
+        })?;
+        let connection =
+            Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        connection.busy_timeout(Duration::from_secs(5))?;
+        connection.execute_batch("PRAGMA query_only = ON; BEGIN DEFERRED;")?;
+        connection.query_row("SELECT count(*) FROM sqlite_schema", [], |row| {
+            row.get::<_, i64>(0)
+        })?;
+        Ok(Self(Arc::new(Mutex::new(connection)), true))
     }
 
     pub fn session_model_usage(&self, session_id: &str) -> Result<Vec<ModelUsageRow>> {
@@ -676,7 +703,7 @@ impl HostDatabase {
         })
     }
 
-    pub fn graph_provider_context(&self, session_id: &str, role: &str) -> Result<Option<String>> {
+    pub fn swarm_provider_context(&self, session_id: &str, role: &str) -> Result<Option<String>> {
         self.with_connection(|connection| {
             connection
                 .query_row(
@@ -1089,7 +1116,18 @@ impl HostDatabase {
         })
     }
 
-    pub fn graph_agent_turns(&self, session_id: &str, role: &str) -> Result<Vec<TurnRow>> {
+    /// Host-only context reconstruction; never projected into client transcripts.
+    pub fn session_model_prompts(
+        &self,
+        session_id: &str,
+    ) -> Result<std::collections::HashMap<i64, String>> {
+        self.with_connection(|db| {
+            let mut statement = db.prepare("SELECT number,model_prompt FROM (SELECT number,model_prompt FROM session_turns WHERE session_id=?1 ORDER BY number DESC LIMIT 64) WHERE model_prompt IS NOT NULL")?;
+            Ok(statement.query_map([session_id], |row| Ok((row.get(0)?, row.get(1)?)))?.collect::<rusqlite::Result<_>>()?)
+        })
+    }
+
+    pub fn swarm_agent_turns(&self, session_id: &str, role: &str) -> Result<Vec<TurnRow>> {
         self.with_connection(|connection| {
             let mut statement = connection.prepare(
                 "SELECT number,provider,method,model,prompt,answer,duration_ms,internal_prompt
@@ -1107,7 +1145,7 @@ impl HostDatabase {
         })
     }
 
-    pub fn graph_recent_turns(&self, session_id: &str) -> Result<Vec<TurnRow>> {
+    pub fn swarm_recent_turns(&self, session_id: &str) -> Result<Vec<TurnRow>> {
         self.with_connection(|connection| {
             let mut statement = connection.prepare(
                 "SELECT number,provider,method,model,prompt,answer,duration_ms,internal_prompt
@@ -1158,8 +1196,7 @@ impl HostDatabase {
             connection
                 .query_row(
                     "SELECT EXISTS(SELECT 1 FROM session_tool_calls
-                 WHERE session_id = ?1 AND (name IN ('graph_delegate','graph_subagents_spawn','runbook_run')
-                 OR (name = 'graph_handoff' AND is_error = 0)
+                 WHERE session_id = ?1 AND (name IN ('swarm_spawn_subagent','runbook_run')
                  OR (is_error = 0 AND name IN ('memory_create', 'memory_save', 'lead_create',
                      'finding_create', 'findings_create', 'claim_create', 'runbook_create', 'runbook_edit', 'surface_add', 'surface_save',
                      'surface_threat_model_edit'))))",
@@ -1477,6 +1514,7 @@ impl HostDatabase {
         metadata: TurnMetadata<'_>,
     ) -> Result<()> {
         let TurnMetadata {
+            model_prompt,
             provider_context_json,
             agent_role,
             model_usage,
@@ -1492,7 +1530,9 @@ impl HostDatabase {
             "repeat requires a new session"
         );
         ensure!(
-            agent_role.is_none_or(|role| !role.is_empty() && role.len() <= 64),
+            agent_role.is_none_or(
+                |role| !role.is_empty() && role.len() <= beale_contracts::swarms::MAX_ID_BYTES
+            ),
             "invalid agent role"
         );
         let automation_next = repeat_preset
@@ -1507,14 +1547,14 @@ impl HostDatabase {
                 )?;
             }
             transaction.execute(
-                "INSERT INTO session_turns(session_id, number, provider, method, model, prompt, answer, duration_ms, internal_prompt, agent_role)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-                params![session.id, turn.number, turn.provider, turn.method, turn.model, turn.prompt, turn.answer, turn.duration_ms, turn.internal_prompt, agent_role],
+                "INSERT INTO session_turns(session_id, number, provider, method, model, prompt, answer, duration_ms, internal_prompt, agent_role, model_prompt)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                params![session.id, turn.number, turn.provider, turn.method, turn.model, turn.prompt, turn.answer, turn.duration_ms, turn.internal_prompt, agent_role, model_prompt],
             )?;
             if let Some(model_usage) = model_usage {
                 for (ordinal, item) in model_usage.iter().enumerate() {
                     ensure!(!item.agent_id.is_empty() && item.agent_id.len() <= 64
-                        && item.model.len() <= 200 && item.role.len() <= 20
+                        && item.model.len() <= 200 && item.role.len() <= beale_contracts::swarms::MAX_ID_BYTES
                         && item.duration_ms >= 0 && item.observed_at_ms >= 0
                         && item.input_tokens.is_none_or(|value| (0..=1_000_000_000_000).contains(&value))
                         && item.output_tokens.is_none_or(|value| (0..=1_000_000_000_000).contains(&value))
@@ -1563,7 +1603,7 @@ impl HostDatabase {
             for child in child_turns {
                 ensure!(
                     !child.agent_id.is_empty() && child.agent_id.len() <= 64
-                        && child.role.len() <= 32 && child.task.len() <= 16_384
+                        && child.role.len() <= beale_contracts::swarms::MAX_ID_BYTES && child.task.len() <= 16_384
                         && child.completed_at_ms >= 0,
                     "invalid child transcript"
                 );
@@ -2195,13 +2235,13 @@ mod tests {
         .unwrap();
         assert_eq!(example_markers(&db), ["kept"]);
         assert_eq!(
-            db.graph_agent_turns(&session.id, "discovery")
+            db.swarm_agent_turns(&session.id, "discovery")
                 .unwrap()
                 .len(),
             1
         );
         assert_eq!(
-            db.graph_provider_context(&session.id, "discovery")
+            db.swarm_provider_context(&session.id, "discovery")
                 .unwrap()
                 .as_deref(),
             Some("[]")
@@ -2213,7 +2253,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn long_graph_turn_commits_usage_and_child_transcript_without_work_quota() {
+    fn long_swarm_turn_commits_usage_and_child_transcript_without_work_quota() {
         let root = root();
         let db = HostDatabase::open(&root).unwrap();
         let session = SessionRow {
@@ -2223,10 +2263,11 @@ mod tests {
             created_at_ms: 1,
             last_message_at_ms: 2,
         };
+        let profile = "p".repeat(beale_contracts::swarms::MAX_ID_BYTES);
         let usage = (0..513)
             .map(|ordinal| ModelUsageRow {
                 agent_id: "scout-example".to_owned(),
-                role: "scout".to_owned(),
+                role: profile.clone(),
                 provider: 1,
                 method: 1,
                 model: "example-model".to_owned(),
@@ -2240,7 +2281,7 @@ mod tests {
             .collect::<Vec<_>>();
         let child = ChildTurnRow {
             agent_id: "scout-example".to_owned(),
-            role: "scout".to_owned(),
+            role: profile.clone(),
             task: "Inspect a synthetic component".to_owned(),
             result: "x".repeat(65_537),
             is_error: false,
@@ -2269,6 +2310,7 @@ mod tests {
             },
             None,
             TurnMetadata {
+                agent_role: Some(&profile),
                 model_usage: Some(&usage),
                 child_turns: &[child],
                 ..Default::default()
@@ -2276,6 +2318,42 @@ mod tests {
         )
         .unwrap();
         assert_eq!(db.session_model_usage(&session.id).unwrap().len(), 513);
+        assert!(
+            db.session_model_usage(&session.id)
+                .unwrap()
+                .iter()
+                .all(|row| row.role == profile)
+        );
+        let mut invalid_usage = usage[0].clone();
+        invalid_usage.role.push('p');
+        assert!(
+            db.append_turn_with_metadata(
+                &session,
+                &TurnRow {
+                    number: 2,
+                    provider: 1,
+                    method: 1,
+                    model: "example-model".into(),
+                    prompt: "Example".into(),
+                    answer: "Example".into(),
+                    duration_ms: 0,
+                    internal_prompt: false,
+                },
+                false,
+                TurnActivity {
+                    tools: &[],
+                    reasoning: &[],
+                    commentary: &[]
+                },
+                None,
+                TurnMetadata {
+                    model_usage: Some(&[invalid_usage]),
+                    ..Default::default()
+                }
+            )
+            .is_err()
+        );
+        assert_eq!(db.session(&session.id).unwrap().unwrap().turns.len(), 1);
         let saved: (i64, i64, i64) = db.with_connection(|connection| {
             connection.query_row(
                 "SELECT length(result),length(messages_json),length(reasoning_json) FROM session_child_turns WHERE session_id=?1",

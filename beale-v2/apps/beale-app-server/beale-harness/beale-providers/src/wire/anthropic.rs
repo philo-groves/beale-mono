@@ -76,6 +76,7 @@ pub(super) async fn read_stream(
                                 })
                         })
                         .filter(|&count| count <= 1_000_000_000_000);
+                    crate::pacing::observe_usage(input_tokens, output_tokens, cache_read_tokens)?;
                 }
                 "content_block_start" => {
                     let index = event["index"]
@@ -167,6 +168,7 @@ pub(super) async fn read_stream(
                         .and_then(Value::as_u64)
                         .filter(|&count| count <= 1_000_000_000_000)
                         .or(output_tokens);
+                    crate::pacing::observe_usage(input_tokens, output_tokens, cache_read_tokens)?;
                 }
                 "message_stop" => {
                     completed = true;

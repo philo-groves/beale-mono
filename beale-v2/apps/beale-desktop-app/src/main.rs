@@ -42,6 +42,7 @@ mod sessions;
 mod settings_scroll;
 mod subagent_canvas;
 mod surface_canvas;
+mod swarm_controls;
 mod token_charts;
 mod tracking_data;
 mod tracking_view;
@@ -245,7 +246,7 @@ enum ModelRole {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SelectionMenu {
     GoalMode,
-    SessionGraph,
+    SessionSwarm,
     Repeat,
     ResearchWorkspace,
     ResearchWorkspaceHeading,
@@ -637,12 +638,12 @@ struct State {
     new_research_goal_mode: bool,
     new_research_goal_max_turns: TextEdit,
     new_research_goal_max_duration_minutes: TextEdit,
-    new_research_graph_id: String,
-    custom_graph_templates: Vec<beale_contracts::v1::GraphTemplate>,
-    new_research_stage_duration_minutes: TextEdit,
-    new_research_graph_models: HashMap<beale_graphs::ProfileId, Vec<new_research::ModelSelection>>,
-    graph_models_group: Option<bool>,
-    graph_editor: Option<new_research::GraphEditor>,
+    new_research_swarm_id: String,
+    swarm_controls: swarm_controls::Controls,
+    custom_swarm_templates: Vec<beale_contracts::v1::SwarmTemplate>,
+    new_research_swarm_models: HashMap<beale_swarms::ProfileId, Vec<new_research::ModelSelection>>,
+    swarm_models_group: Option<bool>,
+    swarm_editor: Option<new_research::SwarmEditor>,
     quick_chat_open: bool,
     quick_chat_draft: TextEdit,
     quick_chat_input_history: input_history::InputHistory,
@@ -672,10 +673,13 @@ struct State {
     session_loading_id: Option<String>,
     session_busy: bool,
     session_stop_id: Option<String>,
+    session_submission: Option<sessions::SubmissionControl>,
     session_stopping: bool,
     session_error: String,
     session_pending_prompt: Option<String>,
     session_pending_role: String,
+    session_pending_turn: u64,
+    session_stream_turn: u64,
     session_generation: u64,
     session_live_events: Vec<SessionStreamEvent>,
     session_agent_role: String,
@@ -930,12 +934,12 @@ impl Default for State {
             new_research_goal_mode: false,
             new_research_goal_max_turns: TextEdit::new(""),
             new_research_goal_max_duration_minutes: TextEdit::new(""),
-            new_research_graph_id: beale_graphs::SIMPLE_ID.to_owned(),
-            custom_graph_templates: Vec::new(),
-            new_research_stage_duration_minutes: TextEdit::new("60"),
-            new_research_graph_models: HashMap::new(),
-            graph_models_group: None,
-            graph_editor: None,
+            new_research_swarm_id: beale_swarms::BASIC_ID.to_owned(),
+            swarm_controls: Default::default(),
+            custom_swarm_templates: Vec::new(),
+            new_research_swarm_models: HashMap::new(),
+            swarm_models_group: None,
+            swarm_editor: None,
             quick_chat_open: false,
             quick_chat_draft: TextEdit::new(""),
             quick_chat_input_history: input_history::InputHistory::default(),
@@ -965,10 +969,13 @@ impl Default for State {
             session_loading_id: None,
             session_busy: false,
             session_stop_id: None,
+            session_submission: None,
             session_stopping: false,
             session_error: String::new(),
             session_pending_prompt: None,
             session_pending_role: String::new(),
+            session_pending_turn: 0,
+            session_stream_turn: 0,
             session_generation: 0,
             session_live_events: Vec::new(),
             session_agent_role: "main".to_owned(),
@@ -1556,11 +1563,17 @@ impl State {
             self.new_research_goal_max_turns.clear();
             self.new_research_goal_max_duration_minutes.clear();
         }
-        self.new_research_graph_id = beale_graphs::SIMPLE_ID.to_owned();
-        self.new_research_stage_duration_minutes = TextEdit::new("60");
-        self.new_research_graph_models.clear();
-        self.graph_models_group = None;
-        self.graph_editor = None;
+        self.new_research_swarm_id = if extensions_view::swarms_enabled(self) {
+            beale_swarms::BASIC_ID.to_owned()
+        } else {
+            String::new()
+        };
+        self.swarm_controls.destinations.clear();
+        self.swarm_controls.pacing.clear();
+        self.swarm_controls.notice.clear();
+        self.new_research_swarm_models.clear();
+        self.swarm_models_group = None;
+        self.swarm_editor = None;
         self.new_research_workspace_id = if self.primary_view == PrimaryView::Workspace {
             self.workspace_id.map(|id| id.to_string())
         } else {
@@ -1584,6 +1597,7 @@ impl State {
             return;
         }
         self.session_busy = false;
+        self.session_submission = None;
         self.session_stop_id = None;
         self.session_stopping = false;
         self.session_turn_started = None;
@@ -1674,7 +1688,8 @@ impl State {
                 } else if let Some(role) = self
                     .active_session
                     .as_ref()
-                    .and_then(|detail| beale_graphs::entry_role(&detail.graph_id))
+                    .and_then(sessions::swarm_definition)
+                    .and_then(|graph| graph.entry_role())
                 {
                     self.session_agent_role = role.id().to_owned();
                 }
@@ -1701,16 +1716,31 @@ impl State {
         if self.session_generation != generation || !self.session_busy {
             return;
         }
-        let graph_id = self
+        if event.turn_number > 0 {
+            if self
+                .active_session
+                .as_ref()
+                .is_some_and(|d| event.turn_number <= d.committed_turn_number)
+            {
+                return;
+            }
+            if event.turn_number > self.session_stream_turn {
+                self.session_stream_turn = event.turn_number;
+                self.session_turn_started = Some(Instant::now());
+                self.session_elapsed_ms = 0;
+            }
+        }
+        let swarm_id = self
             .active_session
             .as_ref()
-            .map_or(self.new_research_graph_id.as_str(), |detail| {
-                detail.graph_id.as_str()
+            .map_or(self.new_research_swarm_id.as_str(), |detail| {
+                detail.swarm_id.as_str()
             });
         if !self.session_agent_tab_manual
-            && beale_graphs::is_peer_graph(graph_id)
-            && beale_graphs::ProfileId::from_id(&event.agent_role)
-                .is_some_and(|role| role.is_top_level())
+            && research_header::swarm_definition(self, swarm_id).is_some_and(|graph| {
+                beale_swarms::ProfileId::from_id(&event.agent_role)
+                    .is_some_and(|role| graph.is_top_level(role))
+            })
         {
             self.session_agent_role = event.agent_role.clone();
             research_header::sync_model_for_role(self, &event.agent_role);
@@ -1722,6 +1752,44 @@ impl State {
             self.session_agent_started_at.remove(&event.agent_role);
         }
         match SessionStreamKind::try_from(event.kind) {
+            Ok(SessionStreamKind::SwarmUpdated) => {
+                if let Some(detail) = event.detail {
+                    if self
+                        .active_session
+                        .as_ref()
+                        .and_then(|d| d.summary.as_ref())
+                        .zip(detail.summary.as_ref())
+                        .is_some_and(|(old, new)| old.id != new.id)
+                    {
+                        return;
+                    }
+                    if self
+                        .active_session
+                        .as_ref()
+                        .is_some_and(|old| old.committed_turn_number > detail.committed_turn_number)
+                    {
+                        return;
+                    }
+                    if let Some(summary) = &detail.summary {
+                        self.session_summaries.retain(|s| s.id != summary.id);
+                        self.session_summaries.insert(0, summary.clone());
+                    }
+                    let committed = detail.committed_turn_number;
+                    self.session_live_events
+                        .retain(|e| e.turn_number == 0 || e.turn_number > committed);
+                    if self.session_pending_turn > 0 && self.session_pending_turn <= committed {
+                        self.session_pending_prompt = None;
+                        self.session_pending_role.clear();
+                    }
+                    if self.session_stream_turn > 0 && self.session_stream_turn <= committed {
+                        self.session_turn_started = None;
+                        self.session_elapsed_ms = 0;
+                        self.session_agent_started_at.clear();
+                    }
+                    // A later turn may already be streaming; retain its output and selection.
+                    self.active_session = Some(detail);
+                }
+            }
             Ok(
                 SessionStreamKind::SessionStarted
                 | SessionStreamKind::AgentStarted
@@ -1759,6 +1827,7 @@ impl State {
             Ok(SessionStreamKind::MessageDelta | SessionStreamKind::ReasoningDelta) => {
                 if let Some(existing) = self.session_live_events.iter_mut().rev().find(|item| {
                     item.kind == event.kind
+                        && item.turn_number == event.turn_number
                         && item.segment_index == event.segment_index
                         && item.agent_role == event.agent_role
                         && item.subagent_id == event.subagent_id
@@ -1883,13 +1952,15 @@ impl State {
     }
 
     pub(crate) fn session_role_busy(&self) -> bool {
-        let graph_id = self
+        let swarm_id = self
             .active_session
             .as_ref()
-            .map_or(self.new_research_graph_id.as_str(), |detail| {
-                detail.graph_id.as_str()
+            .map_or(self.new_research_swarm_id.as_str(), |detail| {
+                detail.swarm_id.as_str()
             });
-        if beale_graphs::is_peer_graph(graph_id) {
+        if self.active_session.is_some()
+            && research_header::swarm_definition(self, swarm_id).is_some()
+        {
             self.session_agent_started_at
                 .contains_key(&self.session_agent_role)
         } else {
@@ -1901,13 +1972,15 @@ impl State {
         if !self.session_busy {
             return 0;
         }
-        let graph_id = self
+        let swarm_id = self
             .active_session
             .as_ref()
-            .map_or(self.new_research_graph_id.as_str(), |detail| {
-                detail.graph_id.as_str()
+            .map_or(self.new_research_swarm_id.as_str(), |detail| {
+                detail.swarm_id.as_str()
             });
-        if beale_graphs::is_peer_graph(graph_id) {
+        if self.active_session.is_some()
+            && research_header::swarm_definition(self, swarm_id).is_some()
+        {
             self.session_agent_started_at
                 .get(&self.session_agent_role)
                 .map_or(0, |started| {
@@ -2414,7 +2487,6 @@ fn start_session_turn(state: &mut State) {
         .filter(|summary| summary.workspace_id == workspace_id)
         .map_or_else(String::new, |summary| summary.id.clone());
     let goal_mode = state.new_research_goal_mode
-        && !beale_graphs::is_rotating_graph(&state.new_research_graph_id)
         && extensions_view::goal_mode_enabled(state)
         && session_id.is_empty();
     let (goal_max_turns, goal_max_duration_minutes) = if goal_mode {
@@ -2433,27 +2505,37 @@ fn start_session_turn(state: &mut State) {
     } else {
         (0, 0)
     };
-    let repeat_preset = if session_id.is_empty()
-        && !beale_graphs::is_rotating_graph(&state.new_research_graph_id)
-        && state.new_research_repeat != new_research::RepeatPreset::None
+    let repeat_preset =
+        if session_id.is_empty() && state.new_research_repeat != new_research::RepeatPreset::None {
+            state.new_research_repeat.key().to_owned()
+        } else {
+            String::new()
+        };
+    if session_id.is_empty()
+        && let Err(error) = swarm_controls::validate_draft(
+            &state.new_research_swarm_id,
+            extensions_view::swarms_enabled(state),
+            &state.swarm_controls.destinations,
+            &state.swarm_controls.pacing,
+        )
     {
-        state.new_research_repeat.key().to_owned()
+        state.session_error = error;
+        return;
+    }
+    let is_new_scan = session_id.is_empty();
+    let swarm_id = if is_new_scan {
+        state.new_research_swarm_id.clone()
     } else {
         String::new()
     };
-    let graph_id = if session_id.is_empty() && extensions_view::graphs_enabled(state) {
-        state.new_research_graph_id.clone()
-    } else {
-        String::new()
-    };
-    if !graph_id.is_empty() {
-        state.session_agent_role = beale_graphs::entry_role(&graph_id)
-            .unwrap_or(beale_graphs::ProfileId::Main)
+    if !swarm_id.is_empty() {
+        state.session_agent_role = beale_swarms::entry_role(&swarm_id)
+            .unwrap_or(beale_swarms::ProfileId::Leader)
             .id()
             .to_owned();
     }
-    let graph_models = if !graph_id.is_empty() {
-        new_research::graph_model_config(state)
+    let swarm_models = if !swarm_id.is_empty() {
+        new_research::swarm_model_config(state)
     } else {
         Vec::new()
     };
@@ -2469,22 +2551,24 @@ fn start_session_turn(state: &mut State) {
         goal_max_turns,
         goal_max_duration_minutes,
         repeat_preset,
-        graph_id,
-        graph_models,
-        graph_node_concurrency: Vec::new(),
-        max_concurrent_workers: 0,
-        stage_duration_minutes: if beale_graphs::is_rotating_graph(&state.new_research_graph_id) {
-            state
-                .new_research_stage_duration_minutes
-                .text
-                .parse()
-                .unwrap_or(60)
+        swarm_id,
+        swarm_models,
+        swarm_destinations: if is_new_scan {
+            state.swarm_controls.destinations.clone()
         } else {
-            0
+            Vec::new()
         },
+        swarm_retention: None,
+        swarm_pacing: if is_new_scan {
+            state.swarm_controls.pacing.clone()
+        } else {
+            Vec::new()
+        },
+        swarm_node_concurrency: Vec::new(),
+        max_concurrent_workers: 0,
         agent_role: if let Some(detail) = &state.active_session {
-            if beale_graphs::is_peer_graph(&detail.graph_id) {
-                research_header::selected_role(state, &detail.graph_id)
+            if sessions::swarm_definition(detail).is_some() {
+                research_header::selected_role(state, &detail.swarm_id)
             } else {
                 String::new()
             }
@@ -2497,6 +2581,8 @@ fn start_session_turn(state: &mut State) {
     state.session_busy = true;
     let turn_id = uuid::Uuid::new_v4().to_string();
     state.session_stop_id = Some(turn_id.clone());
+    let submission = sessions::SubmissionControl::default();
+    state.session_submission = Some(submission.clone());
     state.session_stopping = false;
     state.session_error.clear();
     state.session_live_events.clear();
@@ -2504,6 +2590,11 @@ fn start_session_turn(state: &mut State) {
     state.session_elapsed_ms = 0;
     state.session_turn_started = Some(Instant::now());
     state.session_agent_started_at.clear();
+    state.session_pending_turn = state
+        .active_session
+        .as_ref()
+        .map_or(1, |d| d.committed_turn_number.saturating_add(1));
+    state.session_stream_turn = 0;
     state.session_pending_prompt = Some(prompt);
     state.session_pending_role = if request.agent_role.is_empty() {
         state.session_agent_role.clone()
@@ -2540,14 +2631,24 @@ fn start_session_turn(state: &mut State) {
                 .build()
                 .map_err(|_| "Could not initialize scan connection".to_owned())?;
             let progress_handle = handle.clone();
+            let stop_handle = handle.clone();
             runtime.block_on(sessions::submit_stream(
                 &client,
                 addr,
                 request,
                 &turn_id,
+                submission,
                 move |event| {
                     progress_handle
                         .update(move |state, _| state.apply_session_progress(generation, event));
+                },
+                move |error| {
+                    stop_handle.update(move |state, _| {
+                        if state.session_generation == generation && state.session_busy {
+                            state.session_stopping = false;
+                            state.session_error = error;
+                        }
+                    });
                 },
             ))
         })();
@@ -2569,6 +2670,13 @@ fn stop_session_turn(state: &mut State) {
     };
     let generation = state.session_generation;
     state.session_stopping = true;
+    if state
+        .session_submission
+        .as_ref()
+        .is_some_and(|control| !control.cancel())
+    {
+        return;
+    }
     std::thread::spawn(move || {
         let result = (|| {
             let addr = connection::configured_addr()
@@ -3603,13 +3711,16 @@ fn selection_menu_items(state: &State, menu: SelectionMenu) -> Vec<in_place_menu
             detail: None,
             selected: state.new_research_goal_mode,
         }],
-        SelectionMenu::SessionGraph => [
-            (beale_graphs::SIMPLE_ID, beale_graphs::SIMPLE_NAME),
+        SelectionMenu::SessionSwarm => [
+            (beale_swarms::BASIC_ID, beale_swarms::BASIC_NAME),
             (
-                beale_graphs::CLOUDFLARE_ID,
-                beale_graphs::CLOUDFLARE_GRAPH.name,
+                beale_swarms::VDH_VVS_ID,
+                beale_swarms::VDH_VVS_SWARM.name.as_str(),
             ),
-            (beale_graphs::OPENAI_ID, beale_graphs::OPENAI_GRAPH.name),
+            (
+                beale_swarms::OAI_948_ID,
+                beale_swarms::OAI_948_SWARM.name.as_str(),
+            ),
             ("", "No Subagents"),
         ]
         .into_iter()
@@ -3617,17 +3728,17 @@ fn selection_menu_items(state: &State, menu: SelectionMenu) -> Vec<in_place_menu
             value: value.to_owned(),
             label: label.to_owned(),
             detail: None,
-            selected: state.new_research_graph_id == value,
+            selected: state.new_research_swarm_id == value,
         })
         .chain(
             state
-                .custom_graph_templates
+                .custom_swarm_templates
                 .iter()
                 .map(|template| in_place_menu::MenuItem {
                     value: template.id.clone(),
                     label: template.name.clone(),
-                    detail: Some("Custom graph".to_owned()),
-                    selected: state.new_research_graph_id == template.id,
+                    detail: Some("Custom swarm".to_owned()),
+                    selected: state.new_research_swarm_id == template.id,
                 }),
         )
         .collect(),
@@ -3767,9 +3878,9 @@ fn selection_menu_items(state: &State, menu: SelectionMenu) -> Vec<in_place_menu
     }
 }
 
-fn graph_option_description(value: &str) -> &'static str {
-    if value == beale_graphs::SIMPLE_ID {
-        beale_graphs::SIMPLE_DESCRIPTION
+fn swarm_option_description(value: &str) -> &'static str {
+    if value == beale_swarms::BASIC_ID {
+        beale_swarms::BASIC_DESCRIPTION
     } else {
         "Research with one main agent."
     }
@@ -3788,7 +3899,7 @@ fn selection_menu_anchor(menu: SelectionMenu) -> String {
         SelectionMenu::SurfaceFilter => "workspace-surface-filter-control",
         SelectionMenu::Repeat => "new-research-repeat-control",
         SelectionMenu::GoalMode => "new-research-goal-control",
-        SelectionMenu::SessionGraph => "new-research-graph-control",
+        SelectionMenu::SessionSwarm => "new-research-swarm-control",
         SelectionMenu::ResearchWorkspace => "new-research-workspace-control",
         SelectionMenu::ResearchWorkspaceHeading => "new-research-heading-workspace-control",
         SelectionMenu::QuickChatWorkspace => "quick-chat-workspace-control",
@@ -3833,7 +3944,7 @@ fn toggle_selection_menu(state: &mut State, menu: SelectionMenu) {
     if matches!(
         menu,
         SelectionMenu::GoalMode
-            | SelectionMenu::SessionGraph
+            | SelectionMenu::SessionSwarm
             | SelectionMenu::Repeat
             | SelectionMenu::ResearchWorkspace
             | SelectionMenu::ResearchWorkspaceHeading
@@ -3897,16 +4008,8 @@ fn choose_selection_menu_item(state: &mut State, menu: SelectionMenu, value: Str
             }
         }
         SelectionMenu::GoalMode => state.new_research_goal_mode = !state.new_research_goal_mode,
-        SelectionMenu::SessionGraph => {
-            if beale_graphs::is_rotating_graph(&value) {
-                state.new_research_goal_mode = false;
-                state.new_research_repeat = new_research::RepeatPreset::None;
-                if let Some(graph) = beale_graphs::graph_definition(&value) {
-                    state.new_research_stage_duration_minutes =
-                        TextEdit::new(graph.default_stage_minutes.to_string());
-                }
-            }
-            state.new_research_graph_id = value;
+        SelectionMenu::SessionSwarm => {
+            swarm_controls::select_mode(state, value);
         }
         SelectionMenu::ResearchWorkspace | SelectionMenu::ResearchWorkspaceHeading => {
             state.new_research_workspace_id = Some(value);
@@ -3987,11 +4090,11 @@ fn choose_selection_menu_item(state: &mut State, menu: SelectionMenu, value: Str
 
 fn selection_menu_key(state: &mut State, event: &KeyEvent, tx: &mut Tx) -> bool {
     if state
-        .graph_editor
+        .swarm_editor
         .as_ref()
         .is_some_and(|editor| editor.model_menu.is_some())
     {
-        return new_research::graph_model_menu_key(state, event);
+        return new_research::swarm_model_menu_key(state, event);
     }
     if state.composer_menu_open {
         if new_research::show_composer_model_selector(state) {
@@ -6458,8 +6561,8 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
         let width = cx
             .layout_size("content-surface")
             .map_or(720.0, |size| size[0]);
-        let graph_width = (width - 80.0).max(180.0);
-        main_content = main_content.child(new_research::render(state, theme, graph_width).shrink());
+        let swarm_width = (width - 80.0).max(180.0);
+        main_content = main_content.child(new_research::render(state, theme, swarm_width).shrink());
     } else if state.primary_view == PrimaryView::Home {
         let page_width = cx
             .layout_size("content-surface")
@@ -6887,9 +6990,9 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
     }
     if state.primary_view == PrimaryView::NewResearch
         && state.active_session.is_none()
-        && state.graph_models_group.is_some()
+        && state.swarm_models_group.is_some()
     {
-        for layer in new_research::graph_models_group_dialog(state, theme) {
+        for layer in new_research::swarm_models_group_dialog(state, theme) {
             window = window.child(layer);
         }
     }
@@ -6974,10 +7077,10 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
             SelectionMenu::ResearchWorkspaceHeading => {
                 state.primary_view == PrimaryView::NewResearch && state.active_session.is_none()
             }
-            SelectionMenu::SessionGraph => {
+            SelectionMenu::SessionSwarm => {
                 state.primary_view == PrimaryView::NewResearch
                     && state.active_session.is_none()
-                    && extensions_view::graphs_enabled(state)
+                    && extensions_view::swarms_enabled(state)
             }
             SelectionMenu::QuickChatWorkspace => {
                 state.quick_chat_open && state.quick_chat_id.is_none() && !state.quick_chat_busy
@@ -7033,7 +7136,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
                     SelectionMenu::FleetAdd => ("Add App Server", 240.0),
                     SelectionMenu::Repeat => ("Repeat schedule", 190.0),
                     SelectionMenu::GoalMode => ("Goal Mode", 150.0),
-                    SelectionMenu::SessionGraph => ("Scan Graph", 190.0),
+                    SelectionMenu::SessionSwarm => ("Scan Swarm", 190.0),
                     SelectionMenu::ResearchWorkspace => ("Workspace", 280.0),
                     SelectionMenu::ResearchWorkspaceHeading => ("Workspace", 280.0),
                     SelectionMenu::QuickChatWorkspace => ("Quick Chat workspace", 280.0),
@@ -7055,8 +7158,8 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
                         in_place_menu::MenuSpec {
                             title,
                             width,
-                            item_help: (menu == SelectionMenu::SessionGraph)
-                                .then_some(graph_option_description),
+                            item_help: (menu == SelectionMenu::SessionSwarm)
+                                .then_some(swarm_option_description),
                         },
                         state.menu_cursor.min(items.len() - 1),
                         items,
@@ -7121,11 +7224,11 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
     if state.primary_view == PrimaryView::NewResearch
         && state.active_session.is_none()
         && state
-            .graph_editor
+            .swarm_editor
             .as_ref()
             .is_some_and(|editor| editor.model_menu.is_some())
     {
-        window = window.child(new_research::graph_editor_model_menu(state, theme));
+        window = window.child(new_research::swarm_editor_model_menu(state, theme));
     }
     if state.primary_view == PrimaryView::Settings
         && state.color_picker.is_some()
@@ -7379,9 +7482,9 @@ fn main() -> std::process::ExitCode {
             } else {
                 None
             };
-            let graph_template_result =
+            let swarm_template_result =
                 if workspace_poll == 0 && matches!(status, ConnectionStatus::Connected { .. }) {
-                    Some(runtime.block_on(sessions::list_graph_templates(&client, addr)))
+                    Some(runtime.block_on(sessions::list_swarm_templates(&client, addr)))
                 } else {
                     None
                 };
@@ -7450,12 +7553,12 @@ fn main() -> std::process::ExitCode {
                     }
                 });
             }
-            if let Some(Ok(templates)) = graph_template_result {
+            if let Some(Ok(templates)) = swarm_template_result {
                 handle.update_if(move |state, _| {
-                    if state.custom_graph_templates == templates {
+                    if state.custom_swarm_templates == templates {
                         false
                     } else {
-                        state.custom_graph_templates = templates;
+                        state.custom_swarm_templates = templates;
                         true
                     }
                 });
@@ -7605,10 +7708,10 @@ fn main() -> std::process::ExitCode {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn session_graph_menu_uses_current_names_and_omits_retired_flow() {
+    fn session_swarm_menu_uses_current_names_and_omits_retired_flow() {
         let items = super::selection_menu_items(
             &super::State::default(),
-            super::SelectionMenu::SessionGraph,
+            super::SelectionMenu::SessionSwarm,
         );
         let choices: Vec<_> = items
             .iter()
@@ -7617,27 +7720,27 @@ mod tests {
         assert_eq!(
             choices,
             [
-                (beale_graphs::SIMPLE_ID, "Basic Subagents"),
-                (beale_graphs::CLOUDFLARE_ID, "VDH VVS Swarm"),
-                (beale_graphs::OPENAI_ID, "OAI 948 Swarm"),
+                (beale_swarms::BASIC_ID, "Basic Subagents"),
+                (beale_swarms::VDH_VVS_ID, "VDH VVS"),
+                (beale_swarms::OAI_948_ID, "OAI 948"),
                 ("", "No Subagents"),
             ]
         );
     }
 
     #[test]
-    fn session_graph_menu_includes_custom_templates() {
-        let template = beale_contracts::v1::GraphTemplate {
+    fn session_swarm_menu_includes_custom_templates() {
+        let template = beale_contracts::v1::SwarmTemplate {
             id: "custom:example_review:0123456789abcdef".to_owned(),
             name: "Example Review".to_owned(),
             definition_json: String::new(),
         };
         let state = super::State {
-            new_research_graph_id: template.id.clone(),
-            custom_graph_templates: vec![template.clone()],
+            new_research_swarm_id: template.id.clone(),
+            custom_swarm_templates: vec![template.clone()],
             ..Default::default()
         };
-        let items = super::selection_menu_items(&state, super::SelectionMenu::SessionGraph);
+        let items = super::selection_menu_items(&state, super::SelectionMenu::SessionSwarm);
         let custom = items.iter().find(|item| item.value == template.id).unwrap();
         assert_eq!(custom.label, template.name);
         assert!(custom.selected);
@@ -7970,7 +8073,7 @@ mod tests {
             ("providers", "providers-view-title", "provider-tab-group"),
             ("archive", "archive-view-title", "archive-view-tabs"),
             ("fleet", "app-servers-view-title", "fleet-view-tabs"),
-            ("vms", "virtual-machines-view-title", "fleet-view-tabs"),
+            ("vms", "vms-/-containers-view-title", "fleet-view-tabs"),
             (
                 "research-tools",
                 "research-tools-view-title",
@@ -10172,7 +10275,7 @@ mod tests {
     }
 
     #[test]
-    fn graph_choice_is_shown_before_a_session_and_defaults_to_simple() {
+    fn swarm_choice_is_shown_before_a_session_and_defaults_to_simple() {
         let mut state = State {
             primary_view: PrimaryView::NewResearch,
             workspaces: vec![WorkspaceSummary {
@@ -10217,22 +10320,38 @@ mod tests {
         state
             .features
             .iter_mut()
-            .find(|feature| feature.id == beale_graphs::FEATURE_ID)
+            .find(|feature| feature.id == beale_swarms::FEATURE_ID)
             .unwrap()
             .enabled = true;
         let mut runtime = Runtime::new(state, view, (900.0, 700.0), Env::new(true, 1.0));
         runtime.frame(0.0);
-        assert_eq!(runtime.state.new_research_graph_id, beale_graphs::SIMPLE_ID);
+        assert_eq!(runtime.state.new_research_swarm_id, beale_swarms::BASIC_ID);
         let (heading, _) = runtime.presented("new-research-workspace-heading").unwrap();
-        let (graph, _) = runtime.presented("new-scan-graph-row").unwrap();
+        let (graph, _) = runtime.presented("new-scan-swarm-row").unwrap();
         let (agents, _) = runtime.presented("new-scan-agent-models-row").unwrap();
         let (workers, _) = runtime.presented("new-scan-subagent-models-row").unwrap();
         assert!(heading[1] + heading[3] <= graph[1]);
+        let (scroll, _) = runtime.presented("new-research-swarm-scroll").unwrap();
+        let (form, _) = runtime.presented("new-research-basic-swarm").unwrap();
+        let above_heading = heading[1] - scroll[1];
+        let below_heading = form[1] - heading[1] - heading[3];
+        assert!((above_heading - below_heading).abs() < 1.0);
+        let elements = runtime.elements();
+        let swarm_control = elements
+            .iter()
+            .find(|item| item.key.as_deref() == Some("new-research-swarm-control"))
+            .unwrap();
+        let model_control = elements
+            .iter()
+            .find(|item| item.key.as_deref() == Some("swarm-editor-model-control-leader"))
+            .unwrap();
+        assert!((swarm_control.rect[3] - model_control.rect[3]).abs() < 1.0);
+        assert_eq!(swarm_control.fill, model_control.fill);
         assert!(graph[1] < agents[1] && agents[1] < workers[1]);
         assert!(runtime.find("new-scan-worker-budget-row").is_none());
         assert!(runtime.find("new-research-model-control").is_none());
         assert!(runtime.find("new-scan-agent-models-edit").is_none());
-        assert!(runtime.find("graph-editor-model-control-main").is_some());
+        assert!(runtime.find("swarm-editor-model-control-leader").is_some());
         assert!(runtime.find("new-scan-subagent-models-edit").is_some());
         assert!(
             runtime
@@ -10243,66 +10362,75 @@ mod tests {
         assert!(runtime.elements().iter().any(|item| {
             item.text.as_deref() == Some("Leads the scan and coordinates specialist tasks.")
         }));
-        let (x, y) = runtime.find("graph-editor-model-control-main").unwrap();
+        let (x, y) = runtime.find("swarm-editor-model-control-leader").unwrap();
         runtime.pointer_down(x, y);
         runtime.pointer_up(x, y);
         runtime.frame(0.05);
-        assert_eq!(runtime.state.graph_models_group, None);
-        assert!(runtime.find("graph-models-group-dialog").is_none());
-        assert!(runtime.find("graph-editor-dialog").is_none());
+        assert_eq!(runtime.state.swarm_models_group, None);
+        assert!(runtime.find("swarm-models-group-dialog").is_none());
+        assert!(runtime.find("swarm-editor-dialog").is_none());
         assert!(
             runtime
-                .find("graph-editor-fixed-max-concurrent-main")
+                .find("swarm-editor-fixed-max-concurrent-main")
                 .is_none()
         );
-        assert!(runtime.find("graph-editor-menu-provider").is_some());
-        assert!(runtime.find("graph-editor-menu-model").is_some());
-        let (x, y) = runtime.find("graph-editor-menu-option-1").unwrap();
+        assert!(runtime.find("swarm-editor-menu-provider").is_some());
+        assert!(runtime.find("swarm-editor-menu-model").is_some());
+        let (control, _) = runtime
+            .presented("swarm-editor-model-control-leader")
+            .unwrap();
+        let (main, _) = runtime.presented("swarm-editor-model-main").unwrap();
+        let (submenu, _) = runtime.presented("swarm-editor-model-submenu").unwrap();
+        assert!(submenu[0] + submenu[2] <= main[0]);
+        assert!((main[0] + main[2] - control[0] - control[2]).abs() < 1.0);
+        assert!((main[1] - control[1] - control[3] - 4.0).abs() < 1.0);
+        assert!((main[1] - submenu[1]).abs() < 1.0);
+        let (x, y) = runtime.find("swarm-editor-menu-option-1").unwrap();
         runtime.pointer_down(x, y);
         runtime.pointer_up(x, y);
         runtime.frame(0.09);
         assert_eq!(
-            new_research::graph_model_label(&runtime.state, beale_graphs::ProfileId::Main),
+            new_research::swarm_model_label(&runtime.state, beale_swarms::ProfileId::Leader),
             "Example Small"
         );
-        assert!(runtime.find("graph-models-group-dialog").is_none());
-        assert!(runtime.find("graph-editor-model-menu").is_none());
+        assert!(runtime.find("swarm-models-group-dialog").is_none());
+        assert!(runtime.find("swarm-editor-model-menu").is_none());
         let (x, y) = runtime.find("new-scan-subagent-models-edit").unwrap();
         runtime.pointer_down(x, y);
         runtime.pointer_up(x, y);
         runtime.frame(0.11);
-        assert_eq!(runtime.state.graph_models_group, Some(false));
-        for role in beale_graphs::SIMPLE_GRAPH
+        assert_eq!(runtime.state.swarm_models_group, Some(false));
+        for role in beale_swarms::BASIC_SWARM
             .nodes
             .iter()
             .filter(|role| !role.is_top_level())
         {
             assert!(
                 runtime
-                    .find(&format!("graph-editor-model-control-{}", role.id()))
+                    .find(&format!("swarm-editor-model-control-{}", role.id()))
                     .is_some()
             );
             assert!(
                 runtime
-                    .find(&format!("graph-editor-max-concurrent-{}", role.id()))
+                    .find(&format!("swarm-editor-max-concurrent-{}", role.id()))
                     .is_none()
             );
         }
-        assert!(runtime.find("graph-editor-dialog").is_none());
-        let (x, y) = runtime.find("graph-editor-model-control-mapper").unwrap();
+        assert!(runtime.find("swarm-editor-dialog").is_none());
+        let (x, y) = runtime.find("swarm-editor-model-control-mapper").unwrap();
         runtime.pointer_down(x, y);
         runtime.pointer_up(x, y);
         runtime.frame(0.125);
-        assert!(runtime.find("graph-editor-model-menu").is_some());
-        let (x, y) = runtime.find("graph-editor-menu-option-0").unwrap();
+        assert!(runtime.find("swarm-editor-model-menu").is_some());
+        let (x, y) = runtime.find("swarm-editor-menu-option-0").unwrap();
         runtime.pointer_down(x, y);
         runtime.pointer_up(x, y);
         runtime.frame(0.126);
         assert_eq!(
             runtime
                 .state
-                .new_research_graph_models
-                .get(&beale_graphs::ProfileId::from_id("mapper").unwrap())
+                .new_research_swarm_models
+                .get(&beale_swarms::ProfileId::from_id("mapper").unwrap())
                 .map(Vec::len),
             Some(2)
         );
@@ -10311,15 +10439,15 @@ mod tests {
             mods: Default::default(),
         });
         runtime.frame(0.127);
-        assert!(runtime.find("graph-editor-model-menu").is_none());
-        let (x, y) = runtime.find("graph-models-group-dialog-close").unwrap();
+        assert!(runtime.find("swarm-editor-model-menu").is_none());
+        let (x, y) = runtime.find("swarm-models-group-dialog-close").unwrap();
         runtime.pointer_down(x, y);
         runtime.pointer_up(x, y);
         runtime.frame(0.14);
-        assert!(runtime.find("graph-models-group-dialog").is_none());
+        assert!(runtime.find("swarm-models-group-dialog").is_none());
         runtime.update(|state, _| {
-            state.new_research_graph_models.insert(
-                beale_graphs::ProfileId::from_id("mapper").unwrap(),
+            state.new_research_swarm_models.insert(
+                beale_swarms::ProfileId::from_id("mapper").unwrap(),
                 vec![new_research::ModelSelection {
                     provider: Provider::OpenAi,
                     method: AuthMethod::Subscription,
@@ -10337,7 +10465,7 @@ mod tests {
     }
 
     #[test]
-    fn graph_selector_options_show_descriptions_as_tooltips() {
+    fn swarm_selector_options_show_descriptions_as_tooltips() {
         let workspace_id = "00000000-0000-4000-8000-000000000010";
         let mut state = State {
             primary_view: PrimaryView::NewResearch,
@@ -10359,19 +10487,25 @@ mod tests {
         state
             .features
             .iter_mut()
-            .find(|feature| feature.id == beale_graphs::FEATURE_ID)
+            .find(|feature| feature.id == beale_swarms::FEATURE_ID)
             .unwrap()
             .enabled = true;
         let mut runtime = Runtime::new(state, view, (900.0, 700.0), Env::new(true, 1.0));
         runtime.help_delay = 0.05;
         runtime.frame(0.0);
-        assert!(runtime.find("new-research-graph-description").is_none());
-        let (x, y) = runtime.find("new-research-graph-control").unwrap();
+        assert!(runtime.find("new-research-swarm-description").is_none());
+        let (x, y) = runtime.find("new-research-swarm-control").unwrap();
         runtime.pointer_down(x, y);
         runtime.pointer_up(x, y);
         runtime.frame(0.0);
+        let menu = runtime
+            .elements()
+            .into_iter()
+            .find(|item| item.key.as_deref() == Some("selection-menu"))
+            .unwrap();
+        assert_eq!(menu.label.as_deref(), Some("Scan Swarm"));
         for (index, description) in [
-            beale_graphs::SIMPLE_DESCRIPTION,
+            beale_swarms::BASIC_DESCRIPTION,
             "Research with one main agent.",
         ]
         .into_iter()
@@ -10415,14 +10549,14 @@ mod tests {
             major: 1,
             minor: 47,
         };
-        let graphs = state
+        let swarms = state
             .features
             .iter_mut()
-            .find(|feature| feature.id == beale_graphs::FEATURE_ID)
+            .find(|feature| feature.id == beale_swarms::FEATURE_ID)
             .unwrap();
-        graphs.enabled = true;
-        graphs.all_workspaces = false;
-        graphs.workspace_ids = vec![first.to_owned()];
+        swarms.enabled = true;
+        swarms.all_workspaces = false;
+        swarms.workspace_ids = vec![first.to_owned()];
         let mut runtime = Runtime::new(state, view, (900.0, 700.0), Env::new(true, 1.0));
         runtime.frame(0.0);
         assert!(runtime.find("new-research-grid-background").is_none());
@@ -10435,6 +10569,9 @@ mod tests {
         runtime.update(|state, _| {
             state.session_pending_prompt = None;
             state.active_session = Some(SessionDetail {
+                scoped_review_rules: Vec::new(),
+                pacing_warnings: Vec::new(),
+                swarm_overview_json: String::new(),
                 summary: Some(SessionSummary {
                     id: "session-example".to_owned(),
                     workspace_id: first.to_owned(),
@@ -10458,11 +10595,11 @@ mod tests {
         runtime.update(|state, _| state.new_research_workspace_id = Some(second.to_owned()));
         runtime.frame(0.1);
         assert!(runtime.find("new-research-grid-background").is_none());
-        assert!(runtime.find("new-research-graph-control").is_none());
+        assert!(runtime.find("new-research-swarm-control").is_none());
     }
 
     #[test]
-    fn graph_profile_rows_stay_inside_the_form_at_narrow_widths() {
+    fn swarm_profile_rows_stay_inside_the_form_at_narrow_widths() {
         for width in [1200.0, 900.0, 720.0, 600.0] {
             let mut state = State {
                 primary_view: PrimaryView::NewResearch,
@@ -10482,21 +10619,21 @@ mod tests {
             state
                 .features
                 .iter_mut()
-                .find(|feature| feature.id == beale_graphs::FEATURE_ID)
+                .find(|feature| feature.id == beale_swarms::FEATURE_ID)
                 .unwrap()
                 .enabled = true;
             let mut runtime = Runtime::new(state, view, (width, 700.0), Env::new(true, 1.0));
             runtime.frame(0.0);
             runtime.frame(0.01);
-            let (stage, _) = runtime.presented("new-research-simple-graph").unwrap();
+            let (stage, _) = runtime.presented("new-research-basic-swarm").unwrap();
             let (surface, _) = runtime.presented("content-surface").unwrap();
             assert!(stage[0] >= surface[0] - 1.0);
             assert!(stage[0] + stage[2] <= surface[0] + surface[2] + 1.0);
             for key in [
-                "new-scan-graph-row",
+                "new-scan-swarm-row",
                 "new-scan-agent-models-row",
                 "new-scan-subagent-models-row",
-                "graph-editor-model-control-main",
+                "swarm-editor-model-control-leader",
             ] {
                 let (node, _) = runtime.presented(key).unwrap();
                 assert!(node[0] >= stage[0] - 1.0);
@@ -10506,31 +10643,23 @@ mod tests {
     }
 
     #[test]
-    fn peer_graph_forms_render_every_role_at_wide_and_narrow_widths() {
+    fn peer_swarm_forms_render_every_role_at_wide_and_narrow_widths() {
         for (variant, graph) in [
-            ("graph-cloudflare", &beale_graphs::CLOUDFLARE_GRAPH),
-            ("graph-openai", &beale_graphs::OPENAI_GRAPH),
-            ("graph-sequential", &beale_graphs::SEQUENTIAL_GRAPH),
+            ("swarm-vdh-vvs", &beale_swarms::VDH_VVS_SWARM),
+            ("swarm-oai-948", &beale_swarms::OAI_948_SWARM),
         ] {
             for width in [1200.0, 600.0] {
                 let state = visual_preview::fixture(variant);
                 let mut runtime = Runtime::new(state, view, (width, 1800.0), Env::new(true, 1.0));
                 runtime.frame(0.0);
-                let (stage, _) = runtime.presented("new-research-flow-graph").unwrap();
-                if graph.id == beale_graphs::SEQUENTIAL_ID {
-                    assert!(
-                        runtime
-                            .find("new-research-stage-duration-minutes")
-                            .is_some()
-                    );
-                    assert_eq!(runtime.state.new_research_stage_duration_minutes.text, "60");
-                }
+                let (stage, _) = runtime.presented("new-research-workflow-swarm").unwrap();
+
                 assert!(runtime.find("new-scan-agent-models-edit").is_some());
                 assert!(runtime.find("new-scan-subagent-models-edit").is_some());
-                assert!(runtime.find("graph-editor-model-control-main").is_none());
+                assert!(runtime.find("swarm-editor-model-control-leader").is_none());
                 assert!(stage[2] <= 640.0);
                 assert_eq!(
-                    new_research::graph_model_config(&runtime.state).len(),
+                    new_research::swarm_model_config(&runtime.state).len(),
                     graph.nodes.len()
                 );
                 if width == 1200.0 {
@@ -10538,19 +10667,19 @@ mod tests {
                     runtime.pointer_down(x, y);
                     runtime.pointer_up(x, y);
                     runtime.frame(0.1);
-                    assert_eq!(runtime.state.graph_models_group, Some(true));
-                    assert!(runtime.find("graph-models-group-dialog").is_some());
+                    assert_eq!(runtime.state.swarm_models_group, Some(true));
+                    assert!(runtime.find("swarm-models-group-dialog").is_some());
                 }
             }
         }
     }
 
     #[test]
-    fn peer_graph_configs_include_each_top_level_model() {
-        for variant in ["graph-cloudflare", "graph-openai", "graph-sequential"] {
+    fn peer_swarm_configs_include_each_top_level_model() {
+        for variant in ["swarm-vdh-vvs", "swarm-oai-948"] {
             let state = visual_preview::fixture(variant);
-            let graph = beale_graphs::graph_definition(&state.new_research_graph_id).unwrap();
-            let models = new_research::graph_model_config(&state);
+            let graph = beale_swarms::swarm_definition(&state.new_research_swarm_id).unwrap();
+            let models = new_research::swarm_model_config(&state);
             assert_eq!(models.len(), graph.nodes.len());
             assert!(
                 models
@@ -10586,7 +10715,7 @@ mod tests {
         let mut runtime = Runtime::new(state, view, (900.0, 700.0), Env::new(true, 1.0));
         runtime.frame(0.0);
         assert!(runtime.find("new-research-workspace-heading").is_some());
-        assert!(runtime.find("new-research-graph-control").is_none());
+        assert!(runtime.find("new-research-swarm-control").is_none());
     }
 
     #[test]
@@ -10673,6 +10802,10 @@ mod tests {
             ..State::default()
         };
         let detail = SessionDetail {
+            committed_turn_number: 0,
+            scoped_review_rules: Vec::new(),
+            pacing_warnings: Vec::new(),
+            swarm_overview_json: String::new(),
             summary: Some(SessionSummary {
                 id: session_id.to_owned(),
                 workspace_id: workspace_id.to_owned(),
@@ -10697,19 +10830,18 @@ mod tests {
                 active_ms: 1,
             }),
             first_turn_number: 1,
-            graph_id: String::new(),
-            graph_models: vec![],
-            graph_node_concurrency: vec![],
-            stage_duration_minutes: 0,
-            graph_template_json: String::new(),
+            swarm_id: String::new(),
+            swarm_models: vec![],
+            swarm_node_concurrency: vec![],
+            swarm_template_json: String::new(),
             max_concurrent_workers: 0,
             total_duration_ms: 0,
             has_campaign_activity: false,
             token_usage: None,
             usage_snapshots: Vec::new(),
             model_usage: Vec::new(),
-            graph_agents: Vec::new(),
-            graph_handoffs: Vec::new(),
+            swarm_agents: Vec::new(),
+            swarm_handoffs: Vec::new(),
             agent_metrics: Vec::new(),
             subagents: Vec::new(),
             runbook_count: 0,
@@ -10880,6 +11012,9 @@ mod tests {
             session_loading_id: Some(session_id.clone()),
             session_busy: true,
             active_session: Some(SessionDetail {
+                scoped_review_rules: Vec::new(),
+                pacing_warnings: Vec::new(),
+                swarm_overview_json: String::new(),
                 summary: Some(SessionSummary {
                     id: session_id,
                     workspace_id: uuid::Uuid::new_v4().to_string(),
@@ -10939,6 +11074,10 @@ mod tests {
             ..State::default()
         };
         let detail = SessionDetail {
+            committed_turn_number: 0,
+            scoped_review_rules: Vec::new(),
+            pacing_warnings: Vec::new(),
+            swarm_overview_json: String::new(),
             summary: Some(SessionSummary {
                 id: session_id.to_owned(),
                 workspace_id: workspace_id.to_owned(),
@@ -10970,19 +11109,18 @@ mod tests {
             model: "model-example".to_owned(),
             goal: None,
             first_turn_number: 1,
-            graph_id: String::new(),
-            graph_models: vec![],
-            graph_node_concurrency: vec![],
-            stage_duration_minutes: 0,
-            graph_template_json: String::new(),
+            swarm_id: String::new(),
+            swarm_models: vec![],
+            swarm_node_concurrency: vec![],
+            swarm_template_json: String::new(),
             max_concurrent_workers: 0,
             total_duration_ms: 1_234,
             has_campaign_activity: false,
             token_usage: None,
             usage_snapshots: Vec::new(),
             model_usage: Vec::new(),
-            graph_agents: Vec::new(),
-            graph_handoffs: Vec::new(),
+            swarm_agents: Vec::new(),
+            swarm_handoffs: Vec::new(),
             agent_metrics: Vec::new(),
             subagents: Vec::new(),
             runbook_count: 0,
@@ -11068,6 +11206,10 @@ mod tests {
                 new_research_workspace_id: Some(workspace_id.to_owned()),
                 new_research_prompt: TextEdit::new("Unsent example"),
                 active_session: Some(SessionDetail {
+                    committed_turn_number: 0,
+                    scoped_review_rules: Vec::new(),
+                    pacing_warnings: Vec::new(),
+                    swarm_overview_json: String::new(),
                     summary: Some(SessionSummary {
                         id: session_id.to_owned(),
                         workspace_id: workspace_id.to_owned(),
@@ -11096,19 +11238,18 @@ mod tests {
                     model: "model-example".to_owned(),
                     goal: None,
                     first_turn_number: 1,
-                    graph_id: String::new(),
-                    graph_models: vec![],
-                    graph_node_concurrency: vec![],
-                    stage_duration_minutes: 0,
-                    graph_template_json: String::new(),
+                    swarm_id: String::new(),
+                    swarm_models: vec![],
+                    swarm_node_concurrency: vec![],
+                    swarm_template_json: String::new(),
                     max_concurrent_workers: 0,
                     total_duration_ms: 0,
                     has_campaign_activity: false,
                     token_usage: None,
                     usage_snapshots: Vec::new(),
                     model_usage: Vec::new(),
-                    graph_agents: Vec::new(),
-                    graph_handoffs: Vec::new(),
+                    swarm_agents: Vec::new(),
+                    swarm_handoffs: Vec::new(),
                     agent_metrics: Vec::new(),
                     subagents: Vec::new(),
                     runbook_count: 0,
@@ -11242,6 +11383,10 @@ mod tests {
         let mut state = State {
             primary_view: PrimaryView::NewResearch,
             active_session: Some(SessionDetail {
+                committed_turn_number: 0,
+        scoped_review_rules: Vec::new(),
+            pacing_warnings: Vec::new(),
+            swarm_overview_json: String::new(),
                 summary: Some(SessionSummary {
                     id: "00000000-0000-4000-8000-000000000002".to_owned(),
                     workspace_id: "00000000-0000-4000-8000-000000000001".to_owned(),
@@ -11262,19 +11407,18 @@ mod tests {
                 model: "model-example".to_owned(),
                 goal: None,
                 first_turn_number: 1,
-                graph_id: String::new(),
-                graph_models: vec![],
-                graph_node_concurrency: vec![],
-                stage_duration_minutes: 0,
-                graph_template_json: String::new(),
+                swarm_id: String::new(),
+                swarm_models: vec![],
+                swarm_node_concurrency: vec![],
+                swarm_template_json: String::new(),
             max_concurrent_workers: 0,
                 total_duration_ms: 1_000,
                 has_campaign_activity: false,
                 token_usage: None,
                 usage_snapshots: Vec::new(),
             model_usage: Vec::new(),
-graph_agents: Vec::new(),
-graph_handoffs: Vec::new(),
+swarm_agents: Vec::new(),
+swarm_handoffs: Vec::new(),
             agent_metrics: Vec::new(),
             subagents: Vec::new(),
 runbook_count: 0,
@@ -11328,6 +11472,10 @@ active_runbook_count: 0,
             primary_view: PrimaryView::NewResearch,
             canvas_open: true,
             active_session: Some(SessionDetail {
+                committed_turn_number: 0,
+        scoped_review_rules: Vec::new(),
+            pacing_warnings: Vec::new(),
+            swarm_overview_json: String::new(),
                 summary: None,
                 messages: vec![beale_contracts::v1::SessionMessage {
                     role: beale_contracts::v1::SessionRole::User as i32,
@@ -11343,19 +11491,18 @@ active_runbook_count: 0,
                 model: "model-example".to_owned(),
                 goal: None,
                 first_turn_number: 1,
-                graph_id: String::new(),
-                graph_models: vec![],
-                graph_node_concurrency: vec![],
-                stage_duration_minutes: 0,
-                graph_template_json: String::new(),
+                swarm_id: String::new(),
+                swarm_models: vec![],
+                swarm_node_concurrency: vec![],
+                swarm_template_json: String::new(),
             max_concurrent_workers: 0,
                 total_duration_ms: 0,
                 has_campaign_activity: false,
                 token_usage: None,
                 usage_snapshots: Vec::new(),
             model_usage: Vec::new(),
-graph_agents: Vec::new(),
-graph_handoffs: Vec::new(),
+swarm_agents: Vec::new(),
+swarm_handoffs: Vec::new(),
             agent_metrics: Vec::new(),
             subagents: Vec::new(),
 runbook_count: 0,
@@ -11394,6 +11541,10 @@ active_runbook_count: 0,
         let state = State {
             primary_view: PrimaryView::NewResearch,
             active_session: Some(SessionDetail {
+                committed_turn_number: 0,
+                scoped_review_rules: Vec::new(),
+                pacing_warnings: Vec::new(),
+                swarm_overview_json: String::new(),
                 summary: Some(SessionSummary {
                     id: session_id.to_owned(),
                     workspace_id: workspace_id.to_owned(),
@@ -11465,19 +11616,18 @@ active_runbook_count: 0,
                 model: "model-example".to_owned(),
                 goal: None,
                 first_turn_number: 1,
-                graph_id: String::new(),
-                graph_models: vec![],
-                graph_node_concurrency: vec![],
-                stage_duration_minutes: 0,
-                graph_template_json: String::new(),
+                swarm_id: String::new(),
+                swarm_models: vec![],
+                swarm_node_concurrency: vec![],
+                swarm_template_json: String::new(),
                 max_concurrent_workers: 0,
                 total_duration_ms: 2_345,
                 has_campaign_activity: false,
                 token_usage: None,
                 usage_snapshots: Vec::new(),
                 model_usage: Vec::new(),
-                graph_agents: Vec::new(),
-                graph_handoffs: Vec::new(),
+                swarm_agents: Vec::new(),
+                swarm_handoffs: Vec::new(),
                 agent_metrics: Vec::new(),
                 subagents: Vec::new(),
                 runbook_count: 0,
@@ -11546,6 +11696,192 @@ active_runbook_count: 0,
                 .presented(&format!("session-tool-detail-{tool_id}"))
                 .is_some()
         );
+    }
+
+    #[test]
+    fn live_swarm_commit_retires_only_committed_turn_events_and_usage() {
+        use beale_contracts::v1::{
+            SessionMessage, SessionModelUsage, SessionRole, SessionTokenUsage,
+        };
+        let usage = SessionTokenUsage {
+            input_tokens: 100,
+            measured_calls: 1,
+            total_calls: 1,
+            ..Default::default()
+        };
+        let model = SessionModelUsage {
+            provider: 1,
+            method: 1,
+            model: "example-model".into(),
+            role: "leader".into(),
+            usage: Some(usage.clone()),
+        };
+        let mut state = State {
+            session_busy: true,
+            session_generation: 7,
+            session_pending_turn: 1,
+            session_pending_prompt: Some("Synthetic prompt".into()),
+            ..Default::default()
+        };
+        for number in [1, 2] {
+            state.apply_session_progress(
+                7,
+                SessionStreamEvent {
+                    kind: SessionStreamKind::MessageDelta as i32,
+                    turn_number: number,
+                    segment_index: 1,
+                    text: format!("Synthetic answer {number}"),
+                    agent_role: "leader".into(),
+                    ..Default::default()
+                },
+            );
+            state.apply_session_progress(
+                7,
+                SessionStreamEvent {
+                    kind: SessionStreamKind::UsageUpdated as i32,
+                    turn_number: number,
+                    usage_delta: Some(model.clone()),
+                    ..Default::default()
+                },
+            );
+        }
+        let started = state.session_turn_started;
+        let detail = SessionDetail {
+            committed_turn_number: 1,
+            token_usage: Some(usage.clone()),
+            model_usage: vec![model.clone()],
+            messages: vec![SessionMessage {
+                role: SessionRole::Assistant as i32,
+                text: "Synthetic answer 1".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        state.apply_session_progress(
+            7,
+            SessionStreamEvent {
+                kind: SessionStreamKind::SwarmUpdated as i32,
+                detail: Some(detail.clone()),
+                ..Default::default()
+            },
+        );
+        assert_eq!(state.session_live_events.len(), 2);
+        assert!(state.session_live_events.iter().all(|e| e.turn_number == 2));
+        assert!(state.session_pending_prompt.is_none());
+        assert_eq!(state.session_turn_started, started);
+        assert_eq!(
+            sessions::detail_with_live_usage(
+                state.active_session.as_ref(),
+                &state.session_live_events,
+                0
+            )
+            .unwrap()
+            .token_usage
+            .unwrap()
+            .input_tokens,
+            200
+        );
+        // A delayed event from the committed turn cannot revive its usage or text.
+        state.apply_session_progress(
+            7,
+            SessionStreamEvent {
+                kind: SessionStreamKind::UsageUpdated as i32,
+                turn_number: 1,
+                usage_delta: Some(model),
+                ..Default::default()
+            },
+        );
+        assert_eq!(state.session_live_events.len(), 2);
+        let mut latest = detail.clone();
+        latest.committed_turn_number = 2;
+        latest.token_usage.as_mut().unwrap().input_tokens = 200;
+        state.apply_session_progress(
+            7,
+            SessionStreamEvent {
+                kind: SessionStreamKind::SwarmUpdated as i32,
+                detail: Some(latest),
+                ..Default::default()
+            },
+        );
+        assert!(state.session_live_events.is_empty());
+        assert!(state.session_turn_started.is_none());
+        assert_eq!(
+            sessions::detail_with_live_usage(
+                state.active_session.as_ref(),
+                &state.session_live_events,
+                0
+            )
+            .unwrap()
+            .token_usage
+            .unwrap()
+            .input_tokens,
+            200
+        );
+        state.apply_session_progress(
+            7,
+            SessionStreamEvent {
+                kind: SessionStreamKind::SwarmUpdated as i32,
+                detail: Some(detail),
+                ..Default::default()
+            },
+        );
+        assert_eq!(state.active_session.unwrap().committed_turn_number, 2);
+    }
+
+    #[test]
+    fn live_swarm_updates_preserve_output_and_reject_old_sessions_and_generations() {
+        let mut state = crate::visual_preview::fixture("stage9-status");
+        let mut detail = state.active_session.take().unwrap();
+        state.session_busy = true;
+        state.session_generation = 7;
+        state.session_pending_prompt = Some("Synthetic pending prompt".into());
+        state.session_agent_role = "leader".into();
+        state.session_agent_tab_manual = true;
+        state.apply_session_progress(
+            7,
+            SessionStreamEvent {
+                kind: SessionStreamKind::MessageDelta as i32,
+                text: "Synthetic live output".into(),
+                agent_role: "leader".into(),
+                segment_index: 1,
+                ..Default::default()
+            },
+        );
+        let live_count = state.session_live_events.len();
+        assert!(live_count > 0);
+        detail.pacing_warnings = vec!["Synthetic authority warning".into()];
+        let event = SessionStreamEvent {
+            kind: SessionStreamKind::SwarmUpdated as i32,
+            detail: Some(detail.clone()),
+            ..Default::default()
+        };
+        state.apply_session_progress(7, event.clone());
+        assert_eq!(state.active_session.as_ref().unwrap(), &detail);
+        assert_eq!(state.session_live_events.len(), live_count);
+        assert_eq!(
+            state.session_pending_prompt.as_deref(),
+            Some("Synthetic pending prompt")
+        );
+        assert_eq!(state.session_agent_role, "leader");
+        let mut updated = detail.clone();
+        updated.pacing_warnings.clear();
+        state.apply_session_progress(
+            6,
+            SessionStreamEvent {
+                detail: Some(updated.clone()),
+                ..event.clone()
+            },
+        );
+        assert_eq!(state.active_session.as_ref().unwrap(), &detail);
+        updated.summary.as_mut().unwrap().id = uuid::Uuid::new_v4().to_string();
+        state.apply_session_progress(
+            7,
+            SessionStreamEvent {
+                detail: Some(updated),
+                ..event
+            },
+        );
+        assert_eq!(state.active_session.as_ref().unwrap(), &detail);
     }
 
     #[test]
@@ -12256,7 +12592,7 @@ active_runbook_count: 0,
     }
 
     #[test]
-    fn saved_workspace_opens_surface_graph_and_shows_recorded_forms() {
+    fn saved_workspace_opens_surface_swarm_and_shows_recorded_forms() {
         use beale_contracts::v1::{
             SurfaceDefinition, SurfaceLocator, SurfaceRevision, SurfaceScope, WorkspaceSurface,
         };
@@ -13721,6 +14057,9 @@ active_runbook_count: 0,
                 runbook_progress: None,
                 kind: SessionStreamKind::TurnCompleted as i32,
                 detail: Some(SessionDetail {
+                    scoped_review_rules: Vec::new(),
+                    pacing_warnings: Vec::new(),
+                    swarm_overview_json: String::new(),
                     total_duration_ms: 7_000,
                     ..Default::default()
                 }),
@@ -13762,6 +14101,9 @@ active_runbook_count: 0,
         use beale_contracts::v1::{SessionMessage, SessionRole, SessionToolSummary};
 
         let detail = SessionDetail {
+            scoped_review_rules: Vec::new(),
+            pacing_warnings: Vec::new(),
+            swarm_overview_json: String::new(),
             summary: Some(SessionSummary {
                 id: uuid::Uuid::from_u128(1).to_string(),
                 workspace_id: uuid::Uuid::from_u128(2).to_string(),
@@ -13862,6 +14204,9 @@ active_runbook_count: 0,
             State {
                 primary_view: PrimaryView::NewResearch,
                 active_session: Some(SessionDetail {
+                    scoped_review_rules: Vec::new(),
+                    pacing_warnings: Vec::new(),
+                    swarm_overview_json: String::new(),
                     token_usage: Some(beale_contracts::v1::SessionTokenUsage {
                         input_tokens: 123_456,
                         output_tokens: 7_890,
@@ -13993,6 +14338,9 @@ active_runbook_count: 0,
             State {
                 primary_view: PrimaryView::NewResearch,
                 active_session: Some(SessionDetail {
+                    scoped_review_rules: Vec::new(),
+                    pacing_warnings: Vec::new(),
+                    swarm_overview_json: String::new(),
                     runbook_count: 1,
                     active_runbook_count: 0,
                     runbooks: Vec::new(),
@@ -14072,6 +14420,9 @@ active_runbook_count: 0,
             State {
                 primary_view: PrimaryView::NewResearch,
                 active_session: Some(SessionDetail {
+                    scoped_review_rules: Vec::new(),
+                    pacing_warnings: Vec::new(),
+                    swarm_overview_json: String::new(),
                     runbook_count: 6,
                     runbooks,
                     ..Default::default()
@@ -14554,6 +14905,9 @@ active_runbook_count: 0,
     fn session_usage_rows_hover_left_popouts_with_selectable_work_snapshots() {
         use beale_contracts::v1::{SessionTokenUsage, SessionUsageSnapshot};
         let detail = SessionDetail {
+            scoped_review_rules: Vec::new(),
+            pacing_warnings: Vec::new(),
+            swarm_overview_json: String::new(),
             total_duration_ms: 600_000,
             token_usage: Some(SessionTokenUsage {
                 input_tokens: 123_456,
@@ -16062,8 +16416,8 @@ active_runbook_count: 0,
         assert!(runtime.find("feature-tab-available").is_some());
         assert!(runtime.find("feature-tab-enabled").is_some());
         assert!(runtime.find("feature-item-goal-mode").is_none());
-        assert!(runtime.find("feature-item-graphs").is_some());
-        assert!(runtime.find("feature-toggle-graphs").is_some());
+        assert!(runtime.find("feature-item-swarms").is_some());
+        assert!(runtime.find("feature-toggle-swarms").is_some());
         assert!(runtime.find("feature-item-fleet").is_none());
         assert!(runtime.find("feature-item-tracking").is_none());
         assert!(runtime.find("feature-item-webfetch").is_some());

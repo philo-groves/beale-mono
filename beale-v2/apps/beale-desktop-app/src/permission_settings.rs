@@ -478,6 +478,20 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
         tabs = tabs.child(tab_button(tab, state.permissions_tab == tab, theme));
     }
     let mut content = vec![crate::titled_view_tabs("Safety", tabs, theme)];
+    if let Some(session) = &state.active_session {
+        for rule in &session.scoped_review_rules {
+            content.push(
+                text(format!(
+                    "Active session rule (read-only): {}\n{}",
+                    rule.title, rule.instruction
+                ))
+                .w_full()
+                .wrap()
+                .font(ui_font(14.0, 400.0))
+                .color(theme.color("#969696")),
+            );
+        }
+    }
     let heading = match state.permissions_tab {
         PermissionTab::AutoReview => "Auto-Review Rules",
         PermissionTab::Guardian => "Guardian Rules",

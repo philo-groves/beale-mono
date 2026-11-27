@@ -24,8 +24,8 @@ impl AgentFilter {
     }
 
     pub(crate) fn accepts(self, role: &str) -> bool {
-        let top_level =
-            beale_graphs::ProfileId::from_id(role).is_some_and(|role| role.is_top_level());
+        let top_level = role == "main"
+            || beale_swarms::ProfileId::from_id(role).is_some_and(|role| role.is_top_level());
         match self {
             Self::All => true,
             Self::Main => top_level,

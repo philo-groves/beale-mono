@@ -7,9 +7,10 @@ use anyhow::{Context, Result, ensure};
 use beale_contracts::runbooks::{
     Cell, CellResult, Document, MAX_TITLE_CHARS, QueryRequest, RunExecution, Summary,
 };
+use beale_contracts::tool_error::ToolError;
 use beale_storage::{
     HostDatabase,
-    rusqlite::{self, OptionalExtension, Transaction, params},
+    rusqlite::{self, Connection, OptionalExtension, params},
 };
 use std::{
     collections::HashSet,
@@ -18,11 +19,28 @@ use std::{
 use uuid::Uuid;
 
 /// Ordered Runbooks schema versions.
-pub const MIGRATIONS: &[&str] = &[V1];
+pub const MIGRATIONS: &[&str] = &[V1, V2];
 
-/// Marks executions that were running when the host stopped as interrupted.
-pub const STARTUP: &[&str] =
-    &["UPDATE runbook_runs SET status='interrupted' WHERE status='running'"];
+/// Interrupts host-local executions at startup. Assigned runs retain their
+/// ledger until the owning worker attempt is reconciled.
+pub const STARTUP: &[&str] = &[
+    "UPDATE runbook_runs SET status='interrupted' WHERE status='running' AND id NOT IN (SELECT run_id FROM runbook_worker_runs)",
+];
+
+const V2: &str = "
+CREATE TABLE runbook_worker_runs (
+    run_id TEXT PRIMARY KEY REFERENCES runbook_runs(id),
+    identity TEXT NOT NULL,
+    document TEXT NOT NULL,
+    finished INTEGER NOT NULL DEFAULT 0 CHECK(finished IN (0,1))
+);
+CREATE TABLE runbook_worker_cells (
+    run_id TEXT NOT NULL REFERENCES runbook_worker_runs(run_id),
+    cell_id TEXT NOT NULL,
+    outcome TEXT NOT NULL,
+    PRIMARY KEY(run_id,cell_id)
+);
+";
 
 const V1: &str = "
 CREATE TABLE runbook_counters (
@@ -129,7 +147,7 @@ fn bounded_cell_output(output: &str, limit: usize) -> String {
     format!("{}{}", &output[..end], SUFFIX)
 }
 
-fn read(tx: &Transaction<'_>, workspace_id: &str, id: &str) -> Result<Option<Document>> {
+fn read(tx: &Connection, workspace_id: &str, id: &str) -> Result<Option<Document>> {
     let json: Option<String> = tx
         .query_row(
             "SELECT document_json FROM runbook_documents WHERE workspace_id=?1 AND id=?2",
@@ -150,13 +168,16 @@ fn validate(document: &mut Document, previous: Option<&Document>) -> Result<()> 
             && ((document.title.chars().count() <= MAX_TITLE_CHARS
                 && !document.title.chars().any(char::is_control))
                 || previous.is_some_and(|old| old.title == document.title)),
-        "invalid runbook title"
+        ToolError::invalid("invalid runbook title")
     );
     ensure!(
         !document.purpose.is_empty() && document.purpose.len() <= 4_000,
-        "invalid runbook purpose"
+        ToolError::invalid("invalid runbook purpose")
     );
-    ensure!(document.cells.len() <= 64, "too many runbook cells");
+    ensure!(
+        document.cells.len() <= 64,
+        ToolError::invalid("too many runbook cells")
+    );
     let previous_ids: HashSet<&str> = previous.map_or_else(HashSet::new, |book| {
         book.cells.iter().map(Cell::id).collect()
     });
@@ -168,21 +189,27 @@ fn validate(document: &mut Document, previous: Option<&Document>) -> Result<()> 
         *name = name.trim().to_owned();
         ensure!(
             name.chars().count() <= 40 && !name.chars().any(char::is_control),
-            "invalid runbook cell name"
+            ToolError::invalid("invalid runbook cell name")
         );
         if cell.id().is_empty() {
             *cell.id_mut() = format!("L{next}");
             next = next.checked_add(1).context("runbook cell ID overflow")?;
         } else {
-            ensure!(previous_ids.contains(cell.id()), "unknown runbook cell ID");
+            ensure!(
+                previous_ids.contains(cell.id()),
+                ToolError::invalid("unknown runbook cell ID")
+            );
         }
         ensure!(
             used.insert(cell.id().to_owned()),
-            "duplicate runbook cell ID"
+            ToolError::invalid("duplicate runbook cell ID")
         );
         match cell {
             Cell::Markdown { source, .. } => {
-                ensure!(source.len() <= 16_000, "runbook cell source is too long");
+                ensure!(
+                    source.len() <= 16_000,
+                    ToolError::invalid("runbook cell source is too long")
+                );
                 total += source.len();
             }
             Cell::Code {
@@ -195,18 +222,24 @@ fn validate(document: &mut Document, previous: Option<&Document>) -> Result<()> 
                         && language
                             .bytes()
                             .all(|byte| byte.is_ascii_alphanumeric() || b"._+-#".contains(&byte)),
-                    "invalid code language identifier"
+                    ToolError::invalid("invalid code language identifier")
                 );
-                ensure!(source.len() <= 16_000, "runbook cell source is too long");
+                ensure!(
+                    source.len() <= 16_000,
+                    ToolError::invalid("runbook cell source is too long")
+                );
                 total += source.len();
             }
         }
     }
-    ensure!(total <= 48_000, "runbook source is too large");
+    ensure!(
+        total <= 48_000,
+        ToolError::invalid("runbook source is too large")
+    );
     document.next_cell_number = next;
     ensure!(
         serde_json::to_vec(document)?.len() <= 56_000,
-        "runbook document is too large"
+        ToolError::invalid("runbook document is too large")
     );
     Ok(())
 }
@@ -222,7 +255,7 @@ fn same_code_content(previous: &Cell, current: Option<&Cell>) -> bool {
 }
 
 fn persist(
-    tx: &Transaction<'_>,
+    tx: &Connection,
     document: &Document,
     actor: &str,
     session_id: &str,
@@ -297,7 +330,33 @@ pub trait RunbookStore {
     ) -> Result<Document>;
 }
 
-impl RunbookStore for HostDatabase {
+// Routed operations borrow the receipt transaction; ordinary calls open one.
+trait RunbookConnection {
+    fn access<T>(&self, action: impl FnOnce(&Connection) -> Result<T>) -> Result<T>;
+}
+impl RunbookConnection for HostDatabase {
+    fn access<T>(&self, action: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
+        self.with_connection(|connection| {
+            // A savepoint composes with the host's read-only status snapshot.
+            let tx = connection.savepoint()?;
+            let result = action(&tx)?;
+            tx.commit()?;
+            Ok(result)
+        })
+    }
+}
+struct TransactionStore<'a>(&'a Connection);
+impl RunbookConnection for TransactionStore<'_> {
+    fn access<T>(&self, action: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
+        action(self.0)
+    }
+}
+/// Uses the caller's transaction for records and their durable acknowledgement.
+pub fn transaction_store<'a>(tx: &'a rusqlite::Transaction<'_>) -> impl RunbookStore + 'a {
+    TransactionStore(tx)
+}
+
+impl<T: RunbookConnection> RunbookStore for T {
     fn runbook_run_start(
         &self,
         workspace_id: &str,
@@ -306,15 +365,15 @@ impl RunbookStore for HostDatabase {
         expected_revision: u64,
     ) -> Result<RunbookRunRow> {
         ensure!(session_id.len() <= 128, "invalid session ID");
-        self.with_connection(|connection| {
-            let tx = connection.transaction()?;
+        self.access(|connection| {
+            let tx = connection;
             let owned: i64 = tx.query_row(
                 "SELECT EXISTS(SELECT 1 FROM workspaces WHERE id=?1)",
                 [workspace_id],
                 |row| row.get(0),
             )?;
             ensure!(owned == 1, "workspace is not registered");
-            let document = read(&tx, workspace_id, runbook_id)?.context("runbook not found")?;
+            let document = read(tx, workspace_id, runbook_id)?.context(ToolError::missing("runbook not found"))?;
             ensure!(document.revision == expected_revision, "runbook changed before execution");
             let id = Uuid::new_v4().to_string();
             let now = now_ms()?;
@@ -322,7 +381,6 @@ impl RunbookStore for HostDatabase {
                 "INSERT INTO runbook_runs(id,workspace_id,runbook_id,session_id,revision,status,created_at_ms,updated_at_ms) VALUES (?1,?2,?3,?4,?5,'running',?6,?6)",
                 params![id, workspace_id, runbook_id, session_id, i64::try_from(document.revision)?, i64::try_from(now)?],
             )?;
-            tx.commit()?;
             Ok(RunbookRunRow {
                 id,
                 runbook_id: runbook_id.to_owned(),
@@ -335,7 +393,7 @@ impl RunbookStore for HostDatabase {
 
     fn runbook_run_finish(&self, id: &str, success: bool, output: &str) -> Result<()> {
         ensure!(output.len() <= 64_000, "runbook output is too large");
-        self.with_connection(|connection| {
+        self.access(|connection| {
             let changed = connection.execute(
                 "UPDATE runbook_runs SET status=?2,output=?3,updated_at_ms=?4 WHERE id=?1 AND status='running'",
                 params![id, if success { "completed" } else { "failed" }, output, now_ms()? as i64],
@@ -353,7 +411,7 @@ impl RunbookStore for HostDatabase {
                 && !cell_name.chars().any(char::is_control),
             "invalid runbook cell number"
         );
-        self.with_connection(|connection| {
+        self.access(|connection| {
             let changed = connection.execute(
                 "UPDATE runbook_runs SET current_cell_number=?2,current_cell_name=?3,updated_at_ms=?4 WHERE id=?1 AND status='running'",
                 params![id, cell_number, cell_name, i64::try_from(now_ms()?)?],
@@ -374,8 +432,8 @@ impl RunbookStore for HostDatabase {
     ) -> Result<()> {
         let stderr = bounded_cell_output(stderr, 20_000);
         let stdout = bounded_cell_output(stdout, 20_000 - stderr.len());
-        self.with_connection(|connection| {
-            let tx = connection.transaction()?;
+        self.access(|connection| {
+            let tx = connection;
             let run: Option<(String, String, String, i64)> = tx
                 .query_row(
                     "SELECT workspace_id,runbook_id,session_id,revision FROM runbook_runs WHERE id=?1 AND status='running'",
@@ -385,7 +443,7 @@ impl RunbookStore for HostDatabase {
                 .optional()?;
             let (workspace_id, runbook_id, session_id, revision) =
                 run.context("runbook execution is no longer active")?;
-            let document = read(&tx, &workspace_id, &runbook_id)?.context("runbook not found")?;
+            let document = read(tx, &workspace_id, &runbook_id)?.context(ToolError::missing("runbook not found"))?;
             let snapshot_json: String = tx.query_row(
                 "SELECT document_json FROM runbook_revisions WHERE workspace_id=?1 AND runbook_id=?2 AND number=?3",
                 params![workspace_id, runbook_id, revision],
@@ -407,13 +465,12 @@ impl RunbookStore for HostDatabase {
                  ON CONFLICT(workspace_id,runbook_id,session_id,cell_id) DO UPDATE SET status=excluded.status,updated_at_ms=excluded.updated_at_ms,output='',exit_code=excluded.exit_code,stdout=excluded.stdout,stderr=excluded.stderr",
                 params![workspace_id, runbook_id, session_id, cell_id, if success { "completed" } else { "failed" }, i64::try_from(now_ms()?)?, exit_code, stdout, stderr],
             )?;
-            tx.commit()?;
             Ok(())
         })
     }
 
     fn runbook_run_interrupt(&self, id: &str) -> Result<()> {
-        self.with_connection(|connection| {
+        self.access(|connection| {
             connection.execute(
                 "UPDATE runbook_runs SET status='interrupted',updated_at_ms=?2 WHERE id=?1 AND status='running'",
                 params![id, i64::try_from(now_ms()?)?],
@@ -423,7 +480,7 @@ impl RunbookStore for HostDatabase {
     }
 
     fn runbook_run_status(&self, session_id: &str, id: &str) -> Result<Option<RunbookRunRow>> {
-        self.with_connection(|connection| {
+        self.access(|connection| {
             connection.query_row(
                 "SELECT id,runbook_id,revision,status,output FROM runbook_runs WHERE id=?1 AND session_id=?2",
                 params![id, session_id],
@@ -439,7 +496,7 @@ impl RunbookStore for HostDatabase {
     }
 
     fn session_runbook_counts(&self, session_id: &str) -> Result<(u64, u64)> {
-        self.with_connection(|connection| {
+        self.access(|connection| {
             let touched: i64 = connection.query_row(
                 "SELECT COUNT(DISTINCT runbook_id) FROM (
                     SELECT runbook_id FROM runbook_revisions WHERE session_id=?1
@@ -461,7 +518,7 @@ impl RunbookStore for HostDatabase {
         workspace_id: &str,
         session_id: &str,
     ) -> Result<Vec<SessionRunbookRow>> {
-        self.with_connection(|connection| {
+        self.access(|connection| {
             let mut statement = connection.prepare(
                 "SELECT d.id,d.title,d.updated_at_ms,r.status,r.created_at_ms,r.updated_at_ms,r.current_cell_number,r.current_cell_name
                  FROM runbook_documents d
@@ -508,7 +565,7 @@ impl RunbookStore for HostDatabase {
         runbook_id: &str,
     ) -> Result<Vec<RunExecution>> {
         ensure!(session_id.len() <= 128, "invalid session ID");
-        self.with_connection(|connection| {
+        self.access(|connection| {
             let mut statement = connection.prepare(
                 "SELECT id,revision,status,output,created_at_ms,updated_at_ms,current_cell_number
                  FROM runbook_runs
@@ -538,7 +595,7 @@ impl RunbookStore for HostDatabase {
         runbook_id: &str,
     ) -> Result<Vec<CellResult>> {
         ensure!(session_id.len() <= 128, "invalid session ID");
-        self.with_connection(|connection| {
+        self.access(|connection| {
             let mut statement = connection.prepare(
                 "SELECT cell_id,status,updated_at_ms,output,exit_code,stdout,stderr FROM runbook_cell_results
                  WHERE workspace_id=?1 AND session_id=?2 AND runbook_id=?3 ORDER BY cell_id LIMIT 64",
@@ -560,10 +617,9 @@ impl RunbookStore for HostDatabase {
     }
 
     fn runbook_get(&self, workspace_id: &str, id: &str) -> Result<Option<Document>> {
-        self.with_connection(|connection| {
-            let tx = connection.transaction()?;
-            let document = read(&tx, workspace_id, id)?;
-            tx.commit()?;
+        self.access(|connection| {
+            let tx = connection;
+            let document = read(tx, workspace_id, id)?;
             Ok(document)
         })
     }
@@ -574,9 +630,9 @@ impl RunbookStore for HostDatabase {
                 && request.text.len() <= 200
                 && request.language.len() <= 40
                 && (1..=50).contains(&request.limit),
-            "invalid runbook query"
+            ToolError::invalid("invalid runbook query")
         );
-        self.with_connection(|connection| {
+        self.access(|connection| {
             let mut statement = connection.prepare("SELECT document_json FROM runbook_documents WHERE workspace_id=?1 ORDER BY updated_at_ms DESC,id DESC")?;
             let rows = statement.query_map([&request.workspace_id], |row| row.get::<_, String>(0))?;
             let needle = request.text.to_lowercase();
@@ -605,15 +661,15 @@ impl RunbookStore for HostDatabase {
                 && !document.workspace_id.is_empty()
                 && actor.len() <= 80
                 && session_id.len() <= 128,
-            "invalid runbook create"
+            ToolError::invalid("invalid runbook create")
         );
-        self.with_connection(|connection| {
-            let tx = connection.transaction()?;
+        self.access(|connection| {
+            let tx = connection;
             let exists: i64 = tx.query_row("SELECT EXISTS(SELECT 1 FROM workspaces WHERE id=?1)", [&document.workspace_id], |row| row.get(0))?;
             ensure!(exists == 1, "workspace not registered");
             validate(&mut document, None)?;
             let duplicate: i64 = tx.query_row("SELECT EXISTS(SELECT 1 FROM runbook_documents WHERE workspace_id=?1 AND lower(trim(title))=lower(?2))", params![document.workspace_id,document.title], |row| row.get(0))?;
-            ensure!(duplicate == 0, "runbook title already exists; query and edit the existing runbook");
+            ensure!(duplicate == 0, ToolError::conflict("runbook title already exists; query and edit the existing runbook"));
             tx.execute("INSERT OR IGNORE INTO runbook_counters(workspace_id) VALUES(?1)", [&document.workspace_id])?;
             let next: i64 = tx.query_row("SELECT next_id FROM runbook_counters WHERE workspace_id=?1", [&document.workspace_id], |row| row.get(0))?;
             tx.execute("UPDATE runbook_counters SET next_id=next_id+1 WHERE workspace_id=?1", [&document.workspace_id])?;
@@ -621,8 +677,7 @@ impl RunbookStore for HostDatabase {
             document.revision = 1;
             document.created_at_ms = now_ms()?;
             document.updated_at_ms = document.created_at_ms;
-            persist(&tx, &document, actor, session_id, "created")?;
-            tx.commit()?;
+            persist(tx, &document, actor, session_id, "created")?;
             Ok(document)
         })
     }
@@ -640,19 +695,19 @@ impl RunbookStore for HostDatabase {
                 && reason.len() <= 1_000
                 && actor.len() <= 80
                 && session_id.len() <= 128,
-            "invalid runbook revision reason"
+            ToolError::invalid("invalid runbook revision reason")
         );
-        self.with_connection(|connection| {
-            let tx = connection.transaction()?;
-            let previous = read(&tx, &document.workspace_id, &document.id)?.context("runbook not found")?;
-            ensure!(previous.revision == expected_revision, "runbook revision conflict");
+        self.access(|connection| {
+            let tx = connection;
+            let previous = read(tx, &document.workspace_id, &document.id)?.context(ToolError::missing("runbook not found"))?;
+            ensure!(previous.revision == expected_revision, ToolError::conflict("runbook revision conflict"));
             validate(&mut document, Some(&previous))?;
             let duplicate: i64 = tx.query_row("SELECT EXISTS(SELECT 1 FROM runbook_documents WHERE workspace_id=?1 AND id<>?2 AND lower(trim(title))=lower(?3))", params![document.workspace_id,document.id,document.title], |row| row.get(0))?;
-            ensure!(duplicate == 0, "runbook title already exists");
+            ensure!(duplicate == 0, ToolError::conflict("runbook title already exists"));
             document.created_at_ms = previous.created_at_ms;
             document.updated_at_ms = now_ms()?.max(previous.updated_at_ms.saturating_add(1));
             document.revision = previous.revision.checked_add(1).context("runbook revision overflow")?;
-            persist(&tx, &document, actor, session_id, reason)?;
+            persist(tx, &document, actor, session_id, reason)?;
             for cell in &previous.cells {
                 let same_code = same_code_content(
                     cell,
@@ -665,7 +720,6 @@ impl RunbookStore for HostDatabase {
                     )?;
                 }
             }
-            tx.commit()?;
             Ok(document)
         })
     }
@@ -673,6 +727,39 @@ impl RunbookStore for HostDatabase {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn runbook_summary_reads_compose_with_pinned_host_snapshot() {
+        let root = std::env::temp_dir().join(format!(
+            "beale-runbook-snapshot-example-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let db = HostDatabase::open(&root).unwrap();
+        migrate(&db).unwrap();
+        let snapshot = db.read_snapshot().unwrap();
+        assert_eq!(
+            snapshot.session_runbook_counts("session-example").unwrap(),
+            (0, 0)
+        );
+        assert!(
+            snapshot
+                .session_runbooks("workspace-example", "session-example")
+                .unwrap()
+                .is_empty()
+        );
+        assert!(!snapshot.with_connection(|c| Ok(c.is_autocommit())).unwrap());
+        assert!(
+            snapshot
+                .with_connection(|c| {
+                    c.execute("DELETE FROM runbook_documents", [])?;
+                    Ok(())
+                })
+                .is_err()
+        );
+        drop(snapshot);
+        drop(db);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     use super::*;
     use beale_storage::WorkspaceRow;
 

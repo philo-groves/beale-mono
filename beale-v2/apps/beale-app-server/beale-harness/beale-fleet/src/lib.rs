@@ -1,8 +1,12 @@
 //! Fleet feature metadata and authenticated host descriptor.
 
+pub mod allocation;
 mod browsers;
+pub mod docker;
 mod execution;
 mod store;
+pub mod worker_host;
+pub use beale_storage::fleet_coordination::{FleetCoordinationStore, FleetPeer};
 pub use store::{
     BrowserSettings, FleetStore, MIGRATIONS, ManualBrowserRow, VirtualMachineSettings, migrate,
 };
@@ -12,7 +16,8 @@ mod resources;
 mod virtual_machines;
 pub use execution::{machine_prompt_note, run_machine_command};
 pub use http::router;
-pub use research_tools::{allowed_tools, prompt_note};
+pub use http::router_with_backend;
+pub use research_tools::{allowed_tools, prompt_note, prompt_note_for_os};
 
 pub const FEATURE_ID: &str = "fleet";
 pub const FEATURE_NAME: &str = "Fleet";

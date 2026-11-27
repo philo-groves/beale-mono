@@ -238,7 +238,7 @@ impl MemoryJobStore for HostDatabase {
     ) -> Result<Vec<TranscriptItem>> {
         ensure!(
             limit <= 50 && offset <= 10_000 && text.len() <= 256,
-            "invalid session query"
+            beale_contracts::tool_error::ToolError::invalid("invalid session query")
         );
         self.with_connection(|connection| {
             let mut statement = connection.prepare(

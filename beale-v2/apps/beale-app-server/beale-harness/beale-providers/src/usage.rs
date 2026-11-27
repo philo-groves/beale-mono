@@ -13,6 +13,7 @@ pub struct UsageWindow {
     pub id: &'static str,
     pub label: &'static str,
     pub used_percent: u32,
+    pub used_basis_points: u32,
     pub resets_at_unix: u64,
 }
 
@@ -21,6 +22,13 @@ fn percent(value: Option<&Value>) -> Option<u32> {
     value
         .is_finite()
         .then(|| value.round().clamp(0.0, 100.0) as u32)
+}
+
+fn basis_points(value: Option<&Value>) -> Option<u32> {
+    let value = value?.as_f64()?;
+    value
+        .is_finite()
+        .then(|| (value.clamp(0.0, 100.0) * 100.0).round() as u32)
 }
 
 fn unix_seconds(value: Option<&Value>) -> u64 {
@@ -55,6 +63,7 @@ pub fn parse_codex_usage(value: &Value) -> Vec<UsageWindow> {
             id,
             label,
             used_percent,
+            used_basis_points: basis_points(window.get("used_percent"))?,
             resets_at_unix: unix_seconds(window.get("reset_at")),
         })
     })
@@ -76,14 +85,7 @@ pub fn parse_xai_usage(value: &Value) -> Vec<UsageWindow> {
                 .map(|d| d.timestamp().max(0) as u64)
         })
         .unwrap_or(0);
-    let used_percent = percent(config.get("creditUsagePercent")).or_else(|| {
-        (reset > 0
-            && matches!(
-                period_type,
-                "USAGE_PERIOD_TYPE_WEEKLY" | "USAGE_PERIOD_TYPE_MONTHLY"
-            ))
-        .then_some(0)
-    });
+    let used_percent = percent(config.get("creditUsagePercent"));
     let Some(used_percent) = used_percent else {
         return Vec::new();
     };
@@ -98,6 +100,8 @@ pub fn parse_xai_usage(value: &Value) -> Vec<UsageWindow> {
         id: "subscription",
         label,
         used_percent,
+        used_basis_points: basis_points(config.get("creditUsagePercent"))
+            .unwrap_or(used_percent * 100),
         resets_at_unix: reset,
     }]
 }
@@ -177,12 +181,11 @@ mod tests {
     }
 
     #[test]
-    fn xai_omitted_zero_percent_is_reported_only_for_a_current_period() {
+    fn xai_missing_usage_is_unknown_even_with_a_current_period() {
         let windows = parse_xai_usage(
             &json!({"config": {"currentPeriod": {"type": "USAGE_PERIOD_TYPE_WEEKLY", "end": "2033-05-17T00:00:00Z"}}}),
         );
-        assert_eq!(windows[0].used_percent, 0);
-        assert_eq!(windows[0].label, "Weekly Limit");
+        assert!(windows.is_empty());
         assert!(parse_xai_usage(&json!({"config": {}})).is_empty());
     }
 }

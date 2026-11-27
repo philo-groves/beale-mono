@@ -1,0 +1,467 @@
+[
+  {
+    "version": 1,
+    "id": "basic",
+    "revision": 1,
+    "name": "Basic Subagents",
+    "description": "One coordinating leader with research deputies and bounded specialist workers. Handoffs travel through parents; individual work items progress concurrently.",
+    "nodes": [
+      {
+        "profile": {
+          "id": "leader",
+          "revision": 1
+        },
+        "role": "leader",
+        "x": 235,
+        "y": 15
+      },
+      {
+        "profile": {
+          "id": "research_deputy",
+          "revision": 1
+        },
+        "role": "deputy",
+        "x": 25,
+        "y": 140
+      },
+      {
+        "profile": {
+          "id": "mapper",
+          "revision": 1
+        },
+        "role": "worker",
+        "x": 25,
+        "y": 265
+      },
+      {
+        "profile": {
+          "id": "investigator",
+          "revision": 1
+        },
+        "role": "worker",
+        "x": 235,
+        "y": 265
+      },
+      {
+        "profile": {
+          "id": "experimenter",
+          "revision": 1
+        },
+        "role": "worker",
+        "x": 445,
+        "y": 265
+      },
+      {
+        "profile": {
+          "id": "challenger",
+          "revision": 1
+        },
+        "role": "worker",
+        "x": 655,
+        "y": 265
+      },
+      {
+        "profile": {
+          "id": "builder",
+          "revision": 1
+        },
+        "role": "worker",
+        "x": 865,
+        "y": 265
+      }
+    ],
+    "delegation": [
+      {
+        "parent": "leader",
+        "children": [
+          "research_deputy"
+        ]
+      },
+      {
+        "parent": "research_deputy",
+        "children": [
+          "mapper",
+          "investigator",
+          "experimenter",
+          "challenger",
+          "builder"
+        ]
+      }
+    ],
+    "initial_deputies": [
+      "research_deputy"
+    ],
+    "routes": [
+      {
+        "id": "research_deputy-to-research_deputy-task",
+        "from": "research_deputy",
+        "to": "research_deputy",
+        "payload": "task"
+      }
+    ]
+  },
+  {
+    "version": 1,
+    "id": "vdh_vvs",
+    "revision": 1,
+    "name": "VDH VVS",
+    "description": "One coordinating leader with research deputies and bounded specialist workers. Handoffs travel through parents; individual work items progress concurrently.",
+    "nodes": [
+      {
+        "profile": {
+          "id": "leader",
+          "revision": 1
+        },
+        "role": "leader",
+        "x": 235,
+        "y": 15
+      },
+      {
+        "profile": {
+          "id": "discovery_harness",
+          "revision": 1
+        },
+        "role": "deputy",
+        "x": 25,
+        "y": 140
+      },
+      {
+        "profile": {
+          "id": "validation_system",
+          "revision": 1
+        },
+        "role": "deputy",
+        "x": 235,
+        "y": 140
+      },
+      {
+        "profile": {
+          "id": "mapper",
+          "revision": 1
+        },
+        "role": "worker",
+        "x": 25,
+        "y": 265
+      },
+      {
+        "profile": {
+          "id": "investigator",
+          "revision": 1
+        },
+        "role": "worker",
+        "x": 235,
+        "y": 265
+      },
+      {
+        "profile": {
+          "id": "challenger",
+          "revision": 1
+        },
+        "role": "worker",
+        "x": 445,
+        "y": 265
+      },
+      {
+        "profile": {
+          "id": "builder",
+          "revision": 1
+        },
+        "role": "worker",
+        "x": 655,
+        "y": 265
+      },
+      {
+        "profile": {
+          "id": "experimenter",
+          "revision": 1
+        },
+        "role": "worker",
+        "x": 865,
+        "y": 265
+      }
+    ],
+    "delegation": [
+      {
+        "parent": "leader",
+        "children": [
+          "discovery_harness",
+          "validation_system"
+        ]
+      },
+      {
+        "parent": "discovery_harness",
+        "children": [
+          "mapper",
+          "investigator",
+          "challenger"
+        ]
+      },
+      {
+        "parent": "validation_system",
+        "children": [
+          "builder",
+          "experimenter",
+          "challenger"
+        ]
+      }
+    ],
+    "initial_deputies": [
+      "discovery_harness"
+    ],
+    "routes": [
+      {
+        "id": "discovery_harness-to-validation_system-candidate",
+        "from": "discovery_harness",
+        "to": "validation_system",
+        "payload": "candidate"
+      },
+      {
+        "id": "validation_system-to-discovery_harness-assessment",
+        "from": "validation_system",
+        "to": "discovery_harness",
+        "payload": "assessment"
+      },
+      {
+        "id": "validation_system-to-discovery_harness-task",
+        "from": "validation_system",
+        "to": "discovery_harness",
+        "payload": "task"
+      }
+    ]
+  },
+  {
+    "version": 1,
+    "id": "oai_948",
+    "revision": 1,
+    "name": "OAI 948",
+    "description": "One coordinating leader with research deputies and bounded specialist workers. Handoffs travel through parents; individual work items progress concurrently.",
+    "nodes": [
+      {
+        "profile": {
+          "id": "leader",
+          "revision": 1
+        },
+        "role": "leader",
+        "x": 235,
+        "y": 15
+      },
+      {
+        "profile": {
+          "id": "audit_targets",
+          "revision": 1
+        },
+        "role": "deputy",
+        "x": 25,
+        "y": 140
+      },
+      {
+        "profile": {
+          "id": "discovery",
+          "revision": 1
+        },
+        "role": "deputy",
+        "x": 235,
+        "y": 140
+      },
+      {
+        "profile": {
+          "id": "validation",
+          "revision": 1
+        },
+        "role": "deputy",
+        "x": 445,
+        "y": 140
+      },
+      {
+        "profile": {
+          "id": "reporter",
+          "revision": 1
+        },
+        "role": "deputy",
+        "x": 655,
+        "y": 140
+      },
+      {
+        "profile": {
+          "id": "patch_generation",
+          "revision": 1
+        },
+        "role": "deputy",
+        "x": 865,
+        "y": 140
+      },
+      {
+        "profile": {
+          "id": "mapper",
+          "revision": 1
+        },
+        "role": "worker",
+        "x": 25,
+        "y": 265
+      },
+      {
+        "profile": {
+          "id": "investigator",
+          "revision": 1
+        },
+        "role": "worker",
+        "x": 235,
+        "y": 265
+      },
+      {
+        "profile": {
+          "id": "challenger",
+          "revision": 1
+        },
+        "role": "worker",
+        "x": 445,
+        "y": 265
+      },
+      {
+        "profile": {
+          "id": "builder",
+          "revision": 1
+        },
+        "role": "worker",
+        "x": 655,
+        "y": 265
+      },
+      {
+        "profile": {
+          "id": "experimenter",
+          "revision": 1
+        },
+        "role": "worker",
+        "x": 865,
+        "y": 265
+      }
+    ],
+    "delegation": [
+      {
+        "parent": "leader",
+        "children": [
+          "audit_targets",
+          "discovery",
+          "validation",
+          "reporter",
+          "patch_generation"
+        ]
+      },
+      {
+        "parent": "audit_targets",
+        "children": [
+          "mapper",
+          "investigator"
+        ]
+      },
+      {
+        "parent": "discovery",
+        "children": [
+          "mapper",
+          "investigator",
+          "challenger"
+        ]
+      },
+      {
+        "parent": "validation",
+        "children": [
+          "builder",
+          "experimenter",
+          "challenger"
+        ]
+      },
+      {
+        "parent": "reporter",
+        "children": [
+          "investigator",
+          "challenger"
+        ]
+      },
+      {
+        "parent": "patch_generation",
+        "children": [
+          "builder",
+          "experimenter",
+          "challenger"
+        ]
+      }
+    ],
+    "initial_deputies": [
+      "audit_targets"
+    ],
+    "routes": [
+      {
+        "id": "audit_targets-to-discovery-ranked_targets",
+        "from": "audit_targets",
+        "to": "discovery",
+        "payload": "ranked_targets"
+      },
+      {
+        "id": "discovery-to-audit_targets-task",
+        "from": "discovery",
+        "to": "audit_targets",
+        "payload": "task"
+      },
+      {
+        "id": "discovery-to-validation-candidate",
+        "from": "discovery",
+        "to": "validation",
+        "payload": "candidate"
+      },
+      {
+        "id": "validation-to-discovery-assessment",
+        "from": "validation",
+        "to": "discovery",
+        "payload": "assessment"
+      },
+      {
+        "id": "validation-to-discovery-task",
+        "from": "validation",
+        "to": "discovery",
+        "payload": "task"
+      },
+      {
+        "id": "validation-to-reporter-supported_finding",
+        "from": "validation",
+        "to": "reporter",
+        "payload": "supported_finding"
+      },
+      {
+        "id": "reporter-to-validation-task",
+        "from": "reporter",
+        "to": "validation",
+        "payload": "task"
+      },
+      {
+        "id": "reporter-to-patch_generation-remediation",
+        "from": "reporter",
+        "to": "patch_generation",
+        "payload": "remediation"
+      },
+      {
+        "id": "patch_generation-to-reporter-task",
+        "from": "patch_generation",
+        "to": "reporter",
+        "payload": "task"
+      },
+      {
+        "id": "patch_generation-to-validation-patch",
+        "from": "patch_generation",
+        "to": "validation",
+        "payload": "patch"
+      },
+      {
+        "id": "validation-to-patch_generation-patch_assessment",
+        "from": "validation",
+        "to": "patch_generation",
+        "payload": "patch_assessment"
+      },
+      {
+        "id": "validation-to-reporter-patch_assessment",
+        "from": "validation",
+        "to": "reporter",
+        "payload": "patch_assessment"
+      }
+    ]
+  }
+]

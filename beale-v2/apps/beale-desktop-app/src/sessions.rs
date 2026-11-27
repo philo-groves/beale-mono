@@ -1,12 +1,12 @@
 use beale_contracts::{
-    GRAPH_TEMPLATES_PATH, PROTOBUF_CONTENT_TYPE, PROTOBUF_STREAM_CONTENT_TYPE,
-    SESSION_ARCHIVE_PATH, SESSION_DETAIL_MAX_TOOL_SUMMARIES, SESSION_DETAIL_PATH,
-    SESSION_STREAM_MAX_FRAME_BYTES, SESSION_SUBAGENT_DETAIL_PATH, SESSION_TOOL_DETAIL_PATH,
-    SESSION_TURN_ID_HEADER, SESSION_TURN_STOP_PATH, SESSION_TURN_STREAM_PATH, SESSIONS_PATH,
+    PROTOBUF_CONTENT_TYPE, PROTOBUF_STREAM_CONTENT_TYPE, SESSION_ARCHIVE_PATH,
+    SESSION_DETAIL_MAX_TOOL_SUMMARIES, SESSION_DETAIL_PATH, SESSION_STREAM_MAX_FRAME_BYTES,
+    SESSION_SUBAGENT_DETAIL_PATH, SESSION_TOOL_DETAIL_PATH, SESSION_TURN_ID_HEADER,
+    SESSION_TURN_STOP_PATH, SESSION_TURN_STREAM_PATH, SESSIONS_PATH, SWARM_TEMPLATES_PATH,
     v1::{
-        GoalStatus, GraphTemplate, ListGraphTemplatesResponse, ListSessionsResponse, SessionDetail,
-        SessionRole, SessionStreamEvent, SessionStreamKind, SessionSubagentDetail,
-        SessionSubagentSummary, SessionSummary, SessionToolDetailPage, SubmitSessionTurnRequest,
+        GoalStatus, ListSessionsResponse, ListSwarmTemplatesResponse, SessionDetail, SessionRole,
+        SessionStreamEvent, SessionStreamKind, SessionSubagentDetail, SessionSubagentSummary,
+        SessionSummary, SessionToolDetailPage, SubmitSessionTurnRequest, SwarmTemplate,
     },
 };
 use prost::Message;
@@ -78,6 +78,7 @@ async fn decode<T: Message + Default>(response: reqwest::Response) -> Result<T, 
     if response.status() != StatusCode::OK {
         return Err(match response.status() {
             StatusCode::NOT_FOUND => "Workspace or scan is unavailable.".to_owned(),
+            StatusCode::NOT_IMPLEMENTED => "This app-server build does not support the saved Swarm configuration. It cannot run as an ordinary local scan.".to_owned(),
             StatusCode::CONFLICT => "Scan changed or reached its turn limit.".to_owned(),
             StatusCode::BAD_REQUEST => "The scan request is invalid.".to_owned(),
             StatusCode::BAD_GATEWAY => "The provider could not complete this turn.".to_owned(),
@@ -163,8 +164,9 @@ pub(crate) fn detail_with_live_usage(
     for delta in deltas {
         let Some(usage) = &delta.usage else { continue };
         add_usage(&mut total, usage);
-        let scope = if beale_graphs::ProfileId::from_id(&delta.role)
-            .is_some_and(beale_graphs::ProfileId::is_top_level)
+        let scope = if delta.role == "main"
+            || beale_swarms::ProfileId::from_id(&delta.role)
+                .is_some_and(beale_swarms::ProfileId::is_top_level)
             || delta.role.is_empty()
         {
             &mut main
@@ -224,7 +226,7 @@ pub(crate) fn detail_for_agent(
     live_ms: u64,
 ) -> Option<SessionDetail> {
     let detail = detail?;
-    if !beale_graphs::is_peer_graph(&detail.graph_id) {
+    if swarm_definition(detail).is_none() {
         return detail_with_live_usage(Some(detail), events, live_ms);
     }
     let metrics = detail
@@ -258,7 +260,7 @@ fn valid_model_usage(detail: &SessionDetail) -> bool {
             || !(1..=2).contains(&model.method)
             || model.model.is_empty()
             || model.model.len() > 200
-            || model.role.len() > 20
+            || model.role.len() > beale_contracts::swarms::MAX_ID_BYTES
             || !sources.insert((model.provider, model.method, &model.model, &model.role))
             || usage.measured_calls > usage.total_calls
             || usage.cache_measured_calls > usage.measured_calls
@@ -324,8 +326,9 @@ fn valid_scoped_snapshots(detail: &SessionDetail) -> bool {
     for source in &detail.model_usage {
         let index = if source.role.is_empty() {
             continue;
-        } else if beale_graphs::ProfileId::from_id(&source.role)
-            .is_some_and(beale_graphs::ProfileId::is_top_level)
+        } else if source.role == "main"
+            || beale_swarms::ProfileId::from_id(&source.role)
+                .is_some_and(beale_swarms::ProfileId::is_top_level)
         {
             0
         } else {
@@ -341,62 +344,114 @@ fn valid_scoped_snapshots(detail: &SessionDetail) -> bool {
     previous == expected
 }
 
-fn valid_graph_state(detail: &SessionDetail) -> bool {
-    if detail.graph_handoffs.len() > 128 {
+pub(crate) fn swarm_definition(
+    detail: &SessionDetail,
+) -> Option<std::sync::Arc<beale_swarms::SwarmDefinition>> {
+    if detail.swarm_id.is_empty() {
+        return None;
+    }
+    let saved = beale_swarms::restore_snapshot(&detail.swarm_template_json).ok()?;
+    (saved.id == detail.swarm_id).then_some(saved)
+}
+
+fn valid_swarm_state(detail: &SessionDetail) -> bool {
+    if detail.swarm_handoffs.len() > 128 {
         return false;
     }
-    let graph = beale_graphs::graph_definition(&detail.graph_id);
-    if beale_graphs::is_rotating_graph(&detail.graph_id)
-        && !(1..=1_440).contains(&detail.stage_duration_minutes)
-    {
+    if !detail.swarm_overview_json.is_empty() {
+        if detail.swarm_overview_json.len() > 2 * 1024 * 1024 || detail.swarm_id.is_empty() {
+            return false;
+        }
+        let Ok(overview) = serde_json::from_str::<beale_contracts::swarm_ui::ScanOverview>(
+            &detail.swarm_overview_json,
+        ) else {
+            return false;
+        };
+        let mut ids = std::collections::BTreeSet::new();
+        if overview.definition_id != detail.swarm_id
+            || overview.definition_revision == 0
+            || overview.leader_rule.len() > 32768
+            || overview.agents.len() > 1024
+            || overview.destinations.len() > 128
+            || overview.pacing.len() > 64
+            || !overview.agents.iter().all(|a| {
+                beale_contracts::swarms::valid_id(&a.summary.id) && ids.insert(&a.summary.id)
+            })
+            || overview.agents.iter().any(|a| {
+                a.summary
+                    .parent_id
+                    .as_ref()
+                    .is_some_and(|p| !ids.contains(p))
+            })
+        {
+            return false;
+        }
+    }
+    let saved = swarm_definition(detail);
+    let graph = saved.as_deref();
+
+    if detail.swarm_agents.len() > graph.map_or(0, |_| 1024) {
         return false;
     }
-    if detail.graph_agents.len()
-        > graph.map_or(0, |graph| {
-            graph
-                .nodes
-                .iter()
-                .filter(|role| role.is_top_level())
-                .count()
+    let mut identities = std::collections::BTreeSet::new();
+    if !detail.swarm_agents.iter().all(|agent| {
+        beale_swarms::ProfileId::from_id(&agent.role)
+            .is_some_and(|role| graph.is_some_and(|graph| graph.nodes.contains(&role)))
+            && matches!(
+                agent.status.as_str(),
+                "idle"
+                    | "queued"
+                    | "working"
+                    | "failed"
+                    | "running"
+                    | "waiting"
+                    | "suspended"
+                    | "completed"
+                    | "blocked"
+                    | "stopped"
+            )
+            && identities.insert(if agent.id.is_empty() {
+                agent.role.as_str()
+            } else {
+                agent.id.as_str()
+            })
+    }) {
+        return false;
+    }
+    if detail.scoped_review_rules.len() > 1
+        || detail.scoped_review_rules.iter().any(|r| {
+            !r.enabled
+                || !r.id.starts_with("swarm:")
+                || r.instruction.len() > 32768
+                || r.stage != beale_contracts::v1::ReviewStage::AutoReview as i32
         })
     {
         return false;
     }
-    let mut roles = std::collections::BTreeSet::new();
-    if !detail.graph_agents.iter().all(|agent| {
-        beale_graphs::ProfileId::from_id(&agent.role).is_some_and(|role| {
-            role.is_top_level() && graph.is_some_and(|graph| graph.nodes.contains(&role))
-        }) && matches!(
-            agent.status.as_str(),
-            "idle" | "queued" | "working" | "failed"
-        ) && roles.insert(agent.role.as_str())
-    }) {
-        return false;
-    }
-    detail.graph_handoffs.iter().all(|item| {
+    detail.swarm_handoffs.iter().all(|item| {
         uuid::Uuid::parse_str(&item.id).is_ok()
             && !item.task.trim().is_empty()
             && item.task.len() <= 4_096
             && matches!(
                 item.status.as_str(),
-                "pending" | "running" | "completed" | "failed"
+                "pending" | "assigned" | "completed" | "blocked" | "canceled"
             )
-            && beale_graphs::ProfileId::from_id(&item.from_role)
-                .is_some_and(|role| role.is_top_level())
-            && beale_graphs::ProfileId::from_id(&item.to_role)
-                .is_some_and(|role| role.is_top_level())
+            && beale_swarms::ProfileId::from_id(&item.from_role)
+                .is_some_and(|role| graph.is_some_and(|graph| graph.is_top_level(role)))
+            && beale_swarms::ProfileId::from_id(&item.to_role)
+                .is_some_and(|role| graph.is_some_and(|graph| graph.is_top_level(role)))
     })
 }
 
 pub(crate) fn valid_detail(detail: &SessionDetail) -> bool {
-    if detail.max_concurrent_workers > beale_graphs::MAX_CONCURRENT {
+    if detail.committed_turn_number > i64::MAX as u64
+        || (detail.committed_turn_number > 0
+            && detail.committed_turn_number < detail.first_turn_number)
+        || detail.max_concurrent_workers > beale_swarms::MAX_CONCURRENT
+    {
         return false;
     }
-    if detail.graph_id.starts_with("custom:")
-        && beale_graphs::register_template(&detail.graph_template_json)
-            .ok()
-            .is_none_or(|id| id != detail.graph_id)
-    {
+    if !detail.swarm_id.is_empty() && swarm_definition(detail).is_none() {
         return false;
     }
     let Some(summary) = &detail.summary else {
@@ -437,13 +492,13 @@ pub(crate) fn valid_detail(detail: &SessionDetail) -> bool {
         })
         && valid_model_usage(detail)
         && valid_scoped_snapshots(detail)
-        && valid_graph_state(detail)
+        && valid_swarm_state(detail)
         && detail.subagents.len() <= 1_024
         && detail.subagents.iter().all(valid_subagent_summary)
         && detail.agent_metrics.len() <= 8
         && detail.agent_metrics.iter().all(|item| {
             !item.role.is_empty()
-                && item.role.len() <= 32
+                && item.role.len() <= beale_contracts::swarms::MAX_ID_BYTES
                 && item
                     .token_usage
                     .as_ref()
@@ -509,7 +564,7 @@ pub(crate) fn valid_detail(detail: &SessionDetail) -> bool {
                         && message.commentary.is_empty()
                         && message.duration_ms == 0))
                 && message.tools.len() <= SESSION_DETAIL_MAX_TOOL_SUMMARIES
-                && message.duration_ms <= 86_400_000
+                && message.duration_ms <= beale_contracts::swarm_worker::MAX_ACTIVE_ELAPSED_MS
                 && message.reasoning_summaries.len() <= 8_193
                 && message.commentary.len() <= 8_449
                 && message.commentary.iter().all(|item| {
@@ -540,30 +595,30 @@ pub(crate) fn valid_detail(detail: &SessionDetail) -> bool {
         })
 }
 
-pub(crate) async fn list_graph_templates(
+pub(crate) async fn list_swarm_templates(
     client: &Client,
     addr: SocketAddr,
-) -> Result<Vec<GraphTemplate>, String> {
+) -> Result<Vec<SwarmTemplate>, String> {
     let token = crate::provider_auth::authenticated_token(client, addr).await?;
-    let reply: ListGraphTemplatesResponse = decode(
+    let reply: ListSwarmTemplatesResponse = decode(
         client
-            .get(url(addr, GRAPH_TEMPLATES_PATH))
+            .get(url(addr, SWARM_TEMPLATES_PATH))
             .bearer_auth(token)
             .send()
             .await
-            .map_err(|_| "Could not list graph templates".to_owned())?,
+            .map_err(|_| "Could not list Swarm templates".to_owned())?,
     )
     .await?;
     if reply.templates.len() > 64
         || reply.templates.iter().any(|template| {
             template.name.is_empty()
                 || template.name.len() > 200
-                || beale_graphs::register_template(&template.definition_json)
+                || beale_swarms::register_template(&template.definition_json)
                     .ok()
                     .is_none_or(|id| id != template.id)
         })
     {
-        return Err("Invalid app-server graph templates".to_owned());
+        return Err("Invalid app-server Swarm templates".to_owned());
     }
     Ok(reply.templates)
 }
@@ -571,9 +626,9 @@ pub(crate) async fn list_graph_templates(
 fn valid_subagent_summary(item: &SessionSubagentSummary) -> bool {
     uuid::Uuid::parse_str(&item.id).is_ok()
         && !item.parent_role.is_empty()
-        && item.parent_role.len() <= 32
+        && item.parent_role.len() <= beale_contracts::swarms::MAX_ID_BYTES
         && !item.role.is_empty()
-        && item.role.len() <= 32
+        && item.role.len() <= beale_contracts::swarms::MAX_ID_BYTES
         && !item.task.is_empty()
         && item.task.len() <= 16_384
         && matches!(item.status.as_str(), "active" | "completed" | "failed")
@@ -581,6 +636,9 @@ fn valid_subagent_summary(item: &SessionSubagentSummary) -> bool {
 }
 
 fn valid_stream_event(event: &SessionStreamEvent) -> bool {
+    if event.turn_number > i64::MAX as u64 {
+        return false;
+    }
     if !event.subagent_id.is_empty() && uuid::Uuid::parse_str(&event.subagent_id).is_err() {
         return false;
     }
@@ -620,6 +678,7 @@ fn valid_stream_event(event: &SessionStreamEvent) -> bool {
         Ok(
             SessionStreamKind::Completed
             | SessionStreamKind::TurnCompleted
+            | SessionStreamKind::SwarmUpdated
             | SessionStreamKind::SessionStarted
             | SessionStreamKind::AgentStarted
             | SessionStreamKind::AgentTurnCompleted,
@@ -671,7 +730,7 @@ fn valid_stream_event(event: &SessionStreamEvent) -> bool {
                         && (1..=2).contains(&model.method)
                         && !model.model.is_empty()
                         && model.model.len() <= 200
-                        && model.role.len() <= 20
+                        && model.role.len() <= beale_contracts::swarms::MAX_ID_BYTES
                         && model.usage.as_ref().is_some_and(|usage| {
                             usage.total_calls == 1
                                 && usage.measured_calls <= 1
@@ -834,17 +893,92 @@ pub(crate) async fn load(
     Ok(reply)
 }
 
+/// Cancellation remains owned by Desktop until the host has accepted the turn.
+#[derive(Clone)]
+pub(crate) struct SubmissionControl {
+    canceled: tokio::sync::watch::Sender<bool>,
+    registered: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+impl Default for SubmissionControl {
+    fn default() -> Self {
+        Self {
+            canceled: tokio::sync::watch::channel(false).0,
+            registered: Default::default(),
+        }
+    }
+}
+impl SubmissionControl {
+    pub(crate) fn cancel(&self) -> bool {
+        self.canceled.send_replace(true);
+        self.registered.load(std::sync::atomic::Ordering::SeqCst)
+    }
+    async fn prepare<T>(
+        &self,
+        future: impl std::future::Future<Output = Result<T, String>>,
+    ) -> Result<T, String> {
+        let mut canceled = self.canceled.subscribe();
+        if *canceled.borrow() {
+            return Err("Scan canceled before submission.".into());
+        }
+        tokio::select! { biased;
+            _ = canceled.changed() => Err("Scan canceled before submission.".into()),
+            result = future => result,
+        }
+    }
+    fn accepted(&self) -> bool {
+        self.registered
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        *self.canceled.borrow()
+    }
+}
+
 pub(crate) async fn submit_stream(
     client: &Client,
     addr: SocketAddr,
     request: SubmitSessionTurnRequest,
     turn_id: &str,
-    mut on_progress: impl FnMut(SessionStreamEvent),
+    control: SubmissionControl,
+    on_progress: impl FnMut(SessionStreamEvent),
+    on_stop_error: impl FnMut(String),
 ) -> Result<SessionDetail, String> {
-    let token = crate::provider_auth::authenticated_token(client, addr).await?;
+    let token = control
+        .prepare(async {
+            if request.session_id.is_empty() && !request.swarm_destinations.is_empty() {
+                crate::fleet_connection::sync_execution_hosts(&request.swarm_destinations).await?;
+            }
+            crate::provider_auth::authenticated_token(client, addr).await
+        })
+        .await?;
+    submit_authenticated_stream(
+        client,
+        addr,
+        request,
+        turn_id,
+        control,
+        token,
+        on_progress,
+        on_stop_error,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn submit_authenticated_stream(
+    client: &Client,
+    addr: SocketAddr,
+    request: SubmitSessionTurnRequest,
+    turn_id: &str,
+    control: SubmissionControl,
+    token: String,
+    mut on_progress: impl FnMut(SessionStreamEvent),
+    mut on_stop_error: impl FnMut(String),
+) -> Result<SessionDetail, String> {
+    if *control.canceled.borrow() {
+        return Err("Scan canceled before submission.".into());
+    }
     let mut response = client
         .post(url(addr, SESSION_TURN_STREAM_PATH))
-        .bearer_auth(token)
+        .bearer_auth(&token)
         .header(CONTENT_TYPE, PROTOBUF_CONTENT_TYPE)
         .header(SESSION_TURN_ID_HEADER, turn_id)
         .body(request.encode_to_vec())
@@ -854,6 +988,23 @@ pub(crate) async fn submit_stream(
     if response.status() != StatusCode::OK {
         return Err(format!("Scan request failed ({})", response.status()));
     }
+    // Replay cancellation alongside response consumption. A completed response
+    // wins even if Stop is late, slow, or temporarily unavailable.
+    let mut replay_active = control.accepted();
+    let replay = async {
+        let mut result = Ok(());
+        for attempt in 0..3 {
+            result = stop_authenticated(client, addr, turn_id, &token).await;
+            if result.is_ok() {
+                break;
+            }
+            if attempt < 2 {
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+        }
+        result
+    };
+    tokio::pin!(replay);
     if response
         .headers()
         .get(CONTENT_TYPE)
@@ -863,22 +1014,30 @@ pub(crate) async fn submit_stream(
         return Err("Invalid app-server scan stream".to_owned());
     }
     let mut decoder = StreamDecoder::default();
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|_| "Scan stream was interrupted".to_owned())?
-    {
+    loop {
+        let chunk = tokio::select! {
+            result = &mut replay, if replay_active => {
+                replay_active = false;
+                if let Err(error) = result { on_stop_error(format!("{error}. Stop can be retried; the scan stream is still connected.")); }
+                continue;
+            }
+            chunk = response.chunk() => chunk.map_err(|_| "Scan stream was interrupted".to_owned())?,
+        };
+        let Some(chunk) = chunk else {
+            break;
+        };
         for event in decoder.push(&chunk)? {
             if !valid_stream_event(&event) {
                 return Err("Invalid app-server scan stream event".to_owned());
             }
             match SessionStreamKind::try_from(event.kind) {
-                Ok(SessionStreamKind::TurnCompleted) => {
+                Ok(SessionStreamKind::TurnCompleted | SessionStreamKind::SwarmUpdated) => {
                     if event.detail.as_ref().is_none_or(|detail| {
-                        detail
-                            .summary
-                            .as_ref()
-                            .is_none_or(|summary| summary.workspace_id != request.workspace_id)
+                        detail.summary.as_ref().is_none_or(|summary| {
+                            summary.workspace_id != request.workspace_id
+                                || (!request.session_id.is_empty()
+                                    && summary.id != request.session_id)
+                        })
                     }) {
                         return Err("Invalid app-server scan detail".to_owned());
                     }
@@ -911,16 +1070,24 @@ pub(crate) async fn stop_turn(
         return Err("Invalid turn ID".to_owned());
     }
     let token = crate::provider_auth::authenticated_token(client, addr).await?;
+    stop_authenticated(client, addr, turn_id, &token).await
+}
+async fn stop_authenticated(
+    client: &Client,
+    addr: SocketAddr,
+    turn_id: &str,
+    token: &str,
+) -> Result<(), String> {
     let path = SESSION_TURN_STOP_PATH.replace("{id}", turn_id);
     let response = client
         .post(url(addr, &path))
+        .timeout(Duration::from_secs(3))
         .bearer_auth(token)
         .send()
         .await
         .map_err(|_| "Could not stop scan turn".to_owned())?;
     match response.status() {
-        StatusCode::NO_CONTENT => Ok(()),
-        StatusCode::NOT_FOUND => Err("Scan turn has already finished".to_owned()),
+        StatusCode::NO_CONTENT | StatusCode::NOT_FOUND => Ok(()),
         _ => Err(format!("Could not stop scan turn ({})", response.status())),
     }
 }
@@ -943,6 +1110,7 @@ mod tests {
             cache_measured_calls: 1,
         };
         let mut detail = SessionDetail {
+            scoped_review_rules: Vec::new(),
             token_usage: Some(usage.clone()),
             model_usage: vec![SessionModelUsage {
                 provider: 1,
@@ -954,6 +1122,11 @@ mod tests {
             ..Default::default()
         };
         assert!(valid_model_usage(&detail));
+        detail.model_usage[0].role = "p".repeat(beale_contracts::swarms::MAX_ID_BYTES);
+        assert!(valid_model_usage(&detail));
+        detail.model_usage[0].role.push('p');
+        assert!(!valid_model_usage(&detail));
+        detail.model_usage[0].role.pop();
         detail.model_usage[0].usage.as_mut().unwrap().input_tokens += 1;
         assert!(!valid_model_usage(&detail));
         detail.model_usage[0].usage.as_mut().unwrap().input_tokens -= 1;
@@ -1161,9 +1334,9 @@ mod tests {
     }
 
     #[test]
-    fn peer_graph_detail_accepts_top_level_usage_and_graph_turn_activity() {
+    fn peer_swarm_detail_accepts_top_level_usage_and_swarm_turn_activity() {
         use beale_contracts::v1::{
-            SessionGraphAgent, SessionMessage, SessionModelUsage, SessionTokenUsage,
+            SessionMessage, SessionModelUsage, SessionSwarmAgent, SessionTokenUsage,
             SessionUsageSnapshot,
         };
         let usage = SessionTokenUsage {
@@ -1174,6 +1347,7 @@ mod tests {
             ..Default::default()
         };
         let mut detail = SessionDetail {
+            scoped_review_rules: Vec::new(),
             summary: Some(SessionSummary {
                 id: uuid::Uuid::new_v4().to_string(),
                 workspace_id: uuid::Uuid::new_v4().to_string(),
@@ -1199,7 +1373,8 @@ mod tests {
             method: 1,
             model: "example-model".to_owned(),
             first_turn_number: 1,
-            graph_id: beale_graphs::OPENAI_ID.to_owned(),
+            swarm_id: beale_swarms::OAI_948_ID.to_owned(),
+            swarm_template_json: beale_swarms::template_snapshot(beale_swarms::OAI_948_ID).unwrap(),
             total_duration_ms: 1,
             token_usage: Some(usage.clone()),
             model_usage: vec![SessionModelUsage {
@@ -1219,7 +1394,7 @@ mod tests {
                 subagent_usage: Some(SessionTokenUsage::default()),
                 ..Default::default()
             }],
-            graph_agents: [
+            swarm_agents: [
                 "audit_targets",
                 "discovery",
                 "validation",
@@ -1227,7 +1402,10 @@ mod tests {
                 "patch_generation",
             ]
             .into_iter()
-            .map(|role| SessionGraphAgent {
+            .map(|role| SessionSwarmAgent {
+                id: String::new(),
+                parent_id: String::new(),
+                agent_kind: String::new(),
                 role: role.to_owned(),
                 status: "idle".to_owned(),
             })
@@ -1245,30 +1423,41 @@ mod tests {
             });
         }
         assert!(valid_detail(&detail));
+        let mut long = detail.clone();
+        long.messages[1].duration_ms = 86_400_001;
+        long.total_duration_ms = 86_400_001;
+        long.usage_snapshots[0].work_duration_ms = 86_400_001;
+        assert!(valid_detail(&long));
+        let invalid_duration = beale_contracts::swarm_worker::MAX_ACTIVE_ELAPSED_MS + 1;
+        long.messages[1].duration_ms = invalid_duration;
+        long.total_duration_ms = invalid_duration;
+        long.usage_snapshots[0].work_duration_ms = invalid_duration;
+        assert!(!valid_detail(&long));
+
         let template =
-            include_str!("../../../extensions/features/beale-graphs/examples/example-review.json");
-        let custom_id = beale_graphs::register_template(template).unwrap();
+            include_str!("../../../extensions/features/beale-swarms/examples/example-review.json");
+        let custom_id = beale_swarms::register_template(template).unwrap();
         let mut custom = detail.clone();
-        custom.graph_id = custom_id;
-        custom.graph_template_json = template.to_owned();
-        custom.graph_agents.retain(|agent| {
+        custom.swarm_template_json = beale_swarms::template_snapshot(&custom_id).unwrap();
+        custom.swarm_id = custom_id;
+        custom.swarm_agents.retain(|agent| {
             matches!(
                 agent.role.as_str(),
                 "discovery_harness" | "validation_system"
             )
         });
         assert!(valid_detail(&custom));
-        custom.graph_template_json.push(' ');
+        let mut altered: serde_json::Value =
+            serde_json::from_str(&custom.swarm_template_json).unwrap();
+        altered["definition"]["id"] = serde_json::json!("custom:example-mismatched-id");
+        custom.swarm_template_json = altered.to_string();
         assert!(!valid_detail(&custom));
         let mut earlier_pipeline = detail.clone();
-        earlier_pipeline.graph_agents.remove(0);
+        earlier_pipeline.swarm_agents.remove(0);
         assert!(valid_detail(&earlier_pipeline));
-        let mut sequential = detail.clone();
-        sequential.graph_id = beale_graphs::SEQUENTIAL_ID.to_owned();
-        sequential.stage_duration_minutes = 60;
-        assert!(valid_detail(&sequential));
-        sequential.stage_duration_minutes = 0;
-        assert!(!valid_detail(&sequential));
+        let mut retired = detail.clone();
+        retired.swarm_id = "sequential_pipeline".into();
+        assert!(!valid_detail(&retired));
         detail.messages[1].commentary = (0..40)
             .map(|index| beale_contracts::v1::SessionCommentary {
                 text: format!("Example progress {index}"),
@@ -1295,7 +1484,200 @@ mod tests {
         }
         assert!(!valid_detail(&oversized));
         let mut invalid = detail;
-        invalid.graph_agents[1].status = "unknown".to_owned();
+        invalid.swarm_agents[1].status = "unknown".to_owned();
         assert!(!valid_detail(&invalid));
     }
+
+    #[test]
+    fn local_hierarchy_projection_accepts_repeated_profiles_and_scoped_rules() {
+        let mut detail = SessionDetail {
+            swarm_id: "basic".into(),
+            swarm_template_json: beale_swarms::template_snapshot("basic").unwrap(),
+            ..Default::default()
+        };
+        detail.swarm_agents = (0..2)
+            .map(|_| beale_contracts::v1::SessionSwarmAgent {
+                id: uuid::Uuid::new_v4().to_string(),
+                parent_id: uuid::Uuid::new_v4().to_string(),
+                agent_kind: "deputy".into(),
+                role: "research_deputy".into(),
+                status: "suspended".into(),
+            })
+            .collect();
+        detail
+            .scoped_review_rules
+            .push(beale_contracts::v1::PermissionRule {
+                id: "swarm:coordinator-only:1".into(),
+                title: "Coordinator only".into(),
+                instruction: "Delegate dedicated research".into(),
+                enabled: true,
+                stage: beale_contracts::v1::ReviewStage::AutoReview as i32,
+            });
+        assert!(valid_swarm_state(&detail));
+        detail.swarm_agents[1].id = detail.swarm_agents[0].id.clone();
+        assert!(!valid_swarm_state(&detail));
+        detail.swarm_agents.pop();
+        detail.scoped_review_rules[0].enabled = false;
+        assert!(!valid_swarm_state(&detail));
+    }
+    #[test]
+    fn client_overview_rejects_foreign_definitions_duplicates_and_dangling_parents() {
+        use beale_contracts::{swarm_ui::*, swarms::*};
+        let mut detail = SessionDetail {
+            swarm_id: "basic".into(),
+            swarm_template_json: beale_swarms::template_snapshot("basic").unwrap(),
+            ..Default::default()
+        };
+        let mut overview = ScanOverview {
+            revision: 1,
+            definition_id: "basic".into(),
+            definition_revision: 1,
+            leader_rule: "Delegate research".into(),
+            destinations: vec![],
+            pacing: vec![],
+            agents: vec![AgentOverview {
+                summary: AgentSummary {
+                    id: "leader-example".into(),
+                    parent_id: None,
+                    profile: ProfileRef {
+                        id: "leader".into(),
+                        revision: 1,
+                    },
+                    role: Role::Leader,
+                    state: AgentState::Waiting,
+                    revision: 1,
+                },
+                pending_assignments: 0,
+                queued_wakes: 1,
+                termination_unconfirmed: false,
+                unknown_commands: 0,
+                resumable: true,
+            }],
+        };
+        detail.swarm_overview_json = serde_json::to_string(&overview).unwrap();
+        assert!(valid_swarm_state(&detail));
+        overview.agents.push(overview.agents[0].clone());
+        detail.swarm_overview_json = serde_json::to_string(&overview).unwrap();
+        assert!(!valid_swarm_state(&detail));
+        overview.agents.pop();
+        overview.agents[0].summary.parent_id = Some("missing-example".into());
+        detail.swarm_overview_json = serde_json::to_string(&overview).unwrap();
+        assert!(!valid_swarm_state(&detail));
+        overview.agents[0].summary.parent_id = None;
+        overview.definition_id = "other-example".into();
+        detail.swarm_overview_json = serde_json::to_string(&overview).unwrap();
+        assert!(!valid_swarm_state(&detail));
+        detail.swarm_overview_json = "{".into();
+        assert!(!valid_swarm_state(&detail));
+        detail.swarm_id.clear();
+        assert!(!valid_swarm_state(&detail));
+    }
+    #[test]
+    fn live_swarm_status_uses_validated_stream_detail() {
+        use beale_contracts::{swarm_ui::*, swarms::*};
+        let overview = ScanOverview {
+            revision: 1,
+            definition_id: "basic".into(),
+            definition_revision: 1,
+            leader_rule: "Coordinate synthetic work".into(),
+            destinations: vec![],
+            pacing: vec![],
+            agents: vec![AgentOverview {
+                summary: AgentSummary {
+                    id: "leader-example".into(),
+                    parent_id: None,
+                    profile: ProfileRef {
+                        id: "leader".into(),
+                        revision: 1,
+                    },
+                    role: Role::Leader,
+                    state: AgentState::Running,
+                    revision: 1,
+                },
+                pending_assignments: 0,
+                queued_wakes: 1,
+                termination_unconfirmed: false,
+                unknown_commands: 0,
+                resumable: false,
+            }],
+        };
+        let detail = SessionDetail {
+            summary: Some(SessionSummary {
+                id: uuid::Uuid::new_v4().to_string(),
+                workspace_id: uuid::Uuid::new_v4().to_string(),
+                title: "Example live research".into(),
+                last_message_at_ms: 1,
+            }),
+            provider: 1,
+            method: 1,
+            model: "example-model".into(),
+            first_turn_number: 1,
+            swarm_id: "basic".into(),
+            swarm_template_json: beale_swarms::template_snapshot("basic").unwrap(),
+            swarm_overview_json: serde_json::to_string(&overview).unwrap(),
+            swarm_agents: vec![beale_contracts::v1::SessionSwarmAgent {
+                id: "leader-example".into(),
+                parent_id: String::new(),
+                agent_kind: "leader".into(),
+                role: "leader".into(),
+                status: "running".into(),
+            }],
+            pacing_warnings: vec!["Synthetic authority warning".into()],
+            ..Default::default()
+        };
+        let event = SessionStreamEvent {
+            kind: SessionStreamKind::SwarmUpdated as i32,
+            detail: Some(detail),
+            ..Default::default()
+        };
+        assert!(valid_stream_event(&event));
+        let frame = beale_contracts::session_stream_frame(&event).unwrap();
+        let decoded = StreamDecoder::default().push(&frame).unwrap();
+        assert_eq!(decoded, vec![event.clone()]);
+        let mut malformed = event;
+        malformed.detail.as_mut().unwrap().swarm_overview_json = "{".into();
+        assert!(!valid_stream_event(&malformed));
+    }
+    #[tokio::test]
+    async fn cancellation_during_peer_discovery_prevents_submission_and_covers_post_race() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        let control = SubmissionControl::default();
+        let pending = control.clone();
+        let posts = Arc::new(AtomicUsize::new(0));
+        let observed = posts.clone();
+        let (entered, ready) = tokio::sync::oneshot::channel();
+        let (release, wait) = tokio::sync::oneshot::channel::<()>();
+        let task = tokio::spawn(async move {
+            pending
+                .prepare(async {
+                    entered.send(()).unwrap();
+                    let _ = wait.await;
+                    Ok(())
+                })
+                .await?;
+            observed.fetch_add(1, Ordering::SeqCst);
+            Ok::<(), String>(())
+        });
+        ready.await.unwrap();
+        assert!(!control.cancel(), "the host has not accepted a turn yet");
+        assert!(task.await.unwrap().unwrap_err().contains("canceled"));
+        let _ = release.send(());
+        assert_eq!(posts.load(Ordering::SeqCst), 0);
+        let late = SubmissionControl::default();
+        assert!(!late.cancel());
+        assert!(
+            late.accepted(),
+            "cancel during POST must be delivered after acceptance"
+        );
+        let running = SubmissionControl::default();
+        assert!(!running.accepted());
+        assert!(running.cancel(), "running turns use the host stop endpoint");
+    }
 }
+
+#[cfg(test)]
+#[path = "sessions_transport_tests.rs"]
+mod transport_tests;

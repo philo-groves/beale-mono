@@ -9,7 +9,7 @@ license.workspace = true
 webfetch = ["dep:beale-webfetch"]
 default = []
 agent-feedback = ["dep:beale-agent-feedback"]
-graphs = ["dep:beale-graphs"]
+swarms = ["dep:beale-swarms", "dep:reqwest"]
 surfaces = ["dep:beale-surfaces"]
 findings = ["dep:beale-findings"]
 memories = ["dep:beale-memories"]
@@ -26,7 +26,7 @@ beale-contracts = { path = "../beale-contracts" }
 beale-agent-feedback = { path = "../../../../extensions/features/beale-agent-feedback", optional = true }
 beale-extender = { path = "../beale-extender" }
 beale-goals = { path = "../beale-goals" }
-beale-graphs = { path = "../../../../extensions/features/beale-graphs", optional = true }
+beale-swarms = { path = "../../../../extensions/features/beale-swarms", optional = true }
 beale-findings = { path = "../../../../extensions/features/beale-findings", optional = true }
 beale-memories = { path = "../../../../extensions/features/beale-memories", optional = true }
 beale-runbooks = { path = "../../../../extensions/features/beale-runbooks", optional = true }
@@ -39,6 +39,8 @@ beale-workspaces = { path = "../beale-workspaces" }
 futures-util.workspace = true
 prost.workspace = true
 serde_json.workspace = true
+serde.workspace = true
+reqwest = { workspace = true, optional = true }
 tokio.workspace = true
 uuid.workspace = true
 

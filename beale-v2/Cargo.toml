@@ -16,7 +16,7 @@ members = [
     "apps/beale-app-server/beale-harness/beale-workspaces",
     "apps/beale-desktop-app",
     "extensions/features/beale-agent-feedback",
-    "extensions/features/beale-graphs",
+    "extensions/features/beale-swarms",
     "extensions/features/beale-findings",
     "extensions/features/beale-memories",
     "extensions/features/beale-runbooks",

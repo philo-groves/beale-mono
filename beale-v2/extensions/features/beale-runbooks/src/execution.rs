@@ -61,15 +61,58 @@ fn command(language: &str) -> Result<Command> {
     Ok(command)
 }
 
+pub fn validate_worker_languages(document: &Document) -> Result<()> {
+    for cell in &document.cells {
+        if let Cell::Code { language, .. } = cell {
+            command(language)?;
+        }
+    }
+    Ok(())
+}
+
+/// Executes one already reviewed cell inside the dedicated worker's execution
+/// tree. Any error after dispatch remains uncertain and stops worker recovery.
+pub async fn run_worker_cell(
+    language: &str,
+    source: &str,
+    workspace: &Path,
+    budget: Duration,
+) -> Result<RunOutput> {
+    beale_tools::process::require_worker_group()?;
+    ensure!(
+        !budget.is_zero() && budget <= CELL_TIMEOUT,
+        "invalid Runbook cell budget"
+    );
+    run_cell_policy(language, source, workspace, budget, true).await
+}
+
 async fn run_cell(language: &str, source: &str, workspace: &Path) -> Result<RunOutput> {
-    let mut child = command(language)?
+    run_cell_policy(language, source, workspace, CELL_TIMEOUT, false).await
+}
+
+async fn run_cell_policy(
+    language: &str,
+    source: &str,
+    workspace: &Path,
+    budget: Duration,
+    worker: bool,
+) -> Result<RunOutput> {
+    let mut process = command(language)?;
+    if worker {
+        beale_tools::process::retain_worker_group(&mut process)?;
+    }
+    let mut child = process
         .current_dir(workspace)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .with_context(|| format!("start {language} interpreter"))?;
-    let tree = ProcessTree::attach(&child);
+    let tree = if worker && cfg!(unix) {
+        None
+    } else {
+        Some(ProcessTree::attach(&child))
+    };
     let mut stdin = child.stdin.take().context("runbook stdin unavailable")?;
     let mut stdout = child.stdout.take().context("runbook stdout unavailable")?;
     let mut stderr = child.stderr.take().context("runbook stderr unavailable")?;
@@ -112,10 +155,12 @@ async fn run_cell(language: &str, source: &str, workspace: &Path) -> Result<RunO
             stderr,
         })
     };
-    let output = timeout(CELL_TIMEOUT, execute)
+    let output = timeout(budget, execute)
         .await
         .context("runbook cell timed out")??;
-    tree.release();
+    if let Some(tree) = tree {
+        tree.release();
+    }
     Ok(output)
 }
 
@@ -212,6 +257,33 @@ pub async fn run_selected_cell(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn worker_cell_timeout_terminates_managed_descendants() {
+        let workspace = std::env::temp_dir().join(format!(
+            "beale-worker-cell-example-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir(&workspace).unwrap();
+        let child = "from pathlib import Path; import time; Path('ready.txt').write_text('ready'); time.sleep(2); Path('late.txt').write_text('must not execute')";
+        let source = format!(
+            "import subprocess,sys,time\nsubprocess.Popen([sys.executable,'-c',{}])\ntime.sleep(30)\n",
+            serde_json::to_string(child).unwrap()
+        );
+        assert!(
+            run_worker_cell("python", &source, &workspace, Duration::from_secs(1))
+                .await
+                .is_err()
+        );
+        assert!(
+            workspace.join("ready.txt").exists(),
+            "descendant must start before timeout"
+        );
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        assert!(!workspace.join("late.txt").exists());
+        std::fs::remove_dir_all(workspace).unwrap();
+    }
 
     #[test]
     fn only_declared_interpreters_are_accepted() {

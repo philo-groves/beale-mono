@@ -1,7 +1,13 @@
 //! Host-owned installation registry for bundled Agent Plugins packages.
 //! Installed MCP servers are activated by the host and discovered at launch.
 
+mod active;
 mod mcp_runtime;
+mod resources;
+pub use active::GuardedToolResult;
+use active::{ActivePlugin, ActiveServer};
+pub use resources::{PluginResource, PluginSnapshot};
+use std::sync::atomic::Ordering;
 
 use anyhow::{Context, Result, ensure};
 use axum::{
@@ -60,7 +66,7 @@ struct Manifest {
 struct Catalog {
     root: PathBuf,
     data_root: PathBuf,
-    active: Arc<Mutex<HashMap<String, HashMap<String, mcp_runtime::RunningServer>>>>,
+    active: Arc<Mutex<HashMap<String, Arc<ActivePlugin>>>>,
 }
 
 #[derive(Clone)]
@@ -70,105 +76,6 @@ pub struct PluginRuntime {
 }
 
 impl PluginRuntime {
-    /// Publish only model-facing guidance, skill resources, and discovered tool schemas.
-    /// Host package paths, MCP launch configuration, and credentials stay private.
-    pub async fn publish(
-        &self,
-        name: &str,
-        workspace_id: &str,
-        files: &beale_tools::AgentFiles,
-    ) -> Result<(PathBuf, bool)> {
-        let details = self.details(name, workspace_id).await?;
-        let root = self
-            .catalog
-            .package(name)?
-            .context("plugin package is unavailable")?
-            .canonicalize()?;
-        let prefix = format!("plugins/{name}");
-        let mut document = format!(
-            "# {}\n\n{}\n\n## Skills\n",
-            name,
-            details["description"].as_str().unwrap_or_default()
-        );
-        let mut total_bytes = 0_u64;
-        if let Some(skills) = details["skills"].as_array() {
-            for skill in skills {
-                let skill_name = skill["name"].as_str().context("invalid skill name")?;
-                let relative = format!("skills/{skill_name}/SKILL.md");
-                let source = contained_file(&root, &root.join(&relative))?;
-                let path = files.write(&format!("{prefix}/{relative}"), &std::fs::read(source)?)?;
-                document.push_str(&format!(
-                    "\n- {}: {}",
-                    skill_name,
-                    serde_json::to_string(&path.to_string_lossy())?
-                ));
-                for resource in ["scripts", "references", "assets"] {
-                    let directory = root.join("skills").join(skill_name).join(resource);
-                    count_skill_files(&root, &directory)?;
-                    if !directory.exists() {
-                        continue;
-                    }
-                    let mut pending = vec![directory];
-                    while let Some(directory) = pending.pop() {
-                        for entry in std::fs::read_dir(directory)? {
-                            let path = entry?.path();
-                            let metadata = std::fs::symlink_metadata(&path)?;
-                            ensure!(
-                                !metadata.file_type().is_symlink(),
-                                "skill resource cannot be a symlink"
-                            );
-                            if metadata.is_dir() {
-                                pending.push(path);
-                            } else {
-                                let source = contained_file(&root, &path)?;
-                                total_bytes = total_bytes
-                                    .checked_add(metadata.len())
-                                    .context("skill resources are too large")?;
-                                ensure!(
-                                    total_bytes <= 64_000_000 && metadata.len() <= 8_000_000,
-                                    "skill resources are too large"
-                                );
-                                let relative = path
-                                    .strip_prefix(&root)?
-                                    .to_str()
-                                    .context("invalid skill resource path")?;
-                                let output = files.write(
-                                    &format!("{prefix}/{relative}"),
-                                    &std::fs::read(source)?,
-                                )?;
-                                #[cfg(unix)]
-                                {
-                                    use std::os::unix::fs::PermissionsExt;
-                                    let mode = if metadata.permissions().mode() & 0o111 != 0 {
-                                        0o700
-                                    } else {
-                                        0o600
-                                    };
-                                    std::fs::set_permissions(
-                                        output,
-                                        std::fs::Permissions::from_mode(mode),
-                                    )?;
-                                }
-                                #[cfg(not(unix))]
-                                let _ = output;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        document.push_str("\n\n## Tools\n\nCall these with plugin_call using this plugin name, the server, tool name, and arguments matching its input schema.\n\n```json\n");
-        document.push_str(&serde_json::to_string_pretty(&details["tools"])?);
-        document.push_str("\n```\n");
-        let path = files.write(&format!("{prefix}/PLUGIN.md"), document.as_bytes())?;
-        Ok((
-            path,
-            details["tools"]
-                .as_array()
-                .is_some_and(|tools| !tools.is_empty()),
-        ))
-    }
-
     pub fn new(db: HostDatabase, data_root: PathBuf) -> Result<Self> {
         Ok(Self {
             catalog: Catalog::bundled(data_root)?,
@@ -209,31 +116,37 @@ impl PluginRuntime {
         let root = self
             .catalog
             .package(name)?
-            .context("plugin package is unavailable")?;
+            .context("plugin package is unavailable")?
+            .canonicalize()?;
         let description = self.catalog.scan(name, &root)?.description;
         let mut skills = Vec::new();
+        let mut skill_bytes = 0usize;
         let skills_root = root.join("skills");
         if skills_root.is_dir() {
             for entry in std::fs::read_dir(skills_root)? {
                 let entry = entry?;
                 let path = entry.path().join("SKILL.md");
                 if path.exists() {
-                    let path = contained_file(&root, &path)?;
                     ensure!(
-                        path.metadata()?.len() <= 64_000,
-                        "plugin skill is too large for model context"
+                        skills.len() < beale_contracts::swarm_plugins::MAX_BUNDLE_FILES - 1,
+                        "too many plugin skills"
                     );
-                    skills.push(serde_json::json!({"name":entry.file_name().to_string_lossy(),"instructions":std::fs::read_to_string(path)?}));
+                    let instructions = resources::skill_instructions(&root, &path)?;
+                    skill_bytes = skill_bytes
+                        .checked_add(instructions.len())
+                        .context("plugin skill size overflow")?;
+                    ensure!(skill_bytes <= 8_000_000, "plugin skills are too large");
+                    skills.push(serde_json::json!({"name":entry.file_name().to_string_lossy(),"instructions":instructions}));
                 }
             }
         }
         timeout(Duration::from_secs(30), self.catalog.activate(name))
             .await
             .context("plugin launch timed out")??;
-        let active = self.catalog.active.lock().await;
+        let servers = self.catalog.active_servers(name).await;
         let mut tools = Vec::new();
-        if let Some(servers) = active.get(name) {
-            for (server_name, server) in servers {
+        {
+            for (server_name, server) in &servers {
                 for tool in &server.tools {
                     tools.push(serde_json::json!({"server":server_name,"definition":tool}));
                 }
@@ -262,24 +175,19 @@ impl PluginRuntime {
         arguments: Value,
         workspace_id: &str,
     ) -> Result<Value> {
-        ensure!(
-            self.db
-                .installed_plugin_names()?
-                .iter()
-                .any(|installed| installed == plugin),
-            "plugin is not installed"
-        );
-        ensure!(
-            self.db
-                .extension_applies_to("plugin", plugin, workspace_id)?,
-            "plugin is unavailable in this workspace"
-        );
-        let mut active = self.catalog.active.lock().await;
-        let server = active
-            .get_mut(plugin)
-            .and_then(|servers| servers.get_mut(server))
-            .context("plugin server is unavailable; retry on the next turn")?;
-        server.call_tool(tool, arguments).await
+        let invocation = beale_contracts::swarm_plugins::Invocation {
+            plugin: plugin.into(),
+            server: server.into(),
+            tool: tool.into(),
+            arguments,
+        };
+        match self
+            .call_tool_guarded(&invocation, workspace_id, || Ok(()))
+            .await?
+        {
+            GuardedToolResult::Completed(value) => Ok(value),
+            GuardedToolResult::OutcomeUnknown(error) => Err(error),
+        }
     }
 }
 
@@ -495,11 +403,28 @@ impl Catalog {
                 return Err(error);
             }
         };
-        let mut active = self.active.lock().await;
-        let servers = active.entry(name.to_owned()).or_default();
-        servers.retain(|server_name, server| {
-            configurations.contains_key(server_name) && server.alive()
-        });
+        let plugin = self
+            .active
+            .lock()
+            .await
+            .entry(name.to_owned())
+            .or_default()
+            .clone();
+        let _activation = plugin.activation.lock().await;
+        ensure!(
+            plugin.enabled.load(Ordering::SeqCst),
+            "plugin activation canceled"
+        );
+        {
+            let mut servers = plugin.servers.lock().await;
+            servers.retain(|server_name, server| {
+                let keep = configurations.contains_key(server_name) && server.alive();
+                if !keep {
+                    server.enabled.store(false, Ordering::SeqCst);
+                }
+                keep
+            });
+        }
         if configurations.is_empty() {
             return Ok(0);
         }
@@ -507,54 +432,83 @@ impl Catalog {
         std::fs::create_dir_all(&data_root)?;
         let data_root = data_root.canonicalize()?;
         for (server_name, config) in configurations {
-            if servers.contains_key(&server_name) {
+            if plugin.servers.lock().await.contains_key(&server_name) {
                 continue;
             }
-            // One server's launch failure must not disable the rest of the plugin.
             if let Ok(server) = mcp_runtime::RunningServer::launch(&root, &data_root, &config).await
             {
-                servers.insert(server_name, server);
+                ensure!(
+                    plugin.enabled.load(Ordering::SeqCst),
+                    "plugin activation canceled"
+                );
+                plugin
+                    .servers
+                    .lock()
+                    .await
+                    .insert(server_name, Arc::new(ActiveServer::new(server)));
             }
         }
-        let count = servers.values().map(|server| server.tool_count).sum();
+        let count = plugin
+            .servers
+            .lock()
+            .await
+            .values()
+            .map(|server| server.tool_count)
+            .sum();
         Ok(count)
     }
 
     async fn mcp_detail_counts(&self, name: &str) -> (u32, u32) {
-        let active = self.active.lock().await;
-        active.get(name).map_or((0, 0), |servers| {
-            (
-                servers.values().map(|server| server.prompt_count).sum(),
-                servers.values().map(|server| server.resource_count).sum(),
-            )
-        })
+        let servers = self.active_servers(name).await;
+        (
+            servers.values().map(|s| s.prompt_count).sum(),
+            servers.values().map(|s| s.resource_count).sum(),
+        )
     }
 
     async fn deactivate(&self, name: &str) {
-        self.active.lock().await.remove(name);
+        let plugin = self.active_plugin(name).await;
+        if let Some(plugin) = plugin {
+            plugin.enabled.store(false, Ordering::SeqCst);
+            let _activation = plugin.activation.lock().await;
+            let servers = std::mem::take(&mut *plugin.servers.lock().await);
+            for server in servers.values() {
+                server.enabled.store(false, Ordering::SeqCst);
+            }
+            // Existing calls finish under their original ownership. No registry
+            // lock is held while waiting for a server's in-flight request.
+            for server in servers.values() {
+                drop(server.runtime.lock().await);
+            }
+            let mut active = self.active.lock().await;
+            if active
+                .get(name)
+                .is_some_and(|current| Arc::ptr_eq(current, &plugin))
+            {
+                active.remove(name);
+            }
+        }
     }
 
     async fn tool_names(&self, name: &str, installed: bool) -> Vec<String> {
         if installed {
             let _ = timeout(Duration::from_secs(25), self.activate(name)).await;
-            let active = self.active.lock().await;
-            if let Some(servers) = active.get(name) {
-                let mut names = servers
-                    .iter()
-                    .flat_map(|(server_name, server)| {
-                        server.tool_names.iter().map(move |tool_name| {
-                            if servers.len() == 1 {
-                                tool_name.clone()
-                            } else {
-                                format!("{server_name}: {tool_name}")
-                            }
-                        })
+            let servers = self.active_servers(name).await;
+            let single_server = servers.len() == 1;
+            let mut names = servers
+                .iter()
+                .flat_map(|(server_name, server)| {
+                    server.tool_names.iter().map(move |tool_name| {
+                        if single_server {
+                            tool_name.clone()
+                        } else {
+                            format!("{server_name}: {tool_name}")
+                        }
                     })
-                    .collect::<Vec<_>>();
-                names.sort_unstable();
-                return names;
-            }
-            return Vec::new();
+                })
+                .collect::<Vec<_>>();
+            names.sort_unstable();
+            return names;
         }
         if name == "apple-security-devices" {
             let Some(parent) = self.root.parent() else {
@@ -571,10 +525,17 @@ impl Catalog {
     }
 
     async fn retain_installed(&self, installed: &HashSet<&str>) {
-        self.active
+        let removed = self
+            .active
             .lock()
             .await
-            .retain(|name, _| installed.contains(name.as_str()));
+            .keys()
+            .filter(|name| !installed.contains(name.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        for name in removed {
+            self.deactivate(&name).await;
+        }
     }
 
     fn install(&self, db: &HostDatabase, name: &str) -> Result<Option<PluginSummary>> {

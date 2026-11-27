@@ -463,9 +463,11 @@ enum SessionStreamKind {
   SESSION_STREAM_KIND_USAGE_UPDATED = 13;
   SESSION_STREAM_KIND_SUBAGENT_STARTED = 14;
   SESSION_STREAM_KIND_SUBAGENT_COMPLETED = 15;
+  SESSION_STREAM_KIND_SWARM_UPDATED = 16;
 }
 
 message SessionStreamEvent {
+  uint64 turn_number = 12;
   SessionStreamKind kind = 1;
   string text = 2;
   SessionToolSummary tool = 3;
@@ -533,6 +535,7 @@ message ListArchiveResponse {
 }
 
 message SessionDetail {
+  uint64 committed_turn_number = 29;
   SessionSummary summary = 1;
   repeated SessionMessage messages = 2;
   ProviderId provider = 3;
@@ -540,11 +543,11 @@ message SessionDetail {
   string model = 5;
   SessionGoal goal = 6;
   uint64 first_turn_number = 7; // Earlier turns remain stored when this is greater than one.
-  string graph_id = 8; // Empty when the session has no orchestration graph.
-  repeated GraphNodeModel graph_models = 9; // Saved role model choices; graph execution is separate.
-  repeated GraphNodeConcurrency graph_node_concurrency = 10; // Configured per-role maximums.
+  string swarm_id = 8; // Empty when the session has no Swarm.
+  repeated SwarmNodeModel swarm_models = 9; // Saved role model choices; hierarchy execution is separate.
+  repeated SwarmNodeConcurrency swarm_node_concurrency = 10; // Configured per-role maximums.
   uint64 total_duration_ms = 11; // Sum of saved turn durations, including turns outside the recent transcript.
-  bool has_campaign_activity = 12; // A successful campaign creation or graph delegation call occurred in any saved turn.
+  bool has_campaign_activity = 12; // A successful campaign creation or Swarm delegation call occurred in any saved turn.
   SessionTokenUsage token_usage = 13; // All saved main and subagent model calls, including turns outside the recent transcript.
   repeated SessionUsageSnapshot usage_snapshots = 14; // Cumulative usage at five-minute active-work intervals, plus the latest partial interval.
   uint64 runbook_count = 15; // Distinct runbooks created, edited, or run in this session.
@@ -552,13 +555,16 @@ message SessionDetail {
   repeated SessionRunbook runbooks = 17; // Runbooks created, edited, or run in this session.
   // All recorded calls in this session, independent of transcript pagination.
   repeated SessionModelUsage model_usage = 18;
-  repeated SessionGraphAgent graph_agents = 19;
-  repeated SessionGraphHandoff graph_handoffs = 20;
-  repeated SessionAgentMetrics agent_metrics = 21; // Saved usage for each top-level graph agent and its subagents.
+  repeated SessionSwarmAgent swarm_agents = 19;
+  repeated SessionSwarmHandoff swarm_handoffs = 20;
+  repeated SessionAgentMetrics agent_metrics = 21; // Saved usage for each coordinating agent and its subagents.
   repeated SessionSubagentSummary subagents = 22;
-  uint32 stage_duration_minutes = 23;
+  reserved 23;
   uint32 max_concurrent_workers = 25;
-  string graph_template_json = 24; // Saved custom graph definition; empty for bundled graphs.
+  repeated PermissionRule scoped_review_rules = 26; // Active immutable scan rules; not global toggles.
+  string swarm_template_json = 24; // Saved definition/profile/rule snapshot.
+  repeated string pacing_warnings = 27;
+  string swarm_overview_json = 28;
 }
 
 message SessionSubagentSummary {
@@ -594,17 +600,20 @@ message SessionAgentMetrics {
   uint64 duration_ms = 5;
 }
 
-message SessionGraphAgent {
+message SessionSwarmAgent {
+  string id = 3;
+  string parent_id = 4;
+  string agent_kind = 5;
   string role = 1;
   string status = 2; // idle, queued, working, or failed.
 }
 
-message SessionGraphHandoff {
+message SessionSwarmHandoff {
   string id = 1;
   string from_role = 2;
   string to_role = 3;
   string task = 4;
-  string status = 5; // pending, running, completed, or failed.
+  string status = 5; // pending, assigned, completed, blocked, or canceled.
 }
 
 message SessionModelUsage {
@@ -648,34 +657,34 @@ message SessionUsageSnapshot {
   SessionTokenUsage subagent_usage = 10; // Cumulative usage for nonempty roles other than "main".
 }
 
-message GraphNodeModel {
+message SwarmNodeModel {
   string node_id = 1;
   ProviderId provider = 2;
   AuthMethod method = 3;
   string model = 4;
 }
 
-message GraphNodeConcurrency {
+message SwarmNodeConcurrency {
   string node_id = 1;
   uint32 max_concurrent = 2; // Positive; an absent role has no configured maximum.
 }
 
-message SessionGraphConfig {
-  repeated GraphNodeModel models = 1;
-  repeated GraphNodeConcurrency concurrency = 2;
-  uint32 stage_duration_minutes = 3;
+message SessionSwarmConfig {
+  repeated SwarmNodeModel models = 1;
+  repeated SwarmNodeConcurrency concurrency = 2;
+  reserved 3;
   uint32 max_concurrent_workers = 5; // Zero uses the default shared worker budget.
-  string template_json = 4; // Exact custom definition saved at session creation.
+  string template_json = 4; // Exact definition/profile/rule snapshot saved at scan creation.
 }
 
-message GraphTemplate {
+message SwarmTemplate {
   string id = 1; // Content-derived ID.
   string name = 2;
   string definition_json = 3;
 }
 
-message ListGraphTemplatesResponse {
-  repeated GraphTemplate templates = 1;
+message ListSwarmTemplatesResponse {
+  repeated SwarmTemplate templates = 1;
 }
 
 enum GoalStatus {
@@ -719,12 +728,24 @@ message SubmitSessionTurnRequest {
   uint64 goal_max_turns = 9; // Zero means unlimited.
   uint64 goal_max_duration_minutes = 10; // Zero means unlimited active work time.
   string repeat_preset = 11; // Empty for no repeat; accepted only on the first turn.
-  string graph_id = 12; // Chosen graph on the first turn; empty for no graph or later turns.
-  repeated GraphNodeModel graph_models = 13; // Role model choices on the first turn only.
-  repeated GraphNodeConcurrency graph_node_concurrency = 14; // Per-role maximums on the first turn only.
+  string swarm_id = 12; // Chosen Swarm on the first turn; empty for No Subagents or later turns.
+  repeated SwarmNodeModel swarm_models = 13; // Role model choices on the first turn only.
+  repeated SwarmNodeConcurrency swarm_node_concurrency = 14; // Per-role maximums on the first turn only.
   string agent_role = 15; // Optional top-level role to address for this turn.
-  uint32 stage_duration_minutes = 16;
+  reserved 16;
   uint32 max_concurrent_workers = 17;
+  repeated SwarmDestination swarm_destinations = 18;
+  SwarmRetentionPolicy swarm_retention = 19;
+  repeated SwarmPacingTarget swarm_pacing = 20;
+}
+
+message SwarmDestination {
+  string host_id = 1;
+  string configuration_id = 2;
+}
+message SwarmRetentionPolicy {
+  uint64 ended_scan_seconds = 1;
+  uint64 storage_reserve_bytes = 2;
 }
 
 message AutomationJob {
@@ -907,8 +928,8 @@ message FleetAppServerDescriptor {
 message FleetAllowedResearchTool {
   string id = 1;
   string name = 2;
-  bool allow_locally = 3;
-  bool allow_in_vms = 4;
+  reserved 3, 4;
+  ResearchToolPreference preference = 5;
 }
 
 message FleetSystemResources {
@@ -997,8 +1018,8 @@ message FleetResearchTool {
   string name = 2;
   string category = 3;
   string description = 4;
-  bool allow_locally = 5;
-  bool allow_in_vms = 6;
+  reserved 5, 6;
+  ResearchToolPreference preference = 8;
   reserved 7;
 }
 
@@ -1008,6 +1029,21 @@ message FleetResearchToolsResponse {
 
 message FleetSetResearchToolSettingsRequest {
   string id = 1;
-  bool allow_locally = 2;
-  bool allow_in_vms = 3;
+  reserved 2, 3;
+  ResearchToolPreference preference = 5;
+}
+
+// Host-only budget group returned by provider-accounting; never a credential.
+message SwarmPacingTarget {
+  string budget_group_id = 1;
+  uint32 interval_seconds = 2;
+  string unit = 3; // subscription, currency, credits
+  string denomination = 4; // Named allowance window or ISO currency; empty for credits.
+  uint64 amount = 5; // Basis points of the full allowance, or currency/credit micros.
+}
+
+enum ResearchToolPreference {
+  RESEARCH_TOOL_PREFERENCE_ALLOW = 0;
+  RESEARCH_TOOL_PREFERENCE_RECOMMEND = 1;
+  RESEARCH_TOOL_PREFERENCE_PRIORITY = 2;
 }

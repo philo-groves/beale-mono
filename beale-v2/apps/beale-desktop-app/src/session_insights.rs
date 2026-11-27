@@ -131,11 +131,12 @@ pub(crate) fn dialog(state: &State, theme: ThemeStyle<'_>, window_width: f32) ->
     let title = detail
         .and_then(|d| d.summary.as_ref())
         .map_or("Current scan", |s| s.title.as_str());
-    let main_label = if detail.is_some_and(|detail| beale_graphs::is_peer_graph(&detail.graph_id)) {
-        "Top-level"
-    } else {
-        "Main"
-    };
+    let main_label =
+        if detail.is_some_and(|detail| crate::sessions::swarm_definition(detail).is_some()) {
+            "Top-level"
+        } else {
+            "Main"
+        };
     let mut body = col()
         .key("session-insights-body")
         .w_full()
@@ -424,11 +425,13 @@ mod tests {
     }
 
     #[test]
-    fn peer_graph_insights_name_top_level_agents() {
+    fn peer_swarm_insights_name_top_level_agents() {
         let mut state = visual_preview::fixture("session-insights");
         state.session_agent_role = "discovery".to_owned();
         let detail = state.active_session.as_mut().unwrap();
-        detail.graph_id = beale_graphs::OPENAI_ID.to_owned();
+        detail.swarm_id = beale_swarms::OAI_948_ID.to_owned();
+        detail.swarm_template_json =
+            beale_swarms::template_snapshot(beale_swarms::OAI_948_ID).unwrap();
         detail.agent_metrics = vec![beale_contracts::v1::SessionAgentMetrics {
             role: "discovery".to_owned(),
             token_usage: detail.token_usage.clone(),

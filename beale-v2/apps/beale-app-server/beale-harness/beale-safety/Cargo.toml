@@ -19,4 +19,5 @@ tokio.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+beale-swarms = { path = "../../../../extensions/features/beale-swarms" }
 tower = "0.5"

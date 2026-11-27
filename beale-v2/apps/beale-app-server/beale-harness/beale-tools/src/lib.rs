@@ -10,6 +10,8 @@ use std::{
 };
 use tokio::{io::AsyncReadExt, process::Command, time::timeout};
 mod agent_files;
+#[cfg(target_os = "linux")]
+pub mod linux_worker;
 pub mod process;
 pub mod redact;
 pub use agent_files::AgentFiles;
@@ -53,6 +55,27 @@ pub async fn run_command(
     workspace: &Path,
     timeout_seconds: u64,
 ) -> Result<CommandOutput> {
+    run_command_policy(command, workspace, timeout_seconds, false).await
+}
+
+/// Worker commands stay inside the dedicated execution tree. A failed or
+/// canceled collection must stop the worker; it cannot continue with an unknown
+/// command outcome. The entry point terminates its Unix group before exiting.
+pub async fn run_worker_command(
+    command: &str,
+    workspace: &Path,
+    timeout_seconds: u64,
+) -> Result<CommandOutput> {
+    process::require_worker_group()?;
+    run_command_policy(command, workspace, timeout_seconds, true).await
+}
+
+async fn run_command_policy(
+    command: &str,
+    workspace: &Path,
+    timeout_seconds: u64,
+    worker: bool,
+) -> Result<CommandOutput> {
     ensure!(
         (1..=MAX_COMMAND_TIMEOUT_SECONDS).contains(&timeout_seconds),
         "invalid command timeout_seconds"
@@ -77,12 +100,26 @@ pub async fn run_command(
         process
     };
     #[cfg(not(windows))]
-    let process = {
-        let mut process = process::contained_command(bash_executable());
-        process.arg("-lc").arg(command);
-        process
-    };
-    run_contained_process(process, workspace, timeout_seconds).await
+    let process = bash_command(command, worker && process::is_container_worker());
+    let mut process = process;
+    if worker {
+        process::retain_worker_group(&mut process)?;
+    }
+    run_process(process, workspace, timeout_seconds, worker).await
+}
+
+#[cfg(not(windows))]
+fn bash_command(command: &str, preserve_environment: bool) -> Command {
+    let mut process = process::contained_command(bash_executable());
+    if preserve_environment {
+        // The Docker entry already supplies the image's configured environment.
+        // Login profiles can replace PATH and hide injected/image tools.
+        process.args(["--noprofile", "--norc", "-c"]);
+    } else {
+        process.arg("-lc");
+    }
+    process.arg(command);
+    process
 }
 
 /// Script wrapper shared with the Windows guest command path.
@@ -94,9 +131,18 @@ pub fn powershell_script(command: &str) -> String {
 
 /// Collect bounded output from a process made with `contained_command`.
 pub async fn run_contained_process(
+    process: Command,
+    workspace: &Path,
+    timeout_seconds: u64,
+) -> Result<CommandOutput> {
+    run_process(process, workspace, timeout_seconds, false).await
+}
+
+async fn run_process(
     mut process: Command,
     workspace: &Path,
     timeout_seconds: u64,
+    worker: bool,
 ) -> Result<CommandOutput> {
     ensure!(
         (1..=MAX_COMMAND_TIMEOUT_SECONDS).contains(&timeout_seconds),
@@ -110,7 +156,13 @@ pub async fn run_contained_process(
     #[cfg(windows)]
     enable_git_long_paths(&mut process);
     let mut child = process.spawn().context("start command")?;
-    let tree = process::ProcessTree::attach(&child);
+    // Worker commands on Unix share the root worker group. Attaching a tree to
+    // the command PID would track a nonexistent group and falsely confirm exit.
+    let tree = if worker && cfg!(unix) {
+        None
+    } else {
+        Some(process::ProcessTree::attach(&child))
+    };
     let stdout = child.stdout.take().context("command stdout unavailable")?;
     let stderr = child.stderr.take().context("command stderr unavailable")?;
     let collect = async {
@@ -150,7 +202,9 @@ pub async fn run_contained_process(
     let output = timeout(Duration::from_secs(timeout_seconds), collect)
         .await
         .with_context(|| format!("command timed out after {timeout_seconds} seconds"))??;
-    tree.release();
+    if let Some(tree) = tree {
+        tree.release();
+    }
     Ok(output)
 }
 
@@ -177,6 +231,28 @@ fn success(output: String) -> ToolOutcome {
         output,
         is_error: false,
     }
+}
+
+/// Assigned execution cannot redirect commands to another Fleet machine.
+pub fn worker_definitions(shell: &str) -> Result<Vec<Value>> {
+    ensure!(
+        matches!(shell, "bash" | "powershell"),
+        "unsupported worker shell"
+    );
+    let mut tools = definitions();
+    let command = tools
+        .iter_mut()
+        .find(|tool| tool["name"] == COMMAND_TOOL_NAME)
+        .context("command definition unavailable")?;
+    command["name"] = json!(shell);
+    command["description"] = json!(format!(
+        "Run a {shell} command in the assigned workspace with the environment's current user privileges. Set timeout_seconds for long operations; default 120 seconds."
+    ));
+    command["parameters"]["properties"]
+        .as_object_mut()
+        .context("invalid command schema")?
+        .remove("machine");
+    Ok(tools)
 }
 
 pub fn definitions() -> Vec<Value> {
@@ -215,7 +291,7 @@ pub fn summary(name: &str, args: &Value) -> String {
     }
 }
 
-fn path(args: &Value, workspace: &Path, host_root: &Path) -> Result<PathBuf> {
+fn path(args: &Value, workspace: &Path, host_root: &Path, managed: bool) -> Result<PathBuf> {
     let value = args
         .get("path")
         .and_then(Value::as_str)
@@ -249,7 +325,8 @@ fn path(args: &Value, workspace: &Path, host_root: &Path) -> Result<PathBuf> {
     };
     let private = host_root.canonicalize().context("resolve host data")?;
     ensure!(
-        !resolved.starts_with(&private),
+        !resolved.starts_with(&private)
+            || (managed && resolved.starts_with(workspace.canonicalize()?)),
         "host state is unavailable to tools"
     );
     Ok(resolved)
@@ -301,9 +378,44 @@ pub async fn execute(
     workspace: &Path,
     host_root: &Path,
 ) -> Result<ToolOutcome> {
+    execute_inner(name, args, workspace, host_root, false).await
+}
+
+/// Host-issued private environment exception. Other host state and sibling
+/// environments remain inaccessible through file tools. This is not a shell sandbox.
+pub async fn execute_in_environment(
+    name: &str,
+    args: &Value,
+    workspace: &Path,
+    host_root: &Path,
+) -> Result<ToolOutcome> {
+    let environments = host_root.join("swarm-files/environments");
+    for directory in [workspace, environments.as_path()] {
+        let metadata = std::fs::symlink_metadata(directory)?;
+        ensure!(
+            metadata.is_dir() && !metadata.file_type().is_symlink(),
+            "managed workspace cannot be a link"
+        );
+    }
+    let workspace = workspace.canonicalize()?;
+    let environments = environments.canonicalize()?;
+    ensure!(
+        workspace.parent() == Some(environments.as_path()),
+        "workspace is not a managed environment"
+    );
+    execute_inner(name, args, &workspace, host_root, true).await
+}
+
+async fn execute_inner(
+    name: &str,
+    args: &Value,
+    workspace: &Path,
+    host_root: &Path,
+    managed: bool,
+) -> Result<ToolOutcome> {
     match name {
         "read" => {
-            let path = path(args, workspace, host_root)?;
+            let path = path(args, workspace, host_root, managed)?;
             let size = tokio::fs::metadata(&path)
                 .await
                 .context("inspect file")?
@@ -343,7 +455,7 @@ pub async fn execute(
             Ok(success(output))
         }
         "write" => {
-            let path = path(args, workspace, host_root)?;
+            let path = path(args, workspace, host_root, managed)?;
             let content = required(args, "content")?;
             let parent = path.parent().context("file has no parent")?;
             tokio::fs::create_dir_all(parent)
@@ -359,7 +471,7 @@ pub async fn execute(
             )))
         }
         "edit" => {
-            let path = path(args, workspace, host_root)?;
+            let path = path(args, workspace, host_root, managed)?;
             let old = required(args, "old_text")?;
             let new = required(args, "new_text")?;
             ensure!(!old.is_empty(), "old_text is empty");
@@ -523,6 +635,86 @@ mod tests {
         let (first, next) = page(&value, 12000, 8000).unwrap();
         assert!(first.starts_with('é'));
         assert!(next > 12000);
+    }
+
+    #[tokio::test]
+    async fn managed_workspace_exception_does_not_expose_host_or_sibling_files() {
+        let root = std::env::temp_dir().join(format!("beale-managed-example-{}", Uuid::new_v4()));
+        let host = root.join("host");
+        let workspace = host.join("swarm-files/environments/agent-example");
+        let sibling = host.join("swarm-files/environments/other-example");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::create_dir_all(&sibling).unwrap();
+        std::fs::write(host.join("state.sqlite"), "synthetic host bytes").unwrap();
+        std::fs::write(sibling.join("result.txt"), "other agent").unwrap();
+        let args = json!({"path":"result.txt","content":"own result"});
+        assert!(execute("write", &args, &workspace, &host).await.is_err());
+        execute_in_environment("write", &args, &workspace, &host)
+            .await
+            .unwrap();
+        assert!(
+            execute_in_environment("write", &args, &host, &host)
+                .await
+                .is_err()
+        );
+        for path in [
+            host.join("state.sqlite"),
+            sibling.join("result.txt"),
+            workspace.join("../other-example/result.txt"),
+        ] {
+            assert!(
+                execute_in_environment("read", &json!({"path":path}), &workspace, &host)
+                    .await
+                    .is_err()
+            );
+        }
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("result.txt")).unwrap(),
+            "own result"
+        );
+        std::fs::rename(&workspace, workspace.with_extension("retained")).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&sibling, &workspace).unwrap();
+        #[cfg(windows)]
+        {
+            // mklink requires native separators and no extended-length prefix.
+            let path = |p: &Path| {
+                p.to_str()
+                    .unwrap()
+                    .trim_start_matches(r"\\?\")
+                    .replace('/', "\\")
+            };
+            let output = std::process::Command::new("cmd")
+                .args([
+                    "/d",
+                    "/c",
+                    "mklink",
+                    "/J",
+                    &path(&workspace),
+                    &path(&sibling),
+                ])
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "synthetic junction fixture failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        let linked = execute_in_environment("write", &args, &workspace, &host).await;
+        #[cfg(windows)]
+        std::fs::remove_dir(&workspace).unwrap();
+        #[cfg(unix)]
+        std::fs::remove_file(&workspace).unwrap();
+        assert!(
+            linked.is_err(),
+            "native dispatch must reject a replaced workspace root"
+        );
+        assert_eq!(
+            std::fs::read_to_string(sibling.join("result.txt")).unwrap(),
+            "other agent"
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]
@@ -711,6 +903,37 @@ mod tests {
             );
         }
         tokio::fs::remove_dir_all(root).await.unwrap();
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn container_shell_preserves_custom_path_and_skips_login_profile() {
+        use std::os::unix::fs::PermissionsExt;
+        let root =
+            std::env::temp_dir().join(format!("beale-container-path-example-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("bin")).unwrap();
+        let tool = root.join("bin/example-path-tool");
+        std::fs::write(&tool, "#!/bin/sh\nprintf 'configured tool'\n").unwrap();
+        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(
+            root.join(".bash_profile"),
+            "export PATH=/unavailable-example\nprintf 'unexpected login profile'\n",
+        )
+        .unwrap();
+        let mut command = bash_command("example-path-tool", true);
+        command.env("HOME", &root).env(
+            "PATH",
+            std::env::join_paths([
+                root.join("bin"),
+                PathBuf::from("/usr/bin"),
+                PathBuf::from("/bin"),
+            ])
+            .unwrap(),
+        );
+        let result = run_contained_process(command, &root, 5).await.unwrap();
+        assert!(result.success, "{}", result.stderr);
+        assert_eq!(result.stdout, "configured tool");
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]

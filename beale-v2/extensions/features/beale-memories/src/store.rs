@@ -7,6 +7,7 @@ use std::{
 
 use crate::MemoryTurnJob;
 use anyhow::{Context, Result, ensure};
+use beale_contracts::tool_error::ToolError;
 use beale_storage::HostDatabase;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde_json::{Value, json};
@@ -59,6 +60,18 @@ fn valid_kind(kind: &str) -> bool {
             | "prior_art"
             | "operator_preference"
     )
+}
+
+fn stored_json(column: usize, value: &str) -> rusqlite::Result<Value> {
+    serde_json::from_str::<serde_json::Map<String, Value>>(value)
+        .map(Value::Object)
+        .map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                column,
+                rusqlite::types::Type::Text,
+                Box::new(error),
+            )
+        })
 }
 
 impl MemoryStore {
@@ -268,10 +281,14 @@ impl MemoryStore {
         ensure!(
             text.len() <= 256
                 && kind.len() <= 64
-                && status.len() <= 32
-                && limit <= 50
+                && matches!(
+                    status,
+                    "" | "supported" | "provisional" | "disputed" | "superseded"
+                )
+                && as_of_ms.is_none_or(|value| value >= 0)
+                && (1..=50).contains(&limit)
                 && offset <= 10_000,
-            "invalid memory query"
+            ToolError::invalid("invalid memory query")
         );
         self.with_connection(|connection| {
             let mut statement = connection.prepare(
@@ -299,8 +316,8 @@ impl MemoryStore {
 
     pub fn read(&self, workspace_id: &str, id: &str, offset: usize, limit: usize) -> Result<Value> {
         ensure!(
-            id.len() <= 80 && limit <= 10 && offset <= 10_000,
-            "invalid memory read"
+            !id.is_empty() && id.len() <= 80 && (1..=10).contains(&limit) && offset <= 10_000,
+            ToolError::invalid("invalid memory read")
         );
         self.with_connection(|connection| {
             let assertion: Option<String> = connection.query_row(
@@ -308,7 +325,7 @@ impl MemoryStore {
                 params![workspace_id,id], |row| row.get(0)
             ).optional()?;
             let current = if let Some(record) = assertion {
-                serde_json::from_str::<Value>(&record)?
+                stored_json(0, &record)?
             } else {
                 connection.query_row(
                     "SELECT json_object('id',id,'kind',kind,'name',name,'aliases',json(aliases_json),
@@ -316,8 +333,8 @@ impl MemoryStore {
                      'created_at_ms',created_at_ms,'updated_at_ms',updated_at_ms,'revision',revision)
                      FROM entities WHERE workspace_id=?1 AND id=?2",
                     params![workspace_id,id], |row| row.get::<_,String>(0)
-                ).optional()?.map(|value| serde_json::from_str(&value)).transpose()?
-                    .context("memory record not found")?
+                ).optional()?.map(|value| stored_json(0, &value)).transpose()?
+                    .context(ToolError::missing("memory record not found"))?
             };
             let mut statement = connection.prepare(
                 "SELECT revision,at_ms,author_model,source_ref,record_json FROM revisions
@@ -327,7 +344,7 @@ impl MemoryStore {
                 let value: String = row.get(4)?;
                 Ok(json!({"revision":row.get::<_,i64>(0)?,"at_ms":row.get::<_,i64>(1)?,
                     "author_model":row.get::<_,String>(2)?,"source_ref":row.get::<_,String>(3)?,
-                    "record":serde_json::from_str::<Value>(&value).unwrap_or(Value::Null)}))
+                    "record":stored_json(4, &value)?}))
             })?.collect::<rusqlite::Result<Vec<_>>>()?;
             Ok(json!({"record":current,"history":history,"next_history_offset":
                 (history.len()==limit).then_some(offset+history.len())}))
@@ -342,14 +359,20 @@ impl MemoryStore {
         limit: usize,
         include_superseded: bool,
     ) -> Result<Value> {
-        ensure!(depth <= 2 && limit <= 50, "invalid graph query");
+        ensure!(
+            !id.is_empty()
+                && id.len() <= 80
+                && (1..=2).contains(&depth)
+                && (1..=50).contains(&limit),
+            ToolError::invalid("invalid graph query")
+        );
         self.with_connection(|connection| {
             let root: Option<String> = connection.query_row(
                 "SELECT id FROM entities WHERE workspace_id=?1 AND id=?2", params![workspace_id,id], |row| row.get(0)
             ).optional()?;
             let root = if let Some(root) = root { root } else {
                 connection.query_row("SELECT subject_id FROM assertions WHERE workspace_id=?1 AND id=?2",
-                    params![workspace_id,id], |row| row.get(0)).optional()?.context("graph root not found")?
+                    params![workspace_id,id], |row| row.get(0)).optional()?.context(ToolError::missing("graph root not found"))?
             };
             let mut visited = HashSet::from([root.clone()]);
             let mut queue = VecDeque::from([(root.clone(),0usize)]);
@@ -365,7 +388,7 @@ impl MemoryStore {
                     let detail: String = row.get(6)?;
                     Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,
                         row.get::<_,Option<String>>(3)?,row.get::<_,String>(4)?,row.get::<_,String>(5)?,
-                        serde_json::from_str::<Value>(&detail).unwrap_or(Value::Null)))
+                        stored_json(6, &detail)?))
                 })?.collect::<rusqlite::Result<Vec<_>>>()?;
                 for (edge_id,subject,predicate,object,status,statement,detail) in rows {
                     if edges.len() >= limit { break; }
@@ -642,6 +665,91 @@ mod tests {
         let root = std::env::temp_dir().join(format!("beale-memories-example-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         root
+    }
+
+    #[test]
+    fn malformed_history_and_graph_records_remain_storage_failures() {
+        let root = root();
+        let store = MemoryStore::open(&root).unwrap();
+        for id in 1..=2 {
+            let extraction: Extraction = serde_json::from_value(json!({
+                "entities":[{"name":"Example component","kind":"component"}],
+                "assertions":[{"kind":"target_behavior","subject":"Example component","predicate":"uses","value":"Example setting","statement":format!("Synthetic observation {id}")}]
+            })).unwrap();
+            store
+                .commit(
+                    &MemoryTurnJob {
+                        id,
+                        workspace_id: "workspace-example".into(),
+                        session_id: "session-example".into(),
+                        turn_number: id,
+                        agent_id: "agent-example".into(),
+                    },
+                    "example-small",
+                    extraction,
+                )
+                .unwrap();
+        }
+        let (entity, assertion, history) = store.with_connection(|db| {
+            Ok((db.query_row("SELECT id FROM entities", [], |r|r.get::<_,String>(0))?,
+                db.query_row("SELECT id FROM assertions", [], |r|r.get::<_,String>(0))?,
+                db.query_row("SELECT record_json FROM revisions WHERE record_id IN (SELECT id FROM assertions)", [], |r|r.get::<_,String>(0))?))
+        }).unwrap();
+        store.read("workspace-example", &assertion, 0, 5).unwrap();
+        store
+            .graph("workspace-example", &entity, 2, 50, false)
+            .unwrap();
+        for corrupt in ["invalid", "null", "[]", "7"] {
+            store
+                .with_connection(|db| {
+                    db.execute(
+                        "UPDATE revisions SET record_json=?1 WHERE record_id=?2",
+                        params![corrupt, assertion],
+                    )?;
+                    Ok(())
+                })
+                .unwrap();
+            assert!(
+                store
+                    .read("workspace-example", &assertion, 0, 5)
+                    .unwrap_err()
+                    .downcast_ref::<ToolError>()
+                    .is_none()
+            );
+        }
+        store
+            .with_connection(|db| {
+                db.execute(
+                    "UPDATE revisions SET record_json=?1 WHERE record_id=?2",
+                    params![history, assertion],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        for corrupt in ["invalid", "null", "[]", "7"] {
+            store
+                .with_connection(|db| {
+                    db.execute("UPDATE assertions SET record_json=?1", [corrupt])?;
+                    Ok(())
+                })
+                .unwrap();
+            assert!(
+                store
+                    .graph("workspace-example", &entity, 2, 50, false)
+                    .unwrap_err()
+                    .downcast_ref::<ToolError>()
+                    .is_none()
+            );
+            assert!(
+                store
+                    .read("workspace-example", &assertion, 0, 5)
+                    .unwrap_err()
+                    .downcast_ref::<ToolError>()
+                    .is_none()
+            );
+        }
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

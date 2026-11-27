@@ -1,9 +1,8 @@
-//! One dispatch path for model tool calls from main, peer, and subagent loops.
+//! Trusted session dispatch for model tool review, execution, and redaction.
 //!
 //! Review policy, availability, execution, and output redaction live here so a
 //! check added for one agent kind applies to all of them. Loop-local
-//! orchestration tools (goal status, graph delegation, handoffs, and subagent
-//! messaging) stay in their loops but pass through the same review gate first.
+//! orchestration tools (currently goal status) stay in their loops but pass through the same review gate first.
 
 use std::{collections::HashSet, path::Path};
 
@@ -37,6 +36,20 @@ pub(crate) fn requires_call_review(name: &str) -> bool {
         || super::features::reviews(name)
 }
 
+/// These tools perform their own reviews before acquiring the workspace lock.
+fn defers_mutation_lock(name: &str) -> bool {
+    matches!(name, "plugin_call" | "runbook_run")
+}
+async fn await_tool_review(
+    future: impl std::future::Future<Output = ReviewDecision>,
+    stop: &mut Option<watch::Receiver<bool>>,
+) -> anyhow::Result<ReviewDecision> {
+    anyhow::ensure!(!super::stop_requested(stop), "Tool stopped by user.");
+    until_stopped(future, stop)
+        .await
+        .ok_or_else(|| anyhow::anyhow!("Tool stopped by user."))
+}
+
 /// Whether concurrent agents sharing a workspace must serialize this call.
 fn takes_mutation_lock(name: &str) -> bool {
     #[cfg(feature = "webfetch")]
@@ -44,57 +57,6 @@ fn takes_mutation_lock(name: &str) -> bool {
         return false;
     }
     name != "read"
-}
-
-/// Pipeline role ownership of finding actions, by tool and requested state.
-#[cfg(all(feature = "graphs", feature = "findings"))]
-pub(crate) fn pipeline_finding_allowed(
-    role: beale_graphs::ProfileId,
-    name: &str,
-    args: &Value,
-) -> bool {
-    use beale_graphs::ProfileId;
-    let state = args.get("state").and_then(Value::as_str);
-    match name {
-        "findings_query" | "findings_read" => true,
-        "findings_create" => role == ProfileId::Discovery,
-        "findings_update" => match role {
-            ProfileId::AuditTargets => false,
-            ProfileId::Discovery => matches!(state, Some("finding" | "candidate")),
-            ProfileId::Validation => matches!(state, Some("finding" | "validated")),
-            ProfileId::Reporter => matches!(state, Some("finding" | "screened" | "reported")),
-            ProfileId::PatchGeneration => state == Some("finding"),
-            _ => true,
-        },
-        "findings_complete_state" => match role {
-            ProfileId::Validation => state == Some("validated"),
-            ProfileId::Reporter => matches!(state, Some("screened" | "reported")),
-            ProfileId::AuditTargets | ProfileId::Discovery | ProfileId::PatchGeneration => false,
-            _ => true,
-        },
-        "findings_reject" | beale_findings::VERIFY => role == ProfileId::Validation,
-        _ => true,
-    }
-}
-
-/// Whether a pipeline role may see a finding tool at all: some requested state
-/// must be allowed. Derived from [`pipeline_finding_allowed`] so the tool list
-/// and the dispatch check cannot disagree.
-#[cfg(all(feature = "graphs", feature = "findings"))]
-pub(crate) fn pipeline_finding_visible(role: beale_graphs::ProfileId, name: &str) -> bool {
-    [
-        None,
-        Some("finding"),
-        Some("candidate"),
-        Some("validated"),
-        Some("screened"),
-        Some("reported"),
-    ]
-    .into_iter()
-    .any(|state| {
-        let args = state.map_or_else(|| json!({}), |state| json!({"state": state}));
-        pipeline_finding_allowed(role, name, &args)
-    })
 }
 
 /// The redactor for one turn: host credential values plus credential-named
@@ -167,6 +129,7 @@ impl ToolResult {
 /// are read only by optional features.
 #[allow(dead_code)]
 pub(crate) struct ToolRuntime<'a> {
+    pub local: Option<&'a beale_storage::swarm_state::LocalTurn>,
     pub state: &'a SessionState,
     pub workspace_id: &'a str,
     pub session_id: &'a str,
@@ -183,9 +146,6 @@ pub(crate) struct ToolRuntime<'a> {
     /// Serializes mutating calls among concurrent subagents.
     pub mutation_lock: Option<&'a Mutex<()>>,
     pub progress: Option<&'a mpsc::Sender<SessionStreamEvent>>,
-    /// Research Pipeline role that owns finding actions, when one applies.
-    #[cfg(feature = "graphs")]
-    pub pipeline_role: Option<beale_graphs::ProfileId>,
 }
 
 impl ToolRuntime<'_> {
@@ -194,6 +154,24 @@ impl ToolRuntime<'_> {
     }
 
     async fn review_call(&self, name: &str, arguments: &Value) -> ReviewDecision {
+        if let Some(local) = self.local {
+            return beale_safety::review_agent(
+                &self.state.db,
+                &self.state.provider,
+                &self.state.credentials,
+                ReviewRequest {
+                    provider: self.review.provider,
+                    mode: self.review.mode,
+                    model: self.review.model,
+                    name,
+                    arguments,
+                    workspace_context: self.review.context,
+                },
+                &local.scan_id,
+                &local.agent_id,
+            )
+            .await;
+        }
         beale_safety::review(
             &self.state.db,
             &self.state.provider,
@@ -221,7 +199,12 @@ impl ToolRuntime<'_> {
         let Some(arguments) = arguments else {
             return Gate::Run { reviewed: false };
         };
-        if !self.available(name) || !requires_call_review(name) {
+        if !self.available(name)
+            || (!requires_call_review(name)
+                && !self
+                    .local
+                    .is_some_and(|local| local.role == beale_contracts::swarms::Role::Leader))
+        {
             return Gate::Run { reviewed: false };
         }
         match until_stopped(self.review_call(name, arguments), stop).await {
@@ -235,7 +218,7 @@ impl ToolRuntime<'_> {
     }
 
     /// Reviews and runs a host tool call.
-    #[cfg_attr(not(feature = "graphs"), allow(dead_code))]
+    #[allow(dead_code)]
     pub(crate) async fn dispatch(
         &self,
         call_id: &str,
@@ -267,6 +250,13 @@ impl ToolRuntime<'_> {
         pending: &[ToolCallRow],
         stop: &mut Option<watch::Receiver<bool>>,
     ) -> ToolResult {
+        if let Some(local) = self.local
+            && beale_storage::swarm_state::SwarmStore::open(self.state.db.clone())
+                .and_then(|s| s.local_authorize(local))
+                .is_err()
+        {
+            return ToolResult::error("Local execution is no longer authorized.".into());
+        }
         let Ok(arguments) = arguments else {
             return ToolResult::error("Tool error: invalid JSON arguments".to_owned());
         };
@@ -277,7 +267,9 @@ impl ToolRuntime<'_> {
             return ToolResult::error("Tool error: unavailable to this agent".to_owned());
         }
         let _guard = match self.mutation_lock {
-            Some(lock) if takes_mutation_lock(name) => Some(lock.lock().await),
+            Some(lock) if takes_mutation_lock(name) && !defers_mutation_lock(name) => {
+                Some(lock.lock().await)
+            }
             _ => None,
         };
         let mut result = self
@@ -294,9 +286,62 @@ impl ToolRuntime<'_> {
         arguments: Value,
         reviewed: bool,
         pending: &[ToolCallRow],
-        stop: &mut Option<watch::Receiver<bool>>,
+        review_stop: &mut Option<watch::Receiver<bool>>,
     ) -> ToolResult {
+        // Pending reviews remain cancelable. A local supervisor releases
+        // capacity only after an already dispatched managed effect finishes.
+        let mut execution_stop = if self.local.is_some() {
+            None
+        } else {
+            review_stop.clone()
+        };
+        let stop = &mut execution_stop;
         let _ = (call_id, reviewed, pending);
+        #[cfg(feature = "swarms")]
+        let mut arguments = arguments;
+        #[cfg(feature = "swarms")]
+        if let Some(turn) = self.local {
+            if name == "swarm_materialize_artifact" {
+                return match self.materialize(arguments) {
+                    Ok(value) => ToolResult::new(value.to_string(), false),
+                    Err(error) => super::research_files::tool_error(&error),
+                };
+            }
+            if (matches!(name, "swarm_message_parent" | "swarm_handoff")
+                || name.starts_with("findings_"))
+                && let Err(error) = self.attachments(
+                    &super::research_files::operation(turn, call_id),
+                    &mut arguments,
+                )
+            {
+                return super::research_files::tool_error(&error);
+            }
+        }
+
+        #[cfg(feature = "swarms")]
+        if name.starts_with("swarm_") {
+            let Some(local) = self.local else {
+                return ToolResult::error("No active Swarm identity".into());
+            };
+            let admission = if name == "swarm_spawn_subagent" {
+                crate::distributed::placement::admission(self.state, local).await
+            } else {
+                beale_contracts::swarm_local::Admission::Ready
+            };
+            return match beale_storage::swarm_state::SwarmStore::open(self.state.db.clone())
+                .and_then(|store| {
+                    let command = serde_json::from_value(
+                        serde_json::json!({"tool":name,"arguments":arguments}),
+                    )?;
+                    store.local_dispatch(local, call_id, command, admission)
+                }) {
+                Ok(value) => ToolResult::new(value.to_string(), false),
+                Err(error) => {
+                    beale_host_log::error!("local Swarm dispatch rejected: {error:#}");
+                    ToolResult::error("Swarm request rejected: verify the saved profile, direct-child relationship, task or handoff schema, and current agent state.".into())
+                }
+            };
+        }
         #[cfg(feature = "webfetch")]
         if name == beale_webfetch::TOOL_NAME {
             return match until_stopped(
@@ -311,11 +356,11 @@ impl ToolRuntime<'_> {
             };
         }
         if name == "plugin_call" {
-            return self.run_plugin(arguments, stop).await;
+            return self.run_plugin(arguments, stop, review_stop).await;
         }
         #[cfg(feature = "runbooks")]
         if name == beale_runbooks::RUN {
-            return self.run_runbook(arguments, stop).await;
+            return self.run_runbook(arguments, stop, review_stop).await;
         }
         #[cfg(feature = "runbooks")]
         if beale_runbooks::is_tool(name) {
@@ -420,12 +465,28 @@ impl ToolRuntime<'_> {
                 };
             }
             return match until_stopped(
-                execute(
-                    name,
-                    &arguments,
-                    self.workspace,
-                    self.state.workspaces.root(),
-                ),
+                async {
+                    if self
+                        .local
+                        .is_some_and(|turn| turn.role != beale_contracts::swarms::Role::Leader)
+                    {
+                        beale_tools::execute_in_environment(
+                            name,
+                            &arguments,
+                            self.workspace,
+                            self.state.workspaces.root(),
+                        )
+                        .await
+                    } else {
+                        execute(
+                            name,
+                            &arguments,
+                            self.workspace,
+                            self.state.workspaces.root(),
+                        )
+                        .await
+                    }
+                },
                 stop,
             )
             .await
@@ -442,6 +503,7 @@ impl ToolRuntime<'_> {
         &self,
         arguments: Value,
         stop: &mut Option<watch::Receiver<bool>>,
+        review_stop: &mut Option<watch::Receiver<bool>>,
     ) -> ToolResult {
         let mut review_unavailable = false;
         let result = async {
@@ -453,7 +515,9 @@ impl ToolRuntime<'_> {
             );
             let review_args = json!({"plugin":parsed.plugin,"server":parsed.server,
                 "tool":parsed.tool,"arguments":parsed.arguments});
-            let decision = self.review_call("plugin_call", &review_args).await;
+            let decision =
+                await_tool_review(self.review_call("plugin_call", &review_args), review_stop)
+                    .await?;
             if !decision.approved {
                 if review_failed(&decision) {
                     review_unavailable = true;
@@ -461,6 +525,14 @@ impl ToolRuntime<'_> {
                 }
                 anyhow::bail!("plugin tool denied by review: {}", decision.reason);
             }
+            let _guard = match self.mutation_lock {
+                Some(lock) => Some(
+                    until_stopped(lock.lock(), review_stop)
+                        .await
+                        .ok_or_else(|| anyhow::anyhow!("Tool stopped by user."))?,
+                ),
+                None => None,
+            };
             let value = self
                 .state
                 .plugins
@@ -491,6 +563,7 @@ impl ToolRuntime<'_> {
         &self,
         arguments: Value,
         stop: &mut Option<watch::Receiver<bool>>,
+        review_stop: &mut Option<watch::Receiver<bool>>,
     ) -> ToolResult {
         use beale_contracts::v1::SessionStreamKind;
         let mut review_unavailable = false;
@@ -511,9 +584,11 @@ impl ToolRuntime<'_> {
                 {
                     let review_args =
                         json!({"command":format!("# {language} runbook cell\n{source}")});
-                    let decision = self
-                        .review_call(beale_tools::COMMAND_TOOL_NAME, &review_args)
-                        .await;
+                    let decision = await_tool_review(
+                        self.review_call(beale_tools::COMMAND_TOOL_NAME, &review_args),
+                        review_stop,
+                    )
+                    .await?;
                     if !decision.approved {
                         if review_failed(&decision) {
                             review_unavailable = true;
@@ -523,6 +598,14 @@ impl ToolRuntime<'_> {
                     }
                 }
             }
+            let _guard = match self.mutation_lock {
+                Some(lock) => Some(
+                    until_stopped(lock.lock(), review_stop)
+                        .await
+                        .ok_or_else(|| anyhow::anyhow!("Tool stopped by user."))?,
+                ),
+                None => None,
+            };
             let run = self.state.db.runbook_run_start(
                 self.workspace_id,
                 self.session_id,
@@ -599,15 +682,7 @@ impl ToolRuntime<'_> {
         stop: &mut Option<watch::Receiver<bool>>,
     ) -> ToolResult {
         let _ = stop;
-        #[cfg(feature = "graphs")]
-        let evidence_role = match self.pipeline_role {
-            Some(role) if !pipeline_finding_allowed(role, name, &arguments) => {
-                return ToolResult::error("This finding action belongs to another Research Pipeline agent. Hand off the finding and evidence to that role.".to_owned());
-            }
-            Some(_) => Some(self.agent_role),
-            None => None,
-        };
-        #[cfg(not(feature = "graphs"))]
+
         let evidence_role: Option<&str> = None;
         let pending = pending
             .iter()
@@ -705,17 +780,7 @@ mod tests {
             assert!(requires_call_review(name), "{name}");
         }
         assert!(!requires_call_review("plugin_call"));
-        #[cfg(feature = "graphs")]
-        for name in [
-            beale_graphs::SPAWN_TOOL,
-            beale_graphs::LIST_TOOL,
-            beale_graphs::INSPECT_TOOL,
-            beale_graphs::MESSAGE_TOOL,
-            beale_graphs::KILL_TOOL,
-            beale_graphs::HANDOFF_TOOL,
-        ] {
-            assert!(!requires_call_review(name), "{name}");
-        }
+
         #[cfg(feature = "findings")]
         assert!(requires_call_review(beale_findings::VERIFY));
     }
@@ -733,43 +798,43 @@ mod tests {
         }
         #[cfg(feature = "webfetch")]
         assert!(!takes_mutation_lock(beale_webfetch::TOOL_NAME));
+        assert!(defers_mutation_lock("plugin_call"));
+        assert!(defers_mutation_lock("runbook_run"));
+        assert!(!defers_mutation_lock(beale_tools::COMMAND_TOOL_NAME));
     }
 
-    #[cfg(all(feature = "graphs", feature = "findings"))]
-    #[test]
-    fn pipeline_tool_visibility_matches_dispatch_permissions() {
-        use beale_graphs::ProfileId;
-        for role in [
-            ProfileId::AuditTargets,
-            ProfileId::Discovery,
-            ProfileId::Validation,
-            ProfileId::Reporter,
-            ProfileId::PatchGeneration,
-        ] {
-            for tool in beale_findings::definitions() {
-                let name = tool["name"].as_str().unwrap();
-                let any_state = ["finding", "candidate", "validated", "screened", "reported"]
-                    .iter()
-                    .any(|state| pipeline_finding_allowed(role, name, &json!({"state": state})))
-                    || pipeline_finding_allowed(role, name, &json!({}));
-                assert_eq!(
-                    pipeline_finding_visible(role, name),
-                    any_state,
-                    "{role:?} {name}"
-                );
-            }
-        }
-        assert!(pipeline_finding_visible(
-            ProfileId::Validation,
-            beale_findings::VERIFY
-        ));
-        assert!(!pipeline_finding_visible(
-            ProfileId::Discovery,
-            beale_findings::VERIFY
-        ));
-        assert!(!pipeline_finding_visible(
-            ProfileId::AuditTargets,
-            "findings_update"
-        ));
+    #[tokio::test]
+    async fn inner_review_wait_is_cancelable_and_cannot_restart_after_stop() {
+        let (sender, receiver) = watch::channel(false);
+        let mut stop = Some(receiver);
+        let (entered, waiting) = tokio::sync::oneshot::channel();
+        let review = async {
+            entered.send(()).unwrap();
+            std::future::pending::<ReviewDecision>().await
+        };
+        let cancel = async {
+            waiting.await.unwrap();
+            sender.send(true).unwrap();
+        };
+        let (result, ()) = tokio::join!(await_tool_review(review, &mut stop), cancel);
+        assert_eq!(result.unwrap_err().to_string(), "Tool stopped by user.");
+        // The cancellation has already been observed, so a later review must
+        // check the current value instead of waiting for another watch change.
+        let result =
+            await_tool_review(async { panic!("review dispatched after stop") }, &mut stop).await;
+        assert!(result.is_err());
+        let decision = await_tool_review(
+            async {
+                ReviewDecision {
+                    approved: true,
+                    reviewed: true,
+                    reason: "Synthetic approval".into(),
+                }
+            },
+            &mut None,
+        )
+        .await
+        .unwrap();
+        assert!(decision.approved && decision.reviewed);
     }
 }

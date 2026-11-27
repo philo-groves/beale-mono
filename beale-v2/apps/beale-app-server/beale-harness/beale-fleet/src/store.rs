@@ -11,7 +11,7 @@ use beale_storage::{
 use std::collections::HashSet;
 
 /// Ordered schema versions for this feature's tables.
-pub const MIGRATIONS: &[&str] = &[V1, V2];
+pub const MIGRATIONS: &[&str] = &[V1, V2, V3];
 
 const V1: &str = "
 CREATE TABLE fleet_totp_secret (
@@ -60,9 +60,15 @@ CREATE TABLE fleet_research_tool_settings (
 
 const V2: &str = "ALTER TABLE fleet_vm_settings DROP COLUMN can_clone;";
 
+const V3: &str = "ALTER TABLE fleet_research_tool_settings DROP COLUMN allow_locally;
+ALTER TABLE fleet_research_tool_settings DROP COLUMN allow_in_vms;
+ALTER TABLE fleet_research_tool_settings ADD COLUMN preference INTEGER NOT NULL DEFAULT 0 CHECK(preference BETWEEN 0 AND 2);";
+
 /// Creates or upgrades this feature's tables.
 pub fn migrate(db: &HostDatabase) -> Result<()> {
-    db.migrate_schema(crate::FEATURE_ID, MIGRATIONS)
+    db.migrate_schema(crate::FEATURE_ID, MIGRATIONS)?;
+    beale_storage::fleet_coordination::FleetCoordinationStore::open(db.clone())?;
+    Ok(())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -107,13 +113,8 @@ pub trait FleetStore {
     fn preferred_browser_id(&self) -> Result<Option<String>>;
     fn set_preferred_browser_id(&self, id: &str) -> Result<()>;
     fn set_browser_settings(&self, id: &str, settings: &BrowserSettings) -> Result<()>;
-    fn research_tool_settings(&self, id: &str) -> Result<(bool, bool)>;
-    fn set_research_tool_settings(
-        &self,
-        id: &str,
-        allow_locally: bool,
-        allow_in_vms: bool,
-    ) -> Result<()>;
+    fn research_tool_settings(&self, id: &str) -> Result<i32>;
+    fn set_research_tool_settings(&self, id: &str, preference: i32) -> Result<()>;
     fn virtual_machine_settings(&self, id: &str) -> Result<VirtualMachineSettings>;
     fn set_virtual_machine_settings(
         &self,
@@ -260,25 +261,20 @@ impl FleetStore for HostDatabase {
         })
     }
 
-    fn research_tool_settings(&self, id: &str) -> Result<(bool, bool)> {
+    fn research_tool_settings(&self, id: &str) -> Result<i32> {
         self.with_connection(|connection| {
             Ok(connection
                 .query_row(
-                    "SELECT allow_locally, allow_in_vms FROM fleet_research_tool_settings WHERE tool_id = ?1",
+                    "SELECT preference FROM fleet_research_tool_settings WHERE tool_id = ?1",
                     [id],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
+                    |row| row.get(0),
                 )
                 .optional()?
-                .unwrap_or((false, false)))
+                .unwrap_or(0))
         })
     }
 
-    fn set_research_tool_settings(
-        &self,
-        id: &str,
-        allow_locally: bool,
-        allow_in_vms: bool,
-    ) -> Result<()> {
+    fn set_research_tool_settings(&self, id: &str, preference: i32) -> Result<()> {
         ensure!(
             !id.is_empty()
                 && id.len() <= 64
@@ -287,14 +283,16 @@ impl FleetStore for HostDatabase {
                     .all(|byte| byte.is_ascii_lowercase() || byte == b'-'),
             "invalid research tool id"
         );
+        ensure!(
+            beale_contracts::v1::ResearchToolPreference::try_from(preference).is_ok(),
+            "invalid research tool preference"
+        );
         self.with_connection(|connection| {
             connection.execute(
-                "INSERT INTO fleet_research_tool_settings(tool_id, allow_locally, allow_in_vms)
-                 VALUES (?1, ?2, ?3)
-                 ON CONFLICT(tool_id) DO UPDATE SET
-                     allow_locally = excluded.allow_locally,
-                     allow_in_vms = excluded.allow_in_vms",
-                params![id, allow_locally, allow_in_vms],
+                "INSERT INTO fleet_research_tool_settings(tool_id, preference)
+                 VALUES (?1, ?2)
+                 ON CONFLICT(tool_id) DO UPDATE SET preference = excluded.preference",
+                params![id, preference],
             )?;
             Ok(())
         })
@@ -481,7 +479,7 @@ mod tests {
         })
         .unwrap();
         migrate(&db).unwrap();
-        assert_eq!(db.schema_version(crate::FEATURE_ID).unwrap(), 2);
+        assert_eq!(db.schema_version(crate::FEATURE_ID).unwrap(), 3);
         let settings = db.virtual_machine_settings(id).unwrap();
         assert!(settings.enabled && settings.can_run);
         assert!(!settings.all_workspaces);
@@ -501,31 +499,19 @@ mod tests {
     }
 
     #[test]
-    fn research_tool_approvals_default_off_and_survive_reopen() {
+    fn research_tool_preferences_default_allow_and_survive_reopen() {
         let root = root();
         let db = open(&root);
-        assert_eq!(
-            db.research_tool_settings("ripgrep").unwrap(),
-            (false, false)
-        );
-        db.set_research_tool_settings("ripgrep", true, false)
-            .unwrap();
-        db.set_research_tool_settings("ghidra", false, true)
-            .unwrap();
+        assert_eq!(db.research_tool_settings("ripgrep").unwrap(), 0);
+        db.set_research_tool_settings("ripgrep", 1).unwrap();
+        db.set_research_tool_settings("ghidra", 2).unwrap();
+        assert!(db.set_research_tool_settings("ghidra", 3).is_err());
+        assert_eq!(db.research_tool_settings("ghidra").unwrap(), 2);
         drop(db);
         let reopened = open(&root);
-        assert_eq!(
-            reopened.research_tool_settings("ripgrep").unwrap(),
-            (true, false)
-        );
-        assert_eq!(
-            reopened.research_tool_settings("ghidra").unwrap(),
-            (false, true)
-        );
-        assert_eq!(
-            reopened.research_tool_settings("jadx").unwrap(),
-            (false, false)
-        );
+        assert_eq!(reopened.research_tool_settings("ripgrep").unwrap(), 1);
+        assert_eq!(reopened.research_tool_settings("ghidra").unwrap(), 2);
+        assert_eq!(reopened.research_tool_settings("jadx").unwrap(), 0);
         drop(reopened);
         std::fs::remove_dir_all(root).unwrap();
     }

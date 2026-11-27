@@ -1,5 +1,6 @@
 use super::{THREAT_MODEL_EDIT, THREAT_MODEL_GET, evidence_json, evidence_refs, required};
 use anyhow::{Context, Result, bail, ensure};
+use beale_contracts::tool_error::ToolError;
 use beale_contracts::v1::{
     SurfaceThreatDisposition, SurfaceThreatScenario, UpdateWorkspaceSurfaceThreatModelRequest,
     WorkspaceSurfaceThreatModel,
@@ -8,10 +9,12 @@ use beale_workspaces::WorkspaceStore;
 use serde_json::{Map, Value, json};
 
 fn fields<'a>(value: &'a Value, allowed: &[&str]) -> Result<&'a Map<String, Value>> {
-    let object = value.as_object().context("expected an object")?;
+    let object = value
+        .as_object()
+        .context(ToolError::invalid("expected an object"))?;
     ensure!(
         object.keys().all(|key| allowed.contains(&key.as_str())),
-        "unknown threat model field"
+        ToolError::invalid("unknown threat model field")
     );
     Ok(object)
 }
@@ -20,12 +23,12 @@ fn string_array(value: &Value, key: &str) -> Result<Vec<String>> {
     value
         .get(key)
         .and_then(Value::as_array)
-        .with_context(|| format!("{key} must be an array"))?
+        .with_context(|| ToolError::invalid(format!("{key} must be an array")))?
         .iter()
         .map(|item| {
             item.as_str()
                 .map(str::to_owned)
-                .with_context(|| format!("invalid {key} item"))
+                .with_context(|| ToolError::invalid(format!("invalid {key} item")))
         })
         .collect()
 }
@@ -50,13 +53,17 @@ fn scenario(value: &Value, id: String) -> Result<SurfaceThreatScenario> {
     )?;
     let disposition = match object
         .get("disposition")
-        .map(|value| value.as_str().context("invalid disposition"))
+        .map(|value| {
+            value
+                .as_str()
+                .context(ToolError::invalid("invalid disposition"))
+        })
         .transpose()?
         .unwrap_or("open")
     {
         "open" => SurfaceThreatDisposition::Open,
         "dismissed" => SurfaceThreatDisposition::Dismissed,
-        _ => bail!("invalid disposition"),
+        _ => bail!(ToolError::invalid("invalid disposition")),
     };
     Ok(SurfaceThreatScenario {
         id,
@@ -71,7 +78,11 @@ fn scenario(value: &Value, id: String) -> Result<SurfaceThreatScenario> {
         disposition: disposition as i32,
         disposition_reason: object
             .get("disposition_reason")
-            .map(|value| value.as_str().context("invalid disposition_reason"))
+            .map(|value| {
+                value
+                    .as_str()
+                    .context(ToolError::invalid("invalid disposition_reason"))
+            })
             .transpose()?
             .unwrap_or("")
             .to_owned(),
@@ -87,16 +98,19 @@ fn page(model: &WorkspaceSurfaceThreatModel, args: &Value) -> Result<Value> {
     fields(args, &["surface_id", "offset", "limit"])?;
     let offset = args
         .get("offset")
-        .map(|value| value.as_u64().context("invalid offset"))
+        .map(|value| value.as_u64().context(ToolError::invalid("invalid offset")))
         .transpose()?
         .unwrap_or(0);
     let offset = usize::try_from(offset).unwrap_or(usize::MAX);
     let limit = args
         .get("limit")
-        .map(|value| value.as_u64().context("invalid limit"))
+        .map(|value| value.as_u64().context(ToolError::invalid("invalid limit")))
         .transpose()?
         .unwrap_or(20);
-    ensure!((1..=50).contains(&limit), "invalid limit");
+    ensure!(
+        (1..=50).contains(&limit),
+        ToolError::invalid("invalid limit")
+    );
     let scenarios = model.scenarios.iter().skip(offset).take(limit as usize).map(|item| {
         let disposition = if item.disposition == SurfaceThreatDisposition::Dismissed as i32 { "dismissed" } else { "open" };
         json!({
@@ -122,16 +136,17 @@ pub(super) fn execute(
     args: &Value,
 ) -> Result<String> {
     let surface_id = required(args, "surface_id")?;
-    let mut model = store
-        .threat_model_for_host(workspace_id, surface_id)
-        .map_err(|status| anyhow::anyhow!("threat model read failed: {status}"))?;
+    let mut model = store.threat_model_for_agent(workspace_id, surface_id)?;
     match name {
         THREAT_MODEL_GET => Ok(page(&model, args)?.to_string()),
         THREAT_MODEL_EDIT => {
             fields(args, &["surface_id", "scenario", "remove_id"])?;
             let changes = usize::from(args.get("scenario").is_some())
                 + usize::from(args.get("remove_id").is_some());
-            ensure!(changes == 1, "supply one scenario or removal");
+            ensure!(
+                changes == 1,
+                ToolError::invalid("supply one scenario or removal")
+            );
             let changed_id = if let Some(value) = args.get("scenario") {
                 let id = value
                     .get("id")
@@ -145,30 +160,33 @@ pub(super) fn execute(
                 } else {
                     ensure!(
                         value.get("id").is_none(),
-                        "new scenario IDs are assigned by the host"
+                        ToolError::invalid("new scenario IDs are assigned by the host")
                     );
                     model.scenarios.push(item);
                 }
                 id
             } else if let Some(value) = args.get("remove_id") {
-                let id = value.as_str().context("invalid remove_id")?;
+                let id = value
+                    .as_str()
+                    .context(ToolError::invalid("invalid remove_id"))?;
                 let before = model.scenarios.len();
                 model.scenarios.retain(|item| item.id != id);
-                ensure!(before != model.scenarios.len(), "scenario not found");
+                ensure!(
+                    before != model.scenarios.len(),
+                    ToolError::missing("scenario not found")
+                );
                 id.to_owned()
             } else {
                 String::new()
             };
-            let saved = store
-                .update_threat_model_for_agent(
-                    workspace_id,
-                    surface_id,
-                    UpdateWorkspaceSurfaceThreatModelRequest {
-                        expected_revision: model.revision,
-                        scenarios: model.scenarios,
-                    },
-                )
-                .map_err(|status| anyhow::anyhow!("threat model update failed: {status}"))?;
+            let saved = store.update_threat_model_for_agent(
+                workspace_id,
+                surface_id,
+                UpdateWorkspaceSurfaceThreatModelRequest {
+                    expected_revision: model.revision,
+                    scenarios: model.scenarios,
+                },
+            )?;
             Ok(json!({"surface_id":saved.surface_id,"revision":saved.revision,"changed_id":changed_id}).to_string())
         }
         _ => bail!("unknown threat model tool"),

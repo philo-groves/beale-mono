@@ -1,4 +1,5 @@
 //! Independent, workspace-scoped finding lifecycle.
+use beale_contracts::tool_error::{ToolError, arguments as input};
 
 use anyhow::{Context, Result, bail, ensure};
 use axum::{
@@ -14,12 +15,14 @@ use beale_contracts::findings::{
     Validated, Verification, VerificationRun,
 };
 use beale_storage::HostDatabase;
+pub mod assigned;
 mod store;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 pub use store::{
     EVIDENCE_TOOLS, EvidenceBinding, EvidenceSource, FindingStore, MIGRATIONS, migrate, now_ms,
+    transaction_store,
 };
 
 pub const FEATURE_ID: &str = "beale-findings";
@@ -53,11 +56,7 @@ const REJECT: &str = "findings_reject";
 pub const VERIFY: &str = "findings_verify";
 
 /// Fresh-process runs per verification; every run must satisfy the oracle.
-pub const VERIFY_RUNS: usize = 2;
-const DEFAULT_VERIFY_TIMEOUT_SECONDS: u64 = 120;
-const MAX_VERIFY_TIMEOUT_SECONDS: u64 = 600;
-const MAX_VERIFY_COMMAND_BYTES: usize = 16_384;
-const MAX_ORACLE_TEXT_BYTES: usize = 1_024;
+pub const VERIFY_RUNS: usize = beale_contracts::swarm_findings::VERIFY_RUNS as usize;
 
 pub fn definitions() -> Vec<Value> {
     let attack_path_schema = json!({
@@ -190,7 +189,7 @@ pub struct ToolContext<'a> {
     pub pending: &'a [PendingSource<'a>],
 }
 
-fn record_pending(db: &HostDatabase, context: &ToolContext<'_>, ids: &[String]) -> Result<()> {
+fn record_pending(db: &impl FindingStore, context: &ToolContext<'_>, ids: &[String]) -> Result<()> {
     for id in ids {
         if let Some(source) = context.pending.iter().find(|source| source.id == id) {
             db.finding_record_tool_source(
@@ -221,69 +220,40 @@ pub struct VerifyRequest {
 
 impl VerifyRequest {
     pub fn parse(args: &Value) -> Result<Self> {
-        ensure!(args.is_object(), "arguments must be an object");
-        let command = required(args, "command")?;
-        ensure!(
-            !command.trim().is_empty() && command.len() <= MAX_VERIFY_COMMAND_BYTES,
-            "invalid verification command"
-        );
-        let oracle: Oracle =
-            serde_json::from_value(args.get("oracle").cloned().context("oracle is required")?)
-                .context("invalid oracle")?;
-        if let Oracle::StdoutContains { value }
-        | Oracle::StderrContains { value }
-        | Oracle::OutputContains { value } = &oracle
-        {
-            ensure!(
-                !value.trim().is_empty() && value.len() <= MAX_ORACLE_TEXT_BYTES,
-                "oracle text must be 1 to {MAX_ORACLE_TEXT_BYTES} bytes"
-            );
-            ensure!(
-                !command.contains(value.as_str()),
-                "oracle text appears in the command; choose output the target produces"
-            );
-        }
-        let timeout_seconds = args
-            .get("timeout_seconds")
-            .map_or(Ok(DEFAULT_VERIFY_TIMEOUT_SECONDS), |value| {
-                value.as_u64().context("invalid timeout_seconds")
-            })?;
-        ensure!(
-            (1..=MAX_VERIFY_TIMEOUT_SECONDS).contains(&timeout_seconds),
-            "invalid timeout_seconds"
-        );
+        let command: beale_contracts::swarm_findings::Command = input(args.clone())?;
+        command.validate().map_err(ToolError::invalid)?;
         Ok(Self {
-            id: required(args, "id")?.to_owned(),
-            expected_revision: revision(args)?,
-            command: command.to_owned(),
-            oracle,
-            timeout_seconds,
+            id: command.id,
+            expected_revision: command.expected_revision,
+            command: command.command,
+            oracle: command.oracle,
+            timeout_seconds: command.timeout_seconds,
         })
     }
 }
 
 fn verifiable_finding(
-    db: &HostDatabase,
+    db: &impl FindingStore,
     context: &ToolContext<'_>,
     request: &VerifyRequest,
 ) -> Result<Finding> {
     let finding = db
         .finding_get(context.workspace_id, &request.id)?
-        .context("finding not found")?;
+        .context(ToolError::missing("finding not found"))?;
     ensure!(
         finding.revision == request.expected_revision,
-        "finding revision conflict"
+        ToolError::conflict("finding revision conflict")
     );
     ensure!(
         matches!(finding.status(), Status::Candidate | Status::Validated),
-        "verify a Candidate or Validated finding"
+        ToolError::rejected("verify a Candidate or Validated finding")
     );
     Ok(finding)
 }
 
 /// Checks a verification request before any command runs.
 pub fn check_verifiable(
-    db: &HostDatabase,
+    db: &impl FindingStore,
     context: &ToolContext<'_>,
     request: &VerifyRequest,
 ) -> Result<()> {
@@ -348,7 +318,7 @@ impl VerifyRun {
 /// Saves a verification on the finding. Returns the model-visible result and
 /// whether every run satisfied the oracle.
 pub fn record_verification(
-    db: &HostDatabase,
+    db: &impl FindingStore,
     context: &ToolContext<'_>,
     request: &VerifyRequest,
     tool_call_id: &str,
@@ -398,13 +368,13 @@ pub fn record_verification(
 fn required<'a>(args: &'a Value, key: &str) -> Result<&'a str> {
     args.get(key)
         .and_then(Value::as_str)
-        .with_context(|| format!("{key} is required"))
+        .with_context(|| ToolError::invalid(format!("{key} is required")))
 }
 fn revision(args: &Value) -> Result<u64> {
     args.get("expected_revision")
         .and_then(Value::as_u64)
         .filter(|number| *number > 0)
-        .context("expected_revision is required")
+        .context(ToolError::invalid("expected_revision is required"))
 }
 fn state_summary(finding: &Finding) -> Value {
     json!({"record":Summary::from(finding)})
@@ -412,28 +382,30 @@ fn state_summary(finding: &Finding) -> Value {
 
 fn optional_field<T: DeserializeOwned>(args: &Value, key: &str) -> Result<Option<T>> {
     args.get(key)
-        .map(|value| serde_json::from_value(value.clone()).map_err(Into::into))
+        .map(|value| input(value.clone()).map_err(Into::into))
         .transpose()
 }
 
 fn patch_finding(finding: &mut Finding, patch: &Value) -> Result<()> {
-    let fields = patch.as_object().context("patch must be an object")?;
+    let fields = patch
+        .as_object()
+        .context(ToolError::invalid("patch must be an object"))?;
     ensure!(
         !fields.is_empty() && fields.len() <= 6,
-        "invalid finding patch"
+        ToolError::invalid("invalid finding patch")
     );
     let prior_surface_ids = finding.surface_ids.clone();
     let prior_root_cause = finding.root_cause.clone();
     let prior_attack_path = finding.attack_path.clone();
     for (key, value) in fields {
         match key.as_str() {
-            "title" => finding.title = serde_json::from_value(value.clone())?,
-            "summary" => finding.summary = serde_json::from_value(value.clone())?,
-            "surface_ids" => finding.surface_ids = serde_json::from_value(value.clone())?,
-            "root_cause" => finding.root_cause = serde_json::from_value(value.clone())?,
-            "attack_path" => finding.attack_path = serde_json::from_value(value.clone())?,
-            "remediation" => finding.remediation = serde_json::from_value(value.clone())?,
-            _ => bail!("unknown finding field: {key}"),
+            "title" => finding.title = input(value.clone())?,
+            "summary" => finding.summary = input(value.clone())?,
+            "surface_ids" => finding.surface_ids = input(value.clone())?,
+            "root_cause" => finding.root_cause = input(value.clone())?,
+            "attack_path" => finding.attack_path = input(value.clone())?,
+            "remediation" => finding.remediation = input(value.clone())?,
+            _ => bail!(ToolError::invalid(format!("unknown finding field: {key}"))),
         }
     }
     if (finding.surface_ids != prior_surface_ids
@@ -448,10 +420,12 @@ fn patch_finding(finding: &mut Finding, patch: &Value) -> Result<()> {
 }
 
 fn patch_state<T: serde::Serialize + DeserializeOwned>(state: &mut T, patch: &Value) -> Result<()> {
-    let fields = patch.as_object().context("patch must be an object")?;
+    let fields = patch
+        .as_object()
+        .context(ToolError::invalid("patch must be an object"))?;
     ensure!(
         !fields.is_empty() && fields.len() <= 16,
-        "patch is empty or too large"
+        ToolError::invalid("patch is empty or too large")
     );
     let mut value = serde_json::to_value(&*state)?;
     let target = value.as_object_mut().context("invalid state object")?;
@@ -461,12 +435,15 @@ fn patch_state<T: serde::Serialize + DeserializeOwned>(state: &mut T, patch: &Va
                 key.as_str(),
                 "revision" | "completion" | "completed_at_ms" | "verification" | "evidence_digests"
             ),
-            "state metadata is host-owned"
+            ToolError::invalid("state metadata is host-owned")
         );
-        ensure!(target.contains_key(key), "unknown state field: {key}");
+        ensure!(
+            target.contains_key(key),
+            ToolError::invalid(format!("unknown state field: {key}"))
+        );
         target.insert(key.clone(), value.clone());
     }
-    *state = serde_json::from_value(value)?;
+    *state = input(value)?;
     Ok(())
 }
 
@@ -522,12 +499,15 @@ fn screening_missing(finding: &Finding, state: &Screened) -> Vec<String> {
 /// Runs a Findings tool other than `findings_verify`, which needs host
 /// execution and goes through [`VerifyRequest`] and [`record_verification`].
 pub fn execute(
-    db: &HostDatabase,
+    db: &impl FindingStore,
     context: &ToolContext<'_>,
     name: &str,
     args: &Value,
 ) -> Result<String> {
-    ensure!(args.is_object(), "arguments must be an object");
+    ensure!(
+        args.is_object(),
+        ToolError::invalid("arguments must be an object")
+    );
     ensure!(name != VERIFY, "verification requires host execution");
     let workspace_id = context.workspace_id;
     let session_id = context.session_id;
@@ -535,27 +515,15 @@ pub fn execute(
         QUERY => {
             let status = args
                 .get("status")
-                .map(|value| serde_json::from_value::<Status>(value.clone()))
+                .map(|value| input::<Status>(value.clone()))
                 .transpose()?;
             let request = QueryRequest {
                 workspace_id: workspace_id.to_owned(),
-                text: args
-                    .get("text")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_owned(),
+                text: optional_field::<String>(args, "text")?.unwrap_or_default(),
                 status,
                 surface_ids: optional_field(args, "surface_ids")?.unwrap_or_default(),
-                limit: args
-                    .get("limit")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(20)
-                    .try_into()?,
-                offset: args
-                    .get("offset")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0)
-                    .try_into()?,
+                limit: optional_field::<u32>(args, "limit")?.unwrap_or(20),
+                offset: optional_field::<u32>(args, "offset")?.unwrap_or(0),
             };
             json!(db.finding_query(&request)?)
         }
@@ -563,16 +531,9 @@ pub fn execute(
             db.finding_get_page(
                 workspace_id,
                 required(args, "id")?,
-                args.get("history_offset")
-                    .map(|value| -> Result<u32> {
-                        Ok(value
-                            .as_u64()
-                            .context("invalid history_offset")?
-                            .try_into()?)
-                    })
-                    .transpose()?,
+                optional_field::<u32>(args, "history_offset")?,
             )?
-            .context("finding not found")?
+            .context(ToolError::missing("finding not found"))?
         ),
         CREATE => {
             let finding = Finding {
@@ -606,16 +567,22 @@ pub fn execute(
         UPDATE | COMPLETE | REJECT => {
             let mut finding = db
                 .finding_get(workspace_id, required(args, "id")?)?
-                .context("finding not found")?;
+                .context(ToolError::missing("finding not found"))?;
             let expected = revision(args)?;
-            ensure!(finding.revision == expected, "finding revision conflict");
+            ensure!(
+                finding.revision == expected,
+                ToolError::conflict("finding revision conflict")
+            );
             ensure!(
                 finding.state.rejected.is_none(),
-                "rejected finding cannot be changed"
+                ToolError::rejected("rejected finding cannot be changed")
             );
             if name == REJECT {
                 let reason = required(args, "reason")?;
-                ensure!(!reason.trim().is_empty(), "rejection reason is required");
+                ensure!(
+                    !reason.trim().is_empty(),
+                    ToolError::invalid("rejection reason is required")
+                );
                 finding.state.rejected = Some(Rejected {
                     reason: reason.to_owned(),
                     from: finding.status(),
@@ -627,7 +594,9 @@ pub fn execute(
             } else {
                 let state = required(args, "state")?;
                 if name == UPDATE {
-                    let patch = args.get("patch").context("patch is required")?;
+                    let patch = args
+                        .get("patch")
+                        .context(ToolError::invalid("patch is required"))?;
                     let reason = required(args, "reason")?;
                     match state {
                         "finding" => patch_finding(&mut finding, patch)?,
@@ -650,7 +619,7 @@ pub fn execute(
                                     finding.status(),
                                     Status::Validated | Status::Screened | Status::Reported
                                 ),
-                                "complete validation before screening"
+                                ToolError::rejected("complete validation before screening")
                             );
                             let stage = finding.state.screened.get_or_insert_with(|| Screened {
                                 revision: 1,
@@ -663,7 +632,9 @@ pub fn execute(
                         "reported" => {
                             ensure!(
                                 matches!(finding.status(), Status::Screened | Status::Reported),
-                                "complete screening before preparing a triage-facing PoC"
+                                ToolError::rejected(
+                                    "complete screening before preparing a triage-facing PoC"
+                                )
                             );
                             let stage = finding.state.reported.get_or_insert_with(|| Reported {
                                 revision: 1,
@@ -673,7 +644,7 @@ pub fn execute(
                             stage.revision += 1;
                             stage.completion = None;
                         }
-                        _ => bail!("invalid finding state"),
+                        _ => bail!(ToolError::invalid("invalid finding state")),
                     }
                     state_summary(&db.finding_update(finding, expected, session_id, reason)?)
                 } else {
@@ -682,7 +653,7 @@ pub fn execute(
                         "validated" => {
                             ensure!(
                                 finding.status() == Status::Candidate,
-                                "validation can only complete from Candidate"
+                                ToolError::rejected("validation can only complete from Candidate")
                             );
                             let stage = finding.state.validated.get_or_insert_with(|| Validated {
                                 revision: 1,
@@ -734,7 +705,7 @@ pub fn execute(
                         "screened" => {
                             ensure!(
                                 finding.status() == Status::Validated,
-                                "complete validation before screening"
+                                ToolError::rejected("complete validation before screening")
                             );
                             let predecessor = finding
                                 .state
@@ -761,7 +732,7 @@ pub fn execute(
                         "reported" => {
                             ensure!(
                                 finding.status() == Status::Screened,
-                                "complete screening before reporting"
+                                ToolError::rejected("complete screening before reporting")
                             );
                             let predecessor = finding
                                 .state
@@ -792,7 +763,7 @@ pub fn execute(
                                 stage.revision += 1;
                             }
                         }
-                        _ => bail!("invalid finding completion state"),
+                        _ => bail!(ToolError::invalid("invalid finding completion state")),
                     }
                     if missing.is_empty() {
                         state_summary(&db.finding_update(

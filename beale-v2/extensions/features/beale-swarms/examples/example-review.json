@@ -1,0 +1,129 @@
+{
+  "version": 1,
+  "id": "example_review",
+  "revision": 1,
+  "name": "Example Review",
+  "description": "One coordinating leader with research deputies and bounded specialist workers. Handoffs travel through parents; individual work items progress concurrently.",
+  "nodes": [
+    {
+      "profile": {
+        "id": "leader",
+        "revision": 1
+      },
+      "role": "leader",
+      "x": 235,
+      "y": 15
+    },
+    {
+      "profile": {
+        "id": "discovery_harness",
+        "revision": 1
+      },
+      "role": "deputy",
+      "x": 25,
+      "y": 140
+    },
+    {
+      "profile": {
+        "id": "validation_system",
+        "revision": 1
+      },
+      "role": "deputy",
+      "x": 235,
+      "y": 140
+    },
+    {
+      "profile": {
+        "id": "mapper",
+        "revision": 1
+      },
+      "role": "worker",
+      "x": 25,
+      "y": 265
+    },
+    {
+      "profile": {
+        "id": "investigator",
+        "revision": 1
+      },
+      "role": "worker",
+      "x": 235,
+      "y": 265
+    },
+    {
+      "profile": {
+        "id": "challenger",
+        "revision": 1
+      },
+      "role": "worker",
+      "x": 445,
+      "y": 265
+    },
+    {
+      "profile": {
+        "id": "builder",
+        "revision": 1
+      },
+      "role": "worker",
+      "x": 655,
+      "y": 265
+    },
+    {
+      "profile": {
+        "id": "experimenter",
+        "revision": 1
+      },
+      "role": "worker",
+      "x": 865,
+      "y": 265
+    }
+  ],
+  "delegation": [
+    {
+      "parent": "leader",
+      "children": [
+        "discovery_harness",
+        "validation_system"
+      ]
+    },
+    {
+      "parent": "discovery_harness",
+      "children": [
+        "mapper",
+        "investigator",
+        "challenger"
+      ]
+    },
+    {
+      "parent": "validation_system",
+      "children": [
+        "builder",
+        "experimenter",
+        "challenger"
+      ]
+    }
+  ],
+  "initial_deputies": [
+    "discovery_harness"
+  ],
+  "routes": [
+    {
+      "id": "discovery_harness-to-validation_system-candidate",
+      "from": "discovery_harness",
+      "to": "validation_system",
+      "payload": "candidate"
+    },
+    {
+      "id": "validation_system-to-discovery_harness-assessment",
+      "from": "validation_system",
+      "to": "discovery_harness",
+      "payload": "assessment"
+    },
+    {
+      "id": "validation_system-to-discovery_harness-task",
+      "from": "validation_system",
+      "to": "discovery_harness",
+      "payload": "task"
+    }
+  ]
+}

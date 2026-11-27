@@ -34,8 +34,10 @@ use uuid::Uuid;
 mod http;
 mod import;
 mod research_kits;
+mod surface_operations;
 mod threat_model;
 use http::{authorized, checked_body, response};
+pub use surface_operations::{SurfaceTarget, SurfaceWriter};
 
 const DIRECTORIES: [&str; 10] = [
     "investigations",
@@ -57,6 +59,7 @@ pub struct WorkspaceStore {
     root: PathBuf,
     db: HostDatabase,
     write_lock: Arc<std::sync::Mutex<()>>,
+    surface_stage: Option<Arc<surface_operations::SurfaceStage>>,
 }
 
 struct Registry {
@@ -119,6 +122,8 @@ struct StoredManifest {
     surfaces_revision: u64,
     #[serde(default = "initial_revision")]
     rules_revision: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    surface_receipts: Vec<surface_operations::SurfaceReceipt>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -246,6 +251,7 @@ enum WorkspaceError {
     Invalid,
     Conflict,
     NotFound,
+    Tool(beale_contracts::tool_error::ToolError),
     Internal(&'static str),
 }
 
@@ -255,6 +261,16 @@ impl WorkspaceError {
             Self::Invalid => StatusCode::BAD_REQUEST,
             Self::Conflict => StatusCode::CONFLICT,
             Self::NotFound => StatusCode::NOT_FOUND,
+            Self::Tool(error) => match error.code {
+                beale_contracts::tool_error::ToolErrorCode::InvalidArguments => {
+                    StatusCode::BAD_REQUEST
+                }
+                beale_contracts::tool_error::ToolErrorCode::NotFound => StatusCode::NOT_FOUND,
+                beale_contracts::tool_error::ToolErrorCode::Conflict => StatusCode::CONFLICT,
+                beale_contracts::tool_error::ToolErrorCode::Rejected => {
+                    StatusCode::UNPROCESSABLE_ENTITY
+                }
+            },
             Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -262,6 +278,21 @@ impl WorkspaceError {
     fn report(&self) {
         if let Self::Internal(stage) = self {
             beale_host_log::error!("workspace operation failed: {stage}");
+        }
+    }
+
+    // Apply only to a caller-input validator, never filesystem or stored-data reads.
+    fn input(self, message: &'static str) -> Self {
+        match self {
+            Self::Invalid => Self::Tool(beale_contracts::tool_error::ToolError::invalid(message)),
+            other => other,
+        }
+    }
+
+    fn tool_boundary(self) -> anyhow::Error {
+        match self {
+            Self::Tool(error) => error.into(),
+            other => anyhow::anyhow!("workspace operation unavailable: {}", other.status()),
         }
     }
 }
@@ -289,6 +320,7 @@ impl WorkspaceStore {
             root,
             db,
             write_lock: Arc::new(std::sync::Mutex::new(())),
+            surface_stage: None,
         })
     }
 
@@ -339,9 +371,18 @@ impl WorkspaceStore {
         id: &str,
         surface_id: &str,
         request: UpdateWorkspaceSurfaceThreatModelRequest,
-    ) -> Result<WorkspaceSurfaceThreatModel, StatusCode> {
+    ) -> anyhow::Result<WorkspaceSurfaceThreatModel> {
         self.update_threat_model(id, surface_id, request)
-            .map_err(|error| error.status())
+            .map_err(WorkspaceError::tool_boundary)
+    }
+
+    pub fn threat_model_for_agent(
+        &self,
+        id: &str,
+        surface_id: &str,
+    ) -> anyhow::Result<WorkspaceSurfaceThreatModel> {
+        self.threat_model(id, surface_id)
+            .map_err(WorkspaceError::tool_boundary)
     }
 
     pub fn surface_for_host(
@@ -349,6 +390,16 @@ impl WorkspaceStore {
         id: &str,
         surface_id: &str,
     ) -> Result<Option<(WorkspaceSurface, bool)>, StatusCode> {
+        self.surface_with_revision_for_host(id, surface_id)
+            .map(|saved| saved.map(|(surface, deleted, _)| (surface, deleted)))
+    }
+
+    /// Record and edit revision come from a single immutable manifest read.
+    pub fn surface_with_revision_for_host(
+        &self,
+        id: &str,
+        surface_id: &str,
+    ) -> Result<Option<(WorkspaceSurface, bool, u64)>, StatusCode> {
         let entry = self.entry(id).map_err(|error| error.status())?;
         let manifest = Self::manifest(&entry).map_err(|error| error.status())?;
         manifest
@@ -364,6 +415,9 @@ impl WorkspaceStore {
                     .map(|item| surface_dto(item.clone()).map(|surface| (surface, true)))
             })
             .transpose()
+            .map(|saved| {
+                saved.map(|(surface, deleted)| (surface, deleted, manifest.surfaces_revision))
+            })
             .map_err(|error| error.status())
     }
 
@@ -372,7 +426,7 @@ impl WorkspaceStore {
         id: &str,
         expected_revision: u64,
         surfaces: Vec<WorkspaceSurfaceInput>,
-    ) -> Result<WorkspaceSurfaces, StatusCode> {
+    ) -> anyhow::Result<WorkspaceSurfaces> {
         self.update_surfaces_with_actor(
             id,
             UpdateWorkspaceSurfacesRequest {
@@ -381,7 +435,7 @@ impl WorkspaceStore {
             },
             "agent",
         )
-        .map_err(|error| error.status())
+        .map_err(WorkspaceError::tool_boundary)
     }
 
     pub fn root(&self) -> &Path {
@@ -451,6 +505,13 @@ impl WorkspaceStore {
     }
 
     fn entry(&self, id: &str) -> Result<RegistryEntry, WorkspaceError> {
+        if let Some(stage) = &self.surface_stage {
+            return if stage.entry.id == id {
+                Ok(stage.entry.clone())
+            } else {
+                Err(WorkspaceError::NotFound)
+            };
+        }
         Uuid::parse_str(id).map_err(|_| WorkspaceError::Invalid)?;
         self.read_registry()?
             .workspaces
@@ -539,7 +600,9 @@ impl WorkspaceStore {
             .chain(&manifest.retired_surfaces)
             .any(|item| item.id == surface_id)
         {
-            return Err(WorkspaceError::NotFound);
+            return Err(WorkspaceError::Tool(
+                beale_contracts::tool_error::ToolError::missing("surface not found"),
+            ));
         }
         let directory = Path::new(&entry.directory);
         Ok(threat_model::read(directory, surface_id)?
@@ -561,24 +624,40 @@ impl WorkspaceStore {
         surface_id: &str,
         request: UpdateWorkspaceSurfaceThreatModelRequest,
     ) -> Result<WorkspaceSurfaceThreatModel, WorkspaceError> {
-        let _guard = self
-            .write_lock
-            .lock()
-            .map_err(|_| WorkspaceError::Internal("workspace write lock"))?;
+        let _guard = if self.surface_stage.is_none() {
+            Some(
+                self.write_lock
+                    .lock()
+                    .map_err(|_| WorkspaceError::Internal("workspace write lock"))?,
+            )
+        } else {
+            None
+        };
         let entry = self.entry(id)?;
         let manifest = Self::manifest(&entry)?;
         if !manifest.surfaces.iter().any(|item| item.id == surface_id) {
-            return Err(WorkspaceError::NotFound);
+            return Err(WorkspaceError::Tool(
+                beale_contracts::tool_error::ToolError::missing("surface not found"),
+            ));
         }
         let directory = Path::new(&entry.directory);
         let previous = threat_model::read(directory, surface_id)?;
         let revision = previous.as_ref().map_or(1, |item| item.revision);
         if request.expected_revision != revision {
-            return Err(WorkspaceError::Conflict);
+            return Err(WorkspaceError::Tool(
+                beale_contracts::tool_error::ToolError::conflict("threat model revision conflict"),
+            ));
         }
-        let next_revision = revision.checked_add(1).ok_or(WorkspaceError::Invalid)?;
-        let model = threat_model::validate(surface_id, next_revision, request, previous.as_ref())?;
-        threat_model::write(directory, &model)?;
+        let next_revision = revision
+            .checked_add(1)
+            .ok_or(WorkspaceError::Internal("threat model revision overflow"))?;
+        let model = threat_model::validate(surface_id, next_revision, request, previous.as_ref())
+            .map_err(|error| error.input("invalid threat model update"))?;
+        if let Some(stage) = &self.surface_stage {
+            stage.save(surface_operations::PendingSurface::Threat(model.clone()))?;
+        } else {
+            threat_model::write(directory, &model)?;
+        }
         Ok(threat_model::dto(&model))
     }
 
@@ -677,23 +756,35 @@ impl WorkspaceStore {
         request: UpdateWorkspaceSurfacesRequest,
         actor: &str,
     ) -> Result<WorkspaceSurfaces, WorkspaceError> {
-        let _guard = self
-            .write_lock
-            .lock()
-            .map_err(|_| WorkspaceError::Internal("workspace write lock"))?;
+        let _guard = if self.surface_stage.is_none() {
+            Some(
+                self.write_lock
+                    .lock()
+                    .map_err(|_| WorkspaceError::Internal("workspace write lock"))?,
+            )
+        } else {
+            None
+        };
         let entry = self.entry(id)?;
         let mut manifest = Self::manifest(&entry)?;
         if request.expected_revision != manifest.surfaces_revision {
-            return Err(WorkspaceError::Conflict);
+            return Err(WorkspaceError::Tool(
+                beale_contracts::tool_error::ToolError::conflict("surface revision conflict"),
+            ));
         }
         let (mut surfaces, next_surface_number) = validate_surface_update_with_counter(
             request.surfaces,
             &manifest.surfaces,
             manifest.next_surface_number,
-        )?;
+        )
+        .map_err(|error| error.input("invalid surface definition or relationships"))?;
         if manifest.rules.is_empty() && !surfaces.iter().any(|surface| surface.scope == "in_scope")
         {
-            return Err(WorkspaceError::Invalid);
+            return Err(WorkspaceError::Tool(
+                beale_contracts::tool_error::ToolError::rejected(
+                    "workspace requires an in-scope surface or authorization rules",
+                ),
+            ));
         }
         stamp_lineage(&mut surfaces, &manifest.surfaces, actor)?;
         for old in &manifest.surfaces {
@@ -706,8 +797,14 @@ impl WorkspaceStore {
         manifest.surfaces_revision = manifest
             .surfaces_revision
             .checked_add(1)
-            .ok_or(WorkspaceError::Invalid)?;
-        write_manifest(Path::new(&entry.directory), &manifest)?;
+            .ok_or(WorkspaceError::Internal("surface revision overflow"))?;
+        if let Some(stage) = &self.surface_stage {
+            stage.save(surface_operations::PendingSurface::Manifest(
+                manifest.clone(),
+            ))?;
+        } else {
+            write_manifest(Path::new(&entry.directory), &manifest)?;
+        }
         Ok(WorkspaceSurfaces {
             surfaces: manifest
                 .surfaces
@@ -1431,6 +1528,7 @@ fn normalize_manifest(mut manifest: StoredManifest) -> Result<StoredManifest, Wo
             "invalid workspace manifest version",
         ));
     }
+    surface_operations::validate_receipts(&manifest.surface_receipts)?;
     let mut ids = HashSet::new();
     for surface in manifest
         .surfaces
@@ -1578,7 +1676,7 @@ fn validate_surface_update_with_counter(
             let id = format!("S{next_surface_number}");
             next_surface_number = next_surface_number
                 .checked_add(1)
-                .ok_or(WorkspaceError::Invalid)?;
+                .ok_or(WorkspaceError::Internal("surface ID overflow"))?;
             id
         };
         if !input.id.is_empty() && remap.insert(input.id, id.clone()).is_some() {
@@ -1767,11 +1865,24 @@ fn write_replace(path: &Path, bytes: &[u8]) -> Result<(), WorkspaceError> {
     let temp = parent
         .join(".beale")
         .join(format!("update-{}.tmp", Uuid::new_v4()));
-    write_new(&temp, bytes)?;
+    if let Err(error) = write_new(&temp, bytes) {
+        let _ = fs::remove_file(&temp);
+        return Err(error);
+    }
     if fs::rename(&temp, path).is_err() {
         let _ = fs::remove_file(&temp);
         return Err(WorkspaceError::Internal("replace workspace file"));
     }
+    sync_directory(parent)
+}
+
+fn sync_directory(directory: &Path) -> Result<(), WorkspaceError> {
+    #[cfg(unix)]
+    fs::File::open(directory)
+        .and_then(|file| file.sync_all())
+        .map_err(|_| WorkspaceError::Internal("sync workspace directory"))?;
+    #[cfg(not(unix))]
+    let _ = directory;
     Ok(())
 }
 
@@ -2204,6 +2315,7 @@ mod tests {
             serde_json::from_slice(&fs::read(directory.join("workspace.json")).unwrap()).unwrap();
         assert_eq!(manifest["researchKitId"], "hackerone");
         assert_eq!(manifest["researchKitSourceIdentifier"], "example-program");
+        drop(store);
         fs::remove_dir_all(base).unwrap();
     }
 

@@ -1,6 +1,7 @@
 //! Optional model tools for workspace surface records.
 
 use anyhow::{Context, Result, bail, ensure};
+use beale_contracts::tool_error::ToolError;
 use beale_contracts::v1::{
     SurfaceDefinition, SurfaceEvidence, SurfaceLocator, SurfaceRelationship, SurfaceScope,
     SurfaceScopeState, WorkspaceSurface, WorkspaceSurfaceInput,
@@ -111,14 +112,24 @@ pub fn summary(store: &WorkspaceStore, workspace_id: &str, name: &str, args: &Va
 fn required<'a>(args: &'a Value, key: &str) -> Result<&'a str> {
     args.get(key)
         .and_then(Value::as_str)
-        .with_context(|| format!("{key} is required"))
+        .with_context(|| ToolError::invalid(format!("{key} is required")))
+}
+
+fn optional_text<'a>(args: &'a Value, key: &str) -> Result<Option<&'a str>> {
+    args.get(key)
+        .map(|value| {
+            value
+                .as_str()
+                .with_context(|| ToolError::invalid(format!("{key} must be a string")))
+        })
+        .transpose()
 }
 
 fn scope(value: &str) -> Result<i32> {
     Ok(match value {
         "in_scope" => SurfaceScope::InScope,
         "out_of_scope" => SurfaceScope::OutOfScope,
-        _ => bail!("invalid surface scope"),
+        _ => bail!(ToolError::invalid("invalid surface scope")),
     } as i32)
 }
 
@@ -129,34 +140,37 @@ fn evidence_refs(
     let Some(value) = value else {
         return Ok(previous);
     };
-    let items = value.as_array().context("evidence_refs must be an array")?;
-    ensure!(items.len() <= 16, "too many evidence references");
+    let items = value
+        .as_array()
+        .context(ToolError::invalid("evidence_refs must be an array"))?;
+    ensure!(
+        items.len() <= 16,
+        ToolError::invalid("too many evidence references")
+    );
     items
         .iter()
         .map(|item| {
-            let object = item.as_object().context("invalid evidence reference")?;
+            let object = item
+                .as_object()
+                .context(ToolError::invalid("invalid evidence reference"))?;
             ensure!(
                 object
                     .keys()
                     .all(|key| matches!(key.as_str(), "kind" | "reference" | "note")),
-                "unknown evidence field"
+                ToolError::invalid("unknown evidence field")
             );
             Ok(SurfaceEvidence {
                 kind: object
                     .get("kind")
                     .and_then(Value::as_str)
-                    .context("evidence kind is required")?
+                    .context(ToolError::invalid("evidence kind is required"))?
                     .to_owned(),
                 reference: object
                     .get("reference")
                     .and_then(Value::as_str)
-                    .context("evidence reference is required")?
+                    .context(ToolError::invalid("evidence reference is required"))?
                     .to_owned(),
-                note: object
-                    .get("note")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_owned(),
+                note: optional_text(item, "note")?.unwrap_or("").to_owned(),
             })
         })
         .collect()
@@ -170,44 +184,67 @@ fn definition(
     let Some(value) = value else {
         return Ok(result);
     };
-    let fields = value.as_object().context("definition must be an object")?;
+    let fields = value
+        .as_object()
+        .context(ToolError::invalid("definition must be an object"))?;
     for (key, value) in fields {
         match key.as_str() {
-            "type_id" => result.type_id = value.as_str().context("invalid type_id")?.to_owned(),
-            "name" => result.name = value.as_str().context("invalid name")?.to_owned(),
-            "scope" => result.scope = scope(value.as_str().context("invalid scope")?)?,
+            "type_id" => {
+                result.type_id = value
+                    .as_str()
+                    .context(ToolError::invalid("invalid type_id"))?
+                    .to_owned()
+            }
+            "name" => {
+                result.name = value
+                    .as_str()
+                    .context(ToolError::invalid("invalid name"))?
+                    .to_owned()
+            }
+            "scope" => {
+                result.scope = scope(
+                    value
+                        .as_str()
+                        .context(ToolError::invalid("invalid scope"))?,
+                )?
+            }
             "description" => {
-                result.description = value.as_str().context("invalid description")?.to_owned()
+                result.description = value
+                    .as_str()
+                    .context(ToolError::invalid("invalid description"))?
+                    .to_owned()
             }
             "out_of_scope_reason" => {
                 result.out_of_scope_reason = value
                     .as_str()
-                    .context("invalid out_of_scope_reason")?
+                    .context(ToolError::invalid("invalid out_of_scope_reason"))?
                     .to_owned()
             }
             "evidence_refs" => result.evidence_refs = evidence_refs(Some(value), Vec::new())?,
             "locator" => {
-                let locator = value.as_object().context("invalid locator")?;
+                let locator = value
+                    .as_object()
+                    .context(ToolError::invalid("invalid locator"))?;
                 ensure!(
                     locator
                         .keys()
                         .all(|key| matches!(key.as_str(), "kind" | "value")),
-                    "unknown locator field"
+                    ToolError::invalid("unknown locator field")
                 );
                 result.locator = Some(SurfaceLocator {
                     kind: locator
                         .get("kind")
                         .and_then(Value::as_str)
-                        .context("locator kind is required")?
+                        .context(ToolError::invalid("locator kind is required"))?
                         .to_owned(),
                     value: locator
                         .get("value")
                         .and_then(Value::as_str)
-                        .context("locator value is required")?
+                        .context(ToolError::invalid("locator value is required"))?
                         .to_owned(),
                 });
             }
-            _ => bail!("unknown definition field"),
+            _ => bail!(ToolError::invalid("unknown definition field")),
         }
     }
     Ok(result)
@@ -220,33 +257,45 @@ fn relationships(
     let Some(value) = value else {
         return Ok(previous);
     };
-    let items = value.as_array().context("relationships must be an array")?;
-    ensure!(items.len() <= 64, "too many relationships");
+    let items = value
+        .as_array()
+        .context(ToolError::invalid("relationships must be an array"))?;
+    ensure!(
+        items.len() <= 64,
+        ToolError::invalid("too many relationships")
+    );
     items
         .iter()
         .map(|item| {
-            let item = item.as_object().context("invalid relationship")?;
+            let item = item
+                .as_object()
+                .context(ToolError::invalid("invalid relationship"))?;
             ensure!(
                 item.keys().all(|key| matches!(
                     key.as_str(),
                     "target_id" | "label" | "type_id" | "evidence_refs"
                 )),
-                "unknown relationship field"
+                ToolError::invalid("unknown relationship field")
             );
             Ok(SurfaceRelationship {
                 target_id: item
                     .get("target_id")
                     .and_then(Value::as_str)
-                    .context("relationship target_id is required")?
+                    .context(ToolError::invalid("relationship target_id is required"))?
                     .to_owned(),
                 label: item
                     .get("label")
                     .and_then(Value::as_str)
-                    .context("relationship label is required")?
+                    .context(ToolError::invalid("relationship label is required"))?
                     .to_owned(),
                 type_id: item
                     .get("type_id")
-                    .and_then(Value::as_str)
+                    .map(|value| {
+                        value
+                            .as_str()
+                            .context(ToolError::invalid("type_id must be a string"))
+                    })
+                    .transpose()?
                     .unwrap_or("")
                     .to_owned(),
                 evidence_refs: evidence_refs(item.get("evidence_refs"), Vec::new())?,
@@ -288,14 +337,19 @@ pub fn execute(
     args: &Value,
     review_approved: bool,
 ) -> Result<String> {
-    ensure!(args.is_object(), "arguments must be an object");
+    ensure!(
+        args.is_object(),
+        ToolError::invalid("arguments must be an object")
+    );
     if name == READ {
-        let fields = args.as_object().context("arguments must be an object")?;
+        let fields = args
+            .as_object()
+            .context(ToolError::invalid("arguments must be an object"))?;
         ensure!(
             fields
                 .keys()
                 .all(|key| matches!(key.as_str(), "surface_id" | "section" | "offset" | "limit")),
-            "unknown surface_read field"
+            ToolError::invalid("unknown surface_read field")
         );
         let surface_id = required(args, "surface_id")?;
         return match required(args, "section")? {
@@ -304,22 +358,13 @@ pub fn execute(
                     fields
                         .keys()
                         .all(|key| matches!(key.as_str(), "surface_id" | "section")),
-                    "record read does not accept paging fields"
+                    ToolError::invalid("record read does not accept paging fields")
                 );
-                let mut result: Value = serde_json::from_str(&execute(
-                    store,
-                    workspace_id,
-                    GET,
-                    &json!({"id":surface_id}),
-                    review_approved,
-                )?)?;
-                result["workspace_surfaces_revision"] = json!(
-                    store
-                        .surfaces_for_host(workspace_id)
-                        .map_err(|status| anyhow::anyhow!("surface read failed: {status}"))?
-                        .revision
-                );
-                Ok(result.to_string())
+                let (surface, deleted, revision) = store
+                    .surface_with_revision_for_host(workspace_id, surface_id)
+                    .map_err(|status| anyhow::anyhow!("surface read failed: {status}"))?
+                    .context(ToolError::missing("surface not found"))?;
+                Ok(json!({"surface":surface_json(&surface, true),"deleted":deleted,"workspace_surfaces_revision":revision}).to_string())
             }
             "threat_model" => {
                 let mut input = json!({"surface_id":surface_id});
@@ -331,7 +376,7 @@ pub fn execute(
                 }
                 threat_model::execute(store, workspace_id, THREAT_MODEL_GET, &input)
             }
-            _ => bail!("invalid surface section"),
+            _ => bail!(ToolError::invalid("invalid surface section")),
         };
     }
     if matches!(name, THREAT_MODEL_GET | THREAT_MODEL_EDIT) {
@@ -346,18 +391,25 @@ pub fn execute(
             let (surface, deleted) = store
                 .surface_for_host(workspace_id, id)
                 .map_err(|status| anyhow::anyhow!("surface read failed: {status}"))?
-                .context("surface not found")?;
+                .context(ToolError::missing("surface not found"))?;
             Ok(json!({"surface":surface_json(&surface, true),"deleted":deleted}).to_string())
         }
         QUERY => {
-            let type_id = args.get("type_id").and_then(Value::as_str);
-            let filter_scope = args.get("scope").and_then(Value::as_str);
-            let text = args
-                .get("text")
-                .and_then(Value::as_str)
-                .map(str::to_lowercase);
-            let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(50);
-            ensure!((1..=50).contains(&limit), "invalid limit");
+            let type_id = optional_text(args, "type_id")?;
+            let filter_scope = optional_text(args, "scope")?;
+            if let Some(filter) = filter_scope {
+                scope(filter)?;
+            }
+            let text = optional_text(args, "text")?.map(str::to_lowercase);
+            let limit = args
+                .get("limit")
+                .map(|value| beale_contracts::tool_error::arguments::<u64>(value.clone()))
+                .transpose()?
+                .unwrap_or(50);
+            ensure!(
+                (1..=50).contains(&limit),
+                ToolError::invalid("invalid limit")
+            );
             let matches = current
                 .surfaces
                 .iter()
@@ -387,10 +439,16 @@ pub fn execute(
         ADD | EDIT | SAVE => {
             let requested_parent = args
                 .get("parent_id")
-                .map(|value| value.as_str().context("parent_id must be a string"))
+                .map(|value| {
+                    value
+                        .as_str()
+                        .context(ToolError::invalid("parent_id must be a string"))
+                })
                 .transpose()?;
             let create = if name == SAVE {
-                let fields = args.as_object().context("arguments must be an object")?;
+                let fields = args
+                    .as_object()
+                    .context(ToolError::invalid("arguments must be an object"))?;
                 ensure!(
                     fields.keys().all(|key| matches!(
                         key.as_str(),
@@ -401,13 +459,13 @@ pub fn execute(
                             | "definition"
                             | "relationships"
                     )),
-                    "unknown surface_save field"
+                    ToolError::invalid("unknown surface_save field")
                 );
                 match required(args, "operation")? {
                     "create" => {
                         ensure!(
                             !fields.contains_key("id") && !fields.contains_key("expected_revision"),
-                            "create does not accept id or expected_revision"
+                            ToolError::invalid("create does not accept id or expected_revision")
                         );
                         true
                     }
@@ -416,20 +474,20 @@ pub fn execute(
                         let expected_revision = args
                             .get("expected_revision")
                             .and_then(Value::as_u64)
-                            .context("expected_revision is required")?;
+                            .context(ToolError::invalid("expected_revision is required"))?;
                         ensure!(
                             expected_revision == current.revision,
-                            "surface revision conflict"
+                            ToolError::conflict("surface revision conflict")
                         );
                         ensure!(
                             fields.contains_key("definition")
                                 || fields.contains_key("relationships")
                                 || fields.contains_key("parent_id"),
-                            "revise requires a change"
+                            ToolError::invalid("revise requires a change")
                         );
                         false
                     }
-                    _ => bail!("invalid surface operation"),
+                    _ => bail!(ToolError::invalid("invalid surface operation")),
                 }
             } else {
                 name == ADD
@@ -446,7 +504,7 @@ pub fn execute(
                         && !definition.type_id.is_empty()
                         && definition.locator.is_some()
                         && definition.scope != 0,
-                    "surface definition requires type_id, locator, and scope"
+                    ToolError::invalid("surface definition requires type_id, locator, and scope")
                 );
                 definition.scope_state = if review_approved {
                     SurfaceScopeState::Approved
@@ -454,14 +512,14 @@ pub fn execute(
                     SurfaceScopeState::Candidate
                 } as i32;
                 if let Some(hint) = beale_workspaces::surface_definition_hint(&definition) {
-                    bail!("{hint}");
+                    bail!(ToolError::invalid(hint));
                 }
                 let new_id = "draft-new-surface";
                 if let Some(parent_id) = requested_parent.filter(|id| !id.is_empty()) {
                     let parent = inputs
                         .iter_mut()
                         .find(|item| item.id == parent_id)
-                        .context("parent surface not found")?;
+                        .context(ToolError::missing("parent surface not found"))?;
                     parent.relationships.push(SurfaceRelationship {
                         target_id: new_id.to_owned(),
                         label: "contains".to_owned(),
@@ -479,7 +537,7 @@ pub fn execute(
                 let item = inputs
                     .iter_mut()
                     .find(|item| item.id == id)
-                    .context("surface not found")?;
+                    .context(ToolError::missing("surface not found"))?;
                 let mut updated = definition(args.get("definition"), item.definition.take())?;
                 updated.scope_state = if review_approved {
                     SurfaceScopeState::Approved
@@ -487,7 +545,7 @@ pub fn execute(
                     SurfaceScopeState::Candidate
                 } as i32;
                 if let Some(hint) = beale_workspaces::surface_definition_hint(&updated) {
-                    bail!("{hint}");
+                    bail!(ToolError::invalid(hint));
                 }
                 item.definition = Some(updated);
                 item.relationships = relationships(
@@ -495,7 +553,10 @@ pub fn execute(
                     std::mem::take(&mut item.relationships),
                 )?;
                 if let Some(parent_id) = requested_parent {
-                    ensure!(parent_id != id, "a surface cannot parent itself");
+                    ensure!(
+                        parent_id != id,
+                        ToolError::invalid("a surface cannot parent itself")
+                    );
                     for surface in &mut inputs {
                         surface
                             .relationships
@@ -505,7 +566,7 @@ pub fn execute(
                         let parent = inputs
                             .iter_mut()
                             .find(|item| item.id == parent_id)
-                            .context("parent surface not found")?;
+                            .context(ToolError::missing("parent surface not found"))?;
                         parent.relationships.push(SurfaceRelationship {
                             target_id: id.to_owned(),
                             label: "contains".to_owned(),
@@ -515,9 +576,7 @@ pub fn execute(
                     }
                 }
             }
-            let saved = store
-                .update_surfaces_for_agent(workspace_id, current.revision, inputs)
-                .map_err(|status| anyhow::anyhow!("surface update failed: {status}"))?;
+            let saved = store.update_surfaces_for_agent(workspace_id, current.revision, inputs)?;
             let id = if !create {
                 required(args, "id")?.to_owned()
             } else {

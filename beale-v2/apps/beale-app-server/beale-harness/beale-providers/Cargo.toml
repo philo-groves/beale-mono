@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+beale-contracts = { path = "../beale-contracts" }
 anyhow.workspace = true
 axum.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["std"] }
@@ -19,6 +20,9 @@ tokio.workspace = true
 tokio-tungstenite.workspace = true
 url.workspace = true
 uuid.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }

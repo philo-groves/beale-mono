@@ -1,4 +1,5 @@
-//! Desktop-owned app-server connections. Tokens never cross the local app-server API.
+//! Desktop-owned app-server connections. Fleet control pairings may be registered
+//! with the trusted leader for host-owned execution; provider credentials stay local.
 
 use beale_contracts::{
     FLEET_DESCRIPTOR_PATH, FLEET_PAIR_PATH, FLEET_RESEARCH_TOOL_SETTINGS_PATH,
@@ -93,8 +94,7 @@ pub(crate) struct ResearchToolsSnapshot {
 pub(crate) struct ResearchToolMutation {
     pub(crate) host_id: String,
     pub(crate) id: String,
-    pub(crate) allow_locally: bool,
-    pub(crate) allow_in_vms: bool,
+    pub(crate) preference: i32,
 }
 
 #[derive(Clone)]
@@ -496,7 +496,7 @@ async fn tailnet_status() -> Result<TailnetStatus, String> {
     Err("Tailscale status is unavailable.".to_owned())
 }
 
-async fn read_bounded(mut response: reqwest::Response) -> Result<Vec<u8>, String> {
+pub(crate) async fn read_bounded(mut response: reqwest::Response) -> Result<Vec<u8>, String> {
     let mut bytes = Vec::new();
     while let Some(chunk) = response
         .chunk()
@@ -651,7 +651,7 @@ fn valid_descriptor(descriptor: &FleetAppServerDescriptor) -> bool {
         && descriptor.allowed_research_tools.iter().all(|tool| {
             CATALOG.iter().any(|entry| entry.id == tool.id)
                 && valid_text(&tool.name, 80)
-                && (tool.allow_locally || tool.allow_in_vms)
+                && beale_contracts::v1::ResearchToolPreference::try_from(tool.preference).is_ok()
         })
         && descriptor
             .allowed_research_tools
@@ -831,7 +831,7 @@ async fn local_fleet_client() -> Result<(Client, String, String), String> {
     Ok((client, format!("http://{addr}"), token))
 }
 
-async fn fleet_client(host_id: &str) -> Result<(Client, String, String), String> {
+pub(crate) async fn fleet_client(host_id: &str) -> Result<(Client, String, String), String> {
     if host_id == "local" {
         return local_fleet_client().await;
     }
@@ -1089,8 +1089,7 @@ pub(crate) async fn mutate_research_tool(action: ResearchToolMutation) -> Result
     let (client, base, token) = fleet_client(&action.host_id).await?;
     let request = FleetSetResearchToolSettingsRequest {
         id: action.id,
-        allow_locally: action.allow_locally,
-        allow_in_vms: action.allow_in_vms,
+        preference: action.preference,
     };
     let response = client
         .post(format!("{base}{FLEET_RESEARCH_TOOL_SETTINGS_PATH}"))
@@ -1248,6 +1247,110 @@ pub(crate) async fn mutate(action: Mutation) -> Result<MutationResult, String> {
         }
     }
 }
+/// Register paired execution hosts with the leader; no provider credentials are sent.
+pub(crate) async fn sync_execution_hosts(
+    destinations: &[beale_contracts::v1::SwarmDestination],
+) -> Result<(), String> {
+    use beale_contracts::{swarm_host::*, swarm_ui::*};
+    let saved = read_saved()?;
+    let local: HostExecutionDescriptor =
+        crate::swarm_controls::request("local", HOST_EXECUTION_PATH, None).await?;
+    let mut unresolved = destinations
+        .iter()
+        .map(|d| d.host_id.clone())
+        .collect::<HashSet<_>>();
+    unresolved.remove(&local.host_id);
+    for server in saved.servers.iter().filter(|s| s.enabled) {
+        let descriptor: HostExecutionDescriptor =
+            match crate::swarm_controls::request(&server.id, HOST_EXECUTION_PATH, None).await {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
+        if !unresolved.contains(&descriptor.host_id) {
+            continue;
+        }
+        let peer = PeerRegistration {
+            host_id: descriptor.host_id.clone(),
+            endpoint: server.endpoint.clone(),
+            control_token: server.token.clone(),
+            enabled: true,
+            protocol_major: PROTOCOL_MAJOR,
+        };
+        let _: bool = crate::swarm_controls::request(
+            "local",
+            PEER_REGISTRATION_PATH,
+            Some(serde_json::to_value(peer).map_err(|_| "Could not register execution host.")?),
+        )
+        .await?;
+        unresolved.remove(&descriptor.host_id);
+    }
+    if !unresolved.is_empty() {
+        return Err("Selected execution hosts are unavailable. Reconnect them or correct the draft; execution will not fall back locally.".into());
+    }
+    Ok(())
+}
+
+/// Pair the chosen accounting authority with the participating host before binding.
+/// The only secret transferred is its existing host control pairing.
+pub(crate) async fn sync_account_authority(
+    connection: &str,
+    authority: &str,
+) -> Result<(), String> {
+    use beale_contracts::{swarm_host::*, swarm_ui::*};
+    let participant: HostExecutionDescriptor =
+        crate::swarm_controls::request(connection, HOST_EXECUTION_PATH, None).await?;
+    if participant.host_id == authority {
+        return Ok(());
+    }
+    let local: HostExecutionDescriptor =
+        crate::swarm_controls::request("local", HOST_EXECUTION_PATH, None).await?;
+    let peer = if local.host_id == authority {
+        let endpoint = local_endpoint(&tailnet_status().await?)
+            .ok_or("The local accounting authority needs a reachable Fleet endpoint.")?;
+        let (_, _, control_token) = local_fleet_client().await?;
+        PeerRegistration {
+            host_id: local.host_id,
+            endpoint,
+            control_token,
+            enabled: true,
+            protocol_major: PROTOCOL_MAJOR,
+        }
+    } else {
+        let mut peer = None;
+        for server in read_saved()?.servers.into_iter().filter(|s| s.enabled) {
+            let Ok(descriptor) = crate::swarm_controls::request::<HostExecutionDescriptor>(
+                &server.id,
+                HOST_EXECUTION_PATH,
+                None,
+            )
+            .await
+            else {
+                continue;
+            };
+            if descriptor.host_id == authority {
+                peer = Some(PeerRegistration {
+                    host_id: descriptor.host_id,
+                    endpoint: server.endpoint,
+                    control_token: server.token,
+                    enabled: true,
+                    protocol_major: PROTOCOL_MAJOR,
+                });
+                break;
+            }
+        }
+        peer.ok_or(
+            "Connect the selected accounting authority in Fleet before saving this grouping.",
+        )?
+    };
+    let _: bool = crate::swarm_controls::request(
+        connection,
+        PEER_REGISTRATION_PATH,
+        Some(serde_json::to_value(peer).map_err(|_| "Could not pair accounting authority.")?),
+    )
+    .await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1401,13 +1504,12 @@ mod tests {
             .push(FleetAllowedResearchTool {
                 id: "ripgrep".to_owned(),
                 name: "ripgrep".to_owned(),
-                allow_locally: true,
-                allow_in_vms: false,
+                preference: 1,
             });
         assert!(valid_descriptor(&descriptor));
-        descriptor.allowed_research_tools[0].allow_locally = false;
+        descriptor.allowed_research_tools[0].preference = 99;
         assert!(!valid_descriptor(&descriptor));
-        descriptor.allowed_research_tools[0].allow_in_vms = true;
+        descriptor.allowed_research_tools[0].preference = 2;
         assert!(valid_descriptor(&descriptor));
         descriptor
             .allowed_research_tools
@@ -1421,8 +1523,7 @@ mod tests {
             .map(|tool| FleetAllowedResearchTool {
                 id: tool.id.to_owned(),
                 name: tool.name.to_owned(),
-                allow_locally: true,
-                allow_in_vms: true,
+                preference: 2,
             })
             .collect();
         assert!(valid_descriptor(&descriptor));

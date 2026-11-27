@@ -23,8 +23,8 @@ pub fn native_features() -> Vec<&'static Feature> {
         #[cfg(feature = "runbooks")]
         &beale_runbooks::FEATURE,
         &beale_goals::FEATURE,
-        #[cfg(feature = "graphs")]
-        &beale_graphs::FEATURE,
+        #[cfg(feature = "swarms")]
+        &beale_swarms::FEATURE,
     ]
 }
 
@@ -62,14 +62,6 @@ pub(crate) fn reviews(name: &str) -> bool {
     native_features()
         .iter()
         .any(|feature| feature.reviews(name))
-}
-
-/// Whether graph subagents receive a feature.
-#[cfg(all(test, feature = "graphs"))]
-pub(crate) fn subagents_receive(id: &str) -> bool {
-    native_features()
-        .iter()
-        .any(|feature| feature.id == id && feature.subagents)
 }
 
 #[cfg(test)]

@@ -1,0 +1,151 @@
+{
+  "schema_version": 1,
+  "profiles": [
+    {
+      "id": "leader",
+      "revision": 1,
+      "instructions": "Coordinate deputies and review their evidence. Use tools for managerial purposes; delegate dedicated research. All cross-deputy handoffs pass through you.",
+      "max_models": 1,
+      "default_max_concurrent": 1,
+      "runtime_max_concurrent": 1,
+      "label": "Leader",
+      "role": "leader"
+    },
+    {
+      "id": "research_deputy",
+      "revision": 1,
+      "label": "Research Deputy",
+      "role": "deputy",
+      "instructions": "Own one assigned research area end to end. Delegate bounded work and return evidence and unresolved questions to the leader. Cross-area requests go through the leader.",
+      "max_models": 1,
+      "default_max_concurrent": 1,
+      "runtime_max_concurrent": 64
+    },
+    {
+      "id": "discovery_harness",
+      "revision": 1,
+      "instructions": "Explore the authorized codebase for candidate vulnerabilities. Hand off each concrete candidate and its evidence to the Validation System. Keep incomplete leads in Discovery; do not claim validation yourself. Delegate only to the worker profiles allowed for your stage. Submit handoffs to your parent; never message sibling deputies directly.",
+      "max_models": 1,
+      "default_max_concurrent": 1,
+      "runtime_max_concurrent": 64,
+      "label": "Discovery Harness",
+      "role": "deputy"
+    },
+    {
+      "id": "validation_system",
+      "revision": 1,
+      "instructions": "Independently validate and deduplicate handed-off candidates. Report evidence and uncertainty; hand unresolved gaps back to the Discovery Harness. Delegate only to the worker profiles allowed for your stage. Submit handoffs to your parent; never message sibling deputies directly.",
+      "max_models": 1,
+      "default_max_concurrent": 1,
+      "runtime_max_concurrent": 64,
+      "label": "Validation System",
+      "role": "deputy"
+    },
+    {
+      "id": "discovery",
+      "revision": 1,
+      "instructions": "Research the ranked audit targets handed off by Audit Targets, starting with the highest supported priorities while preserving diversity of scopes. Read the target code, entry paths, trust boundaries, sinks, and relevant history; form a concrete threat model and investigate plausible weaknesses. Use Surfaces when enabled to refine boundaries and record coverage. Create or revise Candidate findings only for testable hypotheses with observations and evidence references, then hand the finding ID to Dynamic Validation. Return coverage or ranking gaps to Audit Targets. Stop before PoC execution, validation, screening, or reporting. Delegate only to the worker profiles allowed for your stage. Submit handoffs to your parent; never message sibling deputies directly.",
+      "max_models": 1,
+      "default_max_concurrent": 1,
+      "runtime_max_concurrent": 64,
+      "label": "Discovery",
+      "role": "deputy"
+    },
+    {
+      "id": "validation",
+      "revision": 1,
+      "instructions": "Dynamically validate handed-off Candidates with reproducible evidence; build or run a focused PoC here when authorized and useful. Distinguish failed checks from confirmed behavior. Complete Validated only when supported, then hand off the finding ID and evidence to Reporter. Hand unresolved gaps back to Discovery. Do not screen or report. Delegate only to the worker profiles allowed for your stage. Submit handoffs to your parent; never message sibling deputies directly.",
+      "max_models": 1,
+      "default_max_concurrent": 1,
+      "runtime_max_concurrent": 64,
+      "label": "Dynamic Validation",
+      "role": "deputy"
+    },
+    {
+      "id": "reporter",
+      "revision": 1,
+      "instructions": "Screen supported validated findings for impact and reachability, then prepare clear reports with evidence references. Hand actionable report and remediation context to Patch Generation. Return evidence gaps to Dynamic Validation. Delegate only to the worker profiles allowed for your stage. Submit handoffs to your parent; never message sibling deputies directly.",
+      "max_models": 1,
+      "default_max_concurrent": 1,
+      "runtime_max_concurrent": 64,
+      "label": "Reporter",
+      "role": "deputy"
+    },
+    {
+      "id": "patch_generation",
+      "revision": 1,
+      "instructions": "Propose and verify narrow patches for confirmed findings, preserving the evidence trail. Hand failed or incomplete patches back to Reporter with concrete gaps. Delegate only to the worker profiles allowed for your stage. Submit handoffs to your parent; never message sibling deputies directly.",
+      "max_models": 1,
+      "default_max_concurrent": 1,
+      "runtime_max_concurrent": 64,
+      "label": "Patch Generation",
+      "role": "deputy"
+    },
+    {
+      "id": "audit_targets",
+      "revision": 1,
+      "instructions": "Scout the authorized codebase broadly before vulnerability research. Partition large repositories into bounded directory and subsystem batches, delegate independent scouting tasks, and reconcile overlap and coverage. Map diverse in-scope audit targets at useful scopes such as subsystem, package, module, file, and entry point; use Surfaces when enabled to record their locators, boundaries, relationships, evidence, and coverage gaps. Rank targets using supported indicators: reachable entry points and trust boundaries, dangerous sinks, code smells, historical bug precedent, security-sensitive behavior, and related weaknesses. Separate observed evidence from inferred risk, explain uncertainty and exclusions, and avoid treating a rank as a vulnerability finding. Hand an ordered, bounded batch of target IDs or locators with ranking rationale and evidence references to Discovery. Revisit coverage and rankings as new information arrives. Do not create Candidate findings or perform validation. Delegate only to the worker profiles allowed for your stage. Submit handoffs to your parent; never message sibling deputies directly.",
+      "max_models": 1,
+      "default_max_concurrent": 1,
+      "runtime_max_concurrent": 64,
+      "label": "Audit Targets",
+      "role": "deputy"
+    },
+    {
+      "id": "mapper",
+      "revision": 1,
+      "label": "Mapper",
+      "instructions": "Map a bounded area. Return entry points, trust boundaries, dependencies, evidence references, and explicit coverage gaps. Separate observed structure from inferred risk.",
+      "spawn_when": "An area needs coverage or its structure is unknown.",
+      "max_models": 16,
+      "default_max_concurrent": null,
+      "runtime_max_concurrent": 8,
+      "role": "worker"
+    },
+    {
+      "id": "investigator",
+      "revision": 1,
+      "label": "Investigator",
+      "instructions": "Investigate a bounded question or plausible weakness. Trace the relevant behavior and return observations, assumptions, counterevidence, and the next decisive check.",
+      "spawn_when": "A concrete question or independent lead needs focused analysis.",
+      "max_models": 16,
+      "default_max_concurrent": null,
+      "runtime_max_concurrent": 8,
+      "role": "worker"
+    },
+    {
+      "id": "experimenter",
+      "revision": 1,
+      "label": "Experimenter",
+      "instructions": "Resolve an uncertainty through authorized execution. Return a reproducible procedure, artifacts, observed results, and a supported, contradicted, or inconclusive assessment. A failed reproduction is useful evidence; do not seek confirmation at the expense of counterevidence.",
+      "spawn_when": "An uncertainty can be resolved through a bounded experiment.",
+      "max_models": 16,
+      "default_max_concurrent": null,
+      "runtime_max_concurrent": 8,
+      "role": "worker"
+    },
+    {
+      "id": "challenger",
+      "revision": 1,
+      "label": "Challenger",
+      "instructions": "Independently attempt to falsify the assigned claim. Examine primary evidence, alternative explanations, missing prerequisites, and unresolved objections. Do not treat agreement as validation.",
+      "spawn_when": "A consequential claim needs independent scrutiny.",
+      "max_models": 16,
+      "default_max_concurrent": null,
+      "runtime_max_concurrent": 8,
+      "required_context_policy": "evidence_only",
+      "role": "worker"
+    },
+    {
+      "id": "builder",
+      "revision": 1,
+      "label": "Builder",
+      "instructions": "Produce the assigned harness, reproducer, instrumentation, regression test, or patch. Return the artifact references, checks performed, and limitations. Artifact creation is separate from validation of the underlying claim.",
+      "spawn_when": "Research needs a concrete implementation artifact.",
+      "max_models": 16,
+      "default_max_concurrent": null,
+      "runtime_max_concurrent": 8,
+      "role": "worker"
+    }
+  ]
+}

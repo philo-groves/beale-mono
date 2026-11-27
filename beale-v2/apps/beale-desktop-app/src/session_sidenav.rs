@@ -85,8 +85,8 @@ fn activates_sidenav(name: &str) -> bool {
             | "surface_add"
             | "surface_save"
             | "surface_threat_model_edit"
-            | "graph_delegate"
-            | "graph_subagents_spawn"
+            | "swarm_delegate"
+            | "swarm_spawn_subagent"
     )
 }
 
@@ -227,9 +227,10 @@ pub(crate) fn render(
     active_menu: Option<UsageMenu>,
     theme: ThemeStyle<'_>,
 ) -> El {
-    let peer_graph = detail.is_some_and(|detail| beale_graphs::is_peer_graph(&detail.graph_id));
+    let peer_graph =
+        detail.is_some_and(|detail| crate::sessions::swarm_definition(detail).is_some());
     let sidebar_title = if peer_graph {
-        beale_graphs::ProfileId::from_id(agent_role).map_or_else(
+        beale_swarms::ProfileId::from_id(agent_role).map_or_else(
             || "Agent Scan".to_owned(),
             |role| format!("{} Scan", role.label()),
         )
@@ -355,7 +356,7 @@ pub(crate) fn render(
         .filter(|item| item.status == "active")
         .count();
     let show_subagents =
-        !subagents.is_empty() || detail.is_some_and(|detail| !detail.graph_id.is_empty());
+        !subagents.is_empty() || detail.is_some_and(|detail| !detail.swarm_id.is_empty());
     let mut sidebar = col()
         .key("session-sidenav")
         .role("complementary")
@@ -782,7 +783,7 @@ fn subagent_popup(
         };
         for member in members.iter().take(visible) {
             let selected = (*member).clone();
-            let role = beale_graphs::ProfileId::from_id(&member.role)
+            let role = beale_swarms::ProfileId::from_id(&member.role)
                 .map_or(member.role.as_str(), |role| role.label())
                 .to_owned();
             group = group.child(
@@ -1284,6 +1285,7 @@ mod tests {
         let discovery = child("child-example-1", "discovery", "completed");
         let validation = child("child-example-2", "validation", "completed");
         let detail = SessionDetail {
+            scoped_review_rules: Vec::new(),
             subagents: vec![discovery.clone(), validation],
             ..Default::default()
         };
@@ -1305,6 +1307,7 @@ mod tests {
     #[test]
     fn duration_adds_only_the_running_period_to_persisted_periods() {
         let detail = SessionDetail {
+            scoped_review_rules: Vec::new(),
             total_duration_ms: 75_000,
             messages: vec![SessionMessage {
                 duration_ms: 10_000,
@@ -1341,6 +1344,7 @@ mod tests {
             ..Default::default()
         };
         let detail = SessionDetail {
+            scoped_review_rules: Vec::new(),
             messages: vec![SessionMessage {
                 tools: vec![tool("memory_query", false), tool("runbook_create", true)],
                 ..Default::default()
@@ -1349,17 +1353,18 @@ mod tests {
         };
         assert!(!has_campaign_activity(&detail));
         assert!(has_campaign_activity(&SessionDetail {
+            scoped_review_rules: Vec::new(),
             has_campaign_activity: true,
             ..Default::default()
         }));
         let event = SessionStreamEvent {
             runbook_progress: None,
             kind: SessionStreamKind::ToolFinished as i32,
-            tool: Some(tool("graph_delegate", false)),
+            tool: Some(tool("swarm_delegate", false)),
             ..Default::default()
         };
         assert!(campaign_activity_event(&event));
-        assert!(activates_sidenav("graph_subagents_spawn"));
+        assert!(activates_sidenav("swarm_spawn_subagent"));
         assert!(campaign_activity_event(&SessionStreamEvent {
             runbook_progress: None,
             kind: SessionStreamKind::ToolFinished as i32,

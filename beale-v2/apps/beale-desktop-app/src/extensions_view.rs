@@ -172,9 +172,9 @@ pub(crate) fn bundled_features() -> Vec<FeatureEntry> {
             all_workspaces: true,
         },
         FeatureEntry {
-            id: beale_graphs::FEATURE_ID.to_owned(),
-            name: beale_graphs::FEATURE_NAME.to_owned(),
-            description: beale_graphs::FEATURE_DESCRIPTION.to_owned(),
+            id: beale_swarms::FEATURE_ID.to_owned(),
+            name: beale_swarms::FEATURE_NAME.to_owned(),
+            description: beale_swarms::FEATURE_DESCRIPTION.to_owned(),
             enabled: false,
             has_prompt_extension: false,
             tool_count: 0,
@@ -250,10 +250,10 @@ pub(crate) fn goal_mode_enabled(state: &State) -> bool {
     matches!(state.connection, ConnectionStatus::Connected { .. })
 }
 
-pub(crate) fn graphs_enabled(state: &State) -> bool {
+pub(crate) fn swarms_enabled(state: &State) -> bool {
     matches!(state.connection, ConnectionStatus::Connected { .. })
         && state.features.iter().any(|feature| {
-            feature.id == beale_graphs::FEATURE_ID
+            feature.id == beale_swarms::FEATURE_ID
                 && feature.enabled
                 && (feature.all_workspaces
                     || state
@@ -1636,7 +1636,7 @@ fn feature_mark(id: &str, theme: ThemeStyle<'_>) -> El {
     use crate::icons::*;
     let glyph = match id {
         "goal-mode" => &TARGET,
-        "graphs" => &AGENT,
+        "swarms" => &AGENT,
         "fleet" => &FLEET,
         "findings" => &FINDINGS,
         "memories" => &BRAIN,
@@ -1932,7 +1932,11 @@ fn feature_card(
     let id = feature.id.clone();
     let mut action = toggle_button(
         format!("feature-toggle-{}", feature.id),
-        format!("{} feature", feature.name),
+        if feature.id == beale_swarms::FEATURE_ID {
+            "Swarms for new scans".to_owned()
+        } else {
+            format!("{} feature", feature.name)
+        },
         feature.enabled,
         available,
         theme,
@@ -1962,7 +1966,11 @@ fn feature_card(
                 .child(feature_mark(&feature.id, theme).key(format!("feature-logo-{}", feature.id)))
                 .child(
                     crate::design::faded_lines(
-                        feature.name.clone(),
+                        if feature.id == beale_swarms::FEATURE_ID {
+                            "Swarms (new scans)".into()
+                        } else {
+                            feature.name.clone()
+                        },
                         ui_font(16.0, 600.0),
                         theme.color("#f2f2f2"),
                         2,

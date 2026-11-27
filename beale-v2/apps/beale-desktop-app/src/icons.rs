@@ -369,6 +369,12 @@ pub(crate) static CHEVRON_RIGHT: Icon = Icon {
     body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m9 18 6-6-6-6"/>"#,
 };
 
+pub(crate) static CHEVRON_LEFT: Icon = Icon {
+    name: "lucide-chevron-left",
+    view: 24.0,
+    body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m15 18-6-6 6-6"/>"#,
+};
+
 pub(crate) static BRAIN: Icon = Icon {
     name: "beale-brain",
     view: 24.0,
@@ -427,6 +433,20 @@ pub(crate) static SETTINGS_FILLED: Icon = Icon {
     name: "beale-settings-filled",
     view: 24.0,
     body: r#"<path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.321-1.915zM15 12a3 3 0 1 0-6 0 3 3 0 0 0 6 0z" fill="currentColor" fill-rule="evenodd"/>"#,
+};
+
+// Original package geometry, distributed under this repository's license.
+pub(crate) static PACKAGE: Icon = Icon {
+    name: "beale-package",
+    view: 24.0,
+    body: r#"<path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" d="M3 6 12 2 21 6v12l-9 4-9-4V6Zm0 0 9 4 9-4M12 10v12M7.5 4 16.5 8v5"/>"#,
+};
+
+// Tabler brand-docker, MIT. See TABLER-LICENSE; upstream tabler/tabler-icons.
+pub(crate) static DOCKER: Icon = Icon {
+    name: "tabler-brand-docker",
+    view: 24.0,
+    body: include_str!("tabler-brand-docker.svg"),
 };
 
 #[cfg(test)]

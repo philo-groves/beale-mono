@@ -12,13 +12,19 @@ use beale_contracts::runbooks::{
     self, Cell, CellChange, CellEditRequest, CellEditResponse, Document, GetRequest, GetResponse,
     MAX_TITLE_CHARS, QueryRequest, QueryResponse, Summary,
 };
+use beale_contracts::tool_error::{ToolError, arguments as input};
 use beale_storage::HostDatabase;
 mod store;
 use serde::Deserialize;
 use serde_json::{Value, json};
-pub use store::{MIGRATIONS, RunbookRunRow, RunbookStore, STARTUP, SessionRunbookRow, migrate};
+pub use store::{
+    MIGRATIONS, RunbookRunRow, RunbookStore, STARTUP, SessionRunbookRow, migrate, transaction_store,
+};
+pub mod assigned;
 mod execution;
-pub use execution::{RunOutput, run_document, run_selected_cell};
+pub use execution::{
+    RunOutput, run_document, run_selected_cell, run_worker_cell, validate_worker_languages,
+};
 
 pub const FEATURE_ID: &str = "beale-runbooks";
 pub const FEATURE_NAME: &str = "Runbooks";
@@ -151,9 +157,21 @@ pub fn execute(
             && db.extension_applies_to("feature", FEATURE_ID, workspace_id)?,
         "Runbooks is disabled for this workspace"
     );
+    execute_saved(db, workspace_id, session_id, name, args)
+}
+
+/// Executes record operations after the harness has checked saved tool policy.
+/// Execution itself is dispatched separately to the assigned environment.
+pub fn execute_saved(
+    db: &impl RunbookStore,
+    workspace_id: &str,
+    session_id: &str,
+    name: &str,
+    args: &Value,
+) -> Result<String> {
     let result = match name {
         QUERY => {
-            let mut request: QueryRequest = serde_json::from_value(
+            let mut request: QueryRequest = input(
                 json!({"workspace_id":workspace_id,"text":args.get("text").cloned().unwrap_or(json!("")),"language":args.get("language").cloned().unwrap_or(json!("")),"limit":args.get("limit").cloned().unwrap_or(json!(20))}),
             )?;
             request.limit = request.limit.min(50);
@@ -165,10 +183,10 @@ pub fn execute(
             let id = args
                 .get("id")
                 .and_then(Value::as_str)
-                .context("id is required")?;
+                .context(ToolError::invalid("id is required"))?;
             let runbook = db
                 .runbook_get(workspace_id, id)?
-                .context("runbook not found")?;
+                .context(ToolError::missing("runbook not found"))?;
             json!(GetResponse {
                 runbook,
                 runs: Vec::new(),
@@ -176,7 +194,7 @@ pub fn execute(
             })
         }
         CREATE => {
-            let input: CreateInput = serde_json::from_value(args.clone())?;
+            let input: CreateInput = input(args.clone())?;
             let document = db.runbook_create(
                 Document {
                     id: String::new(),
@@ -195,10 +213,10 @@ pub fn execute(
             json!({"runbook":Summary::from(&document)})
         }
         EDIT => {
-            let input: EditInput = serde_json::from_value(args.clone())?;
+            let input: EditInput = input(args.clone())?;
             let mut document = db
                 .runbook_get(workspace_id, &input.id)?
-                .context("runbook not found")?;
+                .context(ToolError::missing("runbook not found"))?;
             if let Some(title) = input.title {
                 document.title = title;
             }
@@ -221,10 +239,10 @@ pub fn execute(
             let id = args
                 .get("run_id")
                 .and_then(Value::as_str)
-                .context("run_id is required")?;
+                .context(ToolError::invalid("run_id is required"))?;
             let run = db
                 .runbook_run_status(session_id, id)?
-                .context("runbook execution not found")?;
+                .context(ToolError::missing("runbook execution not found"))?;
             json!({"run_id":run.id,"runbook_id":run.runbook_id,"revision":run.revision,"status":run.status,"output":run.output})
         }
         _ => anyhow::bail!("unknown Runbooks tool"),

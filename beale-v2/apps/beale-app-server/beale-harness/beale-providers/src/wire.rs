@@ -220,6 +220,7 @@ pub fn provider_error_retryable(error: &anyhow::Error) -> bool {
             cause.to_string().as_str(),
             "OpenAI WebSocket connection timed out"
                 | "OpenAI response timed out"
+                | "provider response timed out"
                 | "OpenAI WebSocket is unavailable"
                 | "OpenAI WebSocket recovery failed"
                 | "OpenAI WebSocket send failed"
@@ -512,12 +513,18 @@ pub fn input_messages(messages: &[TextMessage]) -> Vec<Value> {
 }
 
 pub fn tool_output(provider: Provider, mode: AuthMode, id: &str, output: &str) -> Value {
+    message_format(provider, mode).tool_output(id, output)
+}
+
+pub fn message_format(
+    provider: Provider,
+    mode: AuthMode,
+) -> beale_contracts::swarm_worker::MessageFormat {
+    use beale_contracts::swarm_worker::MessageFormat;
     match route(provider, mode).shape {
-        WireShape::Responses => json!({"type":"function_call_output","call_id":id,"output":output}),
-        WireShape::Chat => json!({"role":"tool","tool_call_id":id,"content":output}),
-        WireShape::Anthropic => {
-            json!({"role":"user","content":[{"type":"tool_result","tool_use_id":id,"content":output}]})
-        }
+        WireShape::Responses => MessageFormat::Responses,
+        WireShape::Chat => MessageFormat::Chat,
+        WireShape::Anthropic => MessageFormat::Anthropic,
     }
 }
 
@@ -825,80 +832,69 @@ impl ProviderClient {
         if mode == AuthMode::Subscription {
             return self.codex_tool_step(request, store, progress).await;
         }
-        let token = self.token(Provider::OpenAi, mode, store).await?;
         let cyber_program = request_cyber_program(Provider::OpenAi, request.model, store)?;
         for attempt in 0..2 {
-            if connection.socket.is_none() {
-                let handshake = openai_socket_request(&token)?;
-                let (socket, _) = tokio::time::timeout(
-                    std::time::Duration::from_secs(15),
-                    connect_async(handshake),
-                )
-                .await
-                .context("OpenAI WebSocket connection timed out")?
-                .map_err(|error| match error {
-                    tokio_tungstenite::tungstenite::Error::Http(response) => {
-                        anyhow::Error::new(rejected_failure(
-                            response.status().as_u16(),
-                            response.body().as_deref().unwrap_or_default(),
-                        ))
-                    }
-                    other => other.into(),
-                })?;
-                connection.socket = Some(socket);
-                connection.previous_response_id = None;
-                connection.known_input_len = 0;
-            }
-            let incremental = connection.previous_response_id.is_some()
-                && connection.known_input_len <= request.input.len();
-            let new_input = if incremental {
-                &request.input[connection.known_input_len..]
-            } else {
-                request.input
-            };
-            let body = tool_request_body(
-                Provider::OpenAi,
-                WireShape::Responses,
-                request.model,
-                new_input,
-                request.tools,
-                RequestOptions {
-                    instructions: request.instructions,
-                    reasoning_effort: request.reasoning_effort,
-                    cyber_program,
-                },
-            );
-            let payload = websocket_body(
-                body,
-                new_input,
-                if incremental {
-                    connection.previous_response_id.as_deref()
-                } else {
-                    None
-                },
-            );
-            let socket = connection
-                .socket
-                .as_mut()
-                .context("OpenAI WebSocket is unavailable")?;
-            if socket
-                .send(Message::Text(payload.to_string().into()))
-                .await
-                .is_err()
-            {
-                connection.socket = None;
-                connection.previous_response_id = None;
-                if attempt == 0 {
-                    continue;
+            let step = crate::pacing::dispatch(Provider::OpenAi, mode, request.model, async {
+                let token = self.token(Provider::OpenAi, mode, store).await?;
+                if connection.socket.is_none() {
+                    let handshake = openai_socket_request(&token)?;
+                    let (socket, _) = tokio::time::timeout(
+                        std::time::Duration::from_secs(15),
+                        connect_async(handshake),
+                    )
+                    .await
+                    .context("OpenAI WebSocket connection timed out")?
+                    .map_err(|error| match error {
+                        tokio_tungstenite::tungstenite::Error::Http(response) => {
+                            anyhow::Error::new(rejected_failure(
+                                response.status().as_u16(),
+                                response.body().as_deref().unwrap_or_default(),
+                            ))
+                        }
+                        other => other.into(),
+                    })?;
+                    connection.socket = Some(socket);
+                    connection.previous_response_id = None;
+                    connection.known_input_len = 0;
                 }
-                bail!("OpenAI WebSocket send failed");
-            }
-            let step = tokio::time::timeout(
-                std::time::Duration::from_secs(120),
-                read_openai_socket(socket, progress, cyber_program),
-            )
-            .await
-            .context("OpenAI response timed out")?;
+                let incremental = connection.previous_response_id.is_some()
+                    && connection.known_input_len <= request.input.len();
+                let new_input = if incremental {
+                    &request.input[connection.known_input_len..]
+                } else {
+                    request.input
+                };
+                let body = tool_request_body(
+                    Provider::OpenAi,
+                    WireShape::Responses,
+                    request.model,
+                    new_input,
+                    request.tools,
+                    RequestOptions {
+                        instructions: request.instructions,
+                        reasoning_effort: request.reasoning_effort,
+                        cyber_program,
+                    },
+                );
+                let payload = websocket_body(
+                    body,
+                    new_input,
+                    if incremental {
+                        connection.previous_response_id.as_deref()
+                    } else {
+                        None
+                    },
+                );
+                let socket = connection
+                    .socket
+                    .as_mut()
+                    .context("OpenAI WebSocket is unavailable")?;
+                socket
+                    .send(Message::Text(payload.to_string().into()))
+                    .await?;
+                read_openai_socket(socket, progress, cyber_program).await
+            })
+            .await;
             match step {
                 Ok(step) => {
                     connection.known_input_len = request.input.len() + step.continuation.len();
@@ -925,25 +921,31 @@ impl ProviderClient {
         store: &CredentialStore,
         progress: Option<&mpsc::Sender<ProviderProgress>>,
     ) -> Result<ProviderStep> {
-        let credential = crate::codex::credential()?;
-        let cyber_program = request_cyber_program(Provider::OpenAi, request.model, store)?;
-        let body = codex_request_body(request, cyber_program);
-        let response = self
-            .http
-            .post(route(Provider::OpenAi, AuthMode::Subscription).endpoint)
-            .bearer_auth(&credential.access_token)
-            .header("ChatGPT-Account-Id", &credential.account_id)
-            .header("originator", "pi")
-            .header("OpenAI-Beta", "responses=experimental")
-            .header("Accept", "text/event-stream")
-            .json(&body)
-            .send()
-            .await
-            .context("Codex provider request failed")?;
-        if !response.status().is_success() {
-            return Err(rejected_response(response).await.into());
-        }
-        read_tool_stream_with_program(response, WireShape::Responses, progress, cyber_program).await
+        let model = request.model.to_owned();
+        crate::pacing::dispatch(Provider::OpenAi, AuthMode::Subscription, &model, async {
+            let credential = crate::codex::credential()?;
+            crate::pacing::verify_codex_account(&credential.account_id)?;
+            let cyber_program = request_cyber_program(Provider::OpenAi, request.model, store)?;
+            let body = codex_request_body(request, cyber_program);
+            let response = self
+                .http
+                .post(route(Provider::OpenAi, AuthMode::Subscription).endpoint)
+                .bearer_auth(&credential.access_token)
+                .header("ChatGPT-Account-Id", &credential.account_id)
+                .header("originator", "pi")
+                .header("OpenAI-Beta", "responses=experimental")
+                .header("Accept", "text/event-stream")
+                .json(&body)
+                .send()
+                .await
+                .context("Codex provider request failed")?;
+            if !response.status().is_success() {
+                return Err(rejected_response(response).await.into());
+            }
+            read_tool_stream_with_program(response, WireShape::Responses, progress, cyber_program)
+                .await
+        })
+        .await
     }
 
     fn custom_request(
@@ -1034,141 +1036,47 @@ impl ProviderClient {
         request: &InferenceRequest,
         store: &CredentialStore,
     ) -> Result<String> {
-        if matches!(provider, Provider::Anthropic | Provider::Zai) && mode == AuthMode::Subscription
-        {
-            let input = input_messages(&request.messages);
-            let step = ToolStepRequest {
-                model: &request.model,
-                input: &input,
-                tools: &[],
-                instructions: None,
-                reasoning_effort: None,
-                workspace_root: None,
-            };
-            return Ok(if provider == Provider::Anthropic {
-                crate::subscription::claude_step(step).await?.text
-            } else {
-                crate::subscription::zcode_step(step).await?.text
-            });
-        }
         ensure!(
             !request.model.trim().is_empty() && request.model.len() <= 200,
             "invalid model name"
         );
         ensure!(
-            !request.messages.is_empty() && request.messages.len() <= 128,
-            "invalid message count"
-        );
-        ensure!(
-            request
-                .messages
-                .iter()
-                .all(|m| !m.text.is_empty() && m.text.len() <= 1_048_576),
+            !request.messages.is_empty()
+                && request.messages.len() <= 128
+                && request
+                    .messages
+                    .iter()
+                    .all(|m| !m.text.is_empty() && m.text.len() <= 1_048_576),
             "invalid message text"
         );
-        if provider == Provider::OpenAi {
-            let instructions = request
-                .messages
-                .iter()
-                .filter(|message| matches!(message.role, TextRole::System))
-                .map(|message| message.text.as_str())
-                .collect::<Vec<_>>()
-                .join("\n\n");
-            let input = request
-                .messages
-                .iter()
-                .filter(|message| !matches!(message.role, TextRole::System))
-                .map(|message| json!({"role":message.role,"content":message.text}))
-                .collect::<Vec<_>>();
-            let mut connection = OpenAiConnection::default();
-            return Ok(self
-                .openai_tool_step(
-                    mode,
-                    ToolStepRequest {
-                        model: &request.model,
-                        input: &input,
-                        tools: &[],
-                        instructions: (!instructions.is_empty()).then_some(&instructions),
-                        reasoning_effort: None,
-                        workspace_root: None,
-                    },
-                    store,
-                    None,
-                    &mut connection,
-                )
-                .await?
-                .text);
-        }
-        let route = route(provider, mode);
-        let (endpoint, model, token) = if provider == Provider::Custom {
-            ensure!(
-                mode == AuthMode::ApiKey,
-                "custom providers support API keys only"
-            );
-            self.custom_request(&request.model, store)?
-        } else {
-            (
-                route.endpoint.to_owned(),
-                request.model.clone(),
-                Some(self.token(provider, mode, store).await?),
-            )
-        };
-        let messages: Vec<Value> = request
+        let instructions = request
             .messages
             .iter()
-            .map(|message| json!({"role": message.role, "content": message.text}))
-            .collect();
-        let cyber_program = request_cyber_program(provider, &request.model, store)?;
-        let mut body = match route.shape {
-            WireShape::Responses => json!({
-                "model": model,
-                "input": messages,
-                "store": false,
-                "stream": true,
-            }),
-            WireShape::Chat => json!({
-                "model": model,
-                "messages": messages,
-                "stream": true,
-            }),
-            WireShape::Anthropic => {
-                let system = messages
-                    .iter()
-                    .filter(|message| message["role"] == "system")
-                    .filter_map(|message| message["content"].as_str())
-                    .collect::<Vec<_>>()
-                    .join("\n\n");
-                let messages: Vec<_> = messages
-                    .into_iter()
-                    .filter(|message| message["role"] != "system")
-                    .collect();
-                json!({"model":model,"system":system,"messages":messages,"max_tokens":8192,"stream":true})
-            }
-        };
-        add_cyber_access(&mut body, cyber_program);
-        let mut builder = self.http.post(endpoint).json(&body);
-        if let Some(token) = token {
-            builder = builder.bearer_auth(token);
+            .filter(|m| matches!(m.role, TextRole::System))
+            .map(|m| m.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let mut input = input_messages(&request.messages);
+        if provider == Provider::OpenAi {
+            input.retain(|item| item["role"] != "system");
         }
-        if route.proxy_header {
-            builder = builder
-                .header("X-XAI-Token-Auth", "xai-grok-cli")
-                .header("x-grok-client-version", "1.0.13")
-                .header("x-grok-client-identifier", "beale")
-                .header("x-grok-client-mode", "headless")
-                .header("x-grok-model-override", request.model.as_str());
-        }
-        if provider == Provider::Anthropic {
-            builder = builder.header("anthropic-version", "2026-10-21");
-            if let Ok(workspace) = std::env::var("ANTHROPIC_WORKSPACE_ID") {
-                builder = builder.header("anthropic-workspace-id", workspace);
-            }
-        }
-        let response = builder.send().await.context("provider request failed")?;
-        if !response.status().is_success() {
-            return Err(rejected_response(response).await.into());
-        }
-        read_stream(response, route.shape).await
+        Ok(self
+            .tool_step(
+                provider,
+                mode,
+                ToolStepRequest {
+                    model: &request.model,
+                    input: &input,
+                    tools: &[],
+                    instructions: (!instructions.is_empty()).then_some(instructions.as_str()),
+                    reasoning_effort: None,
+                    workspace_root: None,
+                },
+                store,
+                None,
+            )
+            .await?
+            .text)
     }
 
     pub async fn tool_step(
@@ -1192,8 +1100,26 @@ impl ProviderClient {
         }
         if mode == AuthMode::Subscription {
             match provider {
-                Provider::Anthropic => return crate::subscription::claude_step(request).await,
-                Provider::Zai => return crate::subscription::zcode_step(request).await,
+                Provider::Anthropic => {
+                    let model = request.model.to_owned();
+                    return crate::pacing::dispatch(
+                        provider,
+                        mode,
+                        &model,
+                        crate::subscription::claude_step(request),
+                    )
+                    .await;
+                }
+                Provider::Zai => {
+                    let model = request.model.to_owned();
+                    return crate::pacing::dispatch(
+                        provider,
+                        mode,
+                        &model,
+                        crate::subscription::zcode_step(request),
+                    )
+                    .await;
+                }
                 _ => {}
             }
         }
@@ -1202,68 +1128,71 @@ impl ProviderClient {
             "invalid model name"
         );
         ensure!(!request.input.is_empty(), "empty provider input");
-        let route = route(provider, mode);
-        let (endpoint, model, token) = if provider == Provider::Custom {
-            ensure!(
-                mode == AuthMode::ApiKey,
-                "custom providers support API keys only"
-            );
-            self.custom_request(request.model, store)?
-        } else {
-            (
-                route.endpoint.to_owned(),
-                request.model.to_owned(),
-                Some(self.token(provider, mode, store).await?),
-            )
-        };
-        let cyber_program = request_cyber_program(provider, request.model, store)?;
-        let custom_reasoning = if provider == Provider::Custom {
-            let (id, _) = crate::split_qualified_model(request.model)?;
-            store
-                .custom_provider(id)?
-                .is_some_and(|definition| definition.reasoning)
-        } else {
-            false
-        };
-        let body = tool_request_body(
-            provider,
-            route.shape,
-            &model,
-            request.input,
-            request.tools,
-            RequestOptions {
-                instructions: request.instructions,
-                reasoning_effort: if provider == Provider::Custom && !custom_reasoning {
-                    None
-                } else {
-                    request.reasoning_effort
+        crate::pacing::dispatch(provider, mode, request.model, async {
+            let route = route(provider, mode);
+            let (endpoint, model, token) = if provider == Provider::Custom {
+                ensure!(
+                    mode == AuthMode::ApiKey,
+                    "custom providers support API keys only"
+                );
+                self.custom_request(request.model, store)?
+            } else {
+                (
+                    route.endpoint.to_owned(),
+                    request.model.to_owned(),
+                    Some(self.token(provider, mode, store).await?),
+                )
+            };
+            let cyber_program = request_cyber_program(provider, request.model, store)?;
+            let custom_reasoning = if provider == Provider::Custom {
+                let (id, _) = crate::split_qualified_model(request.model)?;
+                store
+                    .custom_provider(id)?
+                    .is_some_and(|definition| definition.reasoning)
+            } else {
+                false
+            };
+            let body = tool_request_body(
+                provider,
+                route.shape,
+                &model,
+                request.input,
+                request.tools,
+                RequestOptions {
+                    instructions: request.instructions,
+                    reasoning_effort: if provider == Provider::Custom && !custom_reasoning {
+                        None
+                    } else {
+                        request.reasoning_effort
+                    },
+                    cyber_program,
                 },
-                cyber_program,
-            },
-        );
-        let mut builder = self.http.post(endpoint).json(&body);
-        if let Some(token) = token {
-            builder = builder.bearer_auth(token);
-        }
-        if route.proxy_header {
-            builder = builder
-                .header("X-XAI-Token-Auth", "xai-grok-cli")
-                .header("x-grok-client-version", "1.0.13")
-                .header("x-grok-client-identifier", "beale")
-                .header("x-grok-client-mode", "headless")
-                .header("x-grok-model-override", request.model);
-        }
-        if provider == Provider::Anthropic {
-            builder = builder.header("anthropic-version", "2026-10-21");
-            if let Ok(workspace) = std::env::var("ANTHROPIC_WORKSPACE_ID") {
-                builder = builder.header("anthropic-workspace-id", workspace);
+            );
+            let mut builder = self.http.post(endpoint).json(&body);
+            if let Some(token) = token {
+                builder = builder.bearer_auth(token);
             }
-        }
-        let response = builder.send().await.context("provider request failed")?;
-        if !response.status().is_success() {
-            return Err(rejected_response(response).await.into());
-        }
-        read_tool_stream(response, route.shape, progress).await
+            if route.proxy_header {
+                builder = builder
+                    .header("X-XAI-Token-Auth", "xai-grok-cli")
+                    .header("x-grok-client-version", "1.0.13")
+                    .header("x-grok-client-identifier", "beale")
+                    .header("x-grok-client-mode", "headless")
+                    .header("x-grok-model-override", request.model);
+            }
+            if provider == Provider::Anthropic {
+                builder = builder.header("anthropic-version", "2026-10-21");
+                if let Ok(workspace) = std::env::var("ANTHROPIC_WORKSPACE_ID") {
+                    builder = builder.header("anthropic-workspace-id", workspace);
+                }
+            }
+            let response = builder.send().await.context("provider request failed")?;
+            if !response.status().is_success() {
+                return Err(rejected_response(response).await.into());
+            }
+            read_tool_stream(response, route.shape, progress).await
+        })
+        .await
     }
 }
 
@@ -1352,6 +1281,45 @@ where
                 continue;
             }
             let event: Value = serde_json::from_str(data).context("invalid provider event JSON")?;
+            let observed = match shape {
+                WireShape::Responses
+                    if matches!(
+                        event["type"].as_str(),
+                        Some(
+                            "response.completed"
+                                | "response.done"
+                                | "response.failed"
+                                | "response.incomplete"
+                        )
+                    ) =>
+                {
+                    event.pointer("/response/usage").and_then(|v| {
+                        token_usage_with_cache(
+                            v,
+                            "input_tokens",
+                            "output_tokens",
+                            "/input_tokens_details/cached_tokens",
+                        )
+                    })
+                }
+                WireShape::Chat => event.get("usage").and_then(|v| {
+                    token_usage_with_cache(
+                        v,
+                        "prompt_tokens",
+                        "completion_tokens",
+                        "/prompt_tokens_details/cached_tokens",
+                    )
+                }),
+                _ => None,
+            };
+            if let Some(usage) = observed {
+                crate::pacing::observe_usage(
+                    Some(usage.input_tokens),
+                    Some(usage.output_tokens),
+                    usage.cache_read_tokens,
+                )?;
+            }
+
             match shape {
                 WireShape::Responses => {
                     if matches!(
@@ -1740,37 +1708,7 @@ fn apply_chat_event(
     Ok(())
 }
 
-async fn read_stream(response: reqwest::Response, shape: WireShape) -> Result<String> {
-    if matches!(shape, WireShape::Anthropic) {
-        return Ok(anthropic::read_stream(response, None).await?.text);
-    }
-    let mut stream = response.bytes_stream();
-    let mut pending = Vec::new();
-    let mut output = String::new();
-    let mut completed = false;
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.context("provider stream interrupted")?;
-        ensure!(
-            pending.len().saturating_add(chunk.len()) <= MAX_EVENT_BYTES,
-            "provider event is too large"
-        );
-        pending.extend_from_slice(&chunk);
-        process_frames(&mut pending, &mut output, &mut completed, shape)?;
-        if completed {
-            break;
-        }
-    }
-    if !completed {
-        return Err(ProviderFailure {
-            kind: FailureKind::StreamEnded,
-            code: None,
-            param: None,
-        }
-        .into());
-    }
-    Ok(output)
-}
-
+#[cfg(test)]
 fn process_frames(
     pending: &mut Vec<u8>,
     output: &mut String,
@@ -1857,6 +1795,15 @@ fn frame_end(pending: &[u8]) -> Option<usize> {
         (Some(a), None) => Some(a + 4),
         (None, None) => None,
     }
+}
+
+#[cfg(test)]
+pub(crate) async fn test_interrupted_usage_stream() -> Result<ProviderStep> {
+    let events = futures_util::stream::iter(vec![
+        Ok(b"data: {\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":10}}\n\n".to_vec()),
+        Err(anyhow::anyhow!("synthetic interrupted stream")),
+    ]);
+    read_tool_events(events, WireShape::Chat, None).await
 }
 
 #[cfg(test)]

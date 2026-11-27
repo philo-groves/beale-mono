@@ -14,7 +14,27 @@ use rusqlite::{Connection, OptionalExtension, params};
 pub const HOST_OWNER: &str = "host";
 
 /// Ordered host migrations; version N is `HOST_MIGRATIONS[N - 1]`.
-pub const HOST_MIGRATIONS: &[&str] = &[HOST_V1];
+pub const HOST_MIGRATIONS: &[&str] = &[HOST_V1, HOST_V2];
+
+const HOST_V2: &str = "ALTER TABLE session_turns ADD COLUMN model_prompt TEXT;";
+
+#[test]
+fn model_prompt_migration_preserves_existing_transcript_and_is_idempotent() {
+    let mut db = Connection::open_in_memory().unwrap();
+    ensure_registry(&db).unwrap();
+    apply(&mut db, HOST_OWNER, &[HOST_V1]).unwrap();
+    db.execute_batch("INSERT INTO sessions(id,workspace_id,title,created_at_ms) VALUES('session-example','workspace-example','Example',1);
+        INSERT INTO session_turns(session_id,number,provider,method,model,prompt,answer) VALUES('session-example',1,1,1,'example','Original user text','Synthetic answer');").unwrap();
+    for _ in 0..2 {
+        apply(&mut db, HOST_OWNER, HOST_MIGRATIONS).unwrap();
+        let saved: (String, Option<String>) = db
+            .query_row("SELECT prompt,model_prompt FROM session_turns", [], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(saved, ("Original user text".into(), None));
+    }
+}
 
 const HOST_V1: &str = "
 CREATE TABLE workspaces (
@@ -264,6 +284,20 @@ impl HostDatabase {
             .0
             .lock()
             .map_err(|_| anyhow::anyhow!("database lock poisoned"))?;
+        if self.1 {
+            let version: Option<i64> = connection
+                .query_row(
+                    "SELECT version FROM schema_versions WHERE owner = ?1",
+                    [owner],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            ensure!(
+                version == Some(i64::try_from(migrations.len())?),
+                "schema unavailable in read snapshot"
+            );
+            return Ok(());
+        }
         apply(&mut connection, owner, migrations)
     }
 

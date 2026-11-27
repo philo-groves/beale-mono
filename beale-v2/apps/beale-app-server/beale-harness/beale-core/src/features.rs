@@ -30,7 +30,7 @@ struct FeatureSpec {
 const CATALOG_ORDER: [&str; 7] = [
     "webfetch",
     "beale-agent-feedback",
-    "graphs",
+    "swarms",
     "surfaces",
     "beale-findings",
     "beale-memories",
@@ -287,7 +287,7 @@ mod tests {
         }
         legacy!("webfetch", beale_webfetch);
         legacy!("agent-feedback", beale_agent_feedback);
-        legacy!("graphs", beale_graphs);
+        legacy!("swarms", beale_swarms);
         for descriptor in [
             &beale_goals::FEATURE,
             &beale_fleet::FEATURE,
@@ -377,16 +377,16 @@ mod tests {
                 assert!(!surfaces.enabled);
                 assert_eq!(surfaces.tool_count, beale_surfaces::TOOL_COUNT);
             }
-            #[cfg(feature = "graphs")]
+            #[cfg(feature = "swarms")]
             {
-                let graphs = catalog
+                let swarms = catalog
                     .features
                     .iter()
-                    .find(|feature| feature.id == beale_graphs::FEATURE_ID)
+                    .find(|feature| feature.id == beale_swarms::FEATURE_ID)
                     .unwrap();
-                assert!(!graphs.enabled);
-                assert_eq!(graphs.tool_count, beale_graphs::TOOL_COUNT);
-                assert!(graphs.has_prompt_extension);
+                assert!(!swarms.enabled);
+                assert_eq!(swarms.tool_count, beale_swarms::TOOL_COUNT);
+                assert!(!swarms.has_prompt_extension);
             }
             let feature = catalog
                 .features

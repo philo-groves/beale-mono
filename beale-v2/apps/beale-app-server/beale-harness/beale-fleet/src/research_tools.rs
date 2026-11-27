@@ -1,46 +1,31 @@
 use crate::FleetStore;
 use beale_contracts::{
     research_tools::{CATALOG, available_on},
-    v1::{FleetAllowedResearchTool, FleetResearchTool},
+    v1::{FleetAllowedResearchTool, FleetResearchTool, ResearchToolPreference},
 };
 use beale_storage::HostDatabase;
-
 #[derive(Debug)]
 pub struct ResearchToolSettingsError;
-
 pub(crate) fn contains(id: &str) -> bool {
-    CATALOG
-        .iter()
-        .any(|entry| entry.id == id && available_on(entry.id, std::env::consts::OS))
+    CATALOG.iter().any(|entry| entry.id == id)
 }
-
+/// Show all platforms in settings; filter guidance at the execution boundary.
 pub(crate) fn catalog(
-    mut settings: impl FnMut(&str) -> Result<(bool, bool), ()>,
-) -> Result<Vec<FleetResearchTool>, ()> {
-    catalog_for_os(std::env::consts::OS, &mut settings)
-}
-
-fn catalog_for_os(
-    os: &str,
-    mut settings: impl FnMut(&str) -> Result<(bool, bool), ()>,
+    mut settings: impl FnMut(&str) -> Result<i32, ()>,
 ) -> Result<Vec<FleetResearchTool>, ()> {
     CATALOG
         .iter()
-        .filter(|entry| available_on(entry.id, os))
         .map(|entry| {
-            let (allow_locally, allow_in_vms) = settings(entry.id)?;
             Ok(FleetResearchTool {
-                id: entry.id.to_owned(),
-                name: entry.name.to_owned(),
-                category: entry.category.to_owned(),
-                description: entry.description.to_owned(),
-                allow_locally,
-                allow_in_vms,
+                id: entry.id.into(),
+                name: entry.name.into(),
+                category: entry.category.into(),
+                description: entry.description.into(),
+                preference: settings(entry.id)?,
             })
         })
         .collect()
 }
-
 pub fn allowed_tools(
     db: &HostDatabase,
 ) -> Result<Vec<FleetAllowedResearchTool>, ResearchToolSettingsError> {
@@ -49,87 +34,69 @@ pub fn allowed_tools(
         .map(|tools| {
             tools
                 .into_iter()
-                .filter(|tool| tool.allow_locally || tool.allow_in_vms)
                 .map(|tool| FleetAllowedResearchTool {
                     id: tool.id,
                     name: tool.name,
-                    allow_locally: tool.allow_locally,
-                    allow_in_vms: tool.allow_in_vms,
+                    preference: tool.preference,
                 })
                 .collect()
         })
 }
-
-pub fn prompt_note(tools: &[FleetAllowedResearchTool]) -> Option<String> {
-    if tools.is_empty() {
-        return None;
-    }
+pub fn prompt_note_for_os(tools: &[FleetAllowedResearchTool], os: &str) -> Option<String> {
     let entries = tools
         .iter()
-        .map(|tool| {
-            let location = match (tool.allow_locally, tool.allow_in_vms) {
-                (true, true) => "locally and in VMs",
-                (true, false) => "locally",
-                (false, true) => "in VMs",
-                (false, false) => return String::new(),
+        .filter(|t| available_on(&t.id, os))
+        .filter_map(|tool| {
+            let label = match ResearchToolPreference::try_from(tool.preference).ok()? {
+                ResearchToolPreference::Allow => "Allow: may install/use",
+                ResearchToolPreference::Recommend => "Recommend: preferred, optional",
+                ResearchToolPreference::Priority => "Priority: top choice for relevant tasks",
             };
-            format!("{} ({location})", tool.name)
+            Some(format!("{} ({label})", tool.name))
         })
-        .filter(|entry| !entry.is_empty())
         .collect::<Vec<_>>();
-    (!entries.is_empty()).then(|| {
-        format!(
-            "The following research tools may optionally be installed and used during research where allowed: {}. Follow normal review and authorized scope.",
-            entries.join(", ")
-        )
-    })
+    (!entries.is_empty()).then(|| format!("Research-tool guidance for the actual {os} execution environment, locally or remotely: {}. These are preferences, not execution permissions. Follow recorded authorization and normal review.",entries.join(", ")))
 }
-
+pub fn prompt_note(tools: &[FleetAllowedResearchTool]) -> Option<String> {
+    prompt_note_for_os(tools, std::env::consts::OS)
+}
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
-    fn platform_specific_tools_follow_host_os() {
-        let ids = |os| {
-            catalog_for_os(os, |_| Ok((false, false)))
-                .unwrap()
-                .into_iter()
-                .map(|tool| tool.id)
-                .collect::<Vec<_>>()
-        };
-        let macos = ids("macos");
-        let linux = ids("linux");
-        let windows = ids("windows");
-        for id in ["otool", "jtool2", "dig"] {
-            assert!(macos.contains(&id.to_owned()));
-            assert!(!windows.contains(&id.to_owned()));
-        }
-        assert!(!linux.contains(&"otool".to_owned()));
-        assert!(linux.contains(&"jtool2".to_owned()));
-        assert!(linux.contains(&"dig".to_owned()));
-    }
-
-    #[test]
-    fn prompt_note_lists_only_allowed_locations() {
-        assert_eq!(prompt_note(&[]), None);
-        let tools = vec![
-            FleetAllowedResearchTool {
-                id: "ripgrep".into(),
-                name: "ripgrep".into(),
-                allow_locally: true,
-                allow_in_vms: false,
-            },
-            FleetAllowedResearchTool {
-                id: "ghidra".into(),
-                name: "Ghidra".into(),
-                allow_locally: false,
-                allow_in_vms: true,
-            },
-        ];
-        assert_eq!(
-            prompt_note(&tools).unwrap(),
-            "The following research tools may optionally be installed and used during research where allowed: ripgrep (locally), Ghidra (in VMs). Follow normal review and authorized scope."
+    fn preferences_are_mutually_exclusive_and_follow_execution_os() {
+        let tools = catalog(|id| {
+            Ok(if id == "ripgrep" {
+                2
+            } else if id == "dig" {
+                1
+            } else {
+                0
+            })
+        })
+        .unwrap()
+        .into_iter()
+        .map(|t| FleetAllowedResearchTool {
+            id: t.id,
+            name: t.name,
+            preference: t.preference,
+        })
+        .collect::<Vec<_>>();
+        let linux = prompt_note_for_os(&tools, "linux").unwrap();
+        assert!(
+            linux.contains("Priority: top choice")
+                && linux.contains("Recommend: preferred")
+                && linux.contains("Allow: may install/use")
         );
+        assert!(linux.contains("dig (") && !linux.contains("otool ("));
+        let windows = prompt_note_for_os(&tools, "windows").unwrap();
+        assert!(!windows.contains("dig (") && !windows.contains("otool ("));
+        assert!(
+            prompt_note_for_os(&tools, "macos")
+                .unwrap()
+                .contains("otool (")
+        );
+        assert!(ResearchToolPreference::try_from(3).is_err());
+        assert!(catalog(|_| Ok(0)).unwrap().iter().any(|t| t.id == "otool"));
     }
 }

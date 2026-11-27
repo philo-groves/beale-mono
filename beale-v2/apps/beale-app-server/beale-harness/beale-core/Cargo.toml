@@ -7,15 +7,16 @@ license.workspace = true
 
 [features]
 webfetch = ["beale-sessions/webfetch", "dep:beale-webfetch"]
-default = ["graphs", "surfaces", "findings", "memories", "runbooks", "agent-feedback", "webfetch"]
+default = ["swarms", "surfaces", "findings", "memories", "runbooks", "agent-feedback", "webfetch"]
 agent-feedback = ["beale-sessions/agent-feedback", "dep:beale-agent-feedback"]
 findings = ["beale-sessions/findings", "dep:beale-findings"]
 memories = ["beale-sessions/memories", "dep:beale-memories"]
 runbooks = ["beale-sessions/runbooks", "dep:beale-runbooks"]
 surfaces = ["beale-sessions/surfaces", "dep:beale-surfaces"]
-graphs = ["beale-sessions/graphs", "dep:beale-graphs"]
+swarms = ["beale-sessions/swarms", "dep:beale-swarms"]
 
 [dependencies]
+beale-tools = { path = "../beale-tools" }
 beale-webfetch = { path = "../../../../extensions/features/beale-webfetch", optional = true }
 anyhow.workspace = true
 axum.workspace = true
@@ -26,7 +27,7 @@ beale-host-log = { path = "../beale-host-log" }
 beale-fleet = { path = "../beale-fleet" }
 beale-findings = { path = "../../../../extensions/features/beale-findings", optional = true }
 beale-memories = { path = "../../../../extensions/features/beale-memories", optional = true }
-beale-graphs = { path = "../../../../extensions/features/beale-graphs", optional = true }
+beale-swarms = { path = "../../../../extensions/features/beale-swarms", optional = true }
 beale-goals = { path = "../beale-goals" }
 beale-runbooks = { path = "../../../../extensions/features/beale-runbooks", optional = true }
 beale-tracking = { path = "../beale-tracking" }
@@ -42,7 +43,11 @@ tokio.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+reqwest.workspace = true
 tower = "0.5"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }

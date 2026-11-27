@@ -6,10 +6,20 @@
 
 #### Added
 
+- V2 Swarms and Fleet controls add multi-destination drafts, account-aware pacing, saved hierarchy and recovery status, Linux image registration, and retention/discard actions. Existing scans retain their saved configuration when Swarms is disabled for new scans.
+
+- V2 renames Graphs to Swarms, exposes leader/deputy/worker definitions in New Scan, and removes sequential-stage controls. Local hierarchy execution uses durable child identities and mailboxes; No Subagents remains ordinary local research.
+
 - V2 adds a globally enabled HackerOne Research Kit in Extensions and New Workspace, with streamed import and model review progress in the workspace quick chat.
 
 #### Fixed
 
+- V2 live Swarm updates retire committed transcript and usage events without losing a later active turn. Stop replay preserves completed results, retries transient failures, and keeps the stream connected if cancellation needs another attempt.
+- V2 Stop cancels pending scan preflight and is replayed after an in-flight submission is accepted. Account/pacing controls reject stale host/provider resolutions. Fleet refreshes retention state after rejected or lost responses and excludes native local work from the Containers filter.
+- V2 session and tracking usage views accept custom Swarm profile identifiers up to the shared contract limit.
+- V2 saved Swarm views retain their own bundled or custom definition, profile revisions, and leader rule without changing the new-scan catalog. The scan selector uses Swarms terminology throughout.
+- V2 saved Swarm views remain readable after snapshot-cache pressure. Least-recently-used eviction releases unused views while active callers retain their snapshots; reopening evicted revisions does not require restarting Desktop.
+- V2 New Scan balances spacing around the workspace heading, matches agent model controls to the graph selector, and opens graph model option lists to the left of their settings menu.
 - V2 New Workspace and saved workspace guidance editors keep long AGENTS.md text inside a scrollable field instead of painting over the form actions.
 - V2 New Scan counts distinct models in agent and subagent summaries, so agents sharing one model show its name instead of a repeated assignment count.
 - V2 Quick Chat messages use the session transcript's user and assistant styling with smaller text, headings, code, and bubble spacing for the narrow panel.
@@ -386,6 +396,10 @@
 
 ### app-server
 
+#### Documentation
+
+- V2 Swarms and Fleet documentation now describes implemented routing, allocation, pacing, and retention, with a Stage 10 acceptance matrix separating exercised boundaries from remaining platform and deployment validation.
+
 #### Security
 
 - V2 `bash`, runbook cells, and Findings verification commands start from an allowlisted environment, so provider API keys, credential-named variables, and `BEALE_*` host settings in the app-server environment are not inherited. Operators can pass extra non-credential variables with `BEALE_V2_TOOL_ENV`. MCP plugin servers keep their environment minus credential-named variables; values a plugin needs belong in its `env` configuration.
@@ -394,6 +408,57 @@
 
 #### Added
 
+- Protocol 2.48 identifies live and committed Swarm turns. Live status reads use a consistent read-only database snapshot across concurrent commits. Rebuild participating hosts and Desktop together; no storage migration is required.
+- Protocol 2.47 streams current Swarm hierarchy and pacing warnings while turns are running or waiting, including before the first saved turn. Desktop preserves live output while applying status changes. Rebuild participating hosts and Desktop together; no storage migration is required.
+- Protocol 2.46 adds client Swarm status snapshots, allocation inventories, and host-only Fleet peer registration. Fleet schema 3 replaces research-tool allowances with Allow/Recommend/Priority guidance, defaults existing settings to Allow, and filters worker guidance by execution OS. Rebuild participating hosts and Desktop together.
+
+- V2 protocol 2.43 adds saved account pacing targets and session warnings. Host-owned accounting covers Swarm research, review, and attributable memory inference, with durable usage deduplication, explicit Fleet authority handover, and degraded local pacing during authority outages. Provider timeouts begin after admission; unknown pricing remains unknown. The new `provider-accounting` schema retains scheduling and reconciliation state.
+
+- V2 adds versioned Docker image configurations, static Linux worker injection, guest snapshot/artifact preflight, and durable instance ownership. Same-host reuse retains the original container filesystem and private volume. Cancellation, lease expiry, and restart recovery require Docker termination proof; daemon failures keep replacement blocked. Resource admission and automatic allocation use the owning-host allocation service.
+
+- V2 app-server maintenance discovers interrupted peer executions with bounded concurrency, skips live owners, and continues past corrupt records. Missing pairings and pending workspace checkpoints produce durable, deduplicated warnings without releasing uncertain work; accepted receipts recover after pairing removal.
+
+- V2 adds the version-1 `swarm-peer-workers` schema for durable leader-side execution intents and exclusive lifecycle ownership. Restart stops uncertain launches without relaunching; canonical acceptance requires termination and a successful private-workspace checkpoint. Instance release and ended-scan recovery now keep assignment state consistent. Production selected-placement and checkpoint adapters remain unfinished.
+
+- V2 assigned-environment preparation can transfer a sealed initial workspace through scoped, checksummed chunks before worker startup. Interrupted downloads resume; publication recovery preserves private edits and rejects missing retained storage. The transfer supports manifests up to 16 MiB and does not enable production container/VM allocation.
+
+- V2 peer execution can attach lease supervision to a prepared environment, retain process ownership after uncertain termination, and keep running across lost launch acknowledgements. Lifetime OS locks prevent competing host recovery; automatic selected-environment allocation remains unfinished.
+
+- V2 Fleet adds a versioned host-supervision endpoint, peer client, and `fleet-executions` schema for stable host identity, durable launch deduplication, cancellation, and restart observation. Selected-environment execution remains unavailable until a backend is connected; requests never fall back to local execution.
+
+- V2 Linux local workers use a separate supervisor to terminate and reap descendants after host loss and retain durable termination proof for restart reconciliation. Missing proof keeps attempts fenced; delayed startup cannot bypass a completed recovery.
+
+- V2 saves local Swarm execution claims and recovery intents atomically. Local ownership schema 2 adds coordinator recovery: loss of a live coordinator stops its hierarchy and fences credentials without claiming uncertain effects completed. Interrupted first turns retain a discoverable host recovery notice; completed coordinator turns cannot stop later generations.
+- V2 can recover captured worker artifacts after confirmed termination without restoring worker authority or completing replacement work. Runtime schema 3 binds publications to the original assignment; candidate acceptance, recovery receipts, and parent notifications commit atomically. Unknown command outcomes remain unresolved, and capture bytes stay retained. Durable same-host launch intents and exclusive owner locks now support restart discovery. Windows recovers managed trees through unique named jobs; Unix orphan attempts without termination evidence remain blocked.
+- V2 adds worker recovery spooling, monotonic lease fencing, scoped worker HTTP routing, and atomic Findings/hierarchy mutation receipts. Remote review uses host-owned identity and policy; cancellation blocks later commits. A worker supervisor gates startup on a fresh lease, bounds heartbeat recovery, and requires managed process-tree termination confirmation. Distributed scheduler integration remains in progress.
+- V2 adds the `swarm-inference` schema for durable provider-call claims and replayable results. Worker inference uses the leader's saved profile route, tools, scope, and credentials. New Swarms save their enabled tools; resumed local execution retains that tool set and review scope when settings change.
+- V2 adds an assigned worker executable and the `swarm-worker-runtime` schema for prepared turns and candidate checkpoints. Native tools execute in the assigned workspace after leader review; worker mode bypasses guest host services. Resumption preserves completed effects and stops on unknown outcomes or failed recovery writes. Candidate completion retains execution ownership pending host reconciliation; distributed scan launch remains unfinished.
+- V2 derives worker bootstrap context and shell capability from host-owned assignment policy. Confirmed supervisor termination now permits atomic transcript, assignment, parent-notification, and execution-release reconciliation; failed writes retain ownership and accepted receipts replay without completing newer attempts.
+- V2 plugin publication now uses captured resource bundles with relative guidance links, integrity metadata, aggregate byte limits, and path-alias validation. Bundles exclude host launch configuration and preserve declared skill resources independently of later package edits; assigned workers now download verified chunks into separate copies for each attempt before inference. Schema `swarm-plugin-resources` version 1 retains manifests and receipts across interrupted startup; accepted resources survive package changes without granting renewed MCP dispatch authority.
+- V2 MCP calls serialize per server instead of holding the global plugin registry lock. Deactivation prevents queued calls from starting while unrelated servers remain available.
+- V2 assigned-plugin contracts and a separate call ledger preserve dispatch ownership, staged results, and uncertain outcomes across restart. Fenced results remain candidates; operation replay cannot bypass execution identity or unresolved side effects. Assigned calls now route through leader-owned MCP preflight and review; immutable response capture and artifact publication recover completed results without redispatch. Unknown effects stop the affected worker. Assigned model guidance uses scoped resource snapshots.
+- V2 assigned Findings verification executes two journaled worker commands and publishes immutable transcripts for leader-side oracle evaluation. Findings schema 2 retains execution provenance and candidate results when a concurrent edit prevents attachment; receipt failures and restart do not repeat completed commands. Confirmed supervisor termination atomically interrupts unfinished verification.
+- V2 assigned Runbooks execute in the worker workspace with durable per-cell journals and leader-owned progress/results. Runbooks schema 2 retains reviewed revisions and per-attempt results across restart. Confirmed supervisor termination reconciles unfinished runs atomically with assignment release; uncertain cell effects are not automatically repeated.
+- V2 assigned workers preserve review denials as durable tool feedback across lost replies and checkpoint interruption. Review-service failures and rejected execution credentials remain distinct from completed policy denials.
+- V2 local Swarms launch deputies and workers through managed app-server worker processes, retain private workspaces across related turns, and checkpoint them before releasing execution ownership. Failed reconciliation retains process handles for retry; selected Fleet destinations never fall back to local execution. Resource and tool receipts are scoped to the execution generation so resumed agents can reuse provider call IDs safely.
+- V2 assigned Findings, Runbook record, Surface, Memory, Agent Feedback, hierarchy tools, and execution preparation preserve typed validation, missing-record, conflict, and state-rejection feedback across lost replies and checkpoint recovery. Rejected mutations leave canonical records/files unchanged; storage and internal counter failures remain unacknowledged. Error redaction precedes bounded output truncation.
+- V2 Memory tools validate argument types and ranges and reject malformed stored current/history/graph records instead of returning null data. Rejected Agent Feedback arguments do not append log records.
+- V2 workers persist monotonic active duration with checkpoint receipts and retain it through restart and reconciliation. The `swarm-worker-runtime` schema and local loop checkpoints advance to version 2; Desktop accepts multi-day turns. Assigned Swarm tool assembly rejects the separate Goal Mode continuation tool.
+- V2 worker reconciliation now preserves ordered reasoning summaries, commentary, tool timestamps, and provider usage atomically with assignment completion. The `swarm-inference` schema advances to version 2 for host-owned activity metadata; unknown usage remains unmeasured, and concurrent activity forces reconciliation to retry.
+- V2 distributed inference recovers abandoned provider calls with durable warnings and preserves completed results across receipt failures. OS-held per-agent dispatch ownership prevents concurrent retries; replacement executions cannot reuse old inference identities.
+- V2 assigned workers execute Webfetch locally under saved review policy, retain completed fetches across checkpoint interruption, and return argument or HTTP failures as tool feedback.
+- V2 workers route Surface mutations to the leader with atomic file recovery receipts. Lost host receipts replay the original result across intervening edits; invalid results, unaccepted artifacts, and canceled attempts cannot gain canonical write authority.
+- V2 workers route Agent Feedback and Surface reads to the leader. Stable feedback IDs recover interrupted appends and lost receipts without duplicate records; Surface reads retain their accepted snapshot and authenticated scope.
+- V2 workers route Runbook record operations and Memory reads to the leader under saved execution policy. Runbook revisions commit with their retry receipts; Memory reads preserve accepted snapshots and authenticated workspace/session scope. Canonical replies redact host-held secrets.
+- V2 workers now publish and download verified artifacts through the leader, with execution-derived provenance and atomic acceptance receipts. Large local results retain complete redacted output before bounded continuation; failed publication retries preserve completed tool effects and captured bytes.
+
+- V2 Stage 4 adds sealed workspace snapshots, private local Swarm directories, resumable verified artifact publication, explicit artifact materialization, and durable environment checkpoint/publication descriptors in the new `swarm-files` schema. Finding and handoff attachments commit only after central bytes are accepted. Snapshot exclusions cover host state and repository history; unsupported filesystem semantics fail explicitly. Private copies prevent harness path conflicts and do not provide OS isolation.
+
+- V2 Stage 3 adds local Swarm supervision, role-specific delegation tools, checkpoint-gated admission, deduplicated wake messages, related-child resume, branch cancellation, and bounded recovery. Protocol 2.39 adds agent identities and read-only scoped leader review rules; the saved rule survives global toggles and Guardian reconsideration. The new `swarm-local` storage schema retains supervisor state. Fleet allocation remains a separate stage.
+
+- V2 Stage 2 adds snapshotted Basic Subagents, VDH VVS, and OAI 948 workflows with parent-mediated, typed, durable handoffs; completion and research assessment remain separate. Protocol 2.38 renames Swarm contracts and template routes and reserves sequential-timer tags. The Graph peer scheduler and compatibility readers are removed; incompatible development state fails explicitly without conversion or deletion.
+
+- Protocol 2.37 adds the Swarms/Fleet contract and storage foundation: immutable scan snapshots, queued assignments, scoped worker leases, idempotent mutation receipts, operation journals, and retention claims. Fleet gains a separate host-owned peer and account-coordination repository. New schemas reject incompatible state without fallback; runtime orchestration and UI integration remain later stages.
 - Protocol 2.36 adds Research Kit state and HackerOne identifier imports. The host fetches the public program's complete paginated scope, preserves fetched assets through model review, and saves the full policy in a workspace reference file while keeping `AGENTS.md` concise.
 - V2 protocol 2.34 persists a scan-wide worker concurrency budget shared across graph parents. Worker contracts enforce bounded assignments, context policy, and model-turn/time limits; structured results separate completion from evidence assessment. Old budgets default to 8, with no storage migration; update desktops and app-servers together.
 - V2 protocol 2.32 persists optional workspace logo thumbnails through revision-checked Identity updates and returns them in workspace summaries. Existing workspaces need no migration; update desktops and app-servers together.
@@ -406,7 +471,49 @@
 
 #### Fixed
 
+- V2 handoffs now have transactional runtime ownership, forwarding, typed completion, recovery and cancellation. Canonical envelopes travel by ID without the smaller chat/task limit; fresh recipients can receive their handoff atomically at spawn. Protocol 2.49 adds the model/peer contract; rebuild Desktop and participating hosts/workers together.
+- Swarm handoff reassignment retires former-owner execution input while preserving result notifications and saved context. Unrelated work no longer resumes explicitly blocked or executor-blocked handoffs; explicit recovery retries redeliver only eligible retained work.
+- Swarm operator messages retain their exact visible text when mixed with handoff recovery or custody notices, including after reopen and worker reconciliation. Host schema 2 adds a separate model-input column so resumed inference retains that context without exposing it as user text; protocol 2.49 is unchanged.
+- Terminal Swarm coordinator recovery now commits scan end and retention deadlines with transcript repair. Failed finalization stays pending; replay preserves reopened scans and live replacement generations.
+- Successfully completed Swarms finalize retention before clearing coordinator recovery. Owner loss after a saved checkpoint and failed scan-end writes recover without repeating inference or replacing the saved answer.
+- Swarm checkpoint exhaustion retains unsaved operator turns for background transcript recovery after the supervisor stops execution. Recovery completion requires a saved transcript and cannot stop a replacement generation.
+- Swarm coordinator interruption preserves claimed operator follow-ups in existing sessions exactly once. A transcript binding commits with the completed turn, so recovery retains saved answers without duplicate user messages. The `swarm-local-workers` schema advances to 3; rebuild participating hosts/workers.
+
+
+- V2 patch and test handoff references publish workspace-relative files and validate accepted artifact ownership and bytes, preserving the exact patch/test identities through independent assessment.
+
+- V2 protocol 2.44 fixes shared-account pacing settlement for mixed scan targets, applies interrupted usage to degraded local debt atomically, retains reordered cancellation tombstones, and preserves host pricing and full local accounting history during authority handover. Rebuild participating hosts together.
+- V2 accounting reconciliation preserves each scan's pacing debt and rejects incompatible account units before changing the ledger. Unpaced calls validate prices against acknowledged account units, including streamed usage and disconnected execution.
+- V2 first-use accounting outages preserve completed and interrupted token usage with unknown cost until account units are established, preventing local prices from becoming charges in different units on reconnect.
+- V2 unpaced research and supporting calls honor fresh exhausted shared-account allowance windows until reset, including after active pacing leases expire.
+- V2 protocol 2.45 preserves account denomination independently of bounded handover history, retaining allowance-window checks and rejecting conflicting imported units. Rebuild participating hosts together.
+
+- V2 reservation admission retries transient maintenance lock contention within its existing deadline. A waiting caller leaves live ownership intact on timeout or cancellation, and reloads execution binding before reusing a reservation.
+- V2 leader publication-storage reservations remain protected while placement or restore is actively owned, including Busy retries beyond the initial reservation deadline. Normal maintenance reclaims expired unbound reservations after cancellation or owner loss, including after restart.
+- V2 Stage 7 retries in-flight Fleet operations with a typed Busy response, allows fresh allocation after pre-creation configuration rejection, and deletes owned unfinished exports. Cross-host placement checks compatibility before committing its route, and cleanup continues past unavailable historical hosts. Protocol 2.42, `swarm-placement` schema 2, and the new version-1 archive ownership journal require updated participating hosts.
+- V2 Stage 7 retains accepted Swarm work through temporary Fleet contention, fences late checkpoint receipts, and rejects configuration drift before preparation. Cross-host handoffs now persist export ownership, retry interrupted transfers, support return to previous hosts, and propagate retention to unclaimed remote allocations. Protocol 2.41 adds export cancellation; new version-1 placement-export and export-cancellation journals fence delayed requests. Rebuild participating hosts together.
+- V2 default Docker workers reap orphaned child processes without stopping live children. Successful preflight retries restore readiness and clear stale failure reasons; `fleet-docker` schema version 3 fences readiness observations against newer attempts, preparations, and configuration changes.
+- V2 retained Docker instances persist unavailable readiness for inspection, startup, and runtime-probe failures before workspace preparation. Successful retries clear the failure without releasing ownership before termination is confirmed.
+- V2 Docker preparation recovery reloads locked instance state and preserves completed preparation. The `fleet-docker` schema version 2 journals readiness before image pulls and recovers interrupted or failed readiness writes. Restart termination checks survive short maintenance polls, and injected workers preserve the image's configured `PATH`.
+- V2 background maintenance now recovers retained local Swarm checkpoints and publications after storage returns, without another user turn or host restart. The session router and scheduler share execution ownership.
+- V2 Swarm session details reconstruct bounded recovery-history notices after reconnect or host reopen without exposing raw worker event payloads.
+
+- V2 worker recovery spools explicitly release ownership locks before immediate resume, including when a concurrent child launch temporarily inherits the file descriptor.
+
+- V2 worker lease renewals tolerate a backward host wall-clock step without extending previously granted authority. Unix artifact and plugin materialization reject filesystems that silently ignore requested permissions before publishing the destination.
+
+- V2 Stage 4 verifies checkpoint bytes on replay/resume, rejects linked private workspace roots, preserves execution-attempt artifact provenance, and enforces managed artifact integrity across session types. Snapshot exclusions now cover merge-only Git paths and all host runtime subdirectories; transferred manifests materialize independently of entry order.
+- V2 Surface record reads return content and its edit revision from one manifest snapshot, preventing concurrent edits from pairing old content with a newer revision.
+- V2 assigned workers return durable feedback for malformed or unavailable tool calls before execution. Checkpoint retries preserve that feedback without repeating effects; uncertain command outcomes remain blocked for reconciliation.
+- V2 Swarm resume reads provider context under the saved agent profile, matching how it is written. Ordinary sessions and sibling profiles cannot supply fallback context.
+
+- V2 local Swarms preserve accepted tool results across provider recovery and deduplicate repeated provider calls within an execution. Full parent mailboxes no longer block lifecycle commits; recovery events remain ordered across agents. Workers inherit their deputy's saved stage instructions during execution and resume.
+- V2 local Swarms retry checkpoint writes without repeating accepted tool actions, and keep client streams open during bounded provider recovery. Parent models receive complete typed handoffs; early follow-ups preserve original assignments, and multibyte completion summaries respect mailbox byte limits.
 - V2 app-server now writes private, rotating host diagnostics with startup and failure details while retaining console output.
+- V2 Swarm template catalogs reject definitions without worker profiles before selection, matching durable scan validation.
+- The v2 Swarms storage foundation preserves completed null results, fences checkpoint and journal writes by execution attempt, revokes worker authority on scan end, and retains the correct deadline for late environment registration. Pacing reservation retries reconcile saved acknowledgements after ownership changes without admitting stale new work.
+- Swarms schema 2 adds exclusive host-instance ownership across scans. Existing claims are backfilled transactionally; conflicting claims stop the upgrade without discarding state.
+- The Swarms storage foundation rejects late live-instance reports for fenced/stopped attempts and preserves cleanup claims on duplicate stop confirmations. Trusted host journal recovery records uncertain or evidence-referenced outcomes after confirmed termination, with atomic audit events and replayable acknowledgements; worker authority remains revoked.
 - Surface tools now identify unsupported type and locator combinations, and threat model edits can save a scenario while marking its map reviewed. Permission reviews use a concise, complete surface scope inventory so growing descriptions do not exhaust the review input. Transient provider body interruptions retry once before a session turn fails.
 - V2 OpenAI subscription inference and permission reviews use the host Codex sign-in and Codex Responses backend. Model choices come from a local catalog, as in v1, so lookup no longer depends on OAuth refresh. API keys continue to use the public OpenAI API; existing Beale OAuth records are ignored and preserved.
 - Graph subagents report missing scope details to their parent in their result; their prompt no longer asks them to use an unavailable parent-message tool. A failed turn save now logs the underlying storage error for diagnosis.
@@ -568,6 +675,9 @@
 ### app-server
 
 #### Added
+
+- V2 Swarms automatically allocate selected Fleet Docker environments with host-atomic RAM/storage reservations, deputy yield/resume, verified cross-host filesystem handoffs, and no local fallback. Protocol 2.40 adds destination and retention settings; update host and desktop together.
+- V2 retained environments support seven-day ended-scan expiry, Keep, protected Delete now, and separately confirmed pending-output discard. Durable allocation, cancellation, lifecycle, and deletion journals preserve publication recovery across restart; published evidence remains independent.
 
 - Track epoch scheduling reserves claim-specific downstream worker assignments and releases them when a session ends or fails to launch.
 - Repository scan exposes bounded Opengrep structural patterns and local rules, with candidate match context, dataflow locations, and scan errors; literal repository search remains available.

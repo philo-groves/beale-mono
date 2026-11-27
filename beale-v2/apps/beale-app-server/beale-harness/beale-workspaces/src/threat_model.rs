@@ -19,6 +19,8 @@ pub(super) struct StoredThreatModel {
     pub revision: u64,
     scenarios: Vec<StoredScenario>,
     pub next_scenario_number: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub surface_receipts: Vec<super::surface_operations::SurfaceReceipt>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -36,6 +38,17 @@ struct StoredScenario {
     disposition: i32,
     disposition_reason: String,
     related_claim_ids: Vec<String>,
+}
+
+pub(super) fn empty(surface_id: &str) -> StoredThreatModel {
+    StoredThreatModel {
+        schema_version: 1,
+        surface_id: surface_id.into(),
+        revision: 1,
+        scenarios: Vec::new(),
+        next_scenario_number: 1,
+        surface_receipts: Vec::new(),
+    }
 }
 
 pub(super) fn dto(model: &StoredThreatModel) -> WorkspaceSurfaceThreatModel {
@@ -69,7 +82,7 @@ pub(super) fn dto(model: &StoredThreatModel) -> WorkspaceSurfaceThreatModel {
     }
 }
 
-fn valid_id(id: &str, prefix: char) -> bool {
+pub(super) fn valid_id(id: &str, prefix: char) -> bool {
     id.strip_prefix(prefix).is_some_and(|suffix| {
         !suffix.starts_with('0')
             && !suffix.is_empty()
@@ -147,19 +160,25 @@ pub(super) fn validate(
         .filter_map(|id| id[1..].parse::<u64>().ok())
         .max()
         .unwrap_or(0);
-    let next_scenario_number = previous
-        .map_or(1, |item| item.next_scenario_number)
-        .max(maximum.checked_add(1).ok_or(WorkspaceError::Invalid)?);
+    let next_scenario_number = previous.map_or(1, |item| item.next_scenario_number).max(
+        maximum
+            .checked_add(1)
+            .ok_or(WorkspaceError::Internal("scenario ID overflow"))?,
+    );
     Ok(StoredThreatModel {
         schema_version: 1,
         surface_id: surface_id.to_owned(),
         revision,
         scenarios,
         next_scenario_number,
+        surface_receipts: previous.map_or_else(Vec::new, |old| old.surface_receipts.clone()),
     })
 }
 
-fn model_path(directory: &Path, surface_id: &str) -> Result<std::path::PathBuf, WorkspaceError> {
+pub(super) fn model_path(
+    directory: &Path,
+    surface_id: &str,
+) -> Result<std::path::PathBuf, WorkspaceError> {
     if super::surface_number(surface_id).is_none() {
         return Err(WorkspaceError::Invalid);
     }
@@ -212,6 +231,7 @@ pub(super) fn read(
     {
         return Err(WorkspaceError::Internal("invalid threat model header"));
     }
+    super::surface_operations::validate_receipts(&model.surface_receipts)?;
     let loaded = dto(&model);
     let validated = validate(
         surface_id,
@@ -254,10 +274,13 @@ pub(super) fn write(directory: &Path, model: &StoredThreatModel) -> Result<(), W
         return Err(WorkspaceError::Invalid);
     }
     let temp = parent.join(format!("update-{}.tmp", Uuid::new_v4()));
-    write_new(&temp, &bytes)?;
+    if let Err(error) = write_new(&temp, &bytes) {
+        let _ = fs::remove_file(&temp);
+        return Err(error);
+    }
     if fs::rename(&temp, &path).is_err() {
         let _ = fs::remove_file(&temp);
         return Err(WorkspaceError::Internal("replace threat model"));
     }
-    Ok(())
+    super::sync_directory(parent)
 }

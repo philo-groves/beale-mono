@@ -9,7 +9,7 @@ license.workspace = true
 beale-host-log = { path = "../beale-app-server/beale-harness/beale-host-log" }
 beale-webfetch = { path = "../../extensions/features/beale-webfetch" }
 beale-agent-feedback = { path = "../../extensions/features/beale-agent-feedback" }
-beale-graphs = { path = "../../extensions/features/beale-graphs" }
+beale-swarms = { path = "../../extensions/features/beale-swarms" }
 beale-findings = { path = "../../extensions/features/beale-findings" }
 beale-memories = { path = "../../extensions/features/beale-memories" }
 beale-runbooks = { path = "../../extensions/features/beale-runbooks" }
@@ -34,3 +34,7 @@ uuid.workspace = true
 raw-window-handle = "0.6"
 windows-sys = { version = "0.59", features = ["Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_UI_HiDpi", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
+
+[dev-dependencies]
+axum.workspace = true
+beale-storage = { path = "../beale-app-server/beale-harness/beale-storage" }
