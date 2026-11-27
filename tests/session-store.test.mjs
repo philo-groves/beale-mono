@@ -1123,6 +1123,210 @@ test("session event, collaboration, capture, and nested trace reads are targeted
   }
 });
 
+test("session event cursor, detail, and page queries avoid full-session json_each and MIN/MAX scans", () => {
+  const store = new AppServerSessionStore({ databasePath: ":memory:" });
+  try {
+    store.create({
+      id: "session_indexed_queries",
+      workspaceId: "workspace_indexed_queries",
+      attemptId: "attempt_indexed_queries",
+      title: "Indexed queries",
+      prompt: "Keep cursor, detail, and page reads indexed and bounded.",
+      model: "gpt-5.6-sol",
+      reasoningEffort: "high",
+    });
+    store.appendEventReceipt("session_indexed_queries", {
+      id: "event_0",
+      kind: "agent.event",
+      timestamp: "2026-08-22T20:00:00.000Z",
+      summary: "Leading agent event",
+      payload: { type: "step", detail: "a".repeat(256) },
+    });
+    store.appendEventReceipt("session_indexed_queries", {
+      id: "trace_batch_1",
+      kind: "beale.trace_batch",
+      timestamp: "2026-08-22T20:00:01.000Z",
+      summary: "Trace batch",
+      payload: { records: [{ id: "nested_record_1", summary: "Nested record", payload: { ok: true } }] },
+    });
+    store.appendEventReceipt("session_indexed_queries", {
+      id: "transcript_2",
+      kind: "beale.transcript",
+      timestamp: "2026-08-22T20:00:02.000Z",
+      summary: "First transcript",
+      payload: { record: { id: "msg_2", contentMarkdown: "First transcript message." } },
+    });
+    store.appendEventReceipt("session_indexed_queries", {
+      id: "event_3",
+      kind: "agent.event",
+      timestamp: "2026-08-22T20:00:03.000Z",
+      summary: "Middle agent event",
+      payload: { type: "step", detail: "b".repeat(800) },
+    });
+    store.appendEventReceipt("session_indexed_queries", {
+      id: "transcript_4",
+      kind: "beale.transcript",
+      timestamp: "2026-08-22T20:00:04.000Z",
+      summary: "Second transcript",
+      payload: { record: { id: "msg_4", contentMarkdown: "Second transcript message." } },
+    });
+    store.appendEventReceipt("session_indexed_queries", {
+      id: "event_5",
+      kind: "agent.event",
+      timestamp: "2026-08-22T20:00:05.000Z",
+      summary: "Trailing agent event",
+      payload: { type: "step", detail: "c".repeat(800) },
+    });
+
+    const captureSql = (fn) => {
+      const database = store.database;
+      const originalPrepare = database.prepare.bind(database);
+      const queries = [];
+      database.prepare = (sql) => {
+        const statement = originalPrepare(sql);
+        const plan = originalPrepare(`EXPLAIN QUERY PLAN ${sql}`).all().map((row) => String(row.detail ?? ""));
+        queries.push({ sql, plan });
+        return statement;
+      };
+      try {
+        return { result: fn(), queries };
+      } finally {
+        database.prepare = originalPrepare;
+      }
+    };
+
+    // 1. Direct getEventDetails uses the (session_id, event_id) unique index and never touches json_each.
+    const directDetails = captureSql(() =>
+      store.getEventDetails("session_indexed_queries", ["event_5", "transcript_2"]),
+    );
+    assert.deepEqual(directDetails.result.map((event) => event.id), ["transcript_2", "event_5"]);
+    assert.equal(directDetails.queries.length, 1);
+    assert.equal(directDetails.queries.some((entry) => entry.sql.includes("json_each")), false);
+    assert.ok(
+      directDetails.queries[0].plan.some((line) => /USING INDEX.*\(session_id=\? AND event_id=\?\)/u.test(line)),
+      `Expected indexed (session_id, event_id) lookup, got: ${directDetails.queries[0].plan.join(" | ")}`,
+    );
+
+    // 2. Mixed direct + nested + duplicate-enclosing + unknown IDs preserve ascending order and deduplication.
+    assert.deepEqual(
+      store.getEventDetails("session_indexed_queries", [
+        "event_5",
+        "nested_record_1",
+        "trace_batch_1",
+        "missing_event",
+      ]).map((event) => event.id),
+      ["trace_batch_1", "event_5"],
+    );
+
+    // 3. Forward pagination with direct cursor uses indexed cursor lookup, bounded opposite probe, no MIN/MAX.
+    const forwardPage = captureSql(() =>
+      store.getEventPage("session_indexed_queries", { afterEventId: "trace_batch_1", limit: 2, stream: "all" }),
+    );
+    assert.deepEqual(forwardPage.result.events.map((event) => event.id), ["transcript_2", "event_3"]);
+    assert.equal(forwardPage.result.hasEarlier, true);
+    assert.equal(forwardPage.result.hasMore, true);
+    const forwardEventQueries = forwardPage.queries.filter((entry) => entry.sql.includes("app_server_session_events"));
+    assert.equal(forwardEventQueries.some((entry) => /\b(?:MIN|MAX)\s*\(/iu.test(entry.sql)), false);
+    assert.equal(forwardEventQueries.some((entry) => entry.sql.includes("json_each")), false);
+    assert.ok(
+      forwardEventQueries[0].plan.some((line) => /USING INDEX.*\(session_id=\? AND event_id=\?\)/u.test(line)),
+      `Expected indexed cursor lookup, got: ${forwardEventQueries[0].plan.join(" | ")}`,
+    );
+    assert.ok(
+      forwardEventQueries.some((entry) =>
+        entry.sql.includes("event_offset < ?")
+        && entry.sql.includes("LIMIT 1")
+        && entry.plan.some((line) => /session_id=\? AND event_offset<\?/u.test(line)),
+      ),
+      "Expected bounded LIMIT 1 opposite-direction probe.",
+    );
+
+    // 4. Unbounded initial tail/forward pages run only the single page query (no bounds or probe queries).
+    const initialTail = captureSql(() =>
+      store.getEventPage("session_indexed_queries", { tail: true, limit: 2, stream: "all" }),
+    );
+    assert.deepEqual(initialTail.result.events.map((event) => event.id), ["transcript_4", "event_5"]);
+    assert.equal(initialTail.result.hasEarlier, true);
+    assert.equal(initialTail.result.hasMore, false);
+    assert.equal(
+      initialTail.queries.filter((entry) => entry.sql.includes("app_server_session_events")).length,
+      1,
+    );
+
+    const initialForward = captureSql(() =>
+      store.getEventPage("session_indexed_queries", { tail: false, limit: 2, stream: "all" }),
+    );
+    assert.deepEqual(initialForward.result.events.map((event) => event.id), ["event_0", "trace_batch_1"]);
+    assert.equal(initialForward.result.hasEarlier, false);
+    assert.equal(initialForward.result.hasMore, true);
+    assert.equal(
+      initialForward.queries.filter((entry) => entry.sql.includes("app_server_session_events")).length,
+      1,
+    );
+
+    // 5. Nested record cursor works in both afterEventId and beforeEventId directions.
+    const beforeNested = store.getEventPage("session_indexed_queries", { beforeEventId: "nested_record_1", limit: 2 });
+    assert.deepEqual(beforeNested.events.map((event) => event.id), ["event_0"]);
+    assert.equal(beforeNested.hasEarlier, false);
+    assert.equal(beforeNested.hasMore, true);
+
+    const afterNested = store.getEventPage("session_indexed_queries", { afterEventId: "nested_record_1", limit: 1 });
+    assert.deepEqual(afterNested.events.map((event) => event.id), ["transcript_2"]);
+    assert.equal(afterNested.hasEarlier, true);
+    assert.equal(afterNested.hasMore, true);
+
+    // 6. Filtered streams compute opposite-direction edges accurately when the cursor is outside the stream.
+    const transcriptAfterNonMember = store.getEventPage("session_indexed_queries", {
+      afterEventId: "event_0",
+      stream: "transcript",
+      limit: 1,
+    });
+    assert.deepEqual(transcriptAfterNonMember.events.map((event) => event.id), ["transcript_2"]);
+    assert.equal(transcriptAfterNonMember.hasEarlier, false);
+    assert.equal(transcriptAfterNonMember.hasMore, true);
+
+    const transcriptBeforeNonMember = store.getEventPage("session_indexed_queries", {
+      beforeEventId: "event_5",
+      stream: "transcript",
+      limit: 1,
+    });
+    assert.deepEqual(transcriptBeforeNonMember.events.map((event) => event.id), ["transcript_4"]);
+    assert.equal(transcriptBeforeNonMember.hasEarlier, true);
+    assert.equal(transcriptBeforeNonMember.hasMore, false);
+
+    // 7. maxBytes truncation mid-page still reports more rows in the scan direction, and empty pages report false.
+    const byteTruncatedForward = store.getEventPage("session_indexed_queries", {
+      afterEventId: "transcript_2",
+      limit: 10,
+      maxBytes: 1_024,
+    });
+    assert.deepEqual(byteTruncatedForward.events.map((event) => event.id), ["event_3"]);
+    assert.equal(byteTruncatedForward.hasEarlier, true);
+    assert.equal(byteTruncatedForward.hasMore, true);
+
+    const byteTruncatedTail = store.getEventPage("session_indexed_queries", {
+      tail: true,
+      limit: 10,
+      maxBytes: 1_024,
+    });
+    assert.deepEqual(byteTruncatedTail.events.map((event) => event.id), ["event_5"]);
+    assert.equal(byteTruncatedTail.hasEarlier, true);
+    assert.equal(byteTruncatedTail.hasMore, false);
+
+    const emptyAfterTail = store.getEventPage("session_indexed_queries", { afterEventId: "event_5", limit: 10 });
+    assert.deepEqual(emptyAfterTail.events, []);
+    assert.equal(emptyAfterTail.hasEarlier, false);
+    assert.equal(emptyAfterTail.hasMore, false);
+
+    const unknownBefore = store.getEventPage("session_indexed_queries", { beforeEventId: "missing_cursor", limit: 2 });
+    assert.deepEqual(unknownBefore.events.map((event) => event.id), ["transcript_4", "event_5"]);
+    assert.equal(unknownBefore.hasEarlier, true);
+    assert.equal(unknownBefore.hasMore, false);
+  } finally {
+    store.close();
+  }
+});
+
 test("commentary event pages project transcripts and path-safe tool summaries", () => {
   const store = new AppServerSessionStore({ databasePath: ":memory:" });
   try {

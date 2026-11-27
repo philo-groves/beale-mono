@@ -1054,11 +1054,9 @@ export class AppServerSessionStore {
       ? query.all(normalizedSessionId, limit + 1)
       : query.all(normalizedSessionId, cursorOffset, limit + 1)
     ) as Array<StoredSessionEventRow & { event_offset?: unknown }>;
-    const orderedRows = tail ? [...rows].reverse() : rows;
-    const selected: typeof orderedRows = [];
+    const selected: typeof rows = [];
     let bytes = 0;
-    const candidates = tail ? [...orderedRows].reverse() : orderedRows;
-    for (const row of candidates) {
+    for (const row of rows) {
       if (selected.length >= limit) break;
       const document = requiredStoredString(row.event_json, "app-server session event");
       const nextBytes = Buffer.byteLength(document);
@@ -1098,7 +1096,17 @@ export class AppServerSessionStore {
     });
     const firstOffset = numericOffset(selected[0]?.event_offset);
     const lastOffset = numericOffset(selected.at(-1)?.event_offset);
-    const bounds = this.eventStreamBounds(normalizedSessionId, stream);
+    const hasMoreInScanDirection = rows.length > selected.length;
+    const hasEarlier = firstOffset === null
+      ? false
+      : tail
+        ? hasMoreInScanDirection
+        : cursorOffset !== null && this.hasStreamEventBeyond(normalizedSessionId, stream, firstOffset, "before");
+    const hasMore = lastOffset === null
+      ? false
+      : tail
+        ? cursorOffset !== null && this.hasStreamEventBeyond(normalizedSessionId, stream, lastOffset, "after")
+        : hasMoreInScanDirection;
     return {
       sessionId: normalizedSessionId,
       stream,
@@ -1107,8 +1115,8 @@ export class AppServerSessionStore {
       nextAfterEventId: selected.length > 0
         ? decodeEventRow(selected.at(-1)!).id
         : afterEventId ?? null,
-      hasEarlier: firstOffset !== null && bounds.minimum !== null && firstOffset > bounds.minimum,
-      hasMore: lastOffset !== null && bounds.maximum !== null && lastOffset < bounds.maximum,
+      hasEarlier,
+      hasMore,
     };
   }
 
@@ -1139,19 +1147,41 @@ export class AppServerSessionStore {
     const normalizedIds = [...new Set(eventIds.map((eventId) => requiredString(eventId, "Session event id")))];
     if (normalizedIds.length === 0) return [];
     if (normalizedIds.length > 100) throw new Error("At most 100 session event details may be requested at once.");
-    const placeholders = normalizedIds.map(() => "?").join(", ");
-    const rows = this.database.prepare(`
-      SELECT event_json, content_hash FROM app_server_session_events
-      WHERE session_id = ? AND (
-        event_id IN (${placeholders})
-        OR EXISTS (
-          SELECT 1 FROM json_each(json_extract(event_json, '$.payload.records')) AS nested
-          WHERE json_extract(nested.value, '$.id') IN (${placeholders})
-        )
+    const directPlaceholders = normalizedIds.map(() => "?").join(", ");
+    const directRows = this.database.prepare(`
+      SELECT event_offset, event_id, event_json, content_hash FROM app_server_session_events
+      WHERE session_id = ? AND event_id IN (${directPlaceholders})
+      ORDER BY event_offset ASC
+    `).all(normalizedSessionId, ...normalizedIds) as Array<
+      StoredSessionEventRow & { event_offset?: unknown; event_id?: unknown }
+    >;
+    if (directRows.length === normalizedIds.length) return directRows.map(decodeEventRow);
+    const matchedIds = new Set(
+      directRows.map((row) => requiredStoredString(row.event_id, "app-server session event id")),
+    );
+    const unresolvedIds = normalizedIds.filter((eventId) => !matchedIds.has(eventId));
+    const nestedPlaceholders = unresolvedIds.map(() => "?").join(", ");
+    const nestedRows = this.database.prepare(`
+      SELECT event_offset, event_json, content_hash FROM app_server_session_events
+      WHERE session_id = ? AND EXISTS (
+        SELECT 1 FROM json_each(json_extract(event_json, '$.payload.records')) AS nested
+        WHERE json_extract(nested.value, '$.id') IN (${nestedPlaceholders})
       )
       ORDER BY event_offset ASC
-    `).all(normalizedSessionId, ...normalizedIds, ...normalizedIds) as StoredSessionEventRow[];
-    return rows.map(decodeEventRow);
+    `).all(normalizedSessionId, ...unresolvedIds) as Array<
+      StoredSessionEventRow & { event_offset?: unknown }
+    >;
+    if (nestedRows.length === 0) return directRows.map(decodeEventRow);
+    if (directRows.length === 0) return nestedRows.map(decodeEventRow);
+    const mergedByOffset = new Map<number, StoredSessionEventRow>();
+    for (const row of [...directRows, ...nestedRows]) {
+      const offset = numericOffset(row.event_offset);
+      if (offset === null) throw new Error("app-server session event offset is missing or invalid.");
+      if (!mergedByOffset.has(offset)) mergedByOffset.set(offset, row);
+    }
+    return [...mergedByOffset.entries()]
+      .sort(([left], [right]) => left - right)
+      .map(([, row]) => decodeEventRow(row));
   }
 
   public getCollaborationState(sessionId: string, messageLimit = 200): AppServerSessionCollaborationState {
@@ -1520,35 +1550,41 @@ export class AppServerSessionStore {
     return rows.map(decodeEventRow);
   }
 
-  private eventStreamBounds(
+  private hasStreamEventBeyond(
     sessionId: string,
     stream: AppServerSessionEventStream,
-  ): { minimum: number | null; maximum: number | null } {
+    offset: number,
+    direction: "before" | "after",
+  ): boolean {
+    const comparator = direction === "before" ? "<" : ">";
+    const order = direction === "before" ? "DESC" : "ASC";
     const row = this.database.prepare(`
-      SELECT MIN(event_offset) AS minimum, MAX(event_offset) AS maximum
-      FROM app_server_session_events
-      WHERE session_id = ? ${eventStreamSql(stream)}
-    `).get(sessionId) as { minimum?: unknown; maximum?: unknown } | undefined;
-    return {
-      minimum: numericOffset(row?.minimum),
-      maximum: numericOffset(row?.maximum),
-    };
+      SELECT 1 AS present FROM app_server_session_events
+      WHERE session_id = ? AND event_offset ${comparator} ? ${eventStreamSql(stream)}
+      ORDER BY event_offset ${order}
+      LIMIT 1
+    `).get(sessionId, offset) as { present?: unknown } | undefined;
+    return row?.present === 1;
   }
 
   private eventOffsetForCursor(sessionId: string, eventId: string): number | null {
-    const row = this.database.prepare(`
+    const direct = this.database.prepare(`
       SELECT event_offset FROM app_server_session_events
-      WHERE session_id = ? AND (
-        event_id = ?
-        OR EXISTS (
-          SELECT 1 FROM json_each(json_extract(event_json, '$.payload.records')) AS nested
-          WHERE json_extract(nested.value, '$.id') = ?
-        )
+      WHERE session_id = ? AND event_id = ?
+      LIMIT 1
+    `).get(sessionId, eventId) as { event_offset?: unknown } | undefined;
+    const directOffset = numericOffset(direct?.event_offset);
+    if (directOffset !== null) return directOffset;
+    const nested = this.database.prepare(`
+      SELECT event_offset FROM app_server_session_events
+      WHERE session_id = ? AND EXISTS (
+        SELECT 1 FROM json_each(json_extract(event_json, '$.payload.records')) AS nested
+        WHERE json_extract(nested.value, '$.id') = ?
       )
       ORDER BY event_offset DESC
       LIMIT 1
-    `).get(sessionId, eventId, eventId) as { event_offset?: unknown } | undefined;
-    return numericOffset(row?.event_offset);
+    `).get(sessionId, eventId) as { event_offset?: unknown } | undefined;
+    return numericOffset(nested?.event_offset);
   }
 
   private readSummaryTokenUsage(sessionIds: readonly string[]): Map<string, AppServerSessionTokenUsage> {

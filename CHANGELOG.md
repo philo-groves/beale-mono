@@ -12,6 +12,7 @@
 - A paused Research Track can resume with a revised set of ready targets without resetting its pass or surface progress.
 - Research Track routes reportable verified claims with stale reproduction or review provenance to Investigators, then routes stale proof packets back to Triagers before reporting.
 - Research Track discovery and Reviewers stop standalone proof work when a claim is downrated to low or informational without a credible program-level impact path.
+- Session event cursor lookups, detail reads, and paged stream queries now use indexed `(session_id, event_id)` lookups first and bounded edge probes instead of full-session JSON scans.
 
 ## 0.9.6
 
