@@ -680,12 +680,25 @@ async function acquireLease(
       const path = resolve(directory, `${utilityKey}.${slot}.lease`);
       try {
         const handle = await open(path, "wx", 0o600);
-        await handle.writeFile(
-          JSON.stringify({ pid: process.pid, utility, actionId, createdAt: nowIso(),
-            expiresAt: new Date(deadline + LEASE_SETTLE_GRACE_MS).toISOString() }),
-          "utf8",
-        );
-        await handle.close();
+        let written = false;
+        try {
+          await handle.writeFile(
+            JSON.stringify({ pid: process.pid, utility, actionId, createdAt: nowIso(),
+              expiresAt: new Date(deadline + LEASE_SETTLE_GRACE_MS).toISOString() }),
+            "utf8",
+          );
+          written = true;
+        } finally {
+          try {
+            await handle.close();
+          } catch (closeError) {
+            if (written) {
+              await unlink(path).catch(() => undefined);
+              throw closeError;
+            }
+          }
+          if (!written) await unlink(path).catch(() => undefined);
+        }
         let released = false;
         return {
           path,
@@ -710,7 +723,13 @@ async function reclaimStaleLease(path: string): Promise<void> {
     const leaseStat = await stat(path);
     if (Date.now() - leaseStat.mtimeMs < NEW_LEASE_GRACE_MS) return;
     const raw = await readFile(path, "utf8");
-    const value = JSON.parse(raw) as unknown;
+    let value: unknown;
+    try {
+      value = JSON.parse(raw) as unknown;
+    } catch {
+      await unlink(path).catch(() => undefined);
+      return;
+    }
     const createdAt = isRecord(value) && typeof value.createdAt === "string"
       ? Date.parse(value.createdAt) : Number.NaN;
     const explicitExpiry = isRecord(value) && typeof value.expiresAt === "string"
@@ -718,7 +737,7 @@ async function reclaimStaleLease(path: string): Promise<void> {
     const expiry = Number.isFinite(explicitExpiry)
       ? explicitExpiry
       : createdAt + MAX_TIMEOUT_MS + LEASE_SETTLE_GRACE_MS;
-    if (Number.isFinite(expiry) && Date.now() > expiry) {
+    if (!Number.isFinite(expiry) || Date.now() > expiry) {
       await unlink(path).catch(() => undefined);
       return;
     }
@@ -781,6 +800,25 @@ async function runUtility(input: {
   environment?: NodeJS.ProcessEnv;
   remote?: { sshArgs: readonly string[]; guestPlatform: 'win32' | 'darwin' | 'linux'; guestCwd: string; sshExecutable?: string };
 }): Promise<ResearchToolExecutionResult> {
+  if (input.signal?.aborted) {
+    return errorResult(input.action, input.startedAt, `${input.displayUtility} was aborted.`, {
+      utility: input.reportedUtility ?? input.utility,
+      args: redactShellArguments(input.reportedArgs ?? input.args),
+      cwd: input.cwd,
+      runtime: input.runtime,
+      ...(input.remote ? { executionTarget: 'fleet-vm' } : {}),
+      ...(input.wsl ? { wsl: input.wsl } : {}),
+      exitCode: null,
+      signal: null,
+      timedOut: false,
+      aborted: true,
+      authorization: input.authorization,
+      stdout: "",
+      stderr: "",
+      stdoutTruncated: false,
+      stderrTruncated: false,
+    });
+  }
   return new Promise((resolvePromise) => {
     let settled = false;
     let timedOut = false;
@@ -797,6 +835,7 @@ async function runUtility(input: {
       shell: false,
       stdio: ["pipe", "pipe", "pipe"],
     });
+    child.stdin.on("error", () => undefined);
     child.stdout.on("data", (chunk: Buffer) => output.appendStdout(chunk));
     child.stderr.on("data", (chunk: Buffer) => output.appendStderr(chunk));
 
