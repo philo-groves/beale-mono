@@ -16,6 +16,7 @@ import {
   attachAppServerSession,
   BealeDesktopRestartRequiredError,
   ensureBealeAppServerRunning,
+  fetchAppServerCanonicalResultWithRecovery,
   fetchBealeProviderUsageLimits,
   fetchExistingAppServerCanonicalResult,
   fetchAppServerSession,
@@ -28,10 +29,12 @@ import {
   readBealeAppServerDiscovery,
   readLiveBealeAppServerDiscovery,
   requireBuiltAppServerTrayEntry,
+  restartBealeAppServerViaSupervisor,
   setBealeDesktopRestartRequiredHandler,
   shouldLaunchAppServerTrayController,
   shouldReplaceAppServerWithTray,
   startAppServerSession,
+  stopBealeAppServer,
   stopBealeAppServerForUpdate,
   stopAppServerSession,
   testLocalAppServerConnection,
@@ -267,6 +270,199 @@ describe('beale app-server client', () => {
     expect(second).toEqual(first);
     expect(readLiveBealeAppServerDiscovery(stateFile)).toEqual(first);
     expect(healthRequests).toBe(1);
+  });
+
+  it('re-probes /health and replaces an unresponsive live process when forceRevalidate is set', async () => {
+    let healthRequests = 0;
+    let healthy = true;
+    await startStubServer((request, response) => {
+      if (request.url === '/health') {
+        healthRequests += 1;
+        if (!healthy) {
+          response.writeHead(503).end();
+          return;
+        }
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({
+          ok: true,
+          controlVersion: BEALE_APP_SERVER_CONTROL_VERSION,
+          contractTimestamp: BEALE_APP_SERVER_CONTRACT_TIMESTAMP,
+          capabilities: BEALE_APP_SERVER_CAPABILITIES
+        }));
+        return;
+      }
+      response.writeHead(503).end();
+    });
+
+    const wedgedProcess = spawn(process.execPath, ['-e', "process.send?.('ready'); setInterval(() => undefined, 1000);"], {
+      stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+      windowsHide: true
+    });
+    try {
+      await new Promise<void>((resolve) => wedgedProcess.once('message', () => resolve()));
+      const stateFile = process.env.BEALE_APP_SERVER_STATE_FILE!;
+      writeFileSync(stateFile, JSON.stringify(discoveryRecord({ pid: wedgedProcess.pid!, url: serverUrl })), 'utf8');
+      writeFileSync(`${stateFile}.lock`, JSON.stringify({ pid: wedgedProcess.pid }), 'utf8');
+
+      const cached = await ensureBealeAppServerRunning({ readyTimeoutMs: 1_000 });
+      expect(cached.pid).toBe(wedgedProcess.pid);
+      expect(healthRequests).toBe(1);
+
+      const stillHealthy = await ensureBealeAppServerRunning({ readyTimeoutMs: 1_000, forceRevalidate: true });
+      expect(stillHealthy.pid).toBe(wedgedProcess.pid);
+      expect(healthRequests).toBe(2);
+
+      healthy = false;
+      process.env.BEALE_APP_SERVER_COMMAND = 'definitely-not-a-real-beale-launcher';
+      await expect(ensureBealeAppServerRunning({
+        healthTimeoutMs: 100,
+        readyTimeoutMs: 400,
+        forceRevalidate: true
+      })).rejects.toThrow(/did not become ready/);
+      expect(healthRequests).toBe(3);
+
+      await new Promise<void>((resolve) => {
+        if (wedgedProcess.exitCode !== null || wedgedProcess.signalCode !== null) resolve();
+        else wedgedProcess.once('exit', () => resolve());
+      });
+      expect(wedgedProcess.exitCode !== null || wedgedProcess.signalCode !== null).toBe(true);
+    } finally {
+      if (wedgedProcess.exitCode === null && wedgedProcess.signalCode === null) wedgedProcess.kill();
+    }
+  });
+
+  it('evicts the cached discovery and recovers an unresponsive live-PID server during canonical request recovery', async () => {
+    await startStubServer((request, response) => {
+      if (request.url === '/health') {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({
+          ok: true,
+          controlVersion: BEALE_APP_SERVER_CONTROL_VERSION,
+          contractTimestamp: BEALE_APP_SERVER_CONTRACT_TIMESTAMP,
+          capabilities: BEALE_APP_SERVER_CAPABILITIES
+        }));
+        return;
+      }
+      response.writeHead(404).end();
+    });
+
+    const wedgedProcess = spawn(process.execPath, ['-e', "process.send?.('ready'); setInterval(() => undefined, 1000);"], {
+      stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+      windowsHide: true
+    });
+    let replacementPid: number | null = null;
+    try {
+      await new Promise<void>((resolve) => wedgedProcess.once('message', () => resolve()));
+      const stateFile = process.env.BEALE_APP_SERVER_STATE_FILE!;
+      writeFileSync(stateFile, JSON.stringify(discoveryRecord({ pid: wedgedProcess.pid!, url: serverUrl })), 'utf8');
+      writeFileSync(`${stateFile}.lock`, JSON.stringify({ pid: wedgedProcess.pid }), 'utf8');
+
+      // Populate validatedAppServerDiscoveries cache.
+      const initial = await ensureBealeAppServerRunning({ readyTimeoutMs: 1_000 });
+      expect(initial.pid).toBe(wedgedProcess.pid);
+
+      // Stop answering HTTP while keeping wedgedProcess alive so PID checks still succeed.
+      await new Promise<void>((resolve) => server!.close(() => resolve()));
+      server = null;
+
+      const replacementScript = [
+        "const http = require('node:http');",
+        "const fs = require('node:fs');",
+        'const stateFile = process.env.BEALE_APP_SERVER_STATE_FILE;',
+        `const healthPayload = JSON.stringify({ ok: true, controlVersion: ${JSON.stringify(BEALE_APP_SERVER_CONTROL_VERSION)}, contractTimestamp: ${JSON.stringify(BEALE_APP_SERVER_CONTRACT_TIMESTAMP)}, capabilities: ${JSON.stringify(BEALE_APP_SERVER_CAPABILITIES)} });`,
+        `const canonicalPayload = JSON.stringify({ controlVersion: ${JSON.stringify(BEALE_APP_SERVER_CONTROL_VERSION)}, workspace: { workspaceId: 'workspace-example' }, result: { recovered: true } });`,
+        'const srv = http.createServer((req, res) => {',
+        "  if (req.url === '/health') { res.writeHead(200, { 'content-type': 'application/json' }); res.end(healthPayload); return; }",
+        "  if (req.url === '/v1/workspaces/workspace-example/status') { res.writeHead(200, { 'content-type': 'application/json' }); res.end(canonicalPayload); return; }",
+        '  res.writeHead(404).end();',
+        '});',
+        "srv.listen(0, '127.0.0.1', () => {",
+        '  const { port } = srv.address();',
+        "  const url = 'http://127.0.0.1:' + port;",
+        "  fs.writeFileSync(stateFile + '.lock', JSON.stringify({ pid: process.pid }), 'utf8');",
+        "  fs.writeFileSync(stateFile, JSON.stringify({ version: 1, hostMode: 'tray', pid: process.pid, host: '127.0.0.1', port, url, operatorToken: 'recovered-operator-token', startedAt: new Date().toISOString() }), 'utf8');",
+        '});',
+        "process.on('SIGTERM', () => srv.close(() => process.exit(0)));"
+      ].join('\n');
+      process.env.BEALE_APP_SERVER_COMMAND = process.execPath;
+      process.env.BEALE_APP_SERVER_ARGS_JSON = JSON.stringify(['-e', replacementScript]);
+
+      const recovered = await fetchAppServerCanonicalResultWithRecovery<{ recovered: boolean }>(
+        initial,
+        '/v1/workspaces/workspace-example/status'
+      );
+      expect(recovered).toEqual({ recovered: true });
+
+      await new Promise<void>((resolve) => {
+        if (wedgedProcess.exitCode !== null || wedgedProcess.signalCode !== null) resolve();
+        else wedgedProcess.once('exit', () => resolve());
+      });
+      expect(wedgedProcess.exitCode !== null || wedgedProcess.signalCode !== null).toBe(true);
+
+      const updated = readBealeAppServerDiscovery(stateFile);
+      replacementPid = updated?.pid ?? null;
+      expect(replacementPid).not.toBeNull();
+      expect(replacementPid).not.toBe(wedgedProcess.pid);
+    } finally {
+      if (wedgedProcess.exitCode === null && wedgedProcess.signalCode === null) wedgedProcess.kill();
+      if (replacementPid && replacementPid !== process.pid) {
+        try { process.kill(replacementPid, 'SIGTERM'); } catch { /* Already exited. */ }
+      }
+    }
+  });
+
+  it('clears the validated discovery cache on stop and supervisor restart paths', async () => {
+    let healthRequests = 0;
+    await startStubServer((request, response) => {
+      if (request.url === '/health') {
+        healthRequests += 1;
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({
+          ok: true,
+          controlVersion: BEALE_APP_SERVER_CONTROL_VERSION,
+          contractTimestamp: BEALE_APP_SERVER_CONTRACT_TIMESTAMP,
+          capabilities: BEALE_APP_SERVER_CAPABILITIES
+        }));
+        return;
+      }
+      if (request.url === '/v1/sessions') {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({
+          controlVersion: BEALE_APP_SERVER_CONTROL_VERSION,
+          sessions: [appServerSessionEntry('session-active', 'running')]
+        }));
+        return;
+      }
+      response.writeHead(404).end();
+    });
+    const stateFile = process.env.BEALE_APP_SERVER_STATE_FILE!;
+    writeFileSync(stateFile, JSON.stringify(discoveryRecord({ url: serverUrl })), 'utf8');
+
+    await ensureBealeAppServerRunning({ readyTimeoutMs: 1_000 });
+    expect(healthRequests).toBe(1);
+
+    await expect(stopBealeAppServer()).rejects.toThrow(/cannot restart while 1 research session is active/);
+    await ensureBealeAppServerRunning({ readyTimeoutMs: 1_000 });
+    expect(healthRequests).toBe(2);
+
+    process.env.BEALE_APP_SERVER_COMMAND = 'custom-app-server';
+    await expect(stopBealeAppServerForUpdate()).rejects.toThrow(/cannot restart while 1 research session is active/);
+    await ensureBealeAppServerRunning({ readyTimeoutMs: 1_000 });
+    expect(healthRequests).toBe(3);
+
+    const realFetch = globalThis.fetch;
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      if (String(input).includes('/v1/supervisor/restart')) {
+        return Promise.resolve(new Response('{"restarted":true}', { status: 200 }));
+      }
+      return realFetch(input, init);
+    });
+    try {
+      await restartBealeAppServerViaSupervisor();
+      expect(healthRequests).toBe(4);
+    } finally {
+      fetchMock.mockRestore();
+    }
   });
 
   it('reattaches existing-session reads after a socket reset without entering launch recovery', async () => {

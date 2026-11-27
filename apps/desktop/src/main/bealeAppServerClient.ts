@@ -46,6 +46,7 @@ const APP_SERVER_ATTACH_EXISTING_FLAG = '--attach-existing';
 const APP_SERVER_LAUNCH_ENVIRONMENT_TTL_MS = 30_000;
 const appServerEnsureRequests = new Map<string, Promise<BealeAppServerDiscovery>>();
 const validatedAppServerDiscoveries = new Map<string, BealeAppServerDiscovery>();
+const appServerValidationGenerations = new Map<string, number>();
 
 export interface BealeAppServerDiscovery {
   version: number;
@@ -84,6 +85,7 @@ export interface EnsureBealeAppServerOptions {
   stateFile?: string;
   readyTimeoutMs?: number;
   healthTimeoutMs?: number;
+  forceRevalidate?: boolean;
 }
 
 export function bealeAppServerStateFilePath(): string {
@@ -117,6 +119,23 @@ export function isBealeAppServerAlive(record: BealeAppServerDiscovery): boolean 
   }
 }
 
+export function invalidateValidatedAppServerDiscovery(stateFile: string = bealeAppServerStateFilePath()): void {
+  validatedAppServerDiscoveries.delete(stateFile);
+  if (appServerEnsureRequests.has(stateFile)) {
+    appServerValidationGenerations.set(stateFile, (appServerValidationGenerations.get(stateFile) ?? 0) + 1);
+  } else {
+    appServerValidationGenerations.delete(stateFile);
+  }
+}
+
+function invalidateValidatedAppServerDiscoveryRecord(record: BealeAppServerDiscovery): void {
+  for (const [stateFile, validated] of validatedAppServerDiscoveries) {
+    if (sameAppServerInstance(validated, record)) {
+      invalidateValidatedAppServerDiscovery(stateFile);
+    }
+  }
+}
+
 /**
  * Returns a live app-server discovery record, launching the platform tray
  * host when available and the headless host otherwise. The
@@ -125,20 +144,36 @@ export function isBealeAppServerAlive(record: BealeAppServerDiscovery): boolean 
  */
 export function ensureBealeAppServerRunning(options: EnsureBealeAppServerOptions = {}): Promise<BealeAppServerDiscovery> {
   const stateFile = options.stateFile ?? bealeAppServerStateFilePath();
-  const discovered = readLiveBealeAppServerDiscovery(stateFile);
-  const validated = validatedAppServerDiscoveries.get(stateFile);
-  if (discovered && validated && sameAppServerInstance(discovered, validated)) {
-    return Promise.resolve(discovered);
+  if (options.forceRevalidate) {
+    invalidateValidatedAppServerDiscovery(stateFile);
+  } else {
+    const discovered = readLiveBealeAppServerDiscovery(stateFile);
+    const validated = validatedAppServerDiscoveries.get(stateFile);
+    if (discovered && validated && sameAppServerInstance(discovered, validated)) {
+      return Promise.resolve(discovered);
+    }
+    if (validated) invalidateValidatedAppServerDiscovery(stateFile);
   }
   const active = appServerEnsureRequests.get(stateFile);
-  if (active) return active;
-  const request = ensureBealeAppServerRunningOnce({ ...options, stateFile }).then((record) => {
-    validatedAppServerDiscoveries.set(stateFile, record);
-    return record;
-  });
+  if (active && !options.forceRevalidate) return active;
+  const startRequest = (): Promise<BealeAppServerDiscovery> => {
+    const generation = appServerValidationGenerations.get(stateFile) ?? 0;
+    return ensureBealeAppServerRunningOnce({ ...options, stateFile }).then((record) => {
+      if ((appServerValidationGenerations.get(stateFile) ?? 0) === generation) {
+        validatedAppServerDiscoveries.set(stateFile, record);
+      }
+      return record;
+    });
+  };
+  const request = active
+    ? active.catch(() => undefined).then(() => startRequest())
+    : startRequest();
   appServerEnsureRequests.set(stateFile, request);
   void request.finally(() => {
-    if (appServerEnsureRequests.get(stateFile) === request) appServerEnsureRequests.delete(stateFile);
+    if (appServerEnsureRequests.get(stateFile) === request) {
+      appServerEnsureRequests.delete(stateFile);
+      appServerValidationGenerations.delete(stateFile);
+    }
   }).catch(() => undefined);
   return request;
 }
@@ -406,10 +441,16 @@ export async function fetchBealeProviderUsageLimits(
 ): Promise<BealeProviderUsageLimits> {
   const record = await ensureBealeAppServerRunning();
   const params = new URLSearchParams({ provider: providerId, ...(refresh ? { refresh: '1' } : {}), ...(serverId === 'local' ? {} : { serverId }) });
-  const response = await fetch(`${appServerControlUrl(record)}${BEALE_APP_SERVER_PROVIDER_LIMITS_PATH}?${params}`, {
-    headers: { authorization: `Bearer ${record.operatorToken}` },
-    signal: AbortSignal.timeout(15_000)
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${appServerControlUrl(record)}${BEALE_APP_SERVER_PROVIDER_LIMITS_PATH}?${params}`, {
+      headers: { authorization: `Bearer ${record.operatorToken}` },
+      signal: AbortSignal.timeout(15_000)
+    });
+  } catch (error) {
+    if (isAppServerTransportFailure(error)) invalidateValidatedAppServerDiscoveryRecord(record);
+    throw error;
+  }
   if (!response.ok) throw new Error(`Could not read provider usage limits (${response.status}).`);
   return decodeBealeProviderUsageLimits(await response.json() as unknown);
 }
@@ -423,7 +464,8 @@ export async function fetchAppServerCanonicalResultWithRecovery<T>(
     return await fetchAppServerCanonicalResult<T>(record, path, options);
   } catch (error) {
     if (options.signal?.aborted || !isAppServerTransportFailure(error)) throw error;
-    const recovered = await ensureBealeAppServerRunning();
+    invalidateValidatedAppServerDiscoveryRecord(record);
+    const recovered = await ensureBealeAppServerRunning({ forceRevalidate: true });
     return fetchAppServerCanonicalResult<T>(recovered, path, options);
   }
 }
@@ -509,14 +551,26 @@ export async function invokeAppServerOperation<T>(request: {
     ...(request.profileId ? { profileId: request.profileId } : {})
   });
   const execute = async (current: BealeAppServerDiscovery, signal: AbortSignal): Promise<T> => {
-    const response = await fetch(`${appServerControlUrl(current)}${BEALE_APP_SERVER_OPERATIONS_PATH}`, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${current.operatorToken}`, 'content-type': 'application/json' },
-      body,
-      signal
-    });
+    let response: Response;
+    try {
+      response = await fetch(`${appServerControlUrl(current)}${BEALE_APP_SERVER_OPERATIONS_PATH}`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${current.operatorToken}`, 'content-type': 'application/json' },
+        body,
+        signal
+      });
+    } catch (error) {
+      if (!signal.aborted && isAppServerTransportFailure(error)) invalidateValidatedAppServerDiscoveryRecord(current);
+      throw error;
+    }
     if (!response.ok) throw new Error(`app-server ${request.operation} failed: ${await describeResponse(response)}`);
-    const payload = await readOperationResponse(response, request.operation);
+    let payload: unknown;
+    try {
+      payload = await readOperationResponse(response, request.operation);
+    } catch (error) {
+      if (!signal.aborted && isAppServerTransportFailure(error)) invalidateValidatedAppServerDiscoveryRecord(current);
+      throw error;
+    }
     if (!isRecord(payload) || payload.controlVersion !== BEALE_APP_SERVER_CONTROL_VERSION
       || !Object.hasOwn(payload, 'result')) {
       throw new Error('The app-server returned an incompatible operation response.');
@@ -797,7 +851,7 @@ export function appServerControlUrl(record: BealeAppServerDiscovery): string {
 
 export async function restartBealeAppServer(): Promise<BealeAppServerDiscovery> {
   await stopBealeAppServer();
-  return ensureBealeAppServerRunning();
+  return ensureBealeAppServerRunning({ forceRevalidate: true });
 }
 
 /**
@@ -805,34 +859,45 @@ export async function restartBealeAppServer(): Promise<BealeAppServerDiscovery> 
  * while research sessions are active.
  */
 export async function stopBealeAppServer(): Promise<void> {
-  const existing = readBealeAppServerDiscovery();
-  if (existing && isBealeAppServerAlive(existing)) await stopAppServerForUpgrade(existing);
+  const stateFile = bealeAppServerStateFilePath();
+  invalidateValidatedAppServerDiscovery(stateFile);
+  try {
+    const existing = readBealeAppServerDiscovery(stateFile);
+    if (existing && isBealeAppServerAlive(existing)) await stopAppServerForUpgrade(existing);
+  } finally {
+    invalidateValidatedAppServerDiscovery(stateFile);
+  }
 }
 
 /** Stops both processes that run from the installed Beale executable. */
 export async function stopBealeAppServerForUpdate(): Promise<void> {
   const stateFile = bealeAppServerStateFilePath();
+  invalidateValidatedAppServerDiscovery(stateFile);
   const existing = readBealeAppServerDiscovery(stateFile);
   const token = appServerSupervisorToken(stateFile, existing);
-  if (existing && isBealeAppServerAlive(existing)) await stopAppServerForUpgrade(existing);
-  if (process.env.BEALE_APP_SERVER_COMMAND?.trim()) return;
-  if (!token) return;
   try {
-    const response = await fetch(`http://127.0.0.1:${BEALE_APP_SERVER_SUPERVISOR_LOCAL_PORT}${BEALE_APP_SERVER_SUPERVISOR_SHUTDOWN_PATH}`, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${token}` },
-      signal: AbortSignal.timeout(2_000)
-    });
-    if (response.status === 404 && isAppServerTrayPlatform(process.platform) && packagedAppServerRuntimeRoot()) {
-      await stopLegacyPackagedSupervisor();
-    } else if (!response.ok && response.status !== 404) {
-      throw new Error(`The app-server restart supervisor refused shutdown (HTTP ${response.status}).`);
-    } else if (response.ok) {
-      await waitForLocalSupervisorShutdown();
+    if (existing && isBealeAppServerAlive(existing)) await stopAppServerForUpgrade(existing);
+    if (process.env.BEALE_APP_SERVER_COMMAND?.trim()) return;
+    if (!token) return;
+    try {
+      const response = await fetch(`http://127.0.0.1:${BEALE_APP_SERVER_SUPERVISOR_LOCAL_PORT}${BEALE_APP_SERVER_SUPERVISOR_SHUTDOWN_PATH}`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(2_000)
+      });
+      if (response.status === 404 && isAppServerTrayPlatform(process.platform) && packagedAppServerRuntimeRoot()) {
+        await stopLegacyPackagedSupervisor();
+      } else if (!response.ok && response.status !== 404) {
+        throw new Error(`The app-server restart supervisor refused shutdown (HTTP ${response.status}).`);
+      } else if (response.ok) {
+        await waitForLocalSupervisorShutdown();
+      }
+    } catch (error) {
+      if (error instanceof TypeError && error.message === 'fetch failed') return;
+      throw error;
     }
-  } catch (error) {
-    if (error instanceof TypeError && error.message === 'fetch failed') return;
-    throw error;
+  } finally {
+    invalidateValidatedAppServerDiscovery(stateFile);
   }
 }
 
@@ -952,14 +1017,19 @@ export function isLegacyPackagedMacSupervisor(
 
 export async function restartBealeAppServerViaSupervisor(): Promise<BealeAppServerDiscovery> {
   const stateFile = bealeAppServerStateFilePath();
+  invalidateValidatedAppServerDiscovery(stateFile);
   const discovery = readBealeAppServerDiscovery(stateFile);
   const token = appServerSupervisorToken(stateFile, discovery);
   if (!token) throw new Error('The local app-server restart token is unavailable.');
-  const response = await fetch(`http://127.0.0.1:${BEALE_APP_SERVER_SUPERVISOR_LOCAL_PORT}${BEALE_APP_SERVER_SUPERVISOR_RESTART_PATH}`, {
-    method: 'POST', headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(90_000)
-  });
-  if (!response.ok) throw new Error(`The local app-server restart supervisor refused the request (HTTP ${response.status}).`);
-  return ensureBealeAppServerRunning();
+  try {
+    const response = await fetch(`http://127.0.0.1:${BEALE_APP_SERVER_SUPERVISOR_LOCAL_PORT}${BEALE_APP_SERVER_SUPERVISOR_RESTART_PATH}`, {
+      method: 'POST', headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(90_000)
+    });
+    if (!response.ok) throw new Error(`The local app-server restart supervisor refused the request (HTTP ${response.status}).`);
+  } finally {
+    invalidateValidatedAppServerDiscovery(stateFile);
+  }
+  return ensureBealeAppServerRunning({ stateFile, forceRevalidate: true });
 }
 
 function appServerSupervisorToken(stateFile: string, discovery: BealeAppServerDiscovery | null): string {
@@ -1044,6 +1114,7 @@ export async function inspectLocalAppServerStatus(): Promise<FleetAppServerStatu
   if (compatibility.status === 'compatible') {
     return { id: 'local', state: 'online', message: 'Connected to the local app server.' };
   }
+  invalidateValidatedAppServerDiscoveryRecord(record);
   if (compatibility.status === 'desktop_older') {
     return { id: 'local', state: 'issue', message: 'The local app server is newer than Beale. Restart Beale to load the update.' };
   }
