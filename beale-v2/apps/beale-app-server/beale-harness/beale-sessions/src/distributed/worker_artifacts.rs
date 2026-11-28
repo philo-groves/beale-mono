@@ -211,10 +211,11 @@ impl Worker<'_> {
         call: &InferenceCall,
         arguments: &Value,
     ) -> Result<Value> {
-        let request: MaterializeArtifact = serde_json::from_value(arguments.clone())?;
+        let request: MaterializeArtifact =
+            beale_contracts::tool_error::arguments(arguments.clone())?;
         ensure!(
             beale_contracts::swarm_files::relative_path(&request.destination),
-            "invalid artifact destination"
+            beale_contracts::tool_error::ToolError::invalid("invalid artifact destination")
         );
         let key = hash(format!("{}:{}", self.launch.identity.attempt_id, call.id).as_bytes());
         let path = self.launch.recovery.join(format!("download-{key}"));
@@ -227,8 +228,8 @@ impl Worker<'_> {
         let mut metadata = None;
         loop {
             let id = format!("artifact-read:{key}:{offset}");
-            let chunk: ArtifactChunkResult = serde_json::from_value(
-                self.remote(self.request(
+            let reply = self
+                .remote(self.request(
                     id.clone(),
                     WorkerOperation::ArtifactRead {
                         artifact_id: request.artifact.clone(),
@@ -236,8 +237,18 @@ impl Worker<'_> {
                         length: CHUNK as u32,
                     },
                 ))
-                .await?,
-            )?;
+                .await?;
+            // The leader records an unknown or foreign artifact ID as a typed
+            // rejection. Nothing was written to the workspace; report it.
+            if reply.get("is_error") == Some(&Value::Bool(true)) {
+                let rejection: beale_contracts::tool_error::ToolError =
+                    serde_json::from_value(reply["error"].clone())
+                        .context("invalid artifact rejection")?;
+                drop(file);
+                let _ = tokio::fs::remove_file(&path).await;
+                return Err(rejection.into());
+            }
+            let chunk: ArtifactChunkResult = serde_json::from_value(reply)?;
             ensure!(
                 hash(&chunk.bytes) == chunk.sha256
                     && metadata.as_ref().is_none_or(|old| old == &chunk.artifact),

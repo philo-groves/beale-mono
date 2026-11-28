@@ -159,7 +159,6 @@ async fn transcript(recover: bool, ending: Ending, existing: bool) {
     let (root, state, request, server) = regression_session(app).await;
     let store = SwarmStore::open(state.db.clone()).unwrap();
     let definition = beale_swarms::swarm_definition("basic").unwrap();
-    let route = definition.snapshot.workflow().unwrap().routes[0].id.clone();
     let scan = Uuid::new_v4().to_string();
     let saved = store
         .create_scan(
@@ -253,15 +252,9 @@ async fn transcript(recover: bool, ending: Ending, existing: bool) {
     };
     let source = spawn("source");
     let source = store.local_claim(&scan, &source, 2, 8).unwrap().unwrap();
-    let handoff = HandoffRequest {
-        id: "handoff-example".into(),
-        from_agent: source.agent_id.clone(),
-        parent_id: leader_id.clone(),
-        route_id: route,
-        destination_profile: ProfileRef {
-            id: "research_deputy".into(),
-            revision: 1,
-        },
+    let handoff = HandoffDraft {
+        to_profile: "research_deputy".into(),
+        route_id: None,
         task: task.clone(),
         scope: vec!["Synthetic example.test".into()],
         record_revisions: vec![],
@@ -270,7 +263,7 @@ async fn transcript(recover: bool, ending: Ending, existing: bool) {
         unresolved_questions: vec![],
         payload: HandoffPayload::Task {},
     };
-    store
+    let submitted = store
         .local_dispatch(
             &source,
             "submit",
@@ -281,6 +274,7 @@ async fn transcript(recover: bool, ending: Ending, existing: bool) {
             Admission::Ready,
         )
         .unwrap();
+    let handoff_id = submitted["handoff_id"].as_str().unwrap().to_owned();
     if !recover {
         let destination = spawn("destination");
         store
@@ -288,7 +282,7 @@ async fn transcript(recover: bool, ending: Ending, existing: bool) {
                 &leader,
                 "forward",
                 SwarmCommand::Handoff(Box::new(HandoffAction::Forward {
-                    id: "handoff-example".into(),
+                    id: handoff_id.clone(),
                     to: destination,
                 })),
                 Admission::Ready,

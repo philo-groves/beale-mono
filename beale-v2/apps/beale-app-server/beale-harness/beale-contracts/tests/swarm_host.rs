@@ -111,3 +111,32 @@ fn host_origins_never_carry_credentials_paths_or_cleartext_remote_authority() {
         assert!(validate_origin(origin).is_err(), "{origin}");
     }
 }
+
+#[test]
+fn container_workers_reach_a_loopback_leader_through_the_host_alias() {
+    for (leader, expected) in [
+        (
+            "http://127.0.0.1:43123",
+            "http://host.docker.internal:43123/",
+        ),
+        (
+            "http://localhost:43123/",
+            "http://host.docker.internal:43123/",
+        ),
+        ("http://[::1]:43123", "http://host.docker.internal:43123/"),
+        // A paired Fleet origin is already reachable and stays unchanged.
+        (
+            "https://leader.example.ts.net",
+            "https://leader.example.ts.net/",
+        ),
+    ] {
+        let translated = container_leader_origin(leader).unwrap();
+        assert_eq!(translated, expected);
+        validate_origin(&translated).unwrap();
+    }
+    // Plain HTTP stays limited to host-local names.
+    assert!(validate_origin("http://host.docker.internal.example.test:43123").is_err());
+    assert!(validate_origin("http://example.test:43123").is_err());
+    assert!(container_leader_origin("http://192.0.2.1:43123").is_err());
+    assert_eq!(CONTAINER_HOST_ALIAS, "host.docker.internal");
+}

@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, bail, ensure};
 use beale_contracts::runbooks::{Cell, Document};
-use beale_tools::process::{ProcessTree, contained_command};
+use beale_tools::process::{LimitExceeded, ProcessTree, contained_command};
 use std::{path::Path, process::Stdio, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -71,7 +71,9 @@ pub fn validate_worker_languages(document: &Document) -> Result<()> {
 }
 
 /// Executes one already reviewed cell inside the dedicated worker's execution
-/// tree. Any error after dispatch remains uncertain and stops worker recovery.
+/// tree. A time or output limit returns [`LimitExceeded`] only after the cell
+/// was ended and may be recorded as a failed cell. Any other error after
+/// dispatch remains uncertain and stops worker recovery.
 pub async fn run_worker_cell(
     language: &str,
     source: &str,
@@ -108,7 +110,7 @@ async fn run_cell_policy(
         .stderr(Stdio::piped())
         .spawn()
         .with_context(|| format!("start {language} interpreter"))?;
-    let tree = if worker && cfg!(unix) {
+    let tree = if worker && !beale_tools::process::worker_commands_are_isolated() {
         None
     } else {
         Some(ProcessTree::attach(&child))
@@ -139,10 +141,9 @@ async fn run_cell_policy(
                     if count == 0 { err_done = true; } else { err.extend_from_slice(&err_buffer[..count]); }
                 }
             }
-            ensure!(
-                out.len().saturating_add(err.len()) <= MAX_CELL_OUTPUT,
-                "runbook cell output is too large"
-            );
+            if out.len().saturating_add(err.len()) > MAX_CELL_OUTPUT {
+                return Err(LimitExceeded::output("runbook cell").into());
+            }
         }
         let status = child.wait().await.context("wait for runbook cell")?;
         let stdout = String::from_utf8_lossy(&out).into_owned();
@@ -155,13 +156,23 @@ async fn run_cell_policy(
             stderr,
         })
     };
-    let output = timeout(budget, execute)
-        .await
-        .context("runbook cell timed out")??;
-    if let Some(tree) = tree {
-        tree.release();
+    let error = match timeout(budget, execute).await {
+        Ok(Ok(output)) => {
+            if let Some(tree) = tree {
+                tree.release();
+            }
+            return Ok(output);
+        }
+        Ok(Err(error)) => error,
+        Err(_) => LimitExceeded::timed_out("runbook cell", budget).into(),
+    };
+    if error.downcast_ref::<LimitExceeded>().is_some() {
+        // The interpreter child is still owned here; end it before reporting.
+        let _ = child.start_kill();
+        beale_tools::process::end_limited(tree, worker)
+            .context("runbook cell termination was not confirmed")?;
     }
-    Ok(output)
+    Err(error)
 }
 
 pub async fn run_document(
@@ -271,11 +282,20 @@ mod tests {
             "import subprocess,sys,time\nsubprocess.Popen([sys.executable,'-c',{}])\ntime.sleep(30)\n",
             serde_json::to_string(child).unwrap()
         );
-        assert!(
-            run_worker_cell("python", &source, &workspace, Duration::from_secs(1))
-                .await
-                .is_err()
+        let error = run_worker_cell("python", &source, &workspace, Duration::from_secs(1))
+            .await
+            .err()
+            .expect("cell must reach its time limit");
+        // A limit is reported only after the managed tree was terminated, so
+        // the worker can record a failed cell instead of an unknown outcome.
+        assert_eq!(
+            error.downcast_ref::<LimitExceeded>(),
+            Some(&LimitExceeded::timed_out(
+                "runbook cell",
+                Duration::from_secs(1)
+            ))
         );
+        assert_eq!(error.to_string(), "runbook cell timed out after 1 second");
         assert!(
             workspace.join("ready.txt").exists(),
             "descendant must start before timeout"

@@ -2625,17 +2625,24 @@ fn composer_model_control(state: &State, theme: ThemeStyle<'_>) -> Option<El> {
 }
 
 fn composer_action(state: &State, theme: ThemeStyle<'_>, has_workspaces: bool) -> El {
-    let available =
-        has_workspaces && !state.new_research_prompt.text.trim().is_empty() && !state.session_busy;
-    let can_stop = state.session_busy && state.session_stop_id.is_some() && !state.session_stopping;
+    let has_text = !state.new_research_prompt.text.trim().is_empty();
+    // A message typed while a Swarm runs is queued for its leader; with an
+    // empty composer the button stops the scan.
+    let attach = has_text && crate::swarm_attach_available(state);
+    let sending = !state.session_busy || attach;
+    let available = has_workspaces && has_text && sending;
+    let can_stop =
+        !attach && state.session_busy && state.session_stop_id.is_some() && !state.session_stopping;
     let mut button = el()
-        .key(if state.session_busy {
-            "new-research-stop"
-        } else {
+        .key(if sending {
             "new-research-send"
+        } else {
+            "new-research-stop"
         })
         .role("button")
-        .label(if state.session_busy && state.session_stopping {
+        .label(if attach {
+            "Send message to the running Swarm"
+        } else if state.session_busy && state.session_stopping {
             "Stopping scan"
         } else if state.session_busy {
             "Stop scan"
@@ -2651,19 +2658,13 @@ fn composer_action(state: &State, theme: ThemeStyle<'_>, has_workspaces: bool) -
             theme.color("#303030")
         })
         .child(
-            icon(
-                if state.session_busy {
-                    &STOP
+            icon(if sending { &ARROW_RIGHT } else { &STOP }, 16.0).color(
+                if available || can_stop {
+                    theme.accent_ink()
                 } else {
-                    &ARROW_RIGHT
+                    theme.color("#777777")
                 },
-                16.0,
-            )
-            .color(if available || can_stop {
-                theme.accent_ink()
-            } else {
-                theme.color("#777777")
-            }),
+            ),
         );
     if can_stop {
         button = button

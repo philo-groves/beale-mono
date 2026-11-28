@@ -231,3 +231,99 @@ fn snapshot_transfer_preserves_native_permissions_and_internal_links() {
         Path::new("seed.sh")
     );
 }
+
+#[test]
+fn chunks_verify_only_the_served_blob_and_capture_releases_the_database() {
+    let f = Fixture::new();
+    // Capture runs a fault hook between its two passes. The hook uses the same
+    // host database, which would deadlock if capture still held its lock.
+    struct UsesDatabase(HostDatabase, std::sync::atomic::AtomicUsize);
+    impl StorageFaults for UsesDatabase {
+        fn check(&self, point: FaultPoint) -> anyhow::Result<()> {
+            if point == FaultPoint::CaptureVerify {
+                self.0.with_connection(|db| {
+                    Ok(db.query_row("SELECT 1", [], |r| r.get::<_, i64>(0))?)
+                })?;
+                self.1.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+            Ok(())
+        }
+    }
+    let hook = Arc::new(UsesDatabase(
+        f.db.clone(),
+        std::sync::atomic::AtomicUsize::new(0),
+    ));
+    let files = f.files.clone().with_faults(hook.clone());
+    let large = vec![b'x'; SNAPSHOT_CHUNK_BYTES * 2 + 7];
+    fs::write(f.source.join("large.txt"), &large).unwrap();
+    fs::write(f.source.join("small.txt"), b"synthetic small file").unwrap();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let source = f.source.clone();
+    let worker = std::thread::spawn(move || {
+        let digest = files.capture(
+            "scan-example",
+            &[SnapshotInput {
+                source,
+                destination: String::new(),
+            }],
+        );
+        let _ = sender.send(digest.map_err(|e| e.to_string()));
+    });
+    let digest = receiver
+        .recv_timeout(std::time::Duration::from_secs(60))
+        .expect("capture must not hold the database lock while hashing")
+        .unwrap();
+    worker.join().unwrap();
+    assert_eq!(hook.1.load(std::sync::atomic::Ordering::SeqCst), 1);
+    let large_blob = hash(&large);
+    let small_blob = hash(b"synthetic small file");
+    // Corrupting an unrelated blob does not fail reads of another blob: a
+    // chunk no longer re-hashes the whole snapshot.
+    let small_path = f.root.join("host/swarm-files/blobs").join(&small_blob);
+    let original_small = fs::read(&small_path).unwrap();
+    fs::write(&small_path, b"Corrupted synthetic small").unwrap();
+    for offset in [0, SNAPSHOT_CHUNK_BYTES as u64] {
+        let request = SnapshotRead {
+            snapshot: digest.clone(),
+            blob: Some(large_blob.clone()),
+            offset,
+        };
+        assert_eq!(
+            f.files
+                .snapshot_chunk("scan-example", &request)
+                .unwrap()
+                .request
+                .offset,
+            offset
+        );
+    }
+    // The served blob itself is verified when its first chunk is read.
+    let corrupt_first = SnapshotRead {
+        snapshot: digest.clone(),
+        blob: Some(small_blob.clone()),
+        offset: 0,
+    };
+    assert!(
+        f.files
+            .snapshot_chunk("scan-example", &corrupt_first)
+            .is_err()
+    );
+    // Materialization still rejects corrupt snapshot content.
+    assert!(
+        f.files
+            .prepare_agent("scan-example", "agent-corrupt-example")
+            .is_err()
+    );
+    fs::write(&small_path, original_small).unwrap();
+    let workspace = f
+        .files
+        .prepare_agent("scan-example", "agent-corrupt-example")
+        .unwrap();
+    assert_eq!(fs::read(workspace.join("large.txt")).unwrap(), large);
+    assert_eq!(
+        f.files
+            .prepare_agent("scan-example", "agent-corrupt-example")
+            .unwrap(),
+        workspace
+    );
+}

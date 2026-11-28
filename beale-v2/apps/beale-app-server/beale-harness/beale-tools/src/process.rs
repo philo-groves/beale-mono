@@ -202,8 +202,9 @@ pub fn establish_container_worker_group() -> std::io::Result<()> {
     Ok(())
 }
 
-/// A dedicated worker must own its process group on Unix. Target commands stay
-/// in this group so the supervisor can confirm their termination with the worker.
+/// A dedicated worker must own its process group on Unix. The supervisor ends
+/// this group with the worker; see [`worker_commands_are_isolated`] for where
+/// target commands run.
 pub fn require_worker_group() -> std::io::Result<()> {
     #[cfg(unix)]
     {
@@ -217,17 +218,139 @@ pub fn require_worker_group() -> std::io::Result<()> {
     Ok(())
 }
 
-/// Retains normal environment scrubbing while keeping Unix worker commands in
-/// the dedicated worker group. Only the worker entry point uses this policy.
+/// Set to `1` by the Linux subreaper supervisor in [`crate::linux_worker`] for
+/// the worker it launches. Tool commands never inherit it: their environment
+/// omits `BEALE_*` host settings.
+pub const SUPERVISED_WORKER_ENV: &str = "BEALE_WORKER_SUPERVISED";
+
+#[cfg(target_os = "linux")]
+static SUPERVISED_WORKER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Records, once at worker startup, whether this worker runs under the Linux
+/// subreaper supervisor. Has no effect on other platforms.
+pub fn adopt_worker_supervision() {
+    #[cfg(target_os = "linux")]
+    if std::env::var_os(SUPERVISED_WORKER_ENV).is_some_and(|value| value == "1") {
+        SUPERVISED_WORKER.store(true, std::sync::atomic::Ordering::Release);
+    }
+}
+
+/// Whether a dedicated worker can end one command's process tree without ending
+/// the worker.
+///
+/// Isolated commands run in their own process group or job, so their
+/// descendants are no longer in the worker's group. They still end with the
+/// worker only where the worker's supervisor proves every descendant ended:
+/// Docker workers through container-stop proof, Linux workers under the
+/// subreaper supervisor in [`crate::linux_worker`], which adopts and reaps
+/// every orphan before writing termination proof, and Windows workers through
+/// the supervisor's job, which contains each command's nested job. Any other
+/// worker is supervised by its process group, so its commands stay in that
+/// group and a limit ends only the direct child.
+pub fn worker_commands_are_isolated() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        is_container_worker() || SUPERVISED_WORKER.load(std::sync::atomic::Ordering::Acquire)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        cfg!(windows)
+    }
+}
+
+/// Applies the worker command group policy described by
+/// [`worker_commands_are_isolated`]. Only the worker entry point uses this.
 pub fn retain_worker_group(command: &mut Command) -> std::io::Result<()> {
     require_worker_group()?;
     #[cfg(unix)]
-    {
+    if !worker_commands_are_isolated() {
         command.process_group(std::process::id() as i32);
     }
     #[cfg(not(unix))]
     let _ = command;
     Ok(())
+}
+
+/// A command or interpreter cell stopped at its time or output limit.
+///
+/// Returned only after the limited execution was ended: its whole process tree
+/// where [`worker_commands_are_isolated`] holds, otherwise its direct child.
+/// Callers may record this as an ordinary failed result. Any other error after
+/// dispatch leaves the outcome uncertain.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LimitExceeded {
+    pub subject: &'static str,
+    pub limit: Limit,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Limit {
+    Time(std::time::Duration),
+    Output,
+}
+
+impl LimitExceeded {
+    pub fn timed_out(subject: &'static str, budget: std::time::Duration) -> Self {
+        Self {
+            subject,
+            limit: Limit::Time(budget),
+        }
+    }
+
+    pub fn output(subject: &'static str) -> Self {
+        Self {
+            subject,
+            limit: Limit::Output,
+        }
+    }
+
+    /// Model-facing text for a worker result. It names the limit and whether
+    /// descendants may still be running; it contains no host paths.
+    pub fn worker_message(&self) -> String {
+        let remainder = if worker_commands_are_isolated() {
+            "Its process tree was terminated."
+        } else {
+            "Its direct process was terminated; background processes it started may continue until this subagent ends."
+        };
+        format!("{self}. {remainder}")
+    }
+}
+
+impl std::fmt::Display for LimitExceeded {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.limit {
+            Limit::Time(budget) => {
+                let seconds = budget.as_millis().div_ceil(1_000);
+                let unit = if seconds == 1 { "second" } else { "seconds" };
+                write!(f, "{} timed out after {seconds} {unit}", self.subject)
+            }
+            Limit::Output => write!(f, "{} output is too large", self.subject),
+        }
+    }
+}
+
+impl std::error::Error for LimitExceeded {}
+
+/// Ends execution that reached a [`LimitExceeded`] boundary.
+///
+/// Host commands keep their previous best-effort cleanup: dropping an armed
+/// tree kills it. A worker command must have a successful termination request
+/// for its isolated tree, otherwise the caller keeps the outcome uncertain.
+pub fn end_limited(tree: Option<ProcessTree>, worker: bool) -> std::io::Result<()> {
+    match tree {
+        Some(tree) if worker => tree.request_termination(),
+        Some(tree) => {
+            drop(tree);
+            Ok(())
+        }
+        // Shared-group workers: dropping the kill-on-drop child ends the direct
+        // process. Descendants stay in the worker group until the worker ends.
+        None if worker && !worker_commands_are_isolated() => Ok(()),
+        None if worker => Err(std::io::Error::other(
+            "worker command process-tree ownership unavailable",
+        )),
+        None => Ok(()),
+    }
 }
 
 /// Finish the dedicated Unix worker's entire managed group, including any

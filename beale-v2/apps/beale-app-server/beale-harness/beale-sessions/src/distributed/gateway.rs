@@ -77,7 +77,9 @@ pub(super) async fn review(
     tool: &str,
     arguments: &Value,
 ) -> Result<(), StatusCode> {
-    if caller.agent.role != Role::Leader
+    let leader_reviews =
+        caller.agent.role == Role::Leader && !beale_swarms::coordination_tool(tool);
+    if !leader_reviews
         && !matches!(tool, "bash" | "powershell" | "plugin_call")
         && !tool_runtime::requires_call_review(tool)
     {
@@ -204,9 +206,15 @@ async fn dispatch(
         | WorkerOperation::ArtifactSeal { .. }
         | WorkerOperation::ArtifactRead { .. } => {
             let files = crate::research_files::store(&state).map_err(unavailable)?;
-            store
-                .worker_artifact_request(&files, bearer, &request, tool_runtime::unix_ms())
-                .map_err(unavailable)?
+            let result =
+                store.worker_artifact_request(&files, bearer, &request, tool_runtime::unix_ms());
+            if matches!(request.operation, WorkerOperation::ArtifactRead { .. }) {
+                // An unknown or foreign artifact ID comes from the model. Record
+                // the typed rejection so the worker can report it and continue.
+                super::tool_errors::acknowledge(&state, &store, bearer, &request, result)?
+            } else {
+                result.map_err(unavailable)?
+            }
         }
         WorkerOperation::Bootstrap {}
         | WorkerOperation::Checkpoint { .. }
@@ -264,9 +272,14 @@ async fn dispatch(
         WorkerOperation::Infer { .. } => {
             super::inference::dispatch(&state, &store, bearer, &request, &caller).await?
         }
-        WorkerOperation::Event { .. } => store
-            .worker_event(bearer, &request, tool_runtime::unix_ms())
-            .map_err(unavailable)?,
+        WorkerOperation::Event { payload, .. } => {
+            // Tool-outcome events carry local tool output; keep and project
+            // them with the same host-secret redaction as leader tool results.
+            let stored = tool_runtime::host_redactor(&state).redact_json(payload.clone());
+            store
+                .worker_event(bearer, &request, &stored, tool_runtime::unix_ms())
+                .map_err(unavailable)?
+        }
         WorkerOperation::Canonical { tool, arguments } => {
             match review(&state, &store, &request, &caller, tool, arguments).await {
                 Ok(()) => (),
@@ -607,5 +620,7 @@ async fn dispatch(
     reply
         .validate_for(&request)
         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    // Worker mutations can make agents eligible or change live status.
+    crate::hierarchy::scheduler::wake(&state, &request.scan_id);
     Ok(Json(reply))
 }

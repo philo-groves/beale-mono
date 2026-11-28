@@ -109,6 +109,29 @@ fn active(state: &ScanState, agent: &str) -> bool {
         .iter()
         .any(|a| a.agent_id == agent && a.state != ExecutionState::Stopped)
 }
+
+/// Whether an operator message can be queued for `agent`. A stopped leader is
+/// resumable only after every one of its executions stopped; an unconfirmed
+/// termination could otherwise run alongside its replacement.
+fn operator_target(state: &ScanState, local: &LocalState, agent: &str) -> Result<()> {
+    let control = local
+        .controls
+        .iter()
+        .find(|c| c.agent_id == agent)
+        .context("unknown agent")?;
+    if control.stop_requested {
+        ensure!(
+            state.agent(agent)?.summary.role == Role::Leader,
+            "agent intentionally stopped"
+        );
+        ensure!(!active(state, agent), "leader execution is still stopping");
+    }
+    ensure!(
+        local.inbox.iter().filter(|m| m.to == agent).count() < 1024,
+        "mailbox requires draining"
+    );
+    Ok(())
+}
 pub(super) fn set_state(state: &mut ScanState, id: &str, status: AgentState) -> Result<()> {
     let agent = state
         .agents
@@ -379,6 +402,13 @@ impl SwarmStore {
         Ok(())
     }
 
+    /// Queues an operator message.
+    ///
+    /// A message to a leader whose branch was stopped (by an operator Stop or
+    /// exhausted recovery) resumes that leader with its saved context once every
+    /// leader execution has stopped. Its descendants stay stopped; the leader
+    /// can resume them with `swarm_message_subagent`. Other stopped agents
+    /// cannot be resumed by the operator.
     pub fn local_message(
         &self,
         scan: &str,
@@ -395,12 +425,13 @@ impl SwarmStore {
             let mut state = read_scan(tx, scan)?;
             ensure!(state.ended_at_ms.is_none(), "scan has ended");
             let mut local = read_local(tx, scan)?;
+            operator_target(&state, &local, agent)?;
             let target = local
                 .controls
                 .iter_mut()
                 .find(|c| c.agent_id == agent)
                 .context("unknown agent")?;
-            ensure!(!target.stop_requested, "agent intentionally stopped");
+            target.stop_requested = false;
             target.failures = 0;
             handoffs::retry(&mut state, &mut local, agent)?;
             enqueue(
@@ -416,6 +447,18 @@ impl SwarmStore {
                 &content,
                 &json!({"queued":true}),
             )
+        })
+    }
+
+    /// Read-only check that [`Self::local_message`] would accept a message for
+    /// `agent`, ignoring whether the scan has ended. Callers use it before
+    /// reopening an ended scan, so an undeliverable follow-up leaves the scan
+    /// and its retention clock unchanged.
+    pub fn local_message_deliverable(&self, scan: &str, agent: &str) -> Result<()> {
+        self.db.with_connection(|db| {
+            let state = read_scan(db, scan)?;
+            let local = read_local(db, scan)?;
+            operator_target(&state, &local, agent)
         })
     }
 
@@ -956,25 +999,29 @@ fn dispatch_command(
                 target.summary.parent_id.as_ref() == Some(&actor.id),
                 ToolError::rejected("not a direct child")
             );
+            let child_active = active(&state, &message.child_id);
             let child = local
                 .controls
                 .iter_mut()
                 .find(|c| c.agent_id == message.child_id)
                 .context("missing child control")?;
+            // A stopped child resumes only as an explicit parent request, and
+            // only after its execution stopped, so it never runs twice.
             ensure!(
-                !child.stop_requested,
-                ToolError::rejected("child intentionally stopped")
+                !child.stop_requested || !child_active,
+                ToolError::conflict("child is still stopping; retry after it has stopped")
             );
             ensure!(
                 !child.independent
                     || state.agent(&message.child_id)?.summary.state != AgentState::Completed,
                 ToolError::rejected("start a fresh independent reviewer")
             );
+            child.stop_requested = false;
             child.failures = 0;
             handoffs::retry(&mut state, &mut local, &message.child_id)?;
             if matches!(
                 state.agent(&message.child_id)?.summary.state,
-                AgentState::Completed | AgentState::Blocked
+                AgentState::Completed | AgentState::Blocked | AgentState::Stopped
             ) {
                 let previous = state
                     .assignments
@@ -1028,12 +1075,16 @@ fn dispatch_command(
         SwarmCommand::MessageParent(message) => {
             let parent = actor
                 .parent_id
+                .clone()
                 .context(ToolError::rejected("leader has no parent"))?;
-            if let Some(handoff) = &message.handoff {
-                ensure!(
-                    handoff.from_agent == actor.id && handoff.parent_id == parent,
-                    ToolError::rejected("handoff source mismatch")
-                );
+            let beale_contracts::swarm_local::MessageParent {
+                message: text,
+                handoff: draft,
+            } = *message;
+            let handoff = draft
+                .map(|draft| complete_handoff(&state, &actor, &parent, operation, draft))
+                .transpose()?;
+            if let Some(handoff) = &handoff {
                 state.handoff_path(handoff)?;
                 crate::swarm_files::validate_record_artifacts(
                     tx,
@@ -1056,19 +1107,13 @@ fn dispatch_command(
                     });
                 }
             }
-            enqueue(
-                &mut state,
-                &mut local,
-                operation,
-                &actor.id,
-                &parent,
-                &message.message,
-            )?;
+            enqueue(&mut state, &mut local, operation, &actor.id, &parent, &text)?;
+            let handoff_id = handoff.as_ref().map(|h| h.id.clone());
             local
                 .inbox
                 .last_mut()
                 .context("missing handoff message")?
-                .handoff = message.handoff;
+                .handoff = handoff;
             if let Some(h) = local.inbox.last().and_then(|m| m.handoff.as_ref())
                 && state.handoffs.iter().any(|saved| {
                     saved.request.id == h.id
@@ -1078,7 +1123,10 @@ fn dispatch_command(
             {
                 local.handoff_inputs.push(local.sequence);
             }
-            json!({"queued":true,"parent_id":parent})
+            match handoff_id {
+                Some(id) => json!({"queued":true,"parent_id":parent,"handoff_id":id}),
+                None => json!({"queued":true,"parent_id":parent}),
+            }
         }
     };
     // The accepted result is durable before the executor reaches its safe yield checkpoint.
@@ -1099,6 +1147,91 @@ fn dispatch_command(
         &result,
     )?;
     Ok(result)
+}
+
+/// Completes an agent's handoff draft with host-owned identity: the caller and
+/// its parent, the destination profile's saved revision and the saved route
+/// for the source deputy, destination and payload kind. The envelope ID is
+/// derived from the caller's tool operation, so a replay yields the same
+/// envelope.
+fn complete_handoff(
+    state: &ScanState,
+    actor: &AgentSummary,
+    parent: &str,
+    operation: &str,
+    draft: HandoffDraft,
+) -> Result<HandoffRequest> {
+    use beale_contracts::tool_error::ToolError;
+    let source_deputy = match actor.role {
+        Role::Deputy => actor.profile.id.clone(),
+        Role::Worker => state.agent(parent)?.summary.profile.id.clone(),
+        Role::Leader => anyhow::bail!(ToolError::rejected(
+            "leaders assign work rather than submit handoffs"
+        )),
+    };
+    let destination = match &state.config.mode {
+        ScanMode::Swarm { snapshot } => snapshot
+            .profiles
+            .iter()
+            .find(|p| p.profile.id == draft.to_profile && p.role == Role::Deputy)
+            .map(|p| p.profile.clone()),
+        ScanMode::Local {} => None,
+    }
+    .context(ToolError::missing("unknown destination deputy profile"))?;
+    let kind = draft.payload.kind();
+    let workflow = state.workflow()?;
+    let matching: Vec<&str> = workflow
+        .routes
+        .iter()
+        .filter(|r| r.from == source_deputy && r.to == draft.to_profile && r.payload == kind)
+        .map(|r| r.id.as_str())
+        .collect();
+    let route_id = match &draft.route_id {
+        Some(id) => {
+            ensure!(
+                matching.contains(&id.as_str()),
+                ToolError::rejected(
+                    "route_id is not a saved route for this source, destination and payload"
+                )
+            );
+            id.clone()
+        }
+        None => match matching.as_slice() {
+            [only] => (*only).to_owned(),
+            [] => {
+                let kind = serde_json::to_value(kind)?;
+                anyhow::bail!(ToolError::rejected(format!(
+                    "no saved handoff route from {source_deputy} to {} carries a {} payload",
+                    draft.to_profile,
+                    kind.as_str().unwrap_or("this")
+                )))
+            }
+            several => anyhow::bail!(ToolError::invalid(format!(
+                "several saved routes match; set route_id to one of: {}",
+                several.join(", ")
+            ))),
+        },
+    };
+    let identity = format!("{}:{}:{operation}", state.config.scan_id, actor.id);
+    let id = format!(
+        "handoff-{}",
+        &crate::swarm_files::hash(identity.as_bytes())[..32]
+    );
+    let request = draft.into_request(
+        id,
+        actor.id.clone(),
+        parent.to_owned(),
+        route_id,
+        destination,
+    );
+    // Host identity enlarges the envelope; report a draft that no longer fits
+    // as correctable input rather than a host failure.
+    request.validate().map_err(|reason| {
+        ToolError::invalid(format!(
+            "handoff is invalid once its host identity is added ({reason}); shorten its text"
+        ))
+    })?;
+    Ok(request)
 }
 
 pub(super) fn ensure_local_turn(state: &ScanState, turn: &LocalTurn) -> Result<()> {

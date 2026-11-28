@@ -17,23 +17,27 @@ fn field(value: &Value, key: &str) -> Option<Value> {
         _ => None,
     }
 }
-fn envelope(body: &Value, id: &str) -> Option<HandoffRequest> {
-    fn visit(v: &Value, id: &str) -> Option<HandoffRequest> {
-        if v.get("id").and_then(Value::as_str) == Some(id)
+/// Finds a delivered handoff envelope by the label the scripted source put in
+/// its scope. The host assigns envelope IDs; drafts lack them and never match.
+fn envelope(body: &Value, label: &str) -> Option<HandoffRequest> {
+    fn visit(v: &Value, label: &str) -> Option<HandoffRequest> {
+        if v.get("scope")
+            .and_then(Value::as_array)
+            .is_some_and(|scope| scope.iter().any(|s| s.as_str() == Some(label)))
             && let Ok(h) = serde_json::from_value(v.clone())
         {
             return Some(h);
         }
         match v {
-            Value::Object(m) => m.values().find_map(|v| visit(v, id)),
-            Value::Array(a) => a.iter().rev().find_map(|v| visit(v, id)),
+            Value::Object(m) => m.values().find_map(|v| visit(v, label)),
+            Value::Array(a) => a.iter().rev().find_map(|v| visit(v, label)),
             Value::String(s) => serde_json::from_str::<Value>(s)
                 .ok()
-                .and_then(|v| visit(&v, id)),
+                .and_then(|v| visit(&v, label)),
             _ => None,
         }
     }
-    visit(&body["messages"], id)
+    visit(&body["messages"], &format!("flow-label:{label}"))
 }
 fn call(id: &str, name: &str, args: Value) -> Value {
     json!({"tool_calls":[{"index":0,"id":id,"type":"function","function":{"name":name,"arguments":args.to_string()}}]})
@@ -184,9 +188,9 @@ impl Script {
                 "swarm_message_subagent",
                 json!({"child_id":actor.child,"message":"stage10-follow-up"}),
             )),
-            ("destination-deputy", 0) => envelope(&body, "worker-handoff").map(|_| {
+            ("destination-deputy", 0) => envelope(&body, "worker-handoff").map(|h| {
                 self.observed.push("destination-received".into());
-                call("recipient", "swarm_spawn_subagent", json!({"profile":{"id":"challenger","revision":1},"task":{"question":"stage10-recipient","completion_criteria":["Check evidence"],"evidence_refs":[]},"independent":true,"handoff_id":"worker-handoff"}))
+                call("recipient", "swarm_spawn_subagent", json!({"profile":{"id":"challenger","revision":1},"task":{"question":"stage10-recipient","completion_criteria":["Check evidence"],"evidence_refs":[]},"independent":true,"handoff_id":h.id}))
             }),
             ("destination-deputy", 1) if text.contains("handoff_result") && text.contains("Synthetic evidence checked") => Some(call(
                 "receipt-parent",
@@ -199,33 +203,20 @@ impl Script {
                 json!({"path":"evidence.txt","content":"Synthetic routed evidence"}),
             )),
             ("source-worker", 1) => {
-                let workflow = beale_swarms::swarm_definition(definition)
-                    .unwrap()
-                    .snapshot
-                    .workflow()
-                    .unwrap();
-                let route = workflow
-                    .routes
-                    .iter()
-                    .find(|r| {
-                        r.from == source && r.to == destination && r.payload == payload.kind()
-                    })
-                    .unwrap();
-                let h = HandoffRequest {
-                    id: "worker-handoff".into(),
-                    from_agent: id.into(),
-                    parent_id: parent.into(),
-                    route_id: route.id.clone(),
-                    destination_profile: beale_contracts::swarms::ProfileRef {
-                        id: destination.into(),
-                        revision: 1,
-                    },
+                // Like a model, the worker states only the destination and
+                // content; the host resolves identity and the saved route.
+                let h = HandoffDraft {
+                    to_profile: destination.into(),
+                    route_id: None,
                     task: beale_contracts::swarms::Task {
                         question: "Check synthetic evidence".into(),
                         completion_criteria: vec!["Return receipt".into()],
                         evidence_refs: vec!["evidence-example".into()],
                     },
-                    scope: vec!["Synthetic example.test".into()],
+                    scope: vec![
+                        "Synthetic example.test".into(),
+                        "flow-label:worker-handoff".into(),
+                    ],
                     record_revisions: vec![],
                     artifact_refs: vec!["file:evidence.txt".into()],
                     observations: vec!["x".repeat(4096); 5],
@@ -293,7 +284,7 @@ impl Script {
                 Some(call(
                     "receipt",
                     "swarm_handoff",
-                    json!({"action":"complete","id":"worker-handoff","result":{"completion":"complete","assessment":"supported","summary":"Synthetic evidence checked","observations":[],"evidence_refs":envelope(&body,"worker-handoff").unwrap().artifact_refs,"artifact_refs":[],"unresolved_questions":[]}}),
+                    json!({"action":"complete","id":envelope(&body,"worker-handoff").unwrap().id,"result":{"completion":"complete","assessment":"supported","summary":"Synthetic evidence checked","observations":[],"evidence_refs":envelope(&body,"worker-handoff").unwrap().artifact_refs,"artifact_refs":[],"unresolved_questions":[]}}),
                 ))
             }
             _ => None,

@@ -269,9 +269,49 @@ async fn coordinator_and_worker_owned_claims_roll_back_when_intent_storage_fails
 }
 
 #[tokio::test]
+async fn terminal_coordinator_keeps_the_scan_open_while_a_subagent_runs() {
+    let f = Fixture::new().await;
+    let key = Uuid::new_v4();
+    let turn = leader_turn(&f, "terminal-with-running-child", key).await;
+    f.store.local_checkpoint_failed(&turn).unwrap();
+    f.store
+        .complete_coordinator(&turn.attempt_id, key, 1000)
+        .unwrap();
+    // The running subagent's result can still be reconciled; its branch is
+    // stopped and the scheduler ends the scan once it finishes.
+    let saved = f.store.load("scan-example", true).unwrap();
+    assert!(saved.ended_at_ms.is_none());
+    assert!(
+        saved
+            .attempts
+            .iter()
+            .any(|a| a.id == f.attempt.id && a.state == ExecutionState::Running)
+    );
+    assert!(
+        f.store
+            .local_state("scan-example")
+            .unwrap()
+            .controls
+            .iter()
+            .any(|c| c.agent_id == f.deputy && c.stop_requested)
+    );
+    assert!(
+        f.store
+            .coordinator_recovery_page(None, "")
+            .unwrap()
+            .is_empty()
+    );
+    f.close().await;
+}
+
+#[tokio::test]
 async fn coordinator_terminal_completion_rolls_back_and_cannot_end_a_reopened_scan() {
     let f = Fixture::new().await;
     let key = Uuid::new_v4();
+    // No subagent is running, so terminal completion ends the scan.
+    f.store
+        .fence_attempt("scan-example", &f.attempt.id, true)
+        .unwrap();
     let turn = leader_turn(&f, "terminal-coordinator", key).await;
     f.store.local_checkpoint_failed(&turn).unwrap();
     let before = f.store.load("scan-example", true).unwrap();

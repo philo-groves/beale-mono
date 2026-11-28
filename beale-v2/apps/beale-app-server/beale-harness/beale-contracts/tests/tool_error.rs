@@ -146,3 +146,58 @@ fn typed_tool_rejections_round_trip_with_bounded_matching_feedback() {
         ToolErrorCode::InvalidArguments
     );
 }
+
+#[test]
+fn artifact_reads_accept_typed_rejections_and_model_text_is_bounded() {
+    let request = WorkerRequest {
+        version: 1,
+        workspace_id: "workspace-example".into(),
+        scan_id: "scan-example".into(),
+        agent_id: "agent-example".into(),
+        attempt_id: "attempt-example".into(),
+        generation: 1,
+        operation_id: "operation-example".into(),
+        operation: WorkerOperation::ArtifactRead {
+            artifact_id: "artifact-missing-example".into(),
+            offset: 0,
+            length: 1024,
+        },
+    };
+    let response = |result| WorkerReply::Acknowledged {
+        acknowledgement: MutationAcknowledgement {
+            version: 1,
+            operation_id: request.operation_id.clone(),
+            result,
+        },
+    };
+    let error = ToolError::missing("artifact has not been accepted");
+    response(error.feedback()).validate_for(&request).unwrap();
+    let mut changed = error.feedback();
+    changed["output"] = json!("Other text");
+    assert!(response(changed).validate_for(&request).is_err());
+    // Without typed feedback an artifact read still requires a matching chunk.
+    assert!(
+        response(json!({"output":"artifact has not been accepted","is_error":true}))
+            .validate_for(&request)
+            .is_err()
+    );
+    assert_eq!(
+        error.model_text("Artifact operation"),
+        "Artifact operation rejected (not_found): artifact has not been accepted"
+    );
+    let long = ToolError::invalid("é".repeat(MAX_TOOL_ERROR_BYTES));
+    let text = long.model_text("Swarm request");
+    let message = text
+        .strip_prefix("Swarm request rejected (invalid_arguments): ")
+        .unwrap();
+    assert!(message.len() <= MAX_TOOL_ERROR_BYTES);
+    assert!(message.chars().all(|c| c == 'é'));
+    for code in [
+        ToolErrorCode::InvalidArguments,
+        ToolErrorCode::NotFound,
+        ToolErrorCode::Conflict,
+        ToolErrorCode::Rejected,
+    ] {
+        assert_eq!(serde_json::to_value(code).unwrap(), json!(code.as_str()));
+    }
+}

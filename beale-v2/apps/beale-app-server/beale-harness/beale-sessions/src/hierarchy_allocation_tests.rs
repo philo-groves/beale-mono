@@ -109,8 +109,8 @@ async fn one_slot(contention: bool) {
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
     let origin = format!("http://localhost:{}", listener.local_addr().unwrap().port());
     state.fleet_origin = Some(origin.clone());
-    let gateway = std::env::var("BEALE_DOCKER_TEST_GATEWAY").expect("synthetic gateway required");
-    assert!(gateway.parse::<std::net::IpAddr>().is_ok());
+    // Containers reach this loopback-addressed leader through the production
+    // container host alias; the listener accepts the bridge as well.
     let env = DockerEnvironments::new(
         Docker::new(
             std::env::var_os("BEALE_DOCKER_CLI")
@@ -134,7 +134,7 @@ async fn one_slot(contention: bool) {
                 command: vec![
                     "/bin/sh".into(),
                     "-c".into(),
-                    format!("printf '{gateway} localhost\\n' > /etc/hosts; exec tail -f /dev/null"),
+                    "exec tail -f /dev/null".into(),
                 ],
                 ..Default::default()
             },

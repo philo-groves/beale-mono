@@ -12,6 +12,17 @@ pub enum ToolErrorCode {
     Conflict,
     Rejected,
 }
+impl ToolErrorCode {
+    /// The serialized wire name.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::InvalidArguments => "invalid_arguments",
+            Self::NotFound => "not_found",
+            Self::Conflict => "conflict",
+            Self::Rejected => "rejected",
+        }
+    }
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ToolError {
@@ -48,6 +59,18 @@ impl ToolError {
     }
     pub fn feedback(&self) -> Value {
         serde_json::json!({"output":self.message,"is_error":true,"error":self})
+    }
+    /// Model-facing text for a tool result: `"{prefix} rejected ({code}):
+    /// {message}"`, with the message bounded to [`MAX_TOOL_ERROR_BYTES`].
+    /// Callers redact host secrets from the message first, so truncation
+    /// cannot split a secret.
+    pub fn model_text(&self, prefix: &str) -> String {
+        let end = self.message.floor_char_boundary(MAX_TOOL_ERROR_BYTES);
+        format!(
+            "{prefix} rejected ({}): {}",
+            self.code.as_str(),
+            &self.message[..end]
+        )
     }
 }
 impl std::fmt::Display for ToolError {

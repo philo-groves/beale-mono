@@ -95,24 +95,46 @@ impl Worker<'_> {
                     .to_owned(),
                 Claim::Dispatch => {
                     let started = Instant::now();
-                    // A collection error can leave effects or descendants. Let
-                    // the supervisor prove termination; never blindly repeat it.
-                    let output = beale_tools::run_worker_command(
+                    // A time or output limit ends the command before it is
+                    // reported and becomes a failed run, as on the leader. Any
+                    // other collection error can leave effects or descendants:
+                    // let the supervisor prove termination; never repeat it.
+                    let result = beale_tools::run_worker_command(
                         &command.command,
                         &self.launch.workspace,
                         command.timeout_seconds,
                     )
-                    .await?;
+                    .await;
+                    let duration_ms = i64::try_from(started.elapsed().as_millis())?;
                     let redactor = beale_tools::Redactor::new([self.launch.bearer.clone()]);
-                    let observation = Observation {
-                        identity: self.launch.identity.clone(),
-                        run_id: run_id.clone(),
-                        index,
-                        exit_code: output.exit_code,
-                        stdout: redactor.redact(&output.stdout).into_owned(),
-                        stderr: redactor.redact(&output.stderr).into_owned(),
-                        duration_ms: i64::try_from(started.elapsed().as_millis())?,
-                        error: None,
+                    let observation = match result {
+                        Ok(output) => Observation {
+                            identity: self.launch.identity.clone(),
+                            run_id: run_id.clone(),
+                            index,
+                            exit_code: output.exit_code,
+                            stdout: redactor.redact(&output.stdout).into_owned(),
+                            stderr: redactor.redact(&output.stderr).into_owned(),
+                            duration_ms,
+                            error: None,
+                        },
+                        Err(error) => {
+                            let Some(limit) =
+                                error.downcast_ref::<beale_tools::process::LimitExceeded>()
+                            else {
+                                return Err(error);
+                            };
+                            Observation {
+                                identity: self.launch.identity.clone(),
+                                run_id: run_id.clone(),
+                                index,
+                                exit_code: None,
+                                stdout: String::new(),
+                                stderr: String::new(),
+                                duration_ms,
+                                error: Some(limit.to_string()),
+                            }
+                        }
                     };
                     observation.validate().map_err(anyhow::Error::msg)?;
                     let serialized = serde_json::to_string(&observation)?;

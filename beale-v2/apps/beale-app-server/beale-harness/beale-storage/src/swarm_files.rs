@@ -159,18 +159,21 @@ pub fn materialize_worker_artifact(
     source: &Path,
     artifact: &Artifact,
 ) -> Result<()> {
+    use beale_contracts::tool_error::ToolError;
     ensure!(
         !cfg!(windows) || artifact.executable != Some(true),
-        "destination cannot preserve executable metadata"
+        ToolError::rejected("destination cannot preserve executable metadata")
     );
     ensure!(
         file_hash(source)? == (artifact.sha256.clone(), artifact.size),
         "downloaded artifact integrity mismatch"
     );
-    let target = snapshot::safe_destination(workspace, destination)?;
+    let target = snapshot::safe_destination(workspace, destination).map_err(|_| {
+        ToolError::invalid("destination must be a workspace-relative path inside the workspace")
+    })?;
     ensure!(
         !target.try_exists()?,
-        "destination exists; use a separate version or patch path"
+        ToolError::conflict("destination exists; use a separate version or patch path")
     );
     let parent = target.parent().context("destination parent missing")?;
     fs::create_dir_all(parent)?;
@@ -526,8 +529,17 @@ impl ResearchFiles {
         if target.exists() {
             self.verify_blob(&digest, size)?;
             fs::remove_file(temporary)?;
+        } else if let Err(error) = fs::rename(&temporary, &target) {
+            // Capture runs without the database lock, so another capture can
+            // publish the same content first; on Windows a rename over a blob
+            // that is open for reading fails. Identical content is acceptable.
+            if !target.exists() {
+                let _ = fs::remove_file(&temporary);
+                return Err(error.into());
+            }
+            self.verify_blob(&digest, size)?;
+            fs::remove_file(temporary)?;
         } else {
-            fs::rename(temporary, target)?;
             sync_directory(&self.root.join("blobs"))?;
         }
         Ok((digest, size))
@@ -567,65 +579,100 @@ impl ResearchFiles {
         Ok(digest)
     }
 
-    pub fn snapshot(&self, scan: &str) -> Result<(String, Manifest)> {
+    /// The scan's sealed manifest: its digest is checked and its structure is
+    /// validated, but referenced content is not re-read. Every consumer of
+    /// snapshot content verifies the bytes it uses: materialization checks
+    /// each source blob and its copy, and a snapshot receiver checks each
+    /// downloaded object against its manifest digest.
+    pub fn snapshot_manifest(&self, scan: &str) -> Result<(String, Manifest)> {
         identity(scan)?;
-        self.db.with_connection(|db| {
-            let (digest, json): (String, String) = db.query_row(
+        let (digest, json): (String, String) = self.db.with_connection(|db| {
+            Ok(db.query_row(
                 "SELECT digest,document FROM swarm_file_snapshots WHERE scan=?1",
                 [scan],
                 |r| Ok((r.get(0)?, r.get(1)?)),
-            )?;
-            ensure!(
-                hash(json.as_bytes()) == digest,
-                "snapshot manifest integrity failure"
-            );
-            let manifest = decode(json)?;
-            self.verify(&manifest)?;
-            Ok((digest, manifest))
-        })
+            )?)
+        })?;
+        ensure!(
+            hash(json.as_bytes()) == digest,
+            "snapshot manifest integrity failure"
+        );
+        let manifest = decode(json)?;
+        snapshot::validate(&manifest, &Destination::portable())?;
+        Ok((digest, manifest))
     }
 
-    /// Capture twice and verify metadata and bytes. This is bounded verification,
-    /// not an atomic filesystem snapshot. A mutating source must be quiesced.
-    pub fn capture(&self, scan: &str, inputs: &[SnapshotInput]) -> Result<String> {
-        identity(scan)?;
+    /// The scan's manifest after re-reading and hashing every referenced blob.
+    /// Hashing happens without holding the host database lock.
+    pub fn snapshot(&self, scan: &str) -> Result<(String, Manifest)> {
+        let (digest, manifest) = self.snapshot_manifest(scan)?;
+        self.verify(&manifest)?;
+        Ok((digest, manifest))
+    }
+
+    fn sealed_snapshot(&self, scan: &str) -> Result<Option<String>> {
         self.db.with_connection(|db| {
-            if let Some(existing) = db
+            Ok(db
                 .query_row(
                     "SELECT digest FROM swarm_file_snapshots WHERE scan=?1",
                     [scan],
                     |r| r.get(0),
                 )
-                .optional()?
-            {
-                return Ok(existing);
-            }
-            let mut last = None;
-            for _ in 0..3 {
-                let result = (|| {
-                    let first = self.capture_inputs(inputs)?;
-                    self.faults.check(FaultPoint::CaptureVerify)?;
-                    let second = self.capture_inputs(inputs)?;
-                    ensure!(first == second, "source changed during capture");
-                    self.verify(&first)?;
-                    let json = encode(&first)?;
-                    let digest = hash(json.as_bytes());
-                    db.execute(
+                .optional()?)
+        })
+    }
+
+    /// Capture twice and verify metadata and bytes. This is bounded verification,
+    /// not an atomic filesystem snapshot. A mutating source must be quiesced.
+    ///
+    /// Copying, hashing and Git bundling run without the host database lock;
+    /// only sealing the manifest is a database write. If another capture of
+    /// the same scan sealed first, its snapshot is kept and returned.
+    pub fn capture(&self, scan: &str, inputs: &[SnapshotInput]) -> Result<String> {
+        identity(scan)?;
+        if let Some(existing) = self.sealed_snapshot(scan)? {
+            return Ok(existing);
+        }
+        let mut last = None;
+        for _ in 0..3 {
+            let result = (|| {
+                let first = self.capture_inputs(inputs)?;
+                self.faults.check(FaultPoint::CaptureVerify)?;
+                let second = self.capture_inputs(inputs)?;
+                ensure!(first == second, "source changed during capture");
+                self.verify(&first)?;
+                let json = encode(&first)?;
+                let digest = hash(json.as_bytes());
+                self.db.with_connection(|db| {
+                    let tx =
+                        db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+                    let existing: Option<String> = tx
+                        .query_row(
+                            "SELECT digest FROM swarm_file_snapshots WHERE scan=?1",
+                            [scan],
+                            |r| r.get(0),
+                        )
+                        .optional()?;
+                    if let Some(existing) = existing {
+                        return Ok(existing);
+                    }
+                    tx.execute(
                         "INSERT INTO swarm_file_snapshots VALUES(?1,?2,?3)",
                         params![scan, digest, json],
                     )?;
+                    tx.commit()?;
                     Ok(digest)
-                })();
-                match result {
-                    Ok(id) => return Ok(id),
-                    Err(error) => last = Some(error),
-                }
+                })
+            })();
+            match result {
+                Ok(id) => return Ok(id),
+                Err(error) => last = Some(error),
             }
-            bail!(
-                "snapshot rejected; correct unsupported input or quiesce source: {}",
-                last.context("capture did not run")?
-            );
-        })
+        }
+        bail!(
+            "snapshot rejected; correct unsupported input or quiesce source: {}",
+            last.context("capture did not run")?
+        );
     }
 
     pub fn verify(&self, manifest: &Manifest) -> Result<()> {
@@ -669,8 +716,10 @@ impl ResearchFiles {
     }
 
     /// Materializes in a new directory only. No overwrite or merging with existing edits.
+    /// Each blob is verified as it is copied, and each copy is verified after
+    /// it is written, so content is read and hashed once per use.
     pub fn materialize_snapshot(&self, manifest: &Manifest, destination: &Path) -> Result<()> {
-        self.verify(manifest)?;
+        snapshot::validate(manifest, &Destination::portable())?;
         snapshot::validate(manifest, &Destination::native())?;
         ensure!(!destination.try_exists()?, "destination already exists");
         let parent = destination.parent().context("destination has no parent")?;
@@ -684,58 +733,95 @@ impl ResearchFiles {
         Ok(())
     }
 
-    pub fn prepare_agent(&self, scan: &str, agent: &str) -> Result<PathBuf> {
-        identity(agent)?;
-        let (snapshot, manifest) = self.snapshot(scan)?;
+    fn saved_environment(&self, scan: &str, agent: &str) -> Result<Option<(String, Environment)>> {
         self.db.with_connection(|db| {
-            let existing: Option<String> = db
+            let saved: Option<(String, String)> = db
                 .query_row(
-                    "SELECT location FROM swarm_file_environments WHERE scan=?1 AND agent=?2",
+                    "SELECT location,document FROM swarm_file_environments WHERE scan=?1 AND agent=?2",
                     params![scan, agent],
-                    |r| r.get(0),
+                    |r| Ok((r.get(0)?, r.get(1)?)),
                 )
                 .optional()?;
-            if let Some(location) = existing {
-                let environment: Environment = decode(db.query_row(
-                    "SELECT document FROM swarm_file_environments WHERE scan=?1 AND agent=?2",
-                    params![scan, agent],
-                    |r| r.get(0),
-                )?)?;
-                ensure!(
-                    environment.version == VERSION
-                        && environment.scan == scan
-                        && environment.agent == agent
-                        && environment.snapshot == snapshot
-                        && environment.compatibility
-                            == format!("local-directory-v1-{}", std::env::consts::OS),
-                    "retained environment is incompatible"
-                );
-                let path = self.retained_path(&location)?;
-                if let Some(checkpoint) = &environment.checkpoint {
-                    self.verify_checkpoint(scan, agent, checkpoint)?;
-                }
-                return Ok(path);
+            saved
+                .map(|(location, document)| Ok((location, decode(document)?)))
+                .transpose()
+        })
+    }
+
+    fn retained_environment(
+        &self,
+        scan: &str,
+        agent: &str,
+        snapshot: &str,
+        location: &str,
+        environment: &Environment,
+    ) -> Result<PathBuf> {
+        ensure!(
+            environment.version == VERSION
+                && environment.scan == scan
+                && environment.agent == agent
+                && environment.snapshot == snapshot
+                && environment.compatibility
+                    == format!("local-directory-v1-{}", std::env::consts::OS),
+            "retained environment is incompatible"
+        );
+        let path = self.retained_path(location)?;
+        if let Some(checkpoint) = &environment.checkpoint {
+            self.verify_checkpoint(scan, agent, checkpoint)?;
+        }
+        Ok(path)
+    }
+
+    /// Returns the agent's private copy, materializing it from the scan
+    /// snapshot on first use. Copying runs without the host database lock;
+    /// only recording the environment is a database write. If another call
+    /// recorded an environment first, that one is kept and this copy removed.
+    pub fn prepare_agent(&self, scan: &str, agent: &str) -> Result<PathBuf> {
+        identity(agent)?;
+        let (snapshot, manifest) = self.snapshot_manifest(scan)?;
+        if let Some((location, environment)) = self.saved_environment(scan, agent)? {
+            return self.retained_environment(scan, agent, &snapshot, &location, &environment);
+        }
+        let location = Uuid::new_v4().to_string();
+        let path = self.root.join("environments").join(&location);
+        self.materialize_snapshot(&manifest, &path)?;
+        let environment = Environment {
+            version: VERSION,
+            scan: scan.into(),
+            agent: agent.into(),
+            snapshot: snapshot.clone(),
+            checkpoint: None,
+            retained_components: vec!["workspace".into()],
+            pending_publications: vec![],
+            compatibility: format!("local-directory-v1-{}", std::env::consts::OS),
+        };
+        self.faults.check(FaultPoint::EnvironmentCommit)?;
+        let recorded = self.db.with_connection(|db| {
+            let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            let exists: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM swarm_file_environments WHERE scan=?1 AND agent=?2)",
+                params![scan, agent],
+                |r| r.get(0),
+            )?;
+            if exists {
+                return Ok(false);
             }
-            let location = Uuid::new_v4().to_string();
-            let path = self.root.join("environments").join(&location);
-            self.materialize_snapshot(&manifest, &path)?;
-            let environment = Environment {
-                version: VERSION,
-                scan: scan.into(),
-                agent: agent.into(),
-                snapshot,
-                checkpoint: None,
-                retained_components: vec!["workspace".into()],
-                pending_publications: vec![],
-                compatibility: format!("local-directory-v1-{}", std::env::consts::OS),
-            };
-            self.faults.check(FaultPoint::EnvironmentCommit)?;
-            db.execute(
+            tx.execute(
                 "INSERT INTO swarm_file_environments VALUES(?1,?2,?3,?4)",
                 params![scan, agent, location, encode(&environment)?],
             )?;
-            Ok(path)
-        })
+            tx.commit()?;
+            Ok(true)
+        })?;
+        if recorded {
+            return Ok(path);
+        }
+        // The unrecorded copy was never visible to an agent.
+        let _ = fs::remove_dir_all(&path);
+        let (location, environment) = self
+            .saved_environment(scan, agent)?
+            .context("recorded environment disappeared")?;
+        self.retained_environment(scan, agent, &snapshot, &location, &environment)
     }
 
     pub fn environment(&self, scan: &str, agent: &str) -> Result<Environment> {
@@ -1066,17 +1152,21 @@ impl ResearchFiles {
     }
 
     pub fn artifact(&self, workspace: &str, id: &str) -> Result<Artifact> {
-        identity(id)?;
+        use beale_contracts::tool_error::ToolError;
+        identity(id).map_err(|_| ToolError::invalid("invalid artifact reference"))?;
         let artifact: Artifact = self.db.with_connection(|db| {
-            decode(db.query_row(
-                "SELECT document FROM swarm_file_transfers WHERE id=?1 AND accepted=1",
-                [id],
-                |r| r.get(0),
-            )?)
+            let document: Option<String> = db
+                .query_row(
+                    "SELECT document FROM swarm_file_transfers WHERE id=?1 AND accepted=1",
+                    [id],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            decode(document.context(ToolError::missing("artifact has not been accepted"))?)
         })?;
         ensure!(
             artifact.workspace == workspace,
-            "artifact belongs to another workspace"
+            ToolError::rejected("artifact belongs to another workspace")
         );
         self.verify_blob(&artifact.sha256, artifact.size)?;
         Ok(artifact)
@@ -1099,19 +1189,27 @@ impl ResearchFiles {
         offset: u64,
         length: u32,
     ) -> Result<beale_contracts::swarm_worker::ArtifactChunkResult> {
+        use beale_contracts::tool_error::ToolError;
         ensure!(
             (1..=192 * 1024).contains(&length),
             "invalid artifact chunk length"
         );
-        let artifact: Artifact = decode(db.query_row(
-            "SELECT document FROM swarm_file_transfers WHERE id=?1 AND accepted=1",
-            [id],
-            |r| r.get(0),
-        )?)?;
+        let document: Option<String> = db
+            .query_row(
+                "SELECT document FROM swarm_file_transfers WHERE id=?1 AND accepted=1",
+                [id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        // A model-supplied ID that names no accepted artifact is a known
+        // rejection; the worker reports it as a tool error and continues.
+        let artifact: Artifact =
+            decode(document.context(ToolError::missing("artifact has not been accepted"))?)?;
         ensure!(
-            artifact.workspace == workspace && offset <= artifact.size,
-            "artifact not available in this workspace"
+            artifact.workspace == workspace,
+            ToolError::rejected("artifact belongs to another workspace")
         );
+        ensure!(offset <= artifact.size, "artifact read beyond its size");
         let mut file = fs::File::open(self.verify_blob(&artifact.sha256, artifact.size)?)?;
         file.seek(SeekFrom::Start(offset))?;
         let mut bytes = vec![0; usize::try_from((artifact.size - offset).min(u64::from(length)))?];
@@ -1156,15 +1254,18 @@ impl ResearchFiles {
         recipient: &Path,
         destination: &str,
     ) -> Result<()> {
+        use beale_contracts::tool_error::ToolError;
         let artifact = self.artifact(workspace, id)?;
         ensure!(
             !cfg!(windows) || artifact.executable != Some(true),
-            "destination cannot preserve required executable metadata"
+            ToolError::rejected("destination cannot preserve required executable metadata")
         );
-        let target = snapshot::safe_destination(recipient, destination)?;
+        let target = snapshot::safe_destination(recipient, destination).map_err(|_| {
+            ToolError::invalid("destination must be a workspace-relative path inside the workspace")
+        })?;
         ensure!(
             !target.try_exists()?,
-            "destination exists; use a separate version or patch path"
+            ToolError::conflict("destination exists; use a separate version or patch path")
         );
         let parent = target.parent().context("destination parent missing")?;
         fs::create_dir_all(parent)?;

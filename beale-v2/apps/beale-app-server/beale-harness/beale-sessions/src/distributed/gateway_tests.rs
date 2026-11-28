@@ -2334,6 +2334,73 @@ async fn assigned_worker_publishes_finding_attachments_and_materializes_verified
 }
 
 #[tokio::test]
+async fn assigned_worker_reports_unknown_artifact_and_continues() {
+    let f = Fixture::new().await;
+    let workspace = f.root.join("worker-workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let captured = calls.clone();
+    let app = axum::Router::new().route("/v1/chat/completions", axum::routing::post(move |axum::Json(body): axum::Json<Value>| {
+        let calls = captured.clone();
+        async move {
+            let delta = match calls.fetch_add(1, Ordering::SeqCst) {
+                0 => json!({"tool_calls":[{"index":0,"id":"missing-artifact-example","type":"function","function":{"name":"swarm_materialize_artifact","arguments":json!({"artifact":"artifact-missing-example","destination":"received/missing.txt"}).to_string()}}]}),
+                1 => {
+                    let tool = body["messages"].as_array().unwrap().iter().rev().find(|m| m["role"] == "tool").unwrap();
+                    assert_eq!(
+                        tool["content"],
+                        "Artifact operation rejected (not_found): artifact has not been accepted"
+                    );
+                    json!({"content":"Synthetic missing artifact reported"})
+                }
+                _ => panic!("unexpected repeated model turn"),
+            };
+            let chunk = json!({"choices":[{"delta":delta}]});
+            ([("content-type","text/event-stream")], format!("data: {chunk}\n\ndata: [DONE]\n\n"))
+        }
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    f.state
+        .credentials
+        .save_custom_provider(beale_providers::CustomProvider {
+            id: "custom-example".into(),
+            name: "Example".into(),
+            base_url: format!("http://{}/v1", listener.local_addr().unwrap()),
+            models: vec![beale_providers::ModelEntry {
+                id: "example".into(),
+                name: "Example".into(),
+            }],
+            lead_model: "example".into(),
+            small_model: "example".into(),
+            reasoning: false,
+        })
+        .unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let launch = WorkerLaunch {
+        version: 1,
+        identity: f.store.worker_bootstrap(&f.attempt.id).unwrap().identity,
+        leader: f.url.clone(),
+        bearer: f.credential.bearer().into(),
+        workspace: workspace.clone(),
+        protected_root: f.root.clone(),
+        recovery: f.root.join("worker-recovery"),
+    };
+    // A model-supplied unknown artifact ID is a tool error, not an uncertain
+    // outcome: the same attempt continues to its final answer.
+    tokio::time::timeout(Duration::from_secs(15), run_assigned(launch))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert!(!workspace.join("received").exists());
+    server.abort();
+    let _ = server.await;
+    f.close().await;
+}
+
+#[tokio::test]
 async fn assigned_worker_returns_durable_tool_errors_and_continues_without_effects() {
     assigned_worker_feedback_recovery(2, 1).await;
 }
@@ -2985,20 +3052,47 @@ async fn worker_artifact_transfer_binds_provenance_and_replays_only_durable_byte
     files.begin_transfer(&foreign_artifact).unwrap();
     files.write_chunk(&foreign_artifact.id, 0, bytes).unwrap();
     files.seal(&foreign_artifact.id).unwrap();
-    let foreign_read = f.request(
-        "read-foreign-artifact",
-        WorkerOperation::ArtifactRead {
-            artifact_id: foreign_artifact.id,
-            offset: 0,
-            length: 10,
-        },
-    );
-    assert!(
-        f.client()
-            .send(&foreign_read, Duration::from_secs(5))
+    // A foreign or unknown ID is model input: it is rejected durably with
+    // typed feedback, and no bytes of the other workspace are returned.
+    for (id, artifact, code) in [
+        (
+            "read-foreign-artifact",
+            foreign_artifact.id.clone(),
+            beale_contracts::tool_error::ToolErrorCode::Rejected,
+        ),
+        (
+            "read-unknown-artifact",
+            "artifact-missing-example".to_owned(),
+            beale_contracts::tool_error::ToolErrorCode::NotFound,
+        ),
+    ] {
+        let rejected_read = f.request(
+            id,
+            WorkerOperation::ArtifactRead {
+                artifact_id: artifact,
+                offset: 0,
+                length: 10,
+            },
+        );
+        let reply = f
+            .client()
+            .send(&rejected_read, Duration::from_secs(5))
             .await
-            .is_err()
-    );
+            .unwrap();
+        let feedback = acknowledged(reply.clone());
+        assert_eq!(feedback["is_error"], true);
+        assert!(feedback.get("bytes").is_none());
+        let error: beale_contracts::tool_error::ToolError =
+            serde_json::from_value(feedback["error"].clone()).unwrap();
+        assert_eq!(error.code, code);
+        assert_eq!(
+            f.client()
+                .send(&rejected_read, Duration::from_secs(5))
+                .await
+                .unwrap(),
+            reply
+        );
+    }
     let blob = f.root.join("host/swarm-files/blobs").join(&accepted.sha256);
     std::fs::write(&blob, "Corrupted accepted bytes").unwrap();
     assert!(
@@ -3449,6 +3543,114 @@ async fn worker_inference_rejects_other_profile_routes_and_guest_system_instruct
         TransportFailure::Rejected
     );
     assert_eq!(calls.load(Ordering::SeqCst), 0);
+    server.abort();
+    let _ = server.await;
+    f.close().await;
+}
+
+#[tokio::test]
+async fn worker_tool_output_is_redacted_before_provider_dispatch_and_event_storage() {
+    let f = Fixture::new().await;
+    let secret = f.state.token.clone();
+    assert!(secret.len() >= beale_tools::redact::MIN_SECRET_BYTES);
+    let bodies = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+    let captured = bodies.clone();
+    let app = axum::Router::new().route(
+        "/v1/chat/completions",
+        axum::routing::post(move |axum::Json(body): axum::Json<Value>| {
+            let captured = captured.clone();
+            async move {
+                captured.lock().unwrap().push(body);
+                let chunk = json!({"choices":[{"delta":{"content":"Synthetic answer"}}]});
+                (
+                    [("content-type", "text/event-stream")],
+                    format!("data: {chunk}\n\ndata: [DONE]\n\n"),
+                )
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    f.state
+        .credentials
+        .save_custom_provider(beale_providers::CustomProvider {
+            id: "custom-example".into(),
+            name: "Example".into(),
+            base_url: format!("http://{}/v1", listener.local_addr().unwrap()),
+            models: vec![beale_providers::ModelEntry {
+                id: "example".into(),
+                name: "Example".into(),
+            }],
+            lead_model: "example".into(),
+            small_model: "example".into(),
+            reasoning: false,
+        })
+        .unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    // A worker-local tool read a file holding a host credential. Its output
+    // reaches the leader only as a conversation item of the next inference.
+    let mut request = inference_request(&f, "redacted-inference-example");
+    let WorkerOperation::Infer { messages, .. } = &mut request.operation else {
+        unreachable!()
+    };
+    *messages = json!([
+        {"role":"user","content":"Inspect the synthetic fixture."},
+        {"role":"assistant","content":null,"tool_calls":[{"id":"call-example","type":"function","function":{"name":"read","arguments":"{\"path\":\"example.txt\"}"}}]},
+        {"role":"tool","tool_call_id":"call-example","content":format!("token={secret}")}
+    ]);
+    let client = f.client();
+    let reply = client.send(&request, Duration::from_secs(5)).await.unwrap();
+    assert_eq!(acknowledged(reply.clone())["status"], "completed");
+    {
+        let bodies = bodies.lock().unwrap();
+        assert_eq!(bodies.len(), 1);
+        let sent = bodies[0].to_string();
+        assert!(!sent.contains(&secret), "provider received a host secret");
+        let tool = bodies[0]["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["role"] == "tool")
+            .unwrap();
+        assert_eq!(
+            tool["content"],
+            format!("token={}", beale_tools::redact::REDACTED)
+        );
+    }
+    // The original request still binds its receipt: a replay returns the
+    // first acknowledgement without another provider call.
+    assert_eq!(
+        client.send(&request, Duration::from_secs(5)).await.unwrap(),
+        reply
+    );
+    assert_eq!(bodies.lock().unwrap().len(), 1);
+
+    let event = f.request(
+        "redacted-event-example",
+        WorkerOperation::Event {
+            event_id: "redacted-event-example".into(),
+            payload: json!({"kind":"tool_outcome","call_id":"call-example","tool":"read",
+                "arguments":{"path":"example.txt"},
+                "result":{"output":format!("token={secret}"),"is_error":false}}),
+        },
+    );
+    let first = client.send(&event, Duration::from_secs(5)).await.unwrap();
+    assert_eq!(
+        client.send(&event, Duration::from_secs(5)).await.unwrap(),
+        first
+    );
+    let saved = f.store.load("scan-example", true).unwrap();
+    let stored = saved
+        .events
+        .iter()
+        .find(|item| item.id == "redacted-event-example")
+        .unwrap();
+    assert!(!stored.payload.to_string().contains(&secret));
+    assert_eq!(
+        stored.payload["event"]["result"]["output"],
+        format!("token={}", beale_tools::redact::REDACTED)
+    );
     server.abort();
     let _ = server.await;
     f.close().await;
@@ -4543,24 +4745,60 @@ async fn worker_leader_review_uses_the_saved_rule_even_with_global_rules_disable
             unix_ms() + 60_000,
         )
         .unwrap();
-    let mut request = f.request(
+    let as_leader = |id: &str, operation| {
+        let mut request = f.request(id, operation);
+        request.agent_id = f.leader.clone();
+        request.attempt_id = attempt.id.clone();
+        request.generation = attempt.generation;
+        request
+    };
+    let client = WorkerTransport::new(&f.url, credential.bearer()).unwrap();
+    // Managerial hierarchy tools stay available to the leader without a model
+    // review: this reviewer denies every request it receives.
+    let list = as_leader(
         "leader-list-example",
         WorkerOperation::Canonical {
             tool: "swarm_list_subagents".into(),
-            arguments: json!({"role":"worker"}),
+            arguments: json!({}),
         },
     );
-    request.agent_id = f.leader.clone();
-    request.attempt_id = attempt.id;
-    request.generation = attempt.generation;
-    let client = WorkerTransport::new(&f.url, credential.bearer()).unwrap();
+    let listed = acknowledged(client.send(&list, Duration::from_secs(5)).await.unwrap());
+    assert!(listed.is_array(), "{listed}");
+    // A research call is reviewed under the saved coordinator-only rule.
+    let request = as_leader(
+        "leader-read-review-example",
+        WorkerOperation::Review {
+            call: beale_contracts::swarm_worker::ToolInvocation {
+                id: "leader-read-example".into(),
+                name: "read".into(),
+                arguments: json!({"path":"example.txt"}),
+            },
+        },
+    );
     let reply = client.send(&request, Duration::from_secs(5)).await.unwrap();
-    assert_eq!(acknowledged(reply.clone())["is_error"], true);
+    assert_eq!(acknowledged(reply.clone())["approved"], false);
     server.abort();
     let _ = server.await;
     assert_eq!(
         client.send(&request, Duration::from_secs(5)).await.unwrap(),
         reply
+    );
+    // Coordination remains possible while the review service is unavailable.
+    let relisted = as_leader(
+        "leader-list-without-review-example",
+        WorkerOperation::Canonical {
+            tool: "swarm_list_subagents".into(),
+            arguments: json!({}),
+        },
+    );
+    assert!(
+        acknowledged(
+            client
+                .send(&relisted, Duration::from_secs(5))
+                .await
+                .unwrap()
+        )
+        .is_array()
     );
     let reopened = SwarmStore::open(HostDatabase::open(&f.root.join("host")).unwrap()).unwrap();
     assert_eq!(
@@ -4568,8 +4806,8 @@ async fn worker_leader_review_uses_the_saved_rule_even_with_global_rules_disable
             .replay_worker_mutation(credential.bearer(), &request, unix_ms())
             .unwrap()
             .unwrap()
-            .result["is_error"],
-        true
+            .result["approved"],
+        false
     );
     let mut unavailable = request.clone();
     unavailable.operation_id = "review-service-unavailable-example".into();
@@ -4987,15 +5225,10 @@ async fn assigned_worker_publishes_patch_and_test_handoff_references_before_pare
         .unwrap()
         .id
         .clone();
-    let handoff = HandoffRequest {
-        id: "patch-handoff-example".into(),
-        from_agent: f.deputy.clone(),
-        parent_id: f.leader.clone(),
-        route_id: route,
-        destination_profile: ProfileRef {
-            id: "validation".into(),
-            revision: 1,
-        },
+    // The worker sends intent only; the leader resolves identity and route.
+    let handoff = HandoffDraft {
+        to_profile: "validation".into(),
+        route_id: None,
         task: task(),
         scope: vec!["Synthetic example.test fixture".into()],
         record_revisions: vec![],
@@ -5056,6 +5289,9 @@ async fn assigned_worker_publishes_patch_and_test_handoff_references_before_pare
         .unwrap();
     let saved = f.store.load("scan-example", true).unwrap();
     assert_eq!(saved.handoffs.len(), 1);
+    assert_eq!(saved.handoffs[0].request.route_id, route);
+    assert_eq!(saved.handoffs[0].request.from_agent, f.deputy);
+    assert_eq!(saved.handoffs[0].request.parent_id, f.leader);
     let HandoffPayload::Patch {
         patch_refs,
         test_refs,

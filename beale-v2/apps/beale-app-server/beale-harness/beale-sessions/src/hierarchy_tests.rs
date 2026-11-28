@@ -13,6 +13,8 @@ mod closeout;
 
 #[path = "hierarchy_allocation_tests.rs"]
 mod allocation;
+#[path = "hierarchy_concurrency_tests.rs"]
+mod concurrency;
 #[path = "hierarchy_maintenance_tests.rs"]
 mod maintenance;
 
@@ -629,14 +631,21 @@ async fn checkpoint_exhaustion_does_not_repeat_accepted_spawn() {
     for fault in ["transcript", "supervisor"] {
         let calls = Arc::new(AtomicUsize::new(0));
         let count = calls.clone();
+        let child_calls = Arc::new(AtomicUsize::new(0));
+        let child_count = child_calls.clone();
         let app = Router::new().route("/v1/chat/completions", axum::routing::post(move |axum::Json(body): axum::Json<Value>| {
             let count = count.clone();
+            let child_count = child_count.clone();
             async move {
                 let system = body["messages"][0]["content"].as_str().unwrap();
                 let delta = if system.contains("host-side reviewer") {
                     json!({"content":json!({"decision":"approved","reason":"Managerial delegation"}).to_string()})
+                } else if !system.contains("Role: Leader") {
+                    // An accepted spawn may start the child while the leader's
+                    // turn is still running.
+                    child_count.fetch_add(1, Ordering::SeqCst);
+                    json!({"content":"Synthetic child result"})
                 } else {
-                    assert!(system.contains("Role: Leader"), "Child must not execute after leader checkpoint failure");
                     let n = count.fetch_add(1, Ordering::SeqCst);
                     if n.is_multiple_of(2) {
                         json!({"tool_calls":[{"index":0,"id":"same-provider-call","type":"function","function":{"name":"swarm_spawn_subagent","arguments":json!({"profile":{"id":"research_deputy","revision":1},"task":{"question":"Inspect synthetic fixture","completion_criteria":["Return evidence"],"evidence_refs":[]},"independent":false}).to_string()}}]})
@@ -664,16 +673,45 @@ async fn checkpoint_exhaustion_does_not_repeat_accepted_spawn() {
             2,
             "{fault}: inference must not replay after persistence failure"
         );
+        // The child runs at most its one accepted assignment; the stopped
+        // branch never starts it again.
+        assert!(child_calls.load(Ordering::SeqCst) <= 1, "{fault}");
         let store = beale_storage::swarm_state::SwarmStore::open(state.db.clone()).unwrap();
         let scan = &detail.summary.as_ref().unwrap().id;
         let saved = store.load(scan, true).unwrap();
         assert_eq!(saved.assignments.len(), 1);
         assert_eq!(saved.agents.len(), 2);
+        // The scheduler ends the scan once the stopped branch finished.
+        assert!(saved.ended_at_ms.is_some(), "{fault}");
+        assert!(
+            saved
+                .attempts
+                .iter()
+                .all(|a| a.state == beale_contracts::swarms::ExecutionState::Stopped),
+            "{fault}"
+        );
         assert!(
             saved
                 .agents
                 .iter()
-                .all(|a| a.summary.state == beale_contracts::swarms::AgentState::Stopped)
+                .all(|a| a.summary.state == beale_contracts::swarms::AgentState::Stopped),
+            "{fault}: {:?} child calls {} attempts {:?} events {:?}",
+            saved
+                .agents
+                .iter()
+                .map(|a| (a.summary.role, a.summary.state))
+                .collect::<Vec<_>>(),
+            child_calls.load(Ordering::SeqCst),
+            saved
+                .attempts
+                .iter()
+                .map(|a| (&a.agent_id, a.state))
+                .collect::<Vec<_>>(),
+            saved
+                .events
+                .iter()
+                .map(|e| (&e.agent_id, &e.kind, e.payload.to_string()))
+                .collect::<Vec<_>>()
         );
         assert!(
             saved
@@ -689,7 +727,20 @@ async fn checkpoint_exhaustion_does_not_repeat_accepted_spawn() {
                 .len(),
             1
         );
-        assert_eq!(state.db.sessions_excluding("").unwrap().len(), 1);
+        // The scan's session, plus the child's own transcript when it ran.
+        let deputy = &saved
+            .agents
+            .iter()
+            .find(|a| a.summary.role == beale_contracts::swarms::Role::Deputy)
+            .unwrap()
+            .summary
+            .id;
+        let sessions = state.db.sessions_excluding("").unwrap();
+        assert!(sessions.iter().any(|s| &s.id == scan), "{fault}");
+        assert!(
+            sessions.iter().all(|s| &s.id == scan || &s.id == deputy),
+            "{fault}"
+        );
         server.abort();
         drop(store);
         drop(state);
@@ -791,7 +842,10 @@ async fn provider_recovery_preserves_exchange_and_deduplicates_tool_replies() {
             async move {
                 let system = body["messages"][0]["content"].as_str().unwrap();
                 let delta = if system.contains("host-side reviewer") {
-                    if reviews.fetch_add(1, Ordering::SeqCst) > 0 && mode == "review-exhausted" {
+                    // Managerial spawns are not reviewed. The only leader call
+                    // that reaches review in review-exhausted mode is its read.
+                    reviews.fetch_add(1, Ordering::SeqCst);
+                    if mode == "review-exhausted" {
                         return (StatusCode::BAD_REQUEST, "Synthetic review interruption").into_response();
                     }
                     json!({"content":json!({"decision":"approved","reason":"Managerial delegation"}).to_string()})
@@ -809,8 +863,10 @@ async fn provider_recovery_preserves_exchange_and_deduplicates_tool_replies() {
                         assert!(body["messages"].to_string().contains("assignment_id"), "Recovery lost the accepted spawn result");
                         assert_eq!(body["messages"].as_array().unwrap().iter().filter(|m| m["role"] == "user").count(), 1, "Recovery must not repeat the original assignment");
                     }
-                    if n == 0 || (n == 2 && matches!(mode, "replay" | "changed" | "distinct" | "review-exhausted")) {
-                        let id = if n == 2 && matches!(mode, "distinct" | "review-exhausted") { "second-call" } else { "same-call" };
+                    if n == 2 && mode == "review-exhausted" {
+                        json!({"tool_calls":[{"index":0,"id":"second-call","type":"function","function":{"name":"read","arguments":json!({"path":"README.md"}).to_string()}}]})
+                    } else if n == 0 || (n == 2 && matches!(mode, "replay" | "changed" | "distinct")) {
+                        let id = if n == 2 && mode == "distinct" { "second-call" } else { "same-call" };
                         let question = if n == 2 && mode == "changed" { "Changed synthetic task" } else { "Inspect synthetic fixture" };
                         let arguments = json!({"profile":{"id":"research_deputy","revision":1},"task":{"question":question,"completion_criteria":["Return evidence"],"evidence_refs":[]},"independent":false});
                         let arguments = if n == 2 && mode == "replay" { serde_json::to_string_pretty(&arguments).unwrap() } else { arguments.to_string() };
@@ -1114,8 +1170,15 @@ async fn workers_inherit_saved_deputy_stage_on_execution_and_resume() {
 async fn exhausted_provider_blocks_only_failed_worker_and_keeps_accepted_message() {
     let counts = Arc::new(std::sync::Mutex::new(HashMap::<String, usize>::new()));
     let captured = counts.clone();
+    // Workers may run concurrently, so the script follows each worker by its
+    // identity: the first worker to call sends one accepted message and then
+    // exhausts provider recovery; the other answers directly.
+    let workers = Arc::new(std::sync::Mutex::new(HashMap::<String, usize>::new()));
+    let failing = Arc::new(std::sync::Mutex::new(None::<String>));
     let app = Router::new().route("/v1/chat/completions", axum::routing::post(move |axum::Json(body): axum::Json<Value>| {
         let captured = captured.clone();
+        let workers = workers.clone();
+        let failing = failing.clone();
         async move {
             let system = body["messages"][0]["content"].as_str().unwrap();
             let delta = if system.contains("host-side reviewer") {
@@ -1123,17 +1186,24 @@ async fn exhausted_provider_blocks_only_failed_worker_and_keeps_accepted_message
             } else {
                 let role = if system.contains("Role: Leader") { "leader" } else if system.contains("Role: Deputy") { "deputy" } else { "worker" };
                 let n = { let mut counts = captured.lock().unwrap(); let count = counts.entry(role.into()).or_default(); let n = *count; *count += 1; n };
-                if role == "worker" && (1..=3).contains(&n) {
-                    assert!(body["messages"].to_string().contains("parent_id"));
-                    return (StatusCode::SERVICE_UNAVAILABLE, "Synthetic worker provider interruption").into_response();
-                }
-                if n == 0 && role != "worker" {
+                if role == "worker" {
+                    let identity = system.split("Swarm agent identity: ").nth(1).and_then(|rest| rest.split('.').next()).unwrap().to_owned();
+                    let call = { let mut workers = workers.lock().unwrap(); let count = workers.entry(identity.clone()).or_default(); let call = *count; *count += 1; call };
+                    let first = failing.lock().unwrap().get_or_insert_with(|| identity.clone()) == &identity;
+                    if first && (1..=3).contains(&call) {
+                        assert!(body["messages"].to_string().contains("parent_id"));
+                        return (StatusCode::SERVICE_UNAVAILABLE, "Synthetic worker provider interruption").into_response();
+                    }
+                    if first && call == 0 {
+                        json!({"tool_calls":[{"index":0,"id":"accepted-message","type":"function","function":{"name":"swarm_message_parent","arguments":json!({"message":"Synthetic partial evidence retained","handoff":null}).to_string()}}]})
+                    } else {
+                        json!({"content":"worker synthetic result"})
+                    }
+                } else if n == 0 {
                     let profile = if role == "leader" { "research_deputy" } else { "investigator" };
                     let count = if role == "leader" { 1 } else { 2 };
                     let calls = (0..count).map(|i| json!({"index":i,"id":format!("spawn-{i}"),"type":"function","function":{"name":"swarm_spawn_subagent","arguments":json!({"profile":{"id":profile,"revision":1},"task":{"question":"Inspect synthetic fixture","completion_criteria":["Return evidence"],"evidence_refs":[]},"independent":false}).to_string()}})).collect::<Vec<_>>();
                     json!({"tool_calls":calls})
-                } else if n == 0 && role == "worker" {
-                    json!({"tool_calls":[{"index":0,"id":"accepted-message","type":"function","function":{"name":"swarm_message_parent","arguments":json!({"message":"Synthetic partial evidence retained","handoff":null}).to_string()}}]})
                 } else { json!({"content":format!("{role} synthetic result")}) }
             };
             let chunk = json!({"choices":[{"delta":delta}]});
@@ -1427,4 +1497,169 @@ async fn live_and_reconnected_details_read_consistent_usage_during_commits() {
         invalid, 0,
         "{invalid}/{checked} snapshots violate Desktop's usage validation"
     );
+}
+
+#[tokio::test]
+async fn stopped_swarm_resumes_from_an_operator_follow_up_without_half_reopening() {
+    use beale_contracts::swarms::{AgentState, ExecutionState, Role};
+    use beale_storage::swarm_state::SwarmStore;
+    let (stop_tx, stop_rx) = watch::channel(false);
+    let stop_tx = Arc::new(stop_tx);
+    let pressed = stop_tx.clone();
+    let app = Router::new().route("/v1/chat/completions", axum::routing::post(move |axum::Json(body): axum::Json<Value>| {
+        let pressed = pressed.clone();
+        async move {
+            let system = body["messages"][0]["content"].as_str().unwrap();
+            let transcript = body["messages"].to_string();
+            let delta = if system.contains("host-side reviewer") {
+                json!({"content":json!({"decision":"approved","reason":"Synthetic review"}).to_string()})
+            } else if system.contains("Role: Leader") {
+                if transcript.contains("Continue after the stop") {
+                    // The resumed leader keeps its saved conversation.
+                    assert!(transcript.contains("Delegated synthetic research"), "{transcript}");
+                    json!({"content":"Resumed synthetic coordination"})
+                } else if transcript.contains("assignment_id") {
+                    json!({"content":"Delegated synthetic research"})
+                } else {
+                    let arguments = json!({"profile":{"id":"research_deputy","revision":1},"task":{"question":"Inspect synthetic fixture","completion_criteria":["Return evidence"],"evidence_refs":[]},"independent":false});
+                    json!({"tool_calls":[{"index":0,"id":"spawn-example","type":"function","function":{"name":"swarm_spawn_subagent","arguments":arguments.to_string()}}]})
+                }
+            } else {
+                // The operator presses Stop while the deputy is running.
+                pressed.send(true).unwrap();
+                json!({"content":"Synthetic partial deputy result"})
+            };
+            let chunk = json!({"choices":[{"delta":delta}]});
+            ([("content-type","text/event-stream")],format!("data: {chunk}\n\ndata: [DONE]\n\n")).into_response()
+        }
+    }));
+    let (root, state, request, server) = regression_session(app).await;
+    let first = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        engine::run_turn(state.clone(), request.clone(), None, Some(stop_rx)),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let scan = first.summary.as_ref().unwrap().id.clone();
+    let store = SwarmStore::open(state.db.clone()).unwrap();
+    let stopped = store.load(&scan, true).unwrap();
+    let ended_at_ms = stopped.ended_at_ms.expect("Stop ends the scan");
+    let leader = stopped
+        .agents
+        .iter()
+        .find(|a| a.summary.role == Role::Leader)
+        .unwrap()
+        .summary
+        .id
+        .clone();
+    let deputy = stopped
+        .agents
+        .iter()
+        .find(|a| a.summary.role == Role::Deputy)
+        .unwrap()
+        .summary
+        .id
+        .clone();
+    assert!(
+        store
+            .local_state(&scan)
+            .unwrap()
+            .controls
+            .iter()
+            .all(|c| c.stop_requested)
+    );
+    let follow_up = SubmitSessionTurnRequest {
+        session_id: scan.clone(),
+        prompt: "Continue after the stop".into(),
+        ..request.clone()
+    };
+
+    // An undeliverable follow-up (the leader's last execution is not proven
+    // stopped) is rejected without reopening the scan or moving its clock.
+    let edit_leader_attempt = |value: &str| {
+        state
+            .db
+            .with_connection(|db| {
+                let raw: String = db.query_row(
+                    "SELECT document FROM swarm_scans WHERE id=?1",
+                    [&scan],
+                    |r| r.get(0),
+                )?;
+                let mut document: Value = serde_json::from_str(&raw)?;
+                let attempt = document["attempts"]
+                    .as_array_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .rev()
+                    .find(|a| a["agent_id"] == leader.as_str())
+                    .unwrap();
+                attempt["state"] = json!(value);
+                db.execute(
+                    "UPDATE swarm_scans SET document=?1 WHERE id=?2",
+                    beale_storage::rusqlite::params![document.to_string(), scan],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+    };
+    edit_leader_attempt("termination_unconfirmed");
+    let rejected = engine::run_turn(state.clone(), follow_up.clone(), None, None).await;
+    assert!(matches!(rejected, Err(TurnError::Conflict)), "{rejected:?}");
+    let unchanged = store.load(&scan, true).unwrap();
+    assert_eq!(unchanged.ended_at_ms, Some(ended_at_ms));
+    assert_eq!(
+        unchanged
+            .environments
+            .iter()
+            .map(|e| e.retention_deadline_ms)
+            .collect::<Vec<_>>(),
+        stopped
+            .environments
+            .iter()
+            .map(|e| e.retention_deadline_ms)
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        !store
+            .local_state(&scan)
+            .unwrap()
+            .inbox
+            .iter()
+            .any(|m| m.message == "Continue after the stop")
+    );
+    edit_leader_attempt("stopped");
+
+    let resumed = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        engine::run_turn(state.clone(), follow_up, None, None),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        resumed.messages.last().unwrap().text,
+        "Resumed synthetic coordination"
+    );
+    let saved = store.load(&scan, true).unwrap();
+    assert_eq!(
+        saved.agent(&leader).unwrap().summary.state,
+        AgentState::Completed
+    );
+    // The stopped deputy stays stopped until its parent resumes it.
+    assert_eq!(
+        saved.agent(&deputy).unwrap().summary.state,
+        AgentState::Stopped
+    );
+    assert!(
+        saved
+            .attempts
+            .iter()
+            .all(|a| a.state == ExecutionState::Stopped)
+    );
+    assert!(saved.ended_at_ms.is_some());
+    server.abort();
+    drop(store);
+    drop(state);
+    let _ = std::fs::remove_dir_all(root);
 }

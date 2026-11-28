@@ -165,6 +165,11 @@ impl SwarmStore {
 
 /// A terminal leader turn must finish retention bookkeeping before its recovery
 /// intent disappears. Historical attempts must not end a replacement generation.
+///
+/// Subagents can run while the leader's turn ends. A running execution keeps
+/// the scan open so its result is reconciled; the scheduler ends the scan once
+/// its executions finish. Fenced executions (termination unconfirmed) do not
+/// keep it open.
 fn finalize_terminal_coordinator(
     tx: &Transaction<'_>,
     turn: &LocalTurn,
@@ -175,6 +180,10 @@ fn finalize_terminal_coordinator(
         .attempts
         .iter()
         .any(|a| a.agent_id == turn.agent_id && a.generation > turn.generation)
+        && !state
+            .attempts
+            .iter()
+            .any(|a| a.state == ExecutionState::Running)
         && state.ready_to_end()?
     {
         end_scan_in_transaction(tx, &mut state, now_ms)?;

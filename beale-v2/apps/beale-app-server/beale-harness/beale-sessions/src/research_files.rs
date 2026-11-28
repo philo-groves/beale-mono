@@ -94,7 +94,7 @@ impl tool_runtime::ToolRuntime<'_> {
     }
 
     pub(super) fn materialize(&self, arguments: Value) -> anyhow::Result<Value> {
-        let request: MaterializeArtifact = serde_json::from_value(arguments)?;
+        let request: MaterializeArtifact = beale_contracts::tool_error::arguments(arguments)?;
         store(self.state)?.materialize_artifact(
             self.workspace_id,
             &request.artifact,
@@ -107,9 +107,16 @@ impl tool_runtime::ToolRuntime<'_> {
     }
 }
 
-pub(super) fn tool_error(error: &anyhow::Error) -> tool_runtime::ToolResult {
-    beale_host_log::error!("Swarm file operation rejected: {error:#}");
-    tool_runtime::ToolResult::error("Artifact operation was not acknowledged. Verify the workspace-relative file, accepted artifact ID, and unused destination path; retry the same operation after storage is available.".into())
+pub(super) fn tool_error(
+    redactor: &beale_tools::Redactor,
+    error: &anyhow::Error,
+) -> tool_runtime::ToolResult {
+    tool_runtime::ToolResult::rejection(
+        redactor,
+        "Artifact operation",
+        error,
+        "Artifact operation was not acknowledged because of a host-side condition, such as storage being unavailable. Retry the same operation later.",
+    )
 }
 
 pub(super) fn operation(turn: &LocalTurn, call_id: &str) -> String {
@@ -313,6 +320,91 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn local_swarm_and_artifact_rejections_return_typed_feedback() {
+        let f = Fixture::new();
+        let (deputy, workspace) = f.child("typed-deputy-example");
+        let (worker, _) = f.spawn(&deputy, "mapper", "typed-worker-example", false);
+        let unknown = f
+            .call(
+                &f.leader,
+                &f.workspace,
+                "typed-unknown-child",
+                "swarm_message_subagent",
+                json!({"child_id":"child-missing-example","message":"Continue"}),
+            )
+            .await;
+        assert!(unknown.is_error);
+        assert_eq!(
+            unknown.output,
+            "Swarm request rejected (not_found): child not found"
+        );
+        let grandchild = f
+            .call(
+                &f.leader,
+                &f.workspace,
+                "typed-grandchild",
+                "swarm_message_subagent",
+                json!({"child_id":worker.agent_id,"message":"Continue"}),
+            )
+            .await;
+        assert_eq!(
+            grandchild.output,
+            "Swarm request rejected (rejected): not a direct child"
+        );
+        let malformed = f
+            .call(
+                &f.leader,
+                &f.workspace,
+                "typed-malformed",
+                "swarm_message_subagent",
+                json!({"message":"Continue"}),
+            )
+            .await;
+        assert!(malformed.is_error);
+        assert!(
+            malformed
+                .output
+                .starts_with("Swarm request rejected (invalid_arguments): Invalid tool arguments:"),
+            "{}",
+            malformed.output
+        );
+        assert!(
+            malformed.output.contains("child_id"),
+            "{}",
+            malformed.output
+        );
+        let outside = f
+            .call(
+                &deputy,
+                &workspace,
+                "typed-outside-delegation",
+                "swarm_spawn_subagent",
+                json!({"profile":{"id":"research_deputy","revision":1},
+                    "task":{"question":"Inspect synthetic","completion_criteria":["Return evidence"],"evidence_refs":[]},
+                    "independent":false,"handoff_id":null}),
+            )
+            .await;
+        assert_eq!(
+            outside.output,
+            "Swarm request rejected (rejected): spawn is outside permitted delegation"
+        );
+        let artifact = f
+            .call(
+                &deputy,
+                &workspace,
+                "typed-missing-artifact",
+                "swarm_materialize_artifact",
+                json!({"artifact":"artifact-missing-example","destination":"copy.txt"}),
+            )
+            .await;
+        assert_eq!(
+            artifact.output,
+            "Artifact operation rejected (not_found): artifact has not been accepted"
+        );
+        assert!(!workspace.join("copy.txt").exists());
+    }
+
+    #[tokio::test]
     async fn native_tools_route_to_private_copies_and_materialize_only_explicitly() {
         let f = Fixture::new();
         let (first, a) = f.child("first-example");
@@ -484,7 +576,7 @@ mod tests {
             } else {
                 (
                     "swarm_message_parent",
-                    json!({"message":"Synthetic handoff","handoff":{"id":"handoff-example","from_agent":turn.agent_id,"parent_id":f.leader.agent_id,"route_id":"research_deputy-to-research_deputy-task","destination_profile":{"id":"research_deputy","revision":1},"task":{"question":"Assess synthetic output","completion_criteria":["Return evidence"],"evidence_refs":[]},"scope":["Synthetic scope"],"record_revisions":[],"artifact_refs":["file:proof.txt"],"observations":["Candidate bytes"],"unresolved_questions":[],"payload":{"kind":"task"}}}),
+                    json!({"message":"Synthetic handoff","handoff":{"to_profile":"research_deputy","task":{"question":"Assess synthetic output","completion_criteria":["Return evidence"],"evidence_refs":[]},"scope":["Synthetic scope"],"artifact_refs":["file:proof.txt"],"observations":["Candidate bytes"],"payload":{"kind":"task"}}}),
                 )
             };
             // Calling the canonical stores directly cannot bypass byte acceptance.
@@ -500,7 +592,8 @@ mod tests {
                 assert!(beale_findings::execute(&f.state.db, &context, name, &missing).is_err());
             } else {
                 missing["handoff"]["artifact_refs"] = json!(["artifact-missing"]);
-                let request = serde_json::from_value(missing["handoff"].clone()).unwrap();
+                // The host-side envelope API applies the same acceptance check.
+                let request = serde_json::from_value(json!({"id":"handoff-example","from_agent":turn.agent_id,"parent_id":f.leader.agent_id,"route_id":"research_deputy-to-research_deputy-task","destination_profile":{"id":"research_deputy","revision":1},"task":{"question":"Assess synthetic output","completion_criteria":["Return evidence"],"evidence_refs":[]},"scope":["Synthetic scope"],"record_revisions":[],"artifact_refs":["artifact-missing"],"observations":["Candidate bytes"],"unresolved_questions":[],"payload":{"kind":"task"}})).unwrap();
                 assert!(f.swarm.add_handoff(&turn.scan_id, request).is_err());
                 let command =
                     serde_json::from_value(json!({"tool":name,"arguments":missing})).unwrap();

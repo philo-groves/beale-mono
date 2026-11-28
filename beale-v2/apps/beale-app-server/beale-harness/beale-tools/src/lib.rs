@@ -58,9 +58,11 @@ pub async fn run_command(
     run_command_policy(command, workspace, timeout_seconds, false).await
 }
 
-/// Worker commands stay inside the dedicated execution tree. A failed or
-/// canceled collection must stop the worker; it cannot continue with an unknown
-/// command outcome. The entry point terminates its Unix group before exiting.
+/// Worker commands stay inside the dedicated execution tree. A time or output
+/// limit returns [`process::LimitExceeded`] only after the command was ended, so
+/// the worker may record it as a failed result. Any other failed or canceled
+/// collection must stop the worker; it cannot continue with an unknown command
+/// outcome. The entry point terminates its Unix group before exiting.
 pub async fn run_worker_command(
     command: &str,
     workspace: &Path,
@@ -156,9 +158,9 @@ async fn run_process(
     #[cfg(windows)]
     enable_git_long_paths(&mut process);
     let mut child = process.spawn().context("start command")?;
-    // Worker commands on Unix share the root worker group. Attaching a tree to
-    // the command PID would track a nonexistent group and falsely confirm exit.
-    let tree = if worker && cfg!(unix) {
+    // Shared-group worker commands have no group of their own. Attaching a tree
+    // to the command PID would track a nonexistent group and falsely confirm exit.
+    let tree = if worker && !process::worker_commands_are_isolated() {
         None
     } else {
         Some(process::ProcessTree::attach(&child))
@@ -185,10 +187,9 @@ async fn run_process(
                     if count == 0 { err_done = true; } else { err.extend_from_slice(&err_buffer[..count]); }
                 }
             }
-            ensure!(
-                out.len().saturating_add(err.len()) <= MAX_RESULT_BYTES,
-                "command output is too large"
-            );
+            if out.len().saturating_add(err.len()) > MAX_RESULT_BYTES {
+                return Err(process::LimitExceeded::output("command").into());
+            }
         }
         let status = child.wait().await.context("wait for command")?;
         Ok::<_, anyhow::Error>(CommandOutput {
@@ -199,13 +200,23 @@ async fn run_process(
             stderr: String::from_utf8_lossy(&err).into_owned(),
         })
     };
-    let output = timeout(Duration::from_secs(timeout_seconds), collect)
-        .await
-        .with_context(|| format!("command timed out after {timeout_seconds} seconds"))??;
-    if let Some(tree) = tree {
-        tree.release();
+    let budget = Duration::from_secs(timeout_seconds);
+    // The collection future owns the kill-on-drop child; it is dropped before a
+    // limit is reported, so the direct process has been signaled in every case.
+    let error = match timeout(budget, collect).await {
+        Ok(Ok(output)) => {
+            if let Some(tree) = tree {
+                tree.release();
+            }
+            return Ok(output);
+        }
+        Ok(Err(error)) => error,
+        Err(_) => process::LimitExceeded::timed_out("command", budget).into(),
+    };
+    if error.downcast_ref::<process::LimitExceeded>().is_some() {
+        process::end_limited(tree, worker).context("command termination was not confirmed")?;
     }
-    Ok(output)
+    Err(error)
 }
 
 #[derive(Debug, Deserialize)]
@@ -986,5 +997,203 @@ mod tests {
         .unwrap();
         assert_eq!(check.stdout.lines().next(), Some("alive"));
         tokio::fs::remove_dir_all(root).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    const BACKGROUND_SLEEP: &str = "sleep 30 >/dev/null 2>&1 & echo $! > child.pid; wait";
+    #[cfg(windows)]
+    const BACKGROUND_SLEEP: &str = "$p = Start-Process -PassThru -NoNewWindow powershell -ArgumentList '-NoProfile','-Command','Start-Sleep 30'; Set-Content child.pid $p.Id; Wait-Process -Id $p.Id";
+    #[cfg(unix)]
+    const LARGE_OUTPUT: &str = "head -c 9000000 /dev/zero | tr '\\0' x";
+    #[cfg(windows)]
+    const LARGE_OUTPUT: &str = "[Console]::Out.Write('x' * 9000000)";
+
+    #[tokio::test]
+    async fn host_command_limits_are_typed_and_keep_their_messages() {
+        let root = std::env::temp_dir().join(format!("beale-command-limit-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(&root).await.unwrap();
+        let timed_out = run_command(BACKGROUND_SLEEP, &root, 2)
+            .await
+            .err()
+            .expect("command must reach its time limit");
+        assert_eq!(
+            timed_out.downcast_ref::<process::LimitExceeded>(),
+            Some(&process::LimitExceeded::timed_out(
+                "command",
+                Duration::from_secs(2)
+            ))
+        );
+        assert_eq!(timed_out.to_string(), "command timed out after 2 seconds");
+        let too_large = run_command(LARGE_OUTPUT, &root, 60)
+            .await
+            .err()
+            .expect("command must reach its output limit");
+        assert_eq!(
+            too_large.downcast_ref::<process::LimitExceeded>(),
+            Some(&process::LimitExceeded::output("command"))
+        );
+        assert_eq!(too_large.to_string(), "command output is too large");
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    /// Whether a process from the background-sleep fixture is still running.
+    /// A killed process that its new parent has not reaped yet is not running.
+    async fn descendant_running(root: &Path, pid: &str) -> bool {
+        #[cfg(target_os = "linux")]
+        {
+            let _ = root;
+            match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+                Ok(stat) => stat
+                    .rsplit_once(')')
+                    .and_then(|(_, rest)| rest.split_whitespace().next())
+                    .is_some_and(|state| state != "Z"),
+                Err(_) => false,
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let probe = if cfg!(windows) {
+                format!(
+                    "if (Get-Process -Id {pid} -ErrorAction SilentlyContinue) {{ 'alive' }} else {{ 'gone' }}"
+                )
+            } else {
+                format!("kill -0 {pid} 2>/dev/null && echo alive || echo gone")
+            };
+            run_command(&probe, root, 10)
+                .await
+                .unwrap()
+                .stdout
+                .trim()
+                .starts_with("alive")
+        }
+    }
+
+    /// Runs in a child test process that leads its own process group, as a
+    /// dedicated worker does. It records success only after every assertion.
+    #[test]
+    #[ignore = "subprocess fixture invoked by worker_command_limits_end_the_command_and_worker_continues"]
+    fn worker_command_limit_fixture() {
+        let Some(root) = std::env::var_os("BEALE_TEST_WORKER_LIMIT_ROOT") else {
+            return;
+        };
+        let root = PathBuf::from(root);
+        process::adopt_worker_supervision();
+        std::fs::write(
+            root.join("mode"),
+            if process::worker_commands_are_isolated() {
+                "isolated"
+            } else {
+                "shared"
+            },
+        )
+        .unwrap();
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let timed_out = run_worker_command(BACKGROUND_SLEEP, &root, 2)
+                    .await
+                    .err()
+                    .expect("worker command must reach its time limit");
+                let limit = timed_out
+                    .downcast_ref::<process::LimitExceeded>()
+                    .expect("a time limit is a known failed result");
+                assert_eq!(limit.to_string(), "command timed out after 2 seconds");
+                let pid = tokio::fs::read_to_string(root.join("child.pid"))
+                    .await
+                    .unwrap();
+                let pid = pid.trim();
+                if process::worker_commands_are_isolated() {
+                    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+                    while descendant_running(&root, pid).await {
+                        assert!(
+                            std::time::Instant::now() < deadline,
+                            "an isolated worker command must end its descendants"
+                        );
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                    }
+                    assert!(
+                        limit
+                            .worker_message()
+                            .contains("process tree was terminated")
+                    );
+                } else {
+                    // Shared-group platforms end only the direct process; the
+                    // supervisor ends the rest with the worker.
+                    assert!(limit.worker_message().contains("may continue"));
+                }
+                let too_large = run_worker_command(LARGE_OUTPUT, &root, 60)
+                    .await
+                    .err()
+                    .expect("worker command must reach its output limit");
+                assert_eq!(
+                    too_large.downcast_ref::<process::LimitExceeded>(),
+                    Some(&process::LimitExceeded::output("command"))
+                );
+                let next = run_worker_command(
+                    if cfg!(windows) {
+                        "Write-Output continued"
+                    } else {
+                        "echo continued"
+                    },
+                    &root,
+                    10,
+                )
+                .await
+                .unwrap();
+                assert!(next.success && next.stdout.contains("continued"));
+            });
+        std::fs::write(root.join("passed"), b"passed").unwrap();
+    }
+
+    #[tokio::test]
+    async fn worker_command_limits_end_the_command_and_worker_continues() {
+        // Linux isolates commands only under the subreaper supervisor; an
+        // unsupervised worker keeps them in its group so its own supervisor's
+        // group termination still covers them.
+        for supervised in [false, true] {
+            let root = std::env::temp_dir().join(format!("beale-worker-limit-{}", Uuid::new_v4()));
+            tokio::fs::create_dir_all(&root).await.unwrap();
+            // contained_command starts the fixture in its own Unix process group.
+            let mut fixture = process::contained_command(std::env::current_exe().unwrap());
+            fixture
+                .args([
+                    "--ignored",
+                    "--exact",
+                    "tests::worker_command_limit_fixture",
+                    "--test-threads=1",
+                ])
+                .env("BEALE_TEST_WORKER_LIMIT_ROOT", &root)
+                .stdout(Stdio::null())
+                .stderr(Stdio::inherit());
+            if supervised {
+                fixture.env(process::SUPERVISED_WORKER_ENV, "1");
+            }
+            let mut child = fixture.spawn().unwrap();
+            #[cfg(unix)]
+            let group = child.id().unwrap() as i32;
+            let status = child.wait().await.unwrap();
+            // A shared-group fixture leaves its limited command's background
+            // child in the fixture group, as a worker would until it ends.
+            #[cfg(unix)]
+            // SAFETY: kill only signals the fixture's own process group, which
+            // contained_command created for this test.
+            unsafe {
+                libc::kill(-group, libc::SIGKILL);
+            }
+            assert!(status.success(), "worker limit fixture failed: {status}");
+            assert!(root.join("passed").is_file());
+            let expected = if cfg!(windows) || (cfg!(target_os = "linux") && supervised) {
+                "isolated"
+            } else {
+                "shared"
+            };
+            assert_eq!(
+                std::fs::read_to_string(root.join("mode")).unwrap(),
+                expected
+            );
+            let _ = tokio::fs::remove_dir_all(root).await;
+        }
     }
 }

@@ -53,6 +53,14 @@ struct FlowActor {
     released: bool,
     calls: usize,
 }
+/// The host assigns handoff IDs, so scripted agents carry their own label in
+/// the envelope scope, which forwarding preserves unchanged.
+fn label(h: &HandoffRequest) -> &str {
+    h.scope
+        .iter()
+        .find_map(|s| s.strip_prefix("flow-label:"))
+        .expect("scripted handoff label")
+}
 #[derive(Default)]
 struct Flow {
     actors: HashMap<String, FlowActor>,
@@ -114,7 +122,7 @@ impl FlowActor {
             self.tool("read", json!({"path":format!("evidence-{index}.txt")}));
         }
         if definition == "vdh_vvs" {
-            match h.id.as_str() {
+            match label(&h) {
                 "candidate-initial" => {
                     self.complete(&h, Assessment::Inconclusive);
                     self.emit(
@@ -154,8 +162,9 @@ impl FlowActor {
             }
             return;
         }
-        let item = h.id.rsplit('-').next().unwrap();
-        if h.id == "rank-a" && !self.released {
+        let item = label(&h).rsplit('-').next().unwrap().to_owned();
+        let item = item.as_str();
+        if label(&h) == "rank-a" && !self.released {
             self.tool("swarm_handoff", json!({"action":"block","id":h.id}));
             self.blocked = true;
             return;
@@ -318,7 +327,11 @@ impl Flow {
                 .unwrap();
             let output = tool["content"].as_str().unwrap();
             assert!(
-                !output.contains("Swarm request rejected") && !output.contains("Tool error:"),
+                !output.contains("Swarm request rejected")
+                    && !output.contains("Swarm request was not applied")
+                    && !output.contains("Artifact operation rejected")
+                    && !output.contains("Artifact operation was not acknowledged")
+                    && !output.contains("Tool error:"),
                 "{}: {output}",
                 actor.last_tool
             );
@@ -423,8 +436,10 @@ impl Flow {
                         } else {
                             "investigator"
                         };
-                        actor.spawning = Some(h.id.clone());
-                        actor.tool("swarm_spawn_subagent",json!({"profile":{"id":profile,"revision":1},"task":{"question":json!({"flow_stage":actor.stage,"flow_input":h.id}).to_string(),"completion_criteria":["Return evidence-backed assessment"],"evidence_refs":h.artifact_refs},"independent":independent,"handoff_id":h.id}));
+                        // Children are tracked by the script label; the host ID
+                        // assigns the canonical envelope atomically.
+                        actor.spawning = Some(label(h).to_owned());
+                        actor.tool("swarm_spawn_subagent",json!({"profile":{"id":profile,"revision":1},"task":{"question":json!({"flow_stage":actor.stage,"flow_input":label(h)}).to_string(),"completion_criteria":["Return evidence-backed assessment"],"evidence_refs":h.artifact_refs},"independent":independent,"handoff_id":h.id}));
                     }
                     break;
                 }
@@ -502,36 +517,22 @@ impl Flow {
             }
             Step::Emit(key, to, payload, artifacts) => {
                 self.observed.push(key.clone());
-                let workflow = beale_swarms::swarm_definition(definition)
-                    .unwrap()
-                    .snapshot
-                    .workflow()
-                    .unwrap();
-                let route = workflow
-                    .routes
-                    .iter()
-                    .find(|r| r.from == actor.stage && r.to == to && r.payload == payload.kind())
-                    .unwrap();
                 let observations = actor
                     .input
                     .as_ref()
                     .map(|h| h.observations.clone())
                     .unwrap_or_else(|| vec!["Original synthetic observation".into()]);
-                let h = HandoffRequest {
-                    id: key,
-                    from_agent: id.into(),
-                    parent_id: parent.into(),
-                    route_id: route.id.clone(),
-                    destination_profile: beale_contracts::swarms::ProfileRef {
-                        id: to,
-                        revision: 1,
-                    },
+                // Like a model, the script states only intent; the host fills
+                // in identity, parent, profile revision and the saved route.
+                let h = HandoffDraft {
+                    to_profile: to,
+                    route_id: None,
                     task: beale_contracts::swarms::Task {
                         question: "Continue synthetic work".into(),
                         completion_criteria: vec!["Return evidence and limitations".into()],
                         evidence_refs: vec!["evidence-example".into()],
                     },
-                    scope: vec!["Synthetic example.test".into()],
+                    scope: vec!["Synthetic example.test".into(), format!("flow-label:{key}")],
                     record_revisions: vec![],
                     artifact_refs: artifacts,
                     observations,
@@ -617,13 +618,13 @@ async fn run(definition: &str) {
         let original = &saved
             .handoffs
             .iter()
-            .find(|h| h.request.id == "candidate-initial")
+            .find(|h| label(&h.request) == "candidate-initial")
             .unwrap()
             .request;
         let supplement = &saved
             .handoffs
             .iter()
-            .find(|h| h.request.id == "candidate-supplement")
+            .find(|h| label(&h.request) == "candidate-supplement")
             .unwrap()
             .request;
         assert_eq!(original.artifact_refs[0], supplement.artifact_refs[0]);
@@ -643,7 +644,7 @@ async fn run(definition: &str) {
             let patch = saved
                 .handoffs
                 .iter()
-                .find(|h| h.request.id == format!("patch-{item}"))
+                .find(|h| label(&h.request) == format!("patch-{item}"))
                 .unwrap();
             let HandoffPayload::Patch {
                 patch_refs,
@@ -656,7 +657,7 @@ async fn run(definition: &str) {
                 let outcome = saved
                     .handoffs
                     .iter()
-                    .find(|h| h.request.id == format!("patch-result-{dest}-{item}"))
+                    .find(|h| label(&h.request) == format!("patch-result-{dest}-{item}"))
                     .unwrap();
                 let HandoffPayload::PatchAssessment {
                     patch_refs: actual_patch,

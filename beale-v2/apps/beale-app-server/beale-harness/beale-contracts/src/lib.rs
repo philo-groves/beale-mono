@@ -1786,7 +1786,7 @@ mod fleet_virtual_machine_tests {
 }
 
 pub const PROTOCOL_MAJOR: u32 = 2;
-pub const PROTOCOL_MINOR: u32 = 49;
+pub const PROTOCOL_MINOR: u32 = 50;
 pub const SERVICE_NAME: &str = "beale-app-server";
 pub const HEALTH_PATH: &str = "/v1/health";
 pub const AUTH_STATUS_PATH: &str = "/v1/providers/status";

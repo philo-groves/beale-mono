@@ -12,5 +12,6 @@ pub(crate) use service::InstanceBusy;
 pub use store::{DockerStore, Instance, PreflightObservation};
 mod cli;
 pub use cli::{
-    ContainerHandle, ContainerOptions, ContainerStatus, Docker, ResolvedImage, StartupMode,
+    ContainerHandle, ContainerOptions, ContainerStatus, Docker, HostAccess, ResolvedImage,
+    StartupMode,
 };

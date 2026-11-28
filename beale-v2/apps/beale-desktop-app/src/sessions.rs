@@ -897,20 +897,39 @@ pub(crate) async fn load(
 #[derive(Clone)]
 pub(crate) struct SubmissionControl {
     canceled: tokio::sync::watch::Sender<bool>,
+    detached: tokio::sync::watch::Sender<bool>,
     registered: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 impl Default for SubmissionControl {
     fn default() -> Self {
         Self {
             canceled: tokio::sync::watch::channel(false).0,
+            detached: tokio::sync::watch::channel(false).0,
             registered: Default::default(),
         }
     }
 }
+/// Error text for a stream that was detached in favor of a newer one.
+pub(crate) const DETACHED: &str = "Scan stream detached.";
 impl SubmissionControl {
     pub(crate) fn cancel(&self) -> bool {
         self.canceled.send_replace(true);
         self.registered.load(std::sync::atomic::Ordering::SeqCst)
+    }
+    /// Ends this submission's stream without stopping the scan. Used when a
+    /// newer submission attaches to the same running Swarm. A submission
+    /// whose request is not yet accepted still sends it; only its stream ends.
+    pub(crate) fn detach(&self) {
+        self.detached.send_replace(true);
+    }
+    /// Whether the host accepted this submission's request.
+    pub(crate) fn is_accepted(&self) -> bool {
+        self.registered.load(std::sync::atomic::Ordering::SeqCst)
+    }
+    #[cfg(test)]
+    pub(crate) fn mark_accepted(&self) {
+        self.registered
+            .store(true, std::sync::atomic::Ordering::SeqCst);
     }
     async fn prepare<T>(
         &self,
@@ -1014,8 +1033,15 @@ async fn submit_authenticated_stream(
         return Err("Invalid app-server scan stream".to_owned());
     }
     let mut decoder = StreamDecoder::default();
+    // The request is accepted; a detach now ends only this stream.
+    let mut detached = control.detached.subscribe();
+    if *detached.borrow_and_update() {
+        return Err(DETACHED.into());
+    }
     loop {
         let chunk = tokio::select! {
+            // Detaching drops this stream only; it never replays a stop.
+            _ = detached.changed() => return Err(DETACHED.into()),
             result = &mut replay, if replay_active => {
                 replay_active = false;
                 if let Err(error) = result { on_stop_error(format!("{error}. Stop can be retried; the scan stream is still connected.")); }

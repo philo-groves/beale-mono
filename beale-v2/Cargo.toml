@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "apps/beale-app-server/beale-harness/beale-agent-loop",
     "apps/beale-app-server/beale-harness/beale-contracts",
     "apps/beale-app-server/beale-harness/beale-core",
     "apps/beale-app-server/beale-harness/beale-extender",

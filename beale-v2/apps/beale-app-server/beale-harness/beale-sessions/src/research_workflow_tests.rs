@@ -2,6 +2,15 @@ use super::*;
 use beale_contracts::swarm_workflows::*;
 use beale_storage::swarm_state::HandoffChange;
 
+/// The host assigns handoff IDs; fixtures label their envelopes in the scope.
+fn label(request: &HandoffRequest) -> &str {
+    request
+        .scope
+        .iter()
+        .find_map(|s| s.strip_prefix("fixture-label:"))
+        .expect("fixture handoff label")
+}
+
 // Component composition: tool routing, private files, publication and durable transitions.
 // Scheduler/inbox delivery is independently covered in hierarchy_workflow_tests.rs.
 async fn handoff(
@@ -23,6 +32,7 @@ async fn handoff(
     let ScanMode::Swarm { snapshot } = &saved.config.mode else {
         panic!("expected swarm")
     };
+    // The fixture computes the expected route only to check the host's choice.
     let workflow = snapshot.workflow().unwrap();
     let route = workflow
         .routes
@@ -39,21 +49,18 @@ async fn handoff(
         )
         .await;
     assert!(!write.is_error, "{}", write.output);
-    let request = HandoffRequest {
-        id: id.into(),
-        from_agent: source.0.agent_id.clone(),
-        parent_id: parent.clone(),
-        route_id: route.id.clone(),
-        destination_profile: ProfileRef {
-            id: destination.into(),
-            revision: 1,
-        },
+    let request = HandoffDraft {
+        to_profile: destination.into(),
+        route_id: None,
         task: Task {
             question: format!("Continue synthetic {id}"),
             completion_criteria: vec!["Return evidence and limitations".into()],
             evidence_refs: vec!["evidence-example".into()],
         },
-        scope: vec!["Synthetic example.test fixture".into()],
+        scope: vec![
+            "Synthetic example.test fixture".into(),
+            format!("fixture-label:{id}"),
+        ],
         record_revisions: vec![],
         artifact_refs: vec![format!("file:{id}.txt")],
         observations: vec![format!("Original observation for {id}")],
@@ -70,14 +77,30 @@ async fn handoff(
         )
         .await;
     assert!(!reply.is_error, "{}", reply.output);
+    let handoff_id = serde_json::from_str::<Value>(&reply.output).unwrap()["handoff_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     let saved = f.swarm.load("scan-example", true).unwrap();
     let accepted = saved
         .handoffs
         .iter()
-        .find(|h| h.request.id == id)
+        .find(|h| h.request.id == handoff_id)
         .unwrap()
         .request
         .clone();
+    // The host completed the envelope from durable identity and saved state.
+    assert_eq!(accepted.from_agent, source.0.agent_id);
+    assert_eq!(&accepted.parent_id, parent);
+    assert_eq!(accepted.route_id, route.id);
+    assert_eq!(
+        accepted.destination_profile,
+        ProfileRef {
+            id: destination.into(),
+            revision: 1,
+        }
+    );
+    assert_eq!(label(&accepted), id);
     assert_eq!(accepted.observations, request.observations);
     assert!(!accepted.artifact_refs[0].starts_with("file:"));
     let artifact = store(&f.state)
@@ -105,7 +128,7 @@ async fn receive(f: &Fixture, destination: &(LocalTurn, PathBuf), request: &Hand
     assert!(!reply.is_error, "{}", reply.output);
     assert_eq!(
         std::fs::read_to_string(destination.1.join(name)).unwrap(),
-        format!("Synthetic evidence for {}", request.id)
+        format!("Synthetic evidence for {}", label(request))
     );
 }
 

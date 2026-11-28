@@ -49,6 +49,7 @@
 
 #### Changed
 
+- V2 scans accept a message while a Swarm is running: typing in the composer turns Stop into Send, the message is queued for the leader as its own turn, and the new stream replaces the current one without stopping the scan. An unaccepted message returns to the composer. Requires an app-server with the detached Swarm scheduler.
 - V2 Graphs labels the selectable flows Basic Subagents, VDH VVS Swarm, OAI 948 Swarm, and No Subagents. Sequential Research Pipeline is retired for new scans; saved sessions retain its runtime and graph ID.
 - V2 New Scan consolidates graph selection, agent and subagent model summaries, and optional stage duration into one settings form. A single top-level agent's model is selectable in the form; other agent models use modals. The Main Agent row describes its coordinating role, the background is plain, and hidden concurrency controls use host and profile defaults.
 - V2 Graphs replaces bundled Scout, Reviewer, and Prover workers with declarative Mapper, Investigator, Experimenter, Challenger, and Builder profiles. New Scan configures their models; legacy profiles remain available for saved custom templates.
@@ -402,6 +403,7 @@
 
 #### Security
 
+- V2 Swarm worker tool output is redacted with the leader's host-secret redactor before it is sent to a provider, and stored worker tool-outcome events are redacted the same way. Previously only the worker's own credential was removed.
 - V2 `bash`, runbook cells, and Findings verification commands start from an allowlisted environment, so provider API keys, credential-named variables, and `BEALE_*` host settings in the app-server environment are not inherited. Operators can pass extra non-credential variables with `BEALE_V2_TOOL_ENV`. MCP plugin servers keep their environment minus credential-named variables; values a plugin needs belong in its `env` configuration.
 - V2 tool commands run in their own process group (Unix) or job object (Windows). A timeout, oversized output, or user stop now ends background descendants too; processes left running by a command that exits normally are unchanged.
 - V2 redacts exact occurrences of host-held secrets (control token, saved API keys, OAuth tokens, Codex sign-in tokens, and credential-named environment values) from tool output before it is saved, shown, or returned to a model. Encoded or transformed values are not detected.
@@ -471,6 +473,12 @@
 
 #### Fixed
 
+- V2 Stop and exhausted leader recovery no longer end a Swarm permanently. An operator follow-up resumes the leader once its execution has stopped, and a parent can resume a stopped child the same way. A follow-up that cannot be delivered leaves the ended scan and its retention deadlines unchanged instead of half-reopening it.
+- V2 worker commands, verification runs, and Runbook cells that reach their time or output limit are ended and reported as failed results instead of stopping the worker. Linux worker commands run in their own process group when the worker runs under the subreaper supervisor or in a container, which prove that every descendant ended; any other Linux worker, and macOS workers, keep commands in the worker's group and end only the direct process at a limit.
+- V2 local Swarm and artifact requests return typed rejection feedback (code and reason) instead of one generic message. An assigned worker reports an unknown or foreign artifact ID as a tool error and continues.
+- V2 snapshot transfer hashes each blob once instead of re-hashing the whole snapshot for every chunk, and capture and private-copy setup no longer hold the host database lock while copying or hashing.
+- V2 Docker workers reach a loopback leader through `host.docker.internal`. Native Linux engines map it to the bridge gateway, where the app-server serves only the scoped worker route.
+- V2 text-only provider requests (such as Auto-Review) omit the `tools` field instead of sending an empty array that strict OpenAI-compatible endpoints reject.
 - V2 handoffs now have transactional runtime ownership, forwarding, typed completion, recovery and cancellation. Canonical envelopes travel by ID without the smaller chat/task limit; fresh recipients can receive their handoff atomically at spawn. Protocol 2.49 adds the model/peer contract; rebuild Desktop and participating hosts/workers together.
 - Swarm handoff reassignment retires former-owner execution input while preserving result notifications and saved context. Unrelated work no longer resumes explicitly blocked or executor-blocked handoffs; explicit recovery retries redeliver only eligible retained work.
 - Swarm operator messages retain their exact visible text when mixed with handoff recovery or custody notices, including after reopen and worker reconciliation. Host schema 2 adds a separate model-input column so resumed inference retains that context without exposing it as user text; protocol 2.49 is unchanged.
@@ -522,6 +530,10 @@
 
 #### Changed
 
+- V2 ordinary sessions, the Swarm leader, and assigned Swarm workers run one shared agent loop (`beale-agent-loop`) for provider rounds, retries, tool-call bounds, call replay, Anthropic result batching, stop, yield, and saved endings. Worker checkpoints are written as version 3 and version 2 checkpoints still resume. No protocol or database migration is required.
+- V2 assigned Swarm workers now follow the session rules for empty answers and long turns: an empty final answer fails the attempt (so host recovery retries it) instead of reporting an empty result, and a worker turn stops at the same 512 tool-activity safeguard as Swarm session turns.
+- V2 Swarm scans run on a detached, event-driven scheduler. The leader and its subagents execute concurrently within the durable claim, capacity, and ownership gates, instead of one agent at a time. A submission to a running scan queues an operator message for the leader and attaches to the same live stream instead of returning Conflict; Stop through any attached stream stops the scan, and dropping a request no longer cancels it. One live-status publisher per scan replaces the per-request 250 ms poll, and a slow client can no longer hold back the leader. A running subagent whose branch is stopped is now stopped promptly, and a terminal leader keeps the scan open until running subagents are reconciled. Native allocation waits react to capacity changes instead of polling every 250 ms. No protocol or database migration is required; Desktop builds that never send while busy are unaffected.
+- Protocol 2.50: `swarm_message_parent` handoffs are drafts. Agents supply the destination profile, task, scope, evidence, and payload; the host fills in the envelope ID, source, parent, profile revision, and saved route and returns `handoff_id`. Leaders use Swarm coordination tools without model review; their research calls stay under the coordinator-only rule. Rebuild Desktop and participating app-servers and workers together.
 - Protocol 2.29 names the Windows base command tool `powershell`; update connected desktops and app-servers together. Existing stock Windows system prompts upgrade automatically; edited prompts receive runtime shell guidance. No database migration is required.
 - V2 Goal Mode, Fleet, and Tracking crates move into the app-server harness and remain compiled without default Cargo features. Host routes and sessions ignore their legacy Feature enablement and scope. Fleet and Tracking remain authenticated; Goal Mode adds `goal_status` only to active goal turns. No database migration is required.
 - V2 Findings validation evidence must now come from a successful `read`, `bash`, or verified `findings_verify` call made after the Candidate was recorded and, in Research Pipelines, by the Validation role or its subagents. Completion records a SHA-256 digest of each cited result, and saved tool calls record their completion time and agent role for the binding.

@@ -271,6 +271,9 @@ pub fn run(directory: &Path) -> Result<()> {
                 .current_dir(&launch.directory)
                 .env_clear()
                 .envs(crate::process::tool_environment())
+                // This helper reaps every descendant, so the worker may give
+                // each command its own process group.
+                .env(crate::process::SUPERVISED_WORKER_ENV, "1")
                 .stdin(Stdio::piped())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())

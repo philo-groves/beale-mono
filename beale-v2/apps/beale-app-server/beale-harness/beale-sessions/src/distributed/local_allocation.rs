@@ -246,7 +246,21 @@ pub(crate) async fn reserve(
             swarm.allocation_blocked(&saved.config.scan_id, agent, "Native allocation wait exhausted; no execution was launched. Stop lingering subagents or add capacity before retrying.")?;
             return Ok(None);
         }
-        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        // Capacity changes when allocations bind, release, or reconcile; the
+        // interval covers changes made by other processes.
+        let mut stop = stop.clone();
+        tokio::select! {
+            _ = state.swarm_scans.allocations_changed.notified() => {}
+            _ = async {
+                match stop.as_mut() {
+                    Some(receiver) => {
+                        let _ = receiver.changed().await;
+                    }
+                    None => std::future::pending().await,
+                }
+            } => {}
+            _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {}
+        }
     }
 }
 pub(crate) fn bind(state: &SessionState, owned: &OwnedAllocation, turn: &LocalTurn) -> Result<()> {

@@ -313,7 +313,6 @@ pub struct HandoffRequest {
 }
 impl HandoffRequest {
     pub fn validate(&self) -> Result<(), &'static str> {
-        self.task.validate()?;
         if ![
             &self.id,
             &self.from_agent,
@@ -324,87 +323,169 @@ impl HandoffRequest {
         .iter()
         .all(|v| valid_id(v))
             || self.destination_profile.revision == 0
-            || self.scope.is_empty()
-            || !texts(&self.scope)
-            || !texts(&self.observations)
-            || !texts(&self.unresolved_questions)
-            || !ids(&self.artifact_refs)
-            || self.record_revisions.len() > 256
-            || self
-                .record_revisions
-                .iter()
-                .any(|r| !valid_id(&r.id) || r.revision == 0)
-            || self
-                .record_revisions
-                .iter()
-                .map(|r| &r.id)
-                .collect::<HashSet<_>>()
-                .len()
-                != self.record_revisions.len()
             || serde_json::to_vec(self).map_or(true, |b| b.len() > 65536)
         {
             return Err("invalid handoff envelope");
         }
-        match &self.payload {
-            HandoffPayload::Task {} => {}
-            HandoffPayload::Candidate { claim } => {
-                if !text(claim, 4096) || self.task.evidence_refs.is_empty() {
-                    return Err("candidate needs a labeled claim and evidence");
-                }
-            }
-            HandoffPayload::Assessment { result } => result.validate()?,
-            HandoffPayload::SupportedFinding { result } => {
-                result.validate()?;
-                if result.assessment != Assessment::Supported {
-                    return Err("reporting requires a supported assessment");
-                }
-            }
-            HandoffPayload::RankedTargets { targets } => {
-                if targets.is_empty()
-                    || targets.len() > 64
-                    || targets.iter().enumerate().any(|(i, t)| {
-                        t.rank as usize != i + 1
-                            || !text(&t.target, 1024)
-                            || !text(&t.rationale, 4096)
-                    })
-                    || targets
-                        .iter()
-                        .map(|t| &t.target)
-                        .collect::<HashSet<_>>()
-                        .len()
-                        != targets.len()
-                {
-                    return Err("targets must have distinct ordered ranks");
-                }
-            }
-            HandoffPayload::Remediation { finding_refs } => {
-                if finding_refs.is_empty() || !ids(finding_refs) {
-                    return Err("remediation needs finding references");
-                }
-            }
-            HandoffPayload::Patch {
-                patch_refs,
-                test_refs,
-            }
-            | HandoffPayload::PatchAssessment {
-                patch_refs,
-                test_refs,
-                ..
-            } => {
-                if patch_refs.is_empty()
-                    || test_refs.is_empty()
-                    || !ids(patch_refs)
-                    || !ids(test_refs)
-                {
-                    return Err("patch handoff needs patch and test references");
-                }
-                if let HandoffPayload::PatchAssessment { result, .. } = &self.payload {
-                    result.validate()?;
-                }
+        validate_handoff_content(
+            &self.task,
+            &self.scope,
+            &self.record_revisions,
+            &self.artifact_refs,
+            &self.observations,
+            &self.unresolved_questions,
+            &self.payload,
+        )
+    }
+}
+
+/// Handoff intent supplied by an agent. Host identity is never model input:
+/// the host derives the envelope ID from the tool operation, the source and
+/// parent from the caller's durable identity, the destination profile
+/// revision from the scan snapshot, and the saved route from the source
+/// deputy, destination and payload kind. `route_id` is needed only when more
+/// than one saved route matches.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HandoffDraft {
+    pub to_profile: String,
+    #[serde(default)]
+    pub route_id: Option<String>,
+    pub task: Task,
+    pub scope: Vec<String>,
+    #[serde(default)]
+    pub record_revisions: Vec<RecordRevision>,
+    #[serde(default)]
+    pub artifact_refs: Vec<String>,
+    #[serde(default)]
+    pub observations: Vec<String>,
+    #[serde(default)]
+    pub unresolved_questions: Vec<String>,
+    pub payload: HandoffPayload,
+}
+impl HandoffDraft {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if !valid_id(&self.to_profile) || self.route_id.as_ref().is_some_and(|id| !valid_id(id)) {
+            return Err("invalid handoff destination");
+        }
+        validate_handoff_content(
+            &self.task,
+            &self.scope,
+            &self.record_revisions,
+            &self.artifact_refs,
+            &self.observations,
+            &self.unresolved_questions,
+            &self.payload,
+        )
+    }
+    /// Completes the envelope with host-resolved identity and route.
+    pub fn into_request(
+        self,
+        id: String,
+        from_agent: String,
+        parent_id: String,
+        route_id: String,
+        destination_profile: ProfileRef,
+    ) -> HandoffRequest {
+        HandoffRequest {
+            id,
+            from_agent,
+            parent_id,
+            route_id,
+            destination_profile,
+            task: self.task,
+            scope: self.scope,
+            record_revisions: self.record_revisions,
+            artifact_refs: self.artifact_refs,
+            observations: self.observations,
+            unresolved_questions: self.unresolved_questions,
+            payload: self.payload,
+        }
+    }
+}
+
+fn validate_handoff_content(
+    task: &Task,
+    scope: &[String],
+    record_revisions: &[RecordRevision],
+    artifact_refs: &[String],
+    observations: &[String],
+    unresolved_questions: &[String],
+    payload: &HandoffPayload,
+) -> Result<(), &'static str> {
+    task.validate()?;
+    if scope.is_empty()
+        || !texts(scope)
+        || !texts(observations)
+        || !texts(unresolved_questions)
+        || !ids(artifact_refs)
+        || record_revisions.len() > 256
+        || record_revisions
+            .iter()
+            .any(|r| !valid_id(&r.id) || r.revision == 0)
+        || record_revisions
+            .iter()
+            .map(|r| &r.id)
+            .collect::<HashSet<_>>()
+            .len()
+            != record_revisions.len()
+    {
+        return Err("invalid handoff envelope");
+    }
+    match payload {
+        HandoffPayload::Task {} => {}
+        HandoffPayload::Candidate { claim } => {
+            if !text(claim, 4096) || task.evidence_refs.is_empty() {
+                return Err("candidate needs a labeled claim and evidence");
             }
         }
-        Ok(())
+        HandoffPayload::Assessment { result } => result.validate()?,
+        HandoffPayload::SupportedFinding { result } => {
+            result.validate()?;
+            if result.assessment != Assessment::Supported {
+                return Err("reporting requires a supported assessment");
+            }
+        }
+        HandoffPayload::RankedTargets { targets } => {
+            if targets.is_empty()
+                || targets.len() > 64
+                || targets.iter().enumerate().any(|(i, t)| {
+                    t.rank as usize != i + 1 || !text(&t.target, 1024) || !text(&t.rationale, 4096)
+                })
+                || targets
+                    .iter()
+                    .map(|t| &t.target)
+                    .collect::<HashSet<_>>()
+                    .len()
+                    != targets.len()
+            {
+                return Err("targets must have distinct ordered ranks");
+            }
+        }
+        HandoffPayload::Remediation { finding_refs } => {
+            if finding_refs.is_empty() || !ids(finding_refs) {
+                return Err("remediation needs finding references");
+            }
+        }
+        HandoffPayload::Patch {
+            patch_refs,
+            test_refs,
+        }
+        | HandoffPayload::PatchAssessment {
+            patch_refs,
+            test_refs,
+            ..
+        } => {
+            if patch_refs.is_empty() || test_refs.is_empty() || !ids(patch_refs) || !ids(test_refs)
+            {
+                return Err("patch handoff needs patch and test references");
+            }
+            if let HandoffPayload::PatchAssessment { result, .. } = payload {
+                result.validate()?;
+            }
+        }
     }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

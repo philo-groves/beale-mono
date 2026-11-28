@@ -74,7 +74,12 @@ pub(super) async fn run_worker(state: SessionState) {
             })
             .await
             {
-                Ok(Ok(next)) => recovery_cursor = next,
+                Ok(Ok(next)) => {
+                    recovery_cursor = next;
+                    // Recovered executions and released capacity can make
+                    // queued agents eligible.
+                    super::hierarchy::scheduler::wake_all(&state);
+                }
                 _ => {
                     beale_host_log::error!("Saved worker maintenance could not read host storage.")
                 }

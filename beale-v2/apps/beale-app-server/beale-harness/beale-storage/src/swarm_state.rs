@@ -1078,15 +1078,21 @@ impl SwarmStore {
 
     /// Worker events cannot claim lifecycle authority; their sequence and
     /// provenance are assigned centrally and committed with the acknowledgement.
+    /// Records a worker event. `stored` is the payload the host keeps and
+    /// projects, normally `payload` after host-secret redaction. The mutation
+    /// receipt still binds the original request, so a replay matches its first
+    /// delivery even if the host's secret set changed in between.
     pub fn worker_event(
         &self,
         bearer: &str,
         request: &WorkerRequest,
+        stored: &Value,
         now_ms: i64,
     ) -> Result<MutationAcknowledgement> {
-        let WorkerOperation::Event { event_id, payload } = &request.operation else {
+        let WorkerOperation::Event { event_id, .. } = &request.operation else {
             anyhow::bail!("not a worker event");
         };
+        let payload = stored;
         self.dispatch_mutation(bearer, WORKER_AUDIENCE, request, now_ms, |tx, _| {
             let mut state = read_scan(tx, &request.scan_id)?;
             if let Some(existing) = state.events.iter().find(|event| &event.id == event_id) {

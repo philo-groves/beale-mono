@@ -44,6 +44,23 @@ pub struct ContainerHandle {
     pub runtime_directory: String,
     pub image: ResolvedImage,
 }
+/// How a container on this Docker engine reaches its owning host, addressed
+/// as [`beale_contracts::swarm_host::CONTAINER_HOST_ALIAS`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HostAccess {
+    /// Docker Desktop resolves the alias itself and forwards it to the host's
+    /// loopback services.
+    Desktop,
+    /// A native engine. The alias is mapped to this bridge gateway address,
+    /// where the owning host serves only the scoped worker route.
+    Bridge(std::net::Ipv4Addr),
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct IpamConfig {
+    #[serde(default)]
+    gateway: String,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ContainerStatus {
     Running,
@@ -316,6 +333,41 @@ impl Docker {
         drop(tree);
         result
     }
+    /// Detects how containers reach this host. Containers use the default
+    /// bridge network, so a native engine maps the alias to its gateway.
+    pub async fn host_access(&self) -> Result<HostAccess> {
+        let system: String = serde_json::from_slice(
+            &self
+                .run(
+                    &args(&["info", "--format", "{{json .OperatingSystem}}"]),
+                    None,
+                    Duration::from_secs(15),
+                )
+                .await?,
+        )
+        .context("Docker engine identity is unavailable")?;
+        if system.contains("Docker Desktop") {
+            return Ok(HostAccess::Desktop);
+        }
+        let configs: Vec<IpamConfig> = serde_json::from_slice(
+            &self
+                .run(
+                    &args(&[
+                        "network",
+                        "inspect",
+                        "--format",
+                        "{{json .IPAM.Config}}",
+                        "--",
+                        "bridge",
+                    ]),
+                    None,
+                    Duration::from_secs(15),
+                )
+                .await?,
+        )
+        .context("Docker bridge network configuration is unavailable")?;
+        bridge_gateway(&configs).map(HostAccess::Bridge)
+    }
     pub async fn resolve_image(
         &self,
         image: &str,
@@ -423,6 +475,18 @@ impl Docker {
         ]);
         for label in &labels {
             create.extend(args(&["--label", label]));
+        }
+        // Give the worker a stable name for its owning host. Docker Desktop
+        // provides the alias; a native engine maps it to the bridge gateway,
+        // where the host serves the scoped worker route.
+        if let HostAccess::Bridge(gateway) = self.host_access().await? {
+            create.extend(args(&[
+                "--add-host",
+                &format!(
+                    "{}:{gateway}",
+                    beale_contracts::swarm_host::CONTAINER_HOST_ALIAS
+                ),
+            ]));
         }
         ensure!(
             options.environment.len() <= 64,
@@ -788,6 +852,17 @@ async fn bounded(reader: impl tokio::io::AsyncRead + Unpin) -> Result<Vec<u8>> {
 fn args(values: &[&str]) -> Vec<OsString> {
     values.iter().map(OsString::from).collect()
 }
+fn bridge_gateway(configs: &[IpamConfig]) -> Result<std::net::Ipv4Addr> {
+    let gateway = configs
+        .iter()
+        .find_map(|config| config.gateway.parse::<std::net::Ipv4Addr>().ok())
+        .context("Docker bridge gateway is unavailable")?;
+    ensure!(
+        !gateway.is_unspecified() && !gateway.is_loopback() && !gateway.is_multicast(),
+        "invalid Docker bridge gateway"
+    );
+    Ok(gateway)
+}
 fn valid_id(value: &str) -> Result<()> {
     ensure!(
         value.len() == 64 && value.bytes().all(|c| c.is_ascii_hexdigit()),
@@ -814,4 +889,30 @@ fn labels(values: &BTreeMap<String, String>, host: &str, instance: uuid::Uuid) -
         "Docker resource belongs to another owner"
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod host_access_tests {
+    use super::*;
+
+    #[test]
+    fn bridge_gateway_comes_from_docker_ipam_output() {
+        let configs: Vec<IpamConfig> = serde_json::from_str(
+            r#"[{"Subnet":"fd00:db8::/64","Gateway":"fd00:db8::1"},{"Subnet":"192.0.2.0/24","Gateway":"192.0.2.1","IPRange":""}]"#,
+        )
+        .unwrap();
+        assert_eq!(
+            bridge_gateway(&configs).unwrap(),
+            "192.0.2.1".parse::<std::net::Ipv4Addr>().unwrap()
+        );
+        for invalid in [
+            r#"[]"#,
+            r#"[{"Subnet":"192.0.2.0/24"}]"#,
+            r#"[{"Gateway":"0.0.0.0"}]"#,
+            r#"[{"Gateway":"127.0.0.1"}]"#,
+        ] {
+            let configs: Vec<IpamConfig> = serde_json::from_str(invalid).unwrap();
+            assert!(bridge_gateway(&configs).is_err(), "{invalid}");
+        }
+    }
 }

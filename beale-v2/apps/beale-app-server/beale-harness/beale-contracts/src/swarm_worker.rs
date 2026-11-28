@@ -252,7 +252,9 @@ impl WorkerReply {
                                 .map_err(|_| "invalid snapshot acknowledgement")?;
                         chunk.validate_for(request)?;
                     }
-                    WorkerOperation::Canonical { .. }
+                    // A canonical tool or an artifact read can be acknowledged
+                    // with a typed rejection of model-supplied input.
+                    WorkerOperation::Canonical { .. } | WorkerOperation::ArtifactRead { .. }
                         if acknowledgement.result.get("error").is_some() =>
                     {
                         let error: crate::tool_error::ToolError =

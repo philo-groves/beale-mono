@@ -1,7 +1,7 @@
 //! Opt-in Docker acceptance. Uses only synthetic provider and workspace data.
-//! BEALE_CONTAINER_RUNTIME selects a packaged static worker; Docker Desktop
-//! tests also set BEALE_DOCKER_TEST_GATEWAY to its host-gateway IP. The test-only
-//! /etc/hosts mapping lets the same loopback leader URL work on host and guest.
+//! BEALE_CONTAINER_RUNTIME selects a packaged static worker. Containers reach
+//! the synthetic loopback-addressed leader through the production container
+//! host alias; the fixture listener also accepts the native bridge gateway.
 use super::*;
 use crate::distributed::{docker::DockerBackend, peer_host::AssignedWorkerBackend};
 use beale_contracts::{swarm_container::*, swarm_host::*, swarm_worker::WorkerShell};
@@ -265,11 +265,6 @@ async fn round_trip_with_retry(
     let root = f.root.join("docker-host");
     let env = environments(&root);
     let id = Uuid::new_v4();
-    let gateway = std::env::var("BEALE_DOCKER_TEST_GATEWAY")
-        .expect("set BEALE_DOCKER_TEST_GATEWAY to the synthetic listener gateway");
-    assert!(gateway.parse::<std::net::IpAddr>().is_ok());
-    // Docker regenerates /etc/hosts on every start. This fixture-only startup
-    // wrapper reestablishes the synthetic localhost mapping before PID 1.
     let application = if startup == StartupMode::ImageDefault {
         "printf 'application active' > /application-ready; exec tail -f /dev/null".to_owned()
     } else {
@@ -281,7 +276,7 @@ async fn round_trip_with_retry(
             "/bin/sh".into(),
             "-c".into(),
             format!(
-                "printf '{gateway} localhost\\n' > /etc/hosts; if test -f /fail-start-example; then rm /fail-start-example; exit 1; fi; {application}"
+                "if test -f /fail-start-example; then rm /fail-start-example; exit 1; fi; {application}"
             ),
         ],
         ..Default::default()
@@ -383,7 +378,9 @@ async fn round_trip_with_retry(
     });
     env.docker.start(&handle).await.unwrap();
     let port = reqwest::Url::parse(&origin).unwrap().port().unwrap();
-    let response=command(&env.docker,&handle,&format!("exec 3<>/dev/tcp/localhost/{port}; printf 'GET / HTTP/1.0\\r\\n\\r\\n' >&3; IFS= read -r line <&3; printf '%s' \"$line\"")).await;
+    // The container reaches the loopback-addressed leader through the same
+    // host alias production assigns; no fixture host mapping is installed.
+    let response=command(&env.docker,&handle,&format!("exec 3<>/dev/tcp/{CONTAINER_HOST_ALIAS}/{port}; printf 'GET / HTTP/1.0\\r\\n\\r\\n' >&3; IFS= read -r line <&3; printf '%s' \"$line\"")).await;
     assert!(
         response.contains("404"),
         "synthetic gateway is unreachable from Docker: {response}"
@@ -563,7 +560,7 @@ async fn round_trip_with_retry(
         let worker = WorkerLaunch {
             version: 1,
             identity: target.identity.clone(),
-            leader: launch.leader_origin.clone(),
+            leader: container_leader_origin(&launch.leader_origin).unwrap(),
             bearer: launch.worker_bearer.clone(),
             workspace: prepared.workspace,
             protected_root: prepared.protected_root,

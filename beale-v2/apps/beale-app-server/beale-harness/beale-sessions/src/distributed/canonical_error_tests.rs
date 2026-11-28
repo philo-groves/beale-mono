@@ -26,7 +26,12 @@ async fn hierarchy_rejections_preserve_branch_state_and_replay_without_authority
     f.allocation_snapshot();
     let profile = f.store.worker_progress(&f.attempt.id).unwrap().turn.profile;
     let spawn = |profile: &str| json!({"profile":{"id":profile,"revision":1},"task":task(),"independent":false});
-    let handoff = json!({"id":"handoff-example","from_agent":f.deputy,"parent_id":f.leader,"route_id":"missing-route","destination_profile":{"id":profile,"revision":1},"task":task(),"scope":["Synthetic scope"],"record_revisions":[],"artifact_refs":[],"observations":[],"unresolved_questions":[],"payload":{"kind":"task"}});
+    let handoff = json!({"to_profile":"missing-profile","task":task(),"scope":["Synthetic scope"],"payload":{"kind":"task"}});
+    let mut spoofed = handoff.clone();
+    spoofed["from_agent"] = json!(f.leader);
+    let mut wrong_route = handoff.clone();
+    wrong_route["to_profile"] = json!(profile);
+    wrong_route["route_id"] = json!("missing-route");
     for (index, (tool, args, code)) in [
         (
             "swarm_spawn_subagent",
@@ -62,6 +67,17 @@ async fn hierarchy_rejections_preserve_branch_state_and_replay_without_authority
             "swarm_message_parent",
             json!({"message":"Example handoff","handoff":handoff}),
             ToolErrorCode::NotFound,
+        ),
+        // Host identity is not model input.
+        (
+            "swarm_message_parent",
+            json!({"message":"Example handoff","handoff":spoofed}),
+            ToolErrorCode::InvalidArguments,
+        ),
+        (
+            "swarm_message_parent",
+            json!({"message":"Example handoff","handoff":wrong_route}),
+            ToolErrorCode::Rejected,
         ),
     ]
     .into_iter()
@@ -125,13 +141,27 @@ async fn hierarchy_rejections_preserve_branch_state_and_replay_without_authority
         ),
     )
     .await;
+    // A parent may explicitly resume a stopped child whose execution has
+    // stopped. It runs as a new assignment; no earlier attempt is revived.
     let resume = request(
         &f,
         "resume-stopped-child",
         "swarm_message_subagent",
         json!({"child_id":child,"message":"Synthetic resume"}),
     );
-    failure(&send(&f, &resume).await, ToolErrorCode::Rejected);
+    let resumed = send(&f, &resume).await;
+    assert_eq!(resumed["queued"], true, "{resumed}");
+    assert_eq!(send(&f, &resume).await, resumed);
+    assert!(
+        f.store
+            .load("scan-example", true)
+            .unwrap()
+            .assignments
+            .iter()
+            .any(|a| a.child_id == child
+                && a.state == AssignmentState::Queued
+                && a.task.question == "Synthetic resume")
+    );
     f.store
         .fence_attempt("scan-example", &f.attempt.id, true)
         .unwrap();

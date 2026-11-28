@@ -5,6 +5,103 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
+// A newer submission attached to the same Swarm detaches the older stream. The
+// older stream ends without a stop request; the scan keeps running.
+#[tokio::test]
+async fn detached_stream_ends_without_stopping_the_scan() {
+    let control = SubmissionControl::default();
+    let stops = Arc::new(AtomicUsize::new(0));
+    let accepted = Arc::new(tokio::sync::Notify::new());
+    let turn = uuid::Uuid::new_v4().to_string();
+    let app = Router::new()
+        .route(
+            SESSION_TURN_STREAM_PATH,
+            post({
+                let accepted = accepted.clone();
+                move || {
+                    let accepted = accepted.clone();
+                    async move {
+                        accepted.notify_one();
+                        // A live Swarm stream that never completes on its own.
+                        let frames =
+                            futures_util::stream::pending::<Result<Vec<u8>, std::io::Error>>();
+                        (
+                            [(CONTENT_TYPE, PROTOBUF_STREAM_CONTENT_TYPE)],
+                            Body::from_stream(frames),
+                        )
+                            .into_response()
+                    }
+                }
+            }),
+        )
+        .route(
+            &SESSION_TURN_STOP_PATH.replace("{id}", &turn),
+            post({
+                let stops = stops.clone();
+                move || {
+                    let stops = stops.clone();
+                    async move {
+                        stops.fetch_add(1, Ordering::SeqCst);
+                        StatusCode::NO_CONTENT
+                    }
+                }
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let request = SubmitSessionTurnRequest {
+        workspace_id: uuid::Uuid::new_v4().to_string(),
+        session_id: uuid::Uuid::new_v4().to_string(),
+        prompt: "Synthetic follow-up".into(),
+        provider: 1,
+        method: 1,
+        model: "example-model".into(),
+        ..Default::default()
+    };
+    let client = stream_client().unwrap();
+    let stream = tokio::spawn({
+        let control = control.clone();
+        let turn = turn.clone();
+        async move {
+            submit_authenticated_stream(
+                &client,
+                addr,
+                request,
+                &turn,
+                control,
+                "synthetic-token".into(),
+                |_| {},
+                |_| {},
+            )
+            .await
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(10), accepted.notified())
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !control.is_accepted() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    control.detach();
+    let result = tokio::time::timeout(Duration::from_secs(10), stream)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(result, Err(DETACHED.to_owned()));
+    // Give a mistaken stop replay time to arrive.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(stops.load(Ordering::SeqCst), 0);
+    server.abort();
+    let _ = server.await;
+}
+
 // Exercise real HTTP submission, delayed terminal frames, Stop retries, and UI retry notification.
 #[tokio::test]
 async fn replayed_stop_preserves_completion_and_retries_without_dropping_stream() {

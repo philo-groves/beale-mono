@@ -310,6 +310,20 @@ pub mod tool_names {
     pub const MESSAGE_PARENT: &str = "swarm_message_parent";
 }
 
+/// Hierarchy control tools. They change only host-owned Swarm coordination
+/// state, never the workspace, and their authority is enforced structurally by
+/// the host (direct-child relationships, saved routes and profiles). A leader
+/// keeps them under the coordinator-only rule without a model review, so a
+/// review-service outage cannot stop it from delegating or reading results.
+/// Artifact materialization writes files and remains reviewed for a leader.
+pub fn coordination_tool(name: &str) -> bool {
+    use tool_names::*;
+    matches!(
+        name,
+        HANDOFF | LIST | SPAWN | MESSAGE | STOP | MESSAGE_PARENT
+    )
+}
+
 #[cfg(test)]
 mod cache_tests {
     use super::*;

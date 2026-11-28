@@ -1,12 +1,12 @@
 use super::*;
 
+/// Submits a handoff draft and returns the envelope the host must store: the
+/// draft completed with the caller, its parent, the saved destination
+/// revision and route, and the host-assigned ID from the reply.
 fn submit(f: &Fixture, source: &LocalTurn, leader: &LocalTurn, id: &str) -> HandoffRequest {
-    let handoff = HandoffRequest {
-        id: id.into(),
-        from_agent: source.agent_id.clone(),
-        parent_id: leader.agent_id.clone(),
-        route_id: "research-request".into(),
-        destination_profile: profile("research"),
+    let draft = HandoffDraft {
+        to_profile: "research".into(),
+        route_id: None,
         task: task(),
         scope: vec!["Synthetic example.test".into()],
         record_revisions: vec![],
@@ -17,13 +17,21 @@ fn submit(f: &Fixture, source: &LocalTurn, leader: &LocalTurn, id: &str) -> Hand
     };
     let command = SwarmCommand::MessageParent(Box::new(MessageParent {
         message: "Synthetic handoff".into(),
-        handoff: Some(handoff.clone()),
+        handoff: Some(draft.clone()),
     }));
     assert!(command.validate().is_ok());
-    f.store
+    let reply = f
+        .store
         .local_dispatch(source, id, command, Admission::Ready)
         .unwrap();
-    handoff
+    let handoff_id = reply["handoff_id"].as_str().unwrap().to_owned();
+    draft.into_request(
+        handoff_id,
+        source.agent_id.clone(),
+        leader.agent_id.clone(),
+        "research-request".into(),
+        profile("research"),
+    )
 }
 fn action(
     f: &Fixture,
@@ -221,17 +229,19 @@ fn handoff_recovery_resume_stop_and_scan_end_preserve_terminal_results() {
     let dest = spawn(&f, &leader, "dest", "research", Admission::Ready, false);
     let source = claim(&f, &source);
     let mut dest = claim(&f, &dest);
+    let mut submitted = Vec::new();
     for id in ["recover-handoff", "cancel-handoff"] {
-        submit(&f, &source, &leader, id);
+        let handoff = submit(&f, &source, &leader, id);
         action(
             &f,
             &leader,
             id,
             HandoffAction::Forward {
-                id: id.into(),
+                id: handoff.id.clone(),
                 to: dest.agent_id.clone(),
             },
         );
+        submitted.push(handoff.id);
     }
     // Temporary provider failures do not invalidate ownership or accepted input.
     f.store.local_failed(&dest).unwrap();
@@ -266,7 +276,7 @@ fn handoff_recovery_resume_stop_and_scan_end_preserve_terminal_results() {
         &dest,
         "complete-recovered",
         HandoffAction::Complete {
-            id: "recover-handoff".into(),
+            id: submitted[0].clone(),
             result: result(),
         },
     );
@@ -287,13 +297,13 @@ fn unrelated_handoff_and_messages_do_not_reactivate_explicitly_blocked_item() {
     let source = spawn(&f, &leader, "source", "research", Admission::Ready, false);
     let dest = spawn(&f, &leader, "dest", "research", Admission::Ready, false);
     let source = claim(&f, &source);
-    submit(&f, &source, &leader, "item-a");
+    let item_a = submit(&f, &source, &leader, "item-a");
     action(
         &f,
         &leader,
         "route-a",
         HandoffAction::Forward {
-            id: "item-a".into(),
+            id: item_a.id.clone(),
             to: dest.clone(),
         },
     );
@@ -303,7 +313,7 @@ fn unrelated_handoff_and_messages_do_not_reactivate_explicitly_blocked_item() {
         &dest_turn,
         "block-a",
         HandoffAction::Block {
-            id: "item-a".into(),
+            id: item_a.id.clone(),
         },
     );
     finish(&f, &dest_turn);
@@ -311,18 +321,18 @@ fn unrelated_handoff_and_messages_do_not_reactivate_explicitly_blocked_item() {
         f.store.load("scan-example", true).unwrap().handoffs[0].status,
         HandoffStatus::Blocked
     );
-    submit(&f, &source, &leader, "item-b");
+    let item_b = submit(&f, &source, &leader, "item-b");
     action(
         &f,
         &leader,
         "route-b",
         HandoffAction::Forward {
-            id: "item-b".into(),
+            id: item_b.id.clone(),
             to: dest.clone(),
         },
     );
     let next = claim(&f, &dest);
-    assert!(!next.prompt.contains("item-a"));
+    assert!(!next.prompt.contains(&item_a.id));
     let status = f.store.load("scan-example", true).unwrap().handoffs[0].status;
     assert_eq!(status, HandoffStatus::Blocked);
     f.store.local_recovery_exhausted(&next).unwrap();
@@ -349,7 +359,7 @@ fn unrelated_handoff_and_messages_do_not_reactivate_explicitly_blocked_item() {
         &retried,
         "complete-b",
         HandoffAction::Complete {
-            id: "item-b".into(),
+            id: item_b.id.clone(),
             result: result(),
         },
     );
@@ -364,12 +374,12 @@ fn unrelated_handoff_and_messages_do_not_reactivate_explicitly_blocked_item() {
         &leader,
         "retry-a-only",
         HandoffAction::Forward {
-            id: "item-a".into(),
+            id: item_a.id.clone(),
             to: dest.clone(),
         },
     );
     let resumed_a = claim(&f, &dest);
-    assert!(resumed_a.prompt.contains("item-a"));
+    assert!(resumed_a.prompt.contains(&item_a.id));
     let saved = f.reopen().load("scan-example", true).unwrap();
     assert_eq!(saved.handoffs[0].status, HandoffStatus::Assigned);
     assert_eq!(saved.handoffs[1].status, HandoffStatus::Completed);
@@ -385,13 +395,13 @@ fn replacement_custody(acknowledged: bool) {
     let source = spawn(&f, &leader, "source", "research", Admission::Ready, false);
     let dest = spawn(&f, &leader, "dest", "research", Admission::Ready, false);
     let source = claim(&f, &source);
-    submit(&f, &source, &leader, "reassigned-item");
+    let item = submit(&f, &source, &leader, "reassigned-item");
     action(
         &f,
         &leader,
         "route",
         HandoffAction::Forward {
-            id: "reassigned-item".into(),
+            id: item.id.clone(),
             to: dest.clone(),
         },
     );
@@ -417,7 +427,7 @@ fn replacement_custody(acknowledged: bool) {
             &leader,
             "replacement",
             SwarmCommand::Spawn(Spawn {
-                handoff_id: Some("reassigned-item".into()),
+                handoff_id: Some(item.id.clone()),
                 profile: profile("research"),
                 task: task(),
                 independent: false,
@@ -431,7 +441,7 @@ fn replacement_custody(acknowledged: bool) {
         &replacement,
         "completed",
         HandoffAction::Complete {
-            id: "reassigned-item".into(),
+            id: item.id.clone(),
             result: result(),
         },
     );
@@ -447,7 +457,7 @@ fn replacement_custody(acknowledged: bool) {
             .find(|c| c.agent_id == dest)
             .unwrap()
             .retired_handoffs
-            .contains(&"reassigned-item".into())
+            .contains(&item.id)
     );
     reopened
         .local_dispatch(
@@ -467,16 +477,16 @@ fn replacement_custody(acknowledged: bool) {
         h.assignment_context.as_deref(),
         Some(replacement.agent_id.as_str())
     );
-    assert!(resumed.prompt.contains("reassigned-item"));
+    assert!(resumed.prompt.contains(&item.id));
     assert!(resumed.prompt.contains("no longer assigned to you"));
     assert!(!resumed.prompt.contains("Assigned"));
     let local = f.reopen().local_state("scan-example").unwrap();
-    assert!(!local.inbox.iter().any(|m| {
-        m.to == dest
-            && m.handoff
-                .as_ref()
-                .is_some_and(|h| h.id == "reassigned-item")
-    }));
+    assert!(
+        !local
+            .inbox
+            .iter()
+            .any(|m| { m.to == dest && m.handoff.as_ref().is_some_and(|h| h.id == item.id) })
+    );
     // Keep the original context intact; the next turn still receives a custody
     // correction even after the unrelated follow-up has been acknowledged.
     finish(&f, &resumed);
@@ -494,7 +504,7 @@ fn replacement_custody(acknowledged: bool) {
         "custody correction must not hide operator input"
     );
     assert!(again.prompt.contains("no longer assigned to you"));
-    assert!(again.prompt.contains("reassigned-item"));
+    assert!(again.prompt.contains(&item.id));
     assert!(again.prompt.contains("More unrelated synthetic work"));
 }
 
@@ -504,30 +514,30 @@ fn unrelated_delivery_does_not_retry_executor_blocked_work_but_operator_retry_do
     let source = spawn(&f, &leader, "source", "research", Admission::Ready, false);
     let dest = spawn(&f, &leader, "dest", "research", Admission::Ready, false);
     let source = claim(&f, &source);
-    submit(&f, &source, &leader, "recovery-a");
+    let recovery_a = submit(&f, &source, &leader, "recovery-a");
     action(
         &f,
         &leader,
         "route-a",
         HandoffAction::Forward {
-            id: "recovery-a".into(),
+            id: recovery_a.id.clone(),
             to: dest.clone(),
         },
     );
     let first = claim(&f, &dest);
     f.store.local_recovery_exhausted(&first).unwrap();
-    submit(&f, &source, &leader, "unrelated-b");
+    let unrelated_b = submit(&f, &source, &leader, "unrelated-b");
     action(
         &f,
         &leader,
         "route-b",
         HandoffAction::Forward {
-            id: "unrelated-b".into(),
+            id: unrelated_b.id.clone(),
             to: dest.clone(),
         },
     );
     let next = claim(&f, &dest);
-    assert!(!next.prompt.contains("recovery-a"));
+    assert!(!next.prompt.contains(&recovery_a.id));
     assert_eq!(
         f.reopen().load("scan-example", true).unwrap().handoffs[0].status,
         HandoffStatus::Blocked
@@ -537,7 +547,7 @@ fn unrelated_delivery_does_not_retry_executor_blocked_work_but_operator_retry_do
         &next,
         "complete-b",
         HandoffAction::Complete {
-            id: "unrelated-b".into(),
+            id: unrelated_b.id.clone(),
             result: result(),
         },
     );
@@ -551,7 +561,7 @@ fn unrelated_delivery_does_not_retry_executor_blocked_work_but_operator_retry_do
         )
         .unwrap();
     let retry = claim(&f, &dest);
-    assert!(retry.prompt.contains("recovery-a"));
+    assert!(retry.prompt.contains(&recovery_a.id));
     assert_eq!(
         f.reopen().load("scan-example", true).unwrap().handoffs[0].status,
         HandoffStatus::Assigned
@@ -561,7 +571,7 @@ fn unrelated_delivery_does_not_retry_executor_blocked_work_but_operator_retry_do
         &retry,
         "complete-a",
         HandoffAction::Complete {
-            id: "recovery-a".into(),
+            id: recovery_a.id.clone(),
             result: result(),
         },
     );

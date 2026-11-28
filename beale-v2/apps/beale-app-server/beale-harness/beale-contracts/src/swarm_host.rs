@@ -66,20 +66,32 @@ impl HostWorkerLaunch {
     }
 }
 
-pub fn validate_origin(value: &str) -> Result<(), &'static str> {
-    let origin = url::Url::parse(value).map_err(|_| "invalid host origin")?;
-    let loopback = origin.host_str().is_some_and(|host| {
+/// Name a local Docker container uses for its owning host. Docker Desktop
+/// provides it and forwards it to the host's loopback services. On a native
+/// engine the owning host maps it to its bridge gateway when it creates the
+/// container and serves only the worker route there.
+pub const CONTAINER_HOST_ALIAS: &str = "host.docker.internal";
+
+fn loopback_host(origin: &url::Url) -> bool {
+    origin.host_str().is_some_and(|host| {
         host == "localhost"
             || host
                 .trim_matches(['[', ']'])
                 .parse::<std::net::IpAddr>()
                 .is_ok_and(|ip| ip.is_loopback())
-    });
+    })
+}
+
+/// Plain HTTP is accepted only where traffic stays on the owning host: a
+/// loopback address, or the container alias for the host's local bridge.
+pub fn validate_origin(value: &str) -> Result<(), &'static str> {
+    let origin = url::Url::parse(value).map_err(|_| "invalid host origin")?;
+    let local = loopback_host(&origin) || origin.host_str() == Some(CONTAINER_HOST_ALIAS);
     if value.len() > 2048
         || value.trim() != value
         || value.chars().any(char::is_control)
         || origin.host_str().is_none()
-        || !(origin.scheme() == "https" || origin.scheme() == "http" && loopback)
+        || !(origin.scheme() == "https" || origin.scheme() == "http" && local)
         || !origin.username().is_empty()
         || origin.password().is_some()
         || origin.path() != "/"
@@ -90,6 +102,23 @@ pub fn validate_origin(value: &str) -> Result<(), &'static str> {
         return Err("invalid host origin");
     }
     Ok(())
+}
+
+/// The leader origin as seen from a container on the leader's own Docker
+/// engine. Inside a container, loopback is the container itself, so a loopback
+/// origin is addressed through [`CONTAINER_HOST_ALIAS`] on the same port. Other
+/// origins, such as a paired Fleet HTTPS origin, are returned unchanged.
+pub fn container_leader_origin(value: &str) -> Result<String, &'static str> {
+    validate_origin(value)?;
+    let mut origin = url::Url::parse(value).map_err(|_| "invalid host origin")?;
+    if loopback_host(&origin) {
+        origin
+            .set_host(Some(CONTAINER_HOST_ALIAS))
+            .map_err(|_| "invalid host origin")?;
+    }
+    let translated = origin.to_string();
+    validate_origin(&translated)?;
+    Ok(translated)
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]

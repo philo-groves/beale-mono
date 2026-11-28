@@ -144,19 +144,37 @@ impl Worker<'_> {
                             .into(),
                         }
                     } else {
-                        let result = beale_runbooks::run_worker_cell(
+                        // A limit ends the cell before it is reported and is a
+                        // failed cell. Other errors keep the outcome uncertain.
+                        match beale_runbooks::run_worker_cell(
                             language,
                             source,
                             &self.launch.workspace,
                             Duration::from_millis((RUN_BUDGET_MS - elapsed).min(60_000)),
                         )
-                        .await?;
-                        CellOutcome {
-                            cell_id: id.clone(),
-                            success: result.success,
-                            exit_code: result.exit_code,
-                            stdout: redactor.redact(&result.stdout).into_owned(),
-                            stderr: redactor.redact(&result.stderr).into_owned(),
+                        .await
+                        {
+                            Ok(result) => CellOutcome {
+                                cell_id: id.clone(),
+                                success: result.success,
+                                exit_code: result.exit_code,
+                                stdout: redactor.redact(&result.stdout).into_owned(),
+                                stderr: redactor.redact(&result.stderr).into_owned(),
+                            },
+                            Err(error) => {
+                                let Some(limit) =
+                                    error.downcast_ref::<beale_tools::process::LimitExceeded>()
+                                else {
+                                    return Err(error);
+                                };
+                                CellOutcome {
+                                    cell_id: id.clone(),
+                                    success: false,
+                                    exit_code: None,
+                                    stdout: String::new(),
+                                    stderr: limit.worker_message(),
+                                }
+                            }
                         }
                     };
                     outcome.validate().map_err(anyhow::Error::msg)?;

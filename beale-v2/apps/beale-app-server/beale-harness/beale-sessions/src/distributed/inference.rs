@@ -143,7 +143,7 @@ pub(super) async fn dispatch(
     let definitions =
         tools(&caller.enabled_tools, caller.agent.role, bootstrap.shell).map_err(unavailable)?;
     let system = instructions(state, store, request, caller).map_err(unavailable)?;
-    let mut input = messages.as_array().ok_or(StatusCode::BAD_REQUEST)?.clone();
+    let input = messages.as_array().ok_or(StatusCode::BAD_REQUEST)?;
     // System/developer instructions are supplied only by the leader. Other
     // provider continuation items are opaque data, bounded by WorkerRequest.
     if input.iter().any(|item| {
@@ -151,6 +151,16 @@ pub(super) async fn dispatch(
     }) {
         return Err(StatusCode::BAD_REQUEST);
     }
+    // Worker tool results reach this boundary as conversation items. Apply the
+    // same host-secret redaction the leader applies to its own tool results
+    // before any of them is sent to a provider. The idempotency claim below
+    // still binds the original request content.
+    let redactor = tool_runtime::host_redactor(state);
+    let mut input: Vec<Value> = input
+        .iter()
+        .cloned()
+        .map(|item| redactor.redact_json(item))
+        .collect();
     if validated.provider != Provider::OpenAi {
         input.insert(0, json!({"role":"system","content":system}));
     }
@@ -228,7 +238,7 @@ pub(super) async fn dispatch(
         InferenceResult::Unavailable { retryable: false }
     };
     let output = serde_json::to_value(output).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let output = redact_value(&tool_runtime::host_redactor(state), output);
+    let output = redactor.redact_json(output);
     let output = match serde_json::from_value::<InferenceResult>(output.clone()) {
         Ok(parsed) if parsed.validate().is_ok() => output,
         _ => json!({"status":"unavailable","retryable":false}),
@@ -242,25 +252,6 @@ pub(super) async fn dispatch(
     .validate_for(request)
     .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     Ok(acknowledgement)
-}
-
-fn redact_value(redactor: &beale_tools::Redactor, value: Value) -> Value {
-    match value {
-        Value::String(text) => Value::String(redactor.redact(&text).into_owned()),
-        Value::Array(values) => Value::Array(
-            values
-                .into_iter()
-                .map(|v| redact_value(redactor, v))
-                .collect(),
-        ),
-        Value::Object(values) => Value::Object(
-            values
-                .into_iter()
-                .map(|(k, v)| (redactor.redact(&k).into_owned(), redact_value(redactor, v)))
-                .collect(),
-        ),
-        other => other,
-    }
 }
 
 #[cfg(test)]

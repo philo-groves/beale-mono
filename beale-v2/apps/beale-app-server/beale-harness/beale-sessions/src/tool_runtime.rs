@@ -123,6 +123,30 @@ impl ToolResult {
     pub(crate) fn error(output: String) -> Self {
         Self::new(output, true)
     }
+
+    /// Model-facing result for a rejected Swarm or artifact request.
+    ///
+    /// A typed [`ToolError`](beale_contracts::tool_error::ToolError) is a known
+    /// rejection that applied nothing, so its code and message reach the model
+    /// as they do from the remote-worker gateway. The message is redacted
+    /// before it is bounded, so truncation cannot split a secret. Any other
+    /// error is a host-side condition: it is logged and `fallback` is returned.
+    #[cfg_attr(not(feature = "swarms"), allow(dead_code))]
+    pub(crate) fn rejection(
+        redactor: &Redactor,
+        prefix: &str,
+        error: &anyhow::Error,
+        fallback: &str,
+    ) -> Self {
+        use beale_contracts::tool_error::ToolError;
+        let Some(rejection) = error.downcast_ref::<ToolError>() else {
+            beale_host_log::error!("{prefix} failed: {error:#}");
+            return Self::error(fallback.to_owned());
+        };
+        let mut rejection = rejection.clone();
+        rejection.message = redactor.redact(&rejection.message).into_owned();
+        Self::error(rejection.model_text(prefix))
+    }
 }
 
 /// Everything one agent needs to review and run its tool calls. Some fields
@@ -151,6 +175,24 @@ pub(crate) struct ToolRuntime<'a> {
 impl ToolRuntime<'_> {
     pub(crate) fn available(&self, name: &str) -> bool {
         self.definitions.iter().any(|tool| tool["name"] == name)
+    }
+
+    /// Whether the coordinator-only leader rule reviews this call. A leader
+    /// keeps its managerial hierarchy tools without review; every other leader
+    /// call, including tools that are otherwise unreviewed, is reviewed.
+    fn leader_reviews(&self, name: &str) -> bool {
+        if !self
+            .local
+            .is_some_and(|local| local.role == beale_contracts::swarms::Role::Leader)
+        {
+            return false;
+        }
+        #[cfg(feature = "swarms")]
+        if beale_swarms::coordination_tool(name) {
+            return false;
+        }
+        let _ = name;
+        true
     }
 
     async fn review_call(&self, name: &str, arguments: &Value) -> ReviewDecision {
@@ -199,12 +241,7 @@ impl ToolRuntime<'_> {
         let Some(arguments) = arguments else {
             return Gate::Run { reviewed: false };
         };
-        if !self.available(name)
-            || (!requires_call_review(name)
-                && !self
-                    .local
-                    .is_some_and(|local| local.role == beale_contracts::swarms::Role::Leader))
-        {
+        if !self.available(name) || (!requires_call_review(name) && !self.leader_reviews(name)) {
             return Gate::Run { reviewed: false };
         }
         match until_stopped(self.review_call(name, arguments), stop).await {
@@ -304,7 +341,7 @@ impl ToolRuntime<'_> {
             if name == "swarm_materialize_artifact" {
                 return match self.materialize(arguments) {
                     Ok(value) => ToolResult::new(value.to_string(), false),
-                    Err(error) => super::research_files::tool_error(&error),
+                    Err(error) => super::research_files::tool_error(self.redactor, &error),
                 };
             }
             if (matches!(name, "swarm_message_parent" | "swarm_handoff")
@@ -314,7 +351,7 @@ impl ToolRuntime<'_> {
                     &mut arguments,
                 )
             {
-                return super::research_files::tool_error(&error);
+                return super::research_files::tool_error(self.redactor, &error);
             }
         }
 
@@ -330,16 +367,22 @@ impl ToolRuntime<'_> {
             };
             return match beale_storage::swarm_state::SwarmStore::open(self.state.db.clone())
                 .and_then(|store| {
-                    let command = serde_json::from_value(
+                    let command = beale_contracts::tool_error::arguments(
                         serde_json::json!({"tool":name,"arguments":arguments}),
                     )?;
                     store.local_dispatch(local, call_id, command, admission)
                 }) {
-                Ok(value) => ToolResult::new(value.to_string(), false),
-                Err(error) => {
-                    beale_host_log::error!("local Swarm dispatch rejected: {error:#}");
-                    ToolResult::error("Swarm request rejected: verify the saved profile, direct-child relationship, task or handoff schema, and current agent state.".into())
+                Ok(value) => {
+                    // A spawn, message, or stop can make another agent eligible.
+                    crate::hierarchy::scheduler::wake(self.state, &local.scan_id);
+                    ToolResult::new(value.to_string(), false)
                 }
+                Err(error) => ToolResult::rejection(
+                    self.redactor,
+                    "Swarm request",
+                    &error,
+                    "Swarm request was not applied because of a host-side condition, such as this branch stopping or storage being unavailable. Retry the same request later or report the problem to your parent.",
+                ),
             };
         }
         #[cfg(feature = "webfetch")]

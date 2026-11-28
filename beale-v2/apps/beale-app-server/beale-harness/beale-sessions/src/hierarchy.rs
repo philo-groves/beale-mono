@@ -7,6 +7,8 @@ use beale_contracts::swarms::{
 use beale_storage::swarm_state::{LocalModel, LocalSettings, SwarmStore};
 use std::time::Duration;
 
+pub(crate) mod scheduler;
+
 fn store(db: &HostDatabase) -> Result<SwarmStore, TurnError> {
     SwarmStore::open(db.clone()).map_err(|_| TurnError::Internal)
 }
@@ -250,14 +252,6 @@ fn now() -> Result<i64, TurnError> {
         .ok_or(TurnError::Internal)
 }
 
-// This publisher owns no execution. Dropping a turn always cancels it, including
-// early errors; a disconnected/slow client cannot block the coordinator.
-struct LiveStatus(tokio::task::JoinHandle<()>);
-impl Drop for LiveStatus {
-    fn drop(&mut self) {
-        self.0.abort();
-    }
-}
 pub(super) fn live_detail(
     state: &SessionState,
     scan: &str,
@@ -297,56 +291,20 @@ pub(super) fn live_detail(
     enrich(&db, scan, &mut detail)?;
     Ok(detail)
 }
-fn live_status(
-    state: SessionState,
-    scan: String,
-    request: SubmitSessionTurnRequest,
-    progress: Option<mpsc::Sender<SessionStreamEvent>>,
-) -> Option<LiveStatus> {
-    let tx = progress?;
-    // Initialize the optional warning store before the first read-only projection.
-    beale_storage::provider_accounting::AccountingStore::open(state.db.clone()).ok()?;
-    let started = now().ok()? as u64;
-    Some(LiveStatus(tokio::spawn(async move {
-        let mut timer = tokio::time::interval(Duration::from_millis(250));
-        timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        let mut previous = None;
-        loop {
-            timer.tick().await;
-            if tx.is_closed() {
-                break;
-            }
-            let Ok(detail) = live_detail(&state, &scan, &request, started) else {
-                continue;
-            };
-            if previous.as_ref() == Some(&detail) {
-                continue;
-            }
-            let event = SessionStreamEvent {
-                kind: SessionStreamKind::SwarmUpdated as i32,
-                detail: Some(detail.clone()),
-                ..Default::default()
-            };
-            if session_stream_frame(&event).is_some() && tx.try_send(event).is_ok() {
-                previous = Some(detail);
-            }
-        }
-    })))
-}
 
+/// Tags a leader turn's progress with its turn number and publishes it to
+/// every attached stream. Publishing never waits for a subscriber.
 struct TurnProgress {
     sender: Option<mpsc::Sender<SessionStreamEvent>>,
     task: Option<tokio::task::JoinHandle<()>>,
 }
 impl TurnProgress {
-    fn new(output: mpsc::Sender<SessionStreamEvent>, number: u64) -> Self {
+    fn new(output: tokio::sync::broadcast::Sender<SessionStreamEvent>, number: u64) -> Self {
         let (sender, mut receiver) = mpsc::channel::<SessionStreamEvent>(32);
         let task = tokio::spawn(async move {
             while let Some(mut event) = receiver.recv().await {
                 event.turn_number = number;
-                if output.send(event).await.is_err() {
-                    break;
-                }
+                let _ = output.send(event);
             }
         });
         Self {
@@ -369,13 +327,47 @@ impl Drop for TurnProgress {
     }
 }
 
+/// Ends a scan again at its original end time after a follow-up could not
+/// reopen it, restoring its retention deadline. Retained destinations learn the
+/// restored end now or through lifecycle maintenance.
+async fn restore_end(
+    state: &SessionState,
+    store: &SwarmStore,
+    scan: &str,
+    ended_at_ms: i64,
+) -> Result<(), TurnError> {
+    store
+        .end_scan(scan, ended_at_ms)
+        .map_err(|_| TurnError::Internal)?;
+    let saved = store.load(scan, true).map_err(|_| TurnError::Internal)?;
+    if let Err(error) = distributed::placement::sync_lifecycle(state, &saved).await {
+        beale_host_log::error!("Restored scan end remains pending: {error:#}");
+    }
+    Ok(())
+}
+
+/// Runs a Swarm submission: starts the scan's scheduler or attaches to the
+/// running one, forwards live events to `progress`, and returns the scan's
+/// outcome once scheduling ends. Dropping this future detaches without
+/// stopping the scan; a stop on `stop` stops it.
 pub(super) async fn run(
     state: SessionState,
     request: SubmitSessionTurnRequest,
     progress: Option<mpsc::Sender<SessionStreamEvent>>,
     stop: Option<watch::Receiver<bool>>,
 ) -> Result<SessionDetail, TurnError> {
-    engine::validate_request(&request)?;
+    scheduler::start_or_attach(&state, request)
+        .await?
+        .follow(progress, stop)
+        .await
+}
+
+/// Checks a Swarm submission and returns its scan ID.
+fn validate_start(
+    state: &SessionState,
+    request: &SubmitSessionTurnRequest,
+) -> Result<String, TurnError> {
+    engine::validate_request(request)?;
     if !request.session_id.is_empty() && !request.swarm_pacing.is_empty() {
         return Err(TurnError::Invalid);
     }
@@ -393,13 +385,90 @@ pub(super) async fn run(
     {
         return Err(TurnError::Invalid);
     }
-    let scan = if request.session_id.is_empty() {
+    Ok(if request.session_id.is_empty() {
         Uuid::new_v4().to_string()
     } else {
         parse_id(&request.session_id)?.to_string()
-    };
-    let lock = session_lock(&state, &scan).await;
-    let _guard = lock.try_lock().map_err(|_| TurnError::Conflict)?;
+    })
+}
+
+/// A follow-up must match the saved scan's workspace, destinations, Swarm,
+/// and retention.
+fn validate_follow_up(
+    saved: &beale_storage::swarm_state::ScanState,
+    request: &SubmitSessionTurnRequest,
+) -> Result<(), TurnError> {
+    if request.swarm_retention.as_ref().is_some_and(|p| {
+        p.ended_scan_seconds != saved.config.retention.ended_scan_seconds
+            || p.storage_reserve_bytes != saved.config.retention.storage_reserve_bytes
+    }) {
+        return Err(TurnError::Conflict);
+    }
+    if saved.config.workspace_id != request.workspace_id
+        || !request.swarm_destinations.is_empty()
+            && request
+                .swarm_destinations
+                .iter()
+                .map(|d| (&d.host_id, &d.configuration_id))
+                .collect::<Vec<_>>()
+                != saved
+                    .config
+                    .destinations
+                    .iter()
+                    .map(|d| (&d.host_id, &d.configuration_id))
+                    .collect::<Vec<_>>()
+    {
+        return Err(TurnError::Conflict);
+    }
+    if let ScanMode::Swarm { snapshot } = &saved.config.mode
+        && !request.swarm_id.is_empty()
+        && request.swarm_id != snapshot.id
+    {
+        return Err(TurnError::Conflict);
+    }
+    Ok(())
+}
+
+fn leader_id(saved: &beale_storage::swarm_state::ScanState) -> Result<&str, TurnError> {
+    saved
+        .agents
+        .iter()
+        .find(|a| a.summary.role == Role::Leader)
+        .map(|a| a.summary.id.as_str())
+        .ok_or(TurnError::Internal)
+}
+
+/// Queues a follow-up for a running scan's leader. The scheduler delivers it
+/// at the leader's next turn.
+fn queue_follow_up(
+    state: &SessionState,
+    request: &SubmitSessionTurnRequest,
+    scan: &str,
+) -> Result<(), TurnError> {
+    let store = store(&state.db)?;
+    let saved = store.load(scan, true).map_err(|_| TurnError::NotFound)?;
+    validate_follow_up(&saved, request)?;
+    store
+        .local_message(
+            scan,
+            &Uuid::new_v4().to_string(),
+            leader_id(&saved)?,
+            &request.prompt,
+        )
+        .map_err(|error| {
+            beale_host_log::error!("Swarm follow-up was not queued: {error:#}");
+            TurnError::Conflict
+        })
+}
+
+/// Creates a new scan, or queues a follow-up for a saved one and reopens it
+/// when it has ended. The caller holds the scan's session lock.
+async fn prepare(
+    state: &SessionState,
+    request: &SubmitSessionTurnRequest,
+    scan: &str,
+) -> Result<(), TurnError> {
+    let scan = scan.to_owned();
     let store = store(&state.db)?;
     if request.session_id.is_empty() {
         if !feature_applies(&state.db, "swarms", &request.workspace_id)? {
@@ -472,7 +541,7 @@ pub(super) async fn run(
             } else {
                 scope
             },
-            enabled_tools: enabled_tools(&state, &request.workspace_id)
+            enabled_tools: enabled_tools(state, &request.workspace_id)
                 .map_err(|_| TurnError::Internal)?,
             provider_routes: models
                 .iter()
@@ -524,7 +593,7 @@ pub(super) async fn run(
         store
             .create_scan(config, true, true)
             .map_err(|_| TurnError::Internal)?;
-        research_files::capture(&state, &scan, &request.workspace_id).map_err(|error| {
+        research_files::capture(state, &scan, &request.workspace_id).map_err(|error| {
             beale_host_log::error!("Swarm snapshot failed: {error:#}");
             TurnError::Internal
         })?;
@@ -543,328 +612,46 @@ pub(super) async fn run(
             &request.prompt,
         )
         .map_err(|_| TurnError::Internal)?;
-    } else {
-        let saved = store.load(&scan, true).map_err(|_| TurnError::NotFound)?;
-        if request.swarm_retention.as_ref().is_some_and(|p| {
-            p.ended_scan_seconds != saved.config.retention.ended_scan_seconds
-                || p.storage_reserve_bytes != saved.config.retention.storage_reserve_bytes
-        }) {
-            return Err(TurnError::Conflict);
-        }
-        if saved.config.workspace_id != request.workspace_id
-            || !request.swarm_destinations.is_empty()
-                && request
-                    .swarm_destinations
-                    .iter()
-                    .map(|d| (&d.host_id, &d.configuration_id))
-                    .collect::<Vec<_>>()
-                    != saved
-                        .config
-                        .destinations
-                        .iter()
-                        .map(|d| (&d.host_id, &d.configuration_id))
-                        .collect::<Vec<_>>()
-        {
-            return Err(TurnError::Conflict);
-        }
-        if let ScanMode::Swarm { snapshot } = &saved.config.mode
-            && !request.swarm_id.is_empty()
-            && request.swarm_id != snapshot.id
-        {
-            return Err(TurnError::Conflict);
-        }
-        if saved.ended_at_ms.is_some() {
-            store
-                .reopen_scan(&scan, true)
-                .map_err(|_| TurnError::Conflict)?;
-            distributed::placement::sync_lifecycle(
-                &state,
-                &store.load(&scan, true).map_err(|_| TurnError::Internal)?,
-            )
-            .await
+        return Ok(());
+    }
+    let saved = store.load(&scan, true).map_err(|_| TurnError::NotFound)?;
+    validate_follow_up(&saved, request)?;
+    let leader = leader_id(&saved)?.to_owned();
+    // An ended scan is reopened only for a follow-up that can be delivered.
+    // If reopening cannot finish, the original end clock is restored, so a
+    // rejected follow-up never leaves the scan open without an end.
+    let reopened_from = saved.ended_at_ms;
+    if let Some(ended_at_ms) = reopened_from {
+        store
+            .local_message_deliverable(&scan, &leader)
             .map_err(|error| {
-                beale_host_log::error!("Retained scan cannot reopen yet: {error:#}");
+                beale_host_log::error!("Swarm follow-up cannot be delivered: {error:#}");
                 TurnError::Conflict
             })?;
-        }
-        let leader = saved
-            .agents
-            .iter()
-            .find(|a| a.summary.role == Role::Leader)
-            .ok_or(TurnError::Internal)?;
         store
-            .local_message(
-                &scan,
-                &Uuid::new_v4().to_string(),
-                &leader.summary.id,
-                &request.prompt,
-            )
+            .reopen_scan(&scan, true)
             .map_err(|_| TurnError::Conflict)?;
-    }
-    let _live_status = live_status(
-        state.clone(),
-        scan.clone(),
-        request.clone(),
-        progress.clone(),
-    );
-    let mut workers = None;
-    // Serial local adapter: no inference polling or unowned background tasks. The
-    // admission boundary can also be exercised at smaller simulated capacities.
-    'schedule: loop {
-        distributed::LocalWorkerHost::recover(&state, &scan).map_err(|_| TurnError::Internal)?;
-        distributed::local_allocation::reconcile(&state).map_err(|_| TurnError::Internal)?;
-        let snapshot = store.load(&scan, true).map_err(|_| TurnError::Internal)?;
-        let leader = snapshot
-            .agents
-            .iter()
-            .find(|a| a.summary.role == Role::Leader)
-            .ok_or(TurnError::Internal)?;
-        if engine::stop_requested(&stop) {
-            store
-                .local_stop(&scan, &leader.summary.id)
-                .map_err(|_| TurnError::Internal)?;
-            break;
-        }
-        let mut claimed = None;
-        for agent in &snapshot.agents {
-            if !snapshot.config.destinations.is_empty() && agent.summary.role != Role::Leader {
-                if distributed::placement::run_pending(
-                    &state,
-                    &snapshot,
-                    &agent.summary.id,
-                    stop.clone(),
-                )
-                .await
-                .map_err(|_| TurnError::Internal)?
-                {
-                    continue 'schedule;
-                }
-                continue;
-            }
-            let owner_key = Uuid::new_v4();
-            let allocation = if agent.summary.role != Role::Leader {
-                match distributed::local_allocation::reserve(
-                    &state,
-                    &snapshot,
-                    &agent.summary.id,
-                    &stop,
-                )
-                .await
-                .map_err(|error| {
-                    beale_host_log::error!("Native allocation pending: {error:#}");
-                    TurnError::Internal
-                })? {
-                    Some(owned) => Some(owned),
-                    None => continue,
-                }
-            } else {
-                None
-            };
-            let owner = distributed::acquire_local_execution_lock(&state, owner_key)
-                .map_err(|_| TurnError::Internal)?
-                .ok_or(TurnError::Internal)?;
-            if let Some(turn) = store
-                .local_claim_owned(&scan, &agent.summary.id, now()?, 64, owner_key)
-                .map_err(|_| TurnError::Internal)?
-            {
-                if let Some(allocation) = &allocation {
-                    distributed::local_allocation::bind(&state, allocation, &turn)
-                        .map_err(|_| TurnError::Internal)?;
-                }
-                claimed = Some((turn, owner_key, owner, allocation));
-                break;
-            }
-            distributed::discard_unclaimed_lock(&state, owner_key, owner);
-            if let Some(allocation) = allocation {
-                distributed::local_allocation::unclaimed(&state, &allocation)
-                    .map_err(|_| TurnError::Internal)?;
-            }
-        }
-        let Some((turn, owner_key, owner, _allocation)) = claimed else {
-            break;
-        };
-        if turn.role != Role::Leader {
-            if workers.is_none() {
-                match distributed::LocalWorkerHost::start(state.clone()).await {
-                    Ok(host) => workers = Some(host),
-                    Err(error) => {
-                        beale_host_log::error!("Swarm worker host startup failed: {error:#}");
-                        let record = store
-                            .local_worker_record(&turn.attempt_id)
-                            .map_err(|_| TurnError::Internal)?;
-                        store
-                            .reconcile_unlaunched_worker(&record)
-                            .map_err(|_| TurnError::Internal)?;
-                        continue;
-                    }
-                }
-            }
-            // Once launched, only the owning supervisor may release execution.
-            // Failed persistence retains ownership and blocks replacement.
-            let host = workers.as_ref().ok_or(TurnError::Internal)?;
-            if let Err(error) = host.run_owned(&turn, stop.clone(), owner_key, owner).await {
-                beale_host_log::error!("Swarm assigned execution requires recovery: {error:#}");
-            }
-            continue;
-        }
-        let settings = store
-            .local_state(&scan)
-            .map_err(|_| TurnError::Internal)?
-            .settings;
-        let choices: Vec<_> = settings
-            .models
-            .iter()
-            .filter(|m| m.profile == turn.profile)
-            .collect();
-        let ordinal = snapshot
-            .agents
-            .iter()
-            .filter(|a| a.summary.profile.id == turn.profile)
-            .position(|a| a.summary.id == turn.agent_id)
-            .ok_or(TurnError::Internal)?;
-        let model = choices
-            .get(
-                ordinal
-                    .checked_rem(choices.len())
-                    .ok_or(TurnError::Internal)?,
-            )
-            .ok_or(TurnError::Internal)?;
-        let input = SubmitSessionTurnRequest {
-            workspace_id: request.workspace_id.clone(),
-            session_id: turn.session_id.clone(),
-            prompt: turn.prompt.clone(),
-            provider: model.provider,
-            method: model.method,
-            model: model.model.clone(),
-            reasoning_effort: settings.reasoning_effort,
-            ..Default::default()
-        };
-        let tagged = if turn.role == Role::Leader {
-            let number = state
-                .db
-                .session(&turn.session_id)
-                .map_err(|_| TurnError::Internal)?
-                .and_then(|s| s.turns.last().map(|t| t.number))
-                .unwrap_or(0)
-                .checked_add(1)
-                .ok_or(TurnError::Internal)?;
-            progress
-                .clone()
-                .map(|p| TurnProgress::new(p, number as u64))
-        } else {
-            None
-        };
-        let result = engine::run_one_turn(
-            &state,
-            input,
-            tagged.as_ref().and_then(|p| p.sender.clone()),
-            turn.operator_text.is_none(),
-            &lock,
-            stop.clone(),
-            Some(&turn),
+        if let Err(error) = distributed::placement::sync_lifecycle(
+            state,
+            &store.load(&scan, true).map_err(|_| TurnError::Internal)?,
         )
-        .await;
-        if let Some(tagged) = tagged {
-            tagged.finish().await;
+        .await
+        {
+            beale_host_log::error!("Retained scan cannot reopen yet: {error:#}");
+            restore_end(state, &store, &scan, ended_at_ms).await?;
+            return Err(TurnError::Conflict);
         }
-        match result {
-            Ok(detail) => {
-                let answer = detail.messages.last().map_or("", |m| m.text.as_str());
-                if answer.starts_with("Auto-Review was unavailable")
-                    || answer.starts_with(INTERRUPTED_ANSWER)
-                {
-                    store.local_failed(&turn).map_err(|_| TurnError::Internal)?;
-                } else if engine::save_checkpoint(true, || {
-                    let context = json!({"session_id":turn.session_id,"saved":true});
-                    research_files::checkpoint(&state, &turn, &context)?;
-                    store.local_finish(
-                        &turn,
-                        json!({"session_id":turn.session_id,"saved":true}),
-                        answer,
-                        engine::stop_requested(&stop),
-                    )
-                })
-                .await
-                .is_err()
-                {
-                    store
-                        .local_checkpoint_failed(&turn)
-                        .map_err(|_| TurnError::Internal)?;
-                }
-            }
-            Err(TurnError::RecoveryExhausted) => {
-                store
-                    .local_recovery_exhausted(&turn)
-                    .map_err(|_| TurnError::Internal)?;
-            }
-            Err(TurnError::Checkpoint) => {
-                store
-                    .local_checkpoint_failed(&turn)
-                    .map_err(|_| TurnError::Internal)?;
-            }
-            Err(_) => {
-                store.local_failed(&turn).map_err(|_| TurnError::Internal)?;
-            }
+    }
+    if let Err(error) =
+        store.local_message(&scan, &Uuid::new_v4().to_string(), &leader, &request.prompt)
+    {
+        beale_host_log::error!("Swarm follow-up was not queued: {error:#}");
+        if let Some(ended_at_ms) = reopened_from {
+            restore_end(state, &store, &scan, ended_at_ms).await?;
         }
-        store
-            .complete_coordinator(&turn.attempt_id, owner_key, now()?)
-            .map_err(|_| TurnError::Internal)?;
-        drop(owner);
+        return Err(TurnError::Conflict);
     }
-    let saved = store.load(&scan, true).map_err(|_| TurnError::Internal)?;
-    if saved.ready_to_end().map_err(|_| TurnError::Internal)? || engine::stop_requested(&stop) {
-        store
-            .end_scan(&scan, now()?)
-            .map_err(|_| TurnError::Internal)?;
-    }
-    if let Err(error) = distributed::placement::sync_lifecycle(
-        &state,
-        &store.load(&scan, true).map_err(|_| TurnError::Internal)?,
-    )
-    .await
-    {
-        beale_host_log::error!("Scan retention update remains pending: {error:#}");
-    }
-    if state
-        .db
-        .session(&scan)
-        .map_err(|_| TurnError::Internal)?
-        .is_none()
-    {
-        let time = now()?;
-        let session = SessionRow {
-            id: scan.clone(),
-            workspace_id: request.workspace_id.clone(),
-            title: title(&request.prompt),
-            created_at_ms: time,
-            last_message_at_ms: time,
-        };
-        let answer = if engine::stop_requested(&stop) {
-            "Swarm stopped before its first completed turn."
-        } else {
-            "Swarm stopped after bounded local recovery failed. The scan state is retained."
-        };
-        state
-            .db
-            .append_turn(
-                &session,
-                &TurnRow {
-                    number: 1,
-                    provider: request.provider,
-                    method: request.method,
-                    model: request.model.clone(),
-                    prompt: request.prompt.clone(),
-                    answer: answer.into(),
-                    duration_ms: 0,
-                    internal_prompt: false,
-                },
-                true,
-            )
-            .map_err(|_| TurnError::Internal)?;
-    }
-    beale_storage::provider_accounting::AccountingStore::open(state.db.clone())
-        .map_err(|_| TurnError::Internal)?;
-    live_detail(&state, &scan, &request, now()? as u64).map_err(Into::into)
+    Ok(())
 }
 
 pub(super) fn pacing_target(

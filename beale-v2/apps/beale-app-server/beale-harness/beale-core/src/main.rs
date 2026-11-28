@@ -18,6 +18,8 @@ use tokio::net::TcpListener;
 mod auth;
 #[cfg(all(feature = "swarms", target_os = "linux"))]
 mod container;
+#[cfg(all(feature = "swarms", target_os = "linux"))]
+mod container_gateway;
 mod features;
 #[cfg(windows)]
 mod tray;
@@ -189,17 +191,19 @@ async fn serve() -> Result<()> {
     let execution_db = db.clone();
     let execution_data_root = workspaces.root().to_path_buf();
     #[cfg(feature = "swarms")]
+    let docker = beale_fleet::docker::Docker::new(
+        std::env::var_os("BEALE_DOCKER_CLI")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| "docker".into()),
+    );
+    #[cfg(feature = "swarms")]
     let (execution_backend, docker_recovery, allocator): (
         std::sync::Arc<dyn beale_fleet::worker_host::HostExecutionBackend>,
         tokio::task::JoinHandle<()>,
         beale_fleet::allocation::Allocator,
     ) = {
         let environments = beale_fleet::docker::DockerEnvironments::new(
-            beale_fleet::docker::Docker::new(
-                std::env::var_os("BEALE_DOCKER_CLI")
-                    .map(std::path::PathBuf::from)
-                    .unwrap_or_else(|| "docker".into()),
-            ),
+            docker.clone(),
             beale_fleet::docker::DockerStore::open(db.clone())?,
             execution_data_root.clone(),
             std::env::var_os("BEALE_CONTAINER_RUNTIME").map(std::path::PathBuf::from),
@@ -245,6 +249,14 @@ async fn serve() -> Result<()> {
         let leader_origin = std::env::var("BEALE_FLEET_LEADER_ORIGIN").unwrap_or(local_origin);
         sessions.with_fleet_origin(leader_origin)?
     };
+    // Local containers reach a loopback leader through the container host
+    // alias; native Linux engines need the worker route on their bridge.
+    #[cfg(all(feature = "swarms", target_os = "linux"))]
+    let container_gateway = tokio::spawn(container_gateway::serve(
+        docker.clone(),
+        listener.local_addr()?.port(),
+        sessions.worker_router(),
+    ));
     let accounting_maintenance = beale_providers::pacing::start_maintenance(db.clone())?;
     let app = Router::new()
         .merge(beale_providers::pacing::http::router(
@@ -314,6 +326,8 @@ async fn serve() -> Result<()> {
     execution_recovery.abort();
     #[cfg(feature = "swarms")]
     docker_recovery.abort();
+    #[cfg(all(feature = "swarms", target_os = "linux"))]
+    container_gateway.abort();
     #[cfg(feature = "swarms")]
     allocation_maintenance.abort();
     #[cfg(feature = "memories")]

@@ -2,11 +2,17 @@
 //! workspace; it never initializes host storage or a provider credential store.
 use super::{Lease, TransportError, TransportFailure, WorkerTransport};
 use anyhow::{Context, Result, ensure};
+use beale_agent_loop::{
+    AgentPorts, Checkpoint, CompletedCall, InferOutcome, LoopConfig, LoopError, LoopState,
+    ModelStep, PendingCall, Phase, ToolOutcome,
+};
 use beale_contracts::{swarm_worker::*, swarms::*};
 use beale_storage::worker_spool::{Claim, WorkerSpool};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
+    collections::BTreeMap,
+    future::Future,
     path::PathBuf,
     sync::Mutex,
     time::{Duration, Instant},
@@ -37,32 +43,13 @@ pub struct WorkerLaunch {
     pub recovery: PathBuf,
 }
 
+/// The worker checkpoint: the shared loop state plus this execution's
+/// assignment. The leader's reconciliation reads `input`, `phase.phase`,
+/// `phase.answer`, and `active_elapsed_ms`, so these keys stay at the top
+/// level. Version 2 checkpoints (before the shared loop) still load.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct PendingCall {
-    call: InferenceCall,
-    review_id: String,
-    publish_id: String,
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(tag = "phase", rename_all = "snake_case", deny_unknown_fields)]
-enum Phase {
-    Infer {
-        operation_id: String,
-    },
-    Tools {
-        calls: Vec<PendingCall>,
-    },
-    Done {
-        operation_id: String,
-        answer: String,
-    },
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct LoopState {
+struct WorkerCheckpoint {
     version: u32,
     shell: WorkerShell,
     route_id: String,
@@ -70,8 +57,67 @@ struct LoopState {
     enabled_tools: Vec<String>,
     input: Vec<Value>,
     provider_failures: u32,
+    #[serde(default)]
+    executed_calls: u32,
+    #[serde(default)]
+    replayed_calls: u32,
+    #[serde(default)]
+    completed: BTreeMap<String, CompletedCall>,
     active_elapsed_ms: u64,
     phase: Phase,
+}
+
+const CHECKPOINT_VERSION: u32 = 3;
+
+/// The assignment fields saved beside the loop state.
+#[derive(Clone)]
+struct Assignment {
+    shell: WorkerShell,
+    route_id: String,
+    enabled_tools: Vec<String>,
+}
+
+impl WorkerCheckpoint {
+    fn load(context: Value) -> Result<(Assignment, LoopState)> {
+        let saved: Self = serde_json::from_value(context)?;
+        ensure!(
+            matches!(saved.version, 2 | CHECKPOINT_VERSION),
+            "unsupported worker checkpoint version"
+        );
+        Ok((
+            Assignment {
+                shell: saved.shell,
+                route_id: saved.route_id,
+                enabled_tools: saved.enabled_tools,
+            },
+            LoopState {
+                format: saved.format,
+                input: saved.input,
+                provider_failures: saved.provider_failures,
+                executed_calls: saved.executed_calls,
+                replayed_calls: saved.replayed_calls,
+                completed: saved.completed,
+                phase: saved.phase,
+            },
+        ))
+    }
+
+    fn new(assignment: &Assignment, state: &LoopState, active_elapsed_ms: u64) -> Self {
+        Self {
+            version: CHECKPOINT_VERSION,
+            shell: assignment.shell,
+            route_id: assignment.route_id.clone(),
+            format: state.format,
+            enabled_tools: assignment.enabled_tools.clone(),
+            input: state.input.clone(),
+            provider_failures: state.provider_failures,
+            executed_calls: state.executed_calls,
+            replayed_calls: state.replayed_calls,
+            completed: state.completed.clone(),
+            active_elapsed_ms,
+            phase: state.phase.clone(),
+        }
+    }
 }
 
 /// Running-process elapsed time. A new process resumes only the last durable
@@ -285,15 +331,20 @@ impl Worker<'_> {
         self.spool.acknowledge(&id)?;
         Ok(saved.revision)
     }
-    async fn save(&self, state: &LoopState, clock: &ActiveClock) -> Result<u64> {
-        let mut state = state.clone();
-        state.active_elapsed_ms = clock.elapsed_at(Instant::now())?;
+    async fn save(
+        &self,
+        assignment: &Assignment,
+        state: &LoopState,
+        clock: &ActiveClock,
+    ) -> Result<u64> {
+        let checkpoint =
+            WorkerCheckpoint::new(assignment, state, clock.elapsed_at(Instant::now())?);
         self.deadline()?;
         let previous = self.spool.latest_checkpoint()?.map_or(0, |c| c.revision);
         self.spool.checkpoint(
             &Uuid::new_v4().to_string(),
             previous,
-            &serde_json::to_value(&state)?,
+            &serde_json::to_value(&checkpoint)?,
         )?;
         self.publish_checkpoint().await
     }
@@ -335,13 +386,17 @@ impl Worker<'_> {
         ))
     }
 
-    async fn execute_call(&self, state: &LoopState, pending: &PendingCall) -> Result<CallOutcome> {
+    async fn execute_call(
+        &self,
+        enabled_tools: &[String],
+        pending: &PendingCall,
+    ) -> Result<CallOutcome> {
         let call = &pending.call;
         let mut arguments: Value = match serde_json::from_str(&call.arguments) {
             Ok(value) if matches!(value, Value::Object(_)) => value,
             _ => return self.reject_call(pending, "Tool arguments must be a valid JSON object. Correct the arguments and try again.").await,
         };
-        if !state.enabled_tools.contains(&call.name) {
+        if !enabled_tools.contains(&call.name) {
             return self.reject_call(pending, "This tool is unavailable to the assigned worker. Use one of the supplied tools.").await;
         }
         if let Some(reason) = invalid_native_arguments(&call.name, &arguments) {
@@ -434,11 +489,28 @@ impl Worker<'_> {
                                 "assigned commands cannot select another machine"
                             );
                             let output = if call.name == "swarm_materialize_artifact" {
-                                let result = self.materialize(call, &arguments).await?;
-                                Ok(beale_tools::ToolOutcome {
-                                    output: result.to_string(),
-                                    is_error: false,
-                                })
+                                // A typed rejection wrote nothing to the workspace
+                                // and is reported like a leader-side artifact error.
+                                // Transfer or storage failures stay uncertain.
+                                match self.materialize(call, &arguments).await {
+                                    Ok(result) => Ok(beale_tools::ToolOutcome {
+                                        output: result.to_string(),
+                                        is_error: false,
+                                    }),
+                                    Err(error) => {
+                                        let Some(rejection) = error
+                                            .downcast_ref::<beale_contracts::tool_error::ToolError>()
+                                        else {
+                                            return Err(error);
+                                        };
+                                        Ok(beale_tools::ToolOutcome {
+                                            // Static host text; the worker bearer is
+                                            // redacted with the rest of the outcome.
+                                            output: rejection.model_text("Artifact operation"),
+                                            is_error: true,
+                                        })
+                                    }
+                                }
                             } else if call.name == beale_tools::COMMAND_TOOL_NAME {
                                 let command = arguments["command"]
                                     .as_str()
@@ -447,16 +519,32 @@ impl Worker<'_> {
                                     .get("timeout_seconds")
                                     .and_then(Value::as_u64)
                                     .unwrap_or(beale_tools::DEFAULT_COMMAND_TIMEOUT_SECONDS);
-                                let output = beale_tools::run_worker_command(
+                                // A limit is a known failed result: the command
+                                // was ended first. Other errors keep the outcome
+                                // uncertain and stop this worker for reconciliation.
+                                match beale_tools::run_worker_command(
                                     command,
                                     &self.launch.workspace,
                                     timeout,
                                 )
-                                .await?;
-                                Ok(beale_tools::ToolOutcome {
-                                    output: output.transcript(),
-                                    is_error: !output.success,
-                                })
+                                .await
+                                {
+                                    Ok(output) => Ok(beale_tools::ToolOutcome {
+                                        output: output.transcript(),
+                                        is_error: !output.success,
+                                    }),
+                                    Err(error) => {
+                                        let Some(limit) = error
+                                            .downcast_ref::<beale_tools::process::LimitExceeded>()
+                                        else {
+                                            return Err(error);
+                                        };
+                                        Ok(beale_tools::ToolOutcome {
+                                            output: limit.worker_message(),
+                                            is_error: true,
+                                        })
+                                    }
+                                }
                             } else {
                                 self.execute_builtin(&call.name, &arguments).await
                             };
@@ -578,16 +666,15 @@ impl Worker<'_> {
             .transpose()?
             .unwrap_or(0);
         let clock = ActiveClock::new(base_ms)?;
-        let mut state = match checkpoint {
+        let (assignment, mut state) = match checkpoint {
             Some(checkpoint) => {
-                let state: LoopState = serde_json::from_value(checkpoint.context)?;
-                ensure!(state.version == 2, "unsupported worker checkpoint version");
+                let (assignment, state) = WorkerCheckpoint::load(checkpoint.context)?;
                 ensure!(
-                    state.shell == WorkerShell::native(),
+                    assignment.shell == WorkerShell::native(),
                     "retained shell does not match this worker runtime"
                 );
                 self.publish_checkpoint().await?;
-                state
+                (assignment, state)
             }
             None => {
                 let id = format!("bootstrap:{}", self.launch.identity.attempt_id);
@@ -606,128 +693,168 @@ impl Worker<'_> {
                 );
                 self.prepare_plugin_resources(&bootstrap.enabled_tools)
                     .await?;
-                let state = LoopState {
-                    version: 2,
-                    active_elapsed_ms: 0,
+                let assignment = Assignment {
                     shell: bootstrap.shell,
                     route_id: bootstrap.route_id,
-                    format: bootstrap.message_format,
                     enabled_tools: bootstrap.enabled_tools,
-                    input: bootstrap.input,
-                    provider_failures: 0,
-                    phase: Phase::Infer {
-                        operation_id: Uuid::new_v4().to_string(),
-                    },
                 };
-                self.save(&state, &clock).await?;
+                let state = LoopState::new(bootstrap.message_format, bootstrap.input);
+                self.save(&assignment, &state, &clock).await?;
                 self.spool.acknowledge(&id)?;
-                state
+                (assignment, state)
             }
         };
-        loop {
-            self.deadline()?;
-            match state.phase.clone() {
-                Phase::Infer { operation_id } => {
-                    let result: InferenceResult = serde_json::from_value(
-                        self.remote(self.request(
-                            operation_id.clone(),
-                            WorkerOperation::Infer {
-                                route_id: state.route_id.clone(),
-                                messages: json!(state.input),
-                            },
-                        ))
-                        .await?,
-                    )?;
-                    result.validate().map_err(anyhow::Error::msg)?;
-                    match result {
-                        InferenceResult::Unavailable { retryable } => {
-                            state.provider_failures += 1;
-                            ensure!(
-                                retryable && state.provider_failures < 3,
-                                "assigned inference recovery exhausted"
-                            );
-                            state.phase = Phase::Infer {
-                                operation_id: Uuid::new_v4().to_string(),
-                            };
-                        }
-                        InferenceResult::Completed {
-                            text,
-                            calls,
-                            continuation,
-                            ..
-                        } => {
-                            state.provider_failures = 0;
-                            if continuation.is_empty() && !text.is_empty() {
-                                state.input.push(json!({"role":"assistant","content":text}));
-                            } else {
-                                state.input.extend(continuation);
-                            }
-                            state.phase = if calls.is_empty() {
-                                Phase::Done {
-                                    operation_id: Uuid::new_v4().to_string(),
-                                    answer: text,
-                                }
-                            } else {
-                                Phase::Tools {
-                                    calls: calls
-                                        .into_iter()
-                                        .map(|call| PendingCall {
-                                            call,
-                                            review_id: Uuid::new_v4().to_string(),
-                                            publish_id: Uuid::new_v4().to_string(),
-                                        })
-                                        .collect(),
-                                }
-                            };
-                        }
-                    }
-                    self.save(&state, &clock).await?;
-                    self.spool.acknowledge(&operation_id)?;
+        let mut ports = WorkerPorts {
+            worker: self,
+            assignment,
+            clock,
+        };
+        let finished = beale_agent_loop::run(&mut state, &LoopConfig::worker(), &mut ports)
+            .await
+            .map_err(|error| match error {
+                LoopError::Provider { .. } | LoopError::ProviderExhausted { .. } => {
+                    anyhow::anyhow!("assigned inference recovery exhausted")
                 }
-                Phase::Tools { mut calls } => {
-                    let Some(pending) = calls.first() else {
-                        anyhow::bail!("worker checkpoint has an empty tool phase")
-                    };
-                    let outcome = self.execute_call(&state, pending).await?;
-                    let output = outcome
-                        .result
-                        .get("output")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned)
-                        .unwrap_or_else(|| outcome.result.to_string());
-                    state
-                        .input
-                        .push(state.format.tool_output(&pending.call.id, &output));
-                    let mut acknowledged = outcome.operations;
-                    acknowledged.push(pending.publish_id.clone());
-                    calls.remove(0);
-                    state.phase = if calls.is_empty() {
-                        Phase::Infer {
-                            operation_id: Uuid::new_v4().to_string(),
-                        }
-                    } else {
-                        Phase::Tools { calls }
-                    };
-                    self.save(&state, &clock).await?;
-                    for id in acknowledged {
-                        self.spool.acknowledge(&id)?;
-                    }
+                LoopError::InvalidCall => {
+                    anyhow::anyhow!("assigned inference returned an invalid tool call")
                 }
-                Phase::Done {
-                    operation_id,
-                    answer,
-                } => {
-                    let revision = self.publish_checkpoint().await?;
-                    self.remote(self.request(
-                        operation_id.clone(),
-                        WorkerOperation::Finish { revision, answer },
-                    ))
-                    .await?;
-                    self.spool.acknowledge(&operation_id)?;
-                    return Ok(());
-                }
-            }
+                LoopError::Port(error) => error,
+            })?;
+        let revision = self.publish_checkpoint().await?;
+        self.remote(self.request(
+            finished.operation_id.clone(),
+            WorkerOperation::Finish {
+                revision,
+                answer: finished.answer,
+            },
+        ))
+        .await?;
+        self.spool.acknowledge(&finished.operation_id)?;
+        Ok(())
+    }
+}
+
+/// Shared-loop ports for an assigned worker: inference through the leader,
+/// tools in the assigned environment or through the leader, and a durable
+/// spool checkpoint after every transition. The supervisor ends the process
+/// to stop it, so there is no in-loop stop or yield signal.
+struct WorkerPorts<'w, 'a> {
+    worker: &'w Worker<'a>,
+    assignment: Assignment,
+    clock: ActiveClock,
+}
+
+impl AgentPorts for WorkerPorts<'_, '_> {
+    fn infer(
+        &mut self,
+        input: &[Value],
+        operation_id: &str,
+        _retry: bool,
+    ) -> impl Future<Output = Result<InferOutcome>> + Send {
+        let worker = self.worker;
+        let request = worker.request(
+            operation_id.to_owned(),
+            WorkerOperation::Infer {
+                route_id: self.assignment.route_id.clone(),
+                messages: json!(input),
+            },
+        );
+        async move {
+            worker.deadline()?;
+            let result: InferenceResult = serde_json::from_value(worker.remote(request).await?)?;
+            result.validate().map_err(anyhow::Error::msg)?;
+            Ok(match result {
+                InferenceResult::Unavailable { retryable } => InferOutcome::Failed {
+                    retryable,
+                    message: String::new(),
+                },
+                InferenceResult::Completed {
+                    text,
+                    calls,
+                    continuation,
+                    reasoning_summaries,
+                    usage,
+                    ..
+                } => InferOutcome::Completed(ModelStep {
+                    text,
+                    calls,
+                    continuation,
+                    reasoning_summaries,
+                    usage,
+                }),
+            })
         }
+    }
+
+    async fn observe_step(&mut self, _state: &LoopState, _step: &ModelStep) -> Result<()> {
+        // The leader records reasoning, commentary, and usage from its own
+        // durable inference record during reconciliation.
+        Ok(())
+    }
+
+    fn run_tool(
+        &mut self,
+        _state: &LoopState,
+        call: &PendingCall,
+        _arguments: Option<&Value>,
+    ) -> impl Future<Output = Result<ToolOutcome>> + Send {
+        let worker = self.worker;
+        let enabled_tools = self.assignment.enabled_tools.clone();
+        let call = call.clone();
+        async move {
+            worker.deadline()?;
+            let outcome = worker.execute_call(&enabled_tools, &call).await?;
+            let model_output = outcome
+                .result
+                .get("output")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .unwrap_or_else(|| outcome.result.to_string());
+            Ok(ToolOutcome {
+                model_output,
+                review_unavailable: false,
+                operations: outcome.operations,
+            })
+        }
+    }
+
+    fn checkpoint(
+        &mut self,
+        state: &LoopState,
+        point: Checkpoint<'_>,
+    ) -> impl Future<Output = Result<()>> + Send {
+        // Operations are acknowledged only after the state that records their
+        // results is durable on both the worker and the leader.
+        let acknowledged: Vec<String> = match point {
+            Checkpoint::Inference { operation_id } => vec![operation_id.to_owned()],
+            Checkpoint::Call {
+                call,
+                outcome: Some(outcome),
+            } => outcome
+                .operations
+                .iter()
+                .cloned()
+                .chain(std::iter::once(call.publish_id.clone()))
+                .collect(),
+            Checkpoint::Call { outcome: None, .. } | Checkpoint::Transition => Vec::new(),
+        };
+        async move {
+            self.worker
+                .save(&self.assignment, state, &self.clock)
+                .await?;
+            for id in acknowledged {
+                self.worker.spool.acknowledge(&id)?;
+            }
+            Ok(())
+        }
+    }
+
+    fn stop_requested(&mut self) -> bool {
+        false
+    }
+
+    fn yield_requested(&mut self) -> Result<bool> {
+        Ok(false)
     }
 }
 
@@ -881,6 +1008,7 @@ pub(super) async fn run_with_faults(
 /// left running merely because the agent loop or root process exited.
 pub async fn worker_entry(launch: WorkerLaunch) -> Result<()> {
     beale_tools::process::require_worker_group()?;
+    beale_tools::process::adopt_worker_supervision();
     let result = run_assigned(launch).await;
     beale_tools::process::terminate_worker_group()?;
     result

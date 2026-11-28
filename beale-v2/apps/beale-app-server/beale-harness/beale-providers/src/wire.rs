@@ -426,7 +426,7 @@ pub struct ToolStepRequest<'a> {
     pub workspace_root: Option<&'a std::path::Path>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum WireShape {
     Responses,
     Chat,
@@ -547,7 +547,7 @@ fn tool_request_body(
         reasoning_effort,
         cyber_program,
     } = options;
-    match shape {
+    let mut body = match shape {
         WireShape::Responses => {
             let mut body = json!({
             "model":model,"input":input,"tools":tools,"store":false,"stream":true,
@@ -611,7 +611,15 @@ fn tool_request_body(
             })).collect();
             json!({"model":model,"system":system,"messages":messages,"tools":native_tools,"max_tokens":8192,"stream":true})
         }
+    };
+    // Text-only steps carry no tools. Strict OpenAI-compatible endpoints reject
+    // an empty `tools` array, so the field is omitted rather than sent empty.
+    if tools.is_empty()
+        && let Some(fields) = body.as_object_mut()
+    {
+        fields.remove("tools");
     }
+    body
 }
 
 fn route(provider: Provider, mode: AuthMode) -> Route {
@@ -2126,6 +2134,39 @@ mod tests {
             ),
             json!({"role":"tool","tool_call_id":"call-example","content":"example"})
         );
+    }
+
+    #[test]
+    fn text_only_request_bodies_omit_the_tools_field() {
+        let input = vec![
+            json!({"role":"system","content":"Review example."}),
+            json!({"role":"user","content":"Example"}),
+        ];
+        for (provider, shape) in [
+            (Provider::OpenAi, WireShape::Responses),
+            (Provider::Xai, WireShape::Responses),
+            (Provider::OpenRouter, WireShape::Chat),
+            (Provider::Custom, WireShape::Chat),
+            (Provider::Anthropic, WireShape::Anthropic),
+        ] {
+            let body = tool_request_body(
+                provider,
+                shape,
+                "model-example",
+                &input,
+                &[],
+                RequestOptions {
+                    instructions: Some("Review example."),
+                    reasoning_effort: None,
+                    cyber_program: None,
+                },
+            );
+            assert!(
+                body.get("tools").is_none(),
+                "{provider:?} {shape:?} must not send an empty tools array"
+            );
+            assert_eq!(body["model"], "model-example");
+        }
     }
 
     #[test]

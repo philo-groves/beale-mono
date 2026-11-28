@@ -105,13 +105,13 @@ pub fn definitions(role: Role) -> Vec<Value> {
         );
         tool(
             "swarm_stop_subagent",
-            "Intentionally stop a direct child's branch while retaining partial results.",
+            "Intentionally stop a direct child's branch while retaining partial results. You can resume the child later with swarm_message_subagent; its own descendants stay stopped until it resumes them.",
             json!({"child_id":string}),
             &["child_id"],
         );
         tool(
             "swarm_message_subagent",
-            "Queue related follow-up work for a direct child, preserving its identity and context. Use a fresh spawn for independent review. Results wake you automatically.",
+            "Queue related follow-up work for a direct child, preserving its identity and context. This also resumes a completed, blocked, or stopped child. Use a fresh spawn for independent review. Results wake you automatically.",
             json!({"child_id":string,"message":string}),
             &["child_id", "message"],
         );
@@ -119,8 +119,24 @@ pub fn definitions(role: Role) -> Vec<Value> {
     if role != Role::Leader {
         tool(
             "swarm_message_parent",
-            "Send observations or requests to your immediate parent. Optional handoff follows a saved route; never address siblings directly.",
-            json!({"message":string,"handoff":{"type":["object","null"],"description":"Optional HandoffRequest: id, from_agent, parent_id, route_id, destination_profile {id,revision}, task {question,completion_criteria,evidence_refs}, scope[], record_revisions[{id,revision}], artifact_refs[], observations[], unresolved_questions[], payload {kind,...route-specific fields}. Use null for an ordinary parent message."}}),
+            "Send observations or requests to your immediate parent. An optional handoff carries work to another deputy along a saved route; the host fills in its identity, source, parent and route, and returns its handoff_id. Never address siblings directly.",
+            json!({"message":string,"handoff":{
+                "type":["object","null"],
+                "description":"Optional handoff to another deputy profile. Use null for an ordinary parent message.",
+                "properties":{
+                    "to_profile":{"type":"string","description":"Destination deputy profile ID on a saved route from your deputy."},
+                    "route_id":{"type":["string","null"],"description":"Only when several saved routes match the destination and payload kind; otherwise omit."},
+                    "task":{"type":"object","properties":{"question":string,"completion_criteria":strings,"evidence_refs":strings},"required":["question","completion_criteria","evidence_refs"],"additionalProperties":false},
+                    "scope":strings,
+                    "record_revisions":{"type":"array","items":{"type":"object","properties":{"id":string,"revision":{"type":"integer"}},"required":["id","revision"],"additionalProperties":false}},
+                    "artifact_refs":{"type":"array","items":string,"description":"Accepted artifact IDs, or file:relative/path to publish a local file."},
+                    "observations":strings,
+                    "unresolved_questions":strings,
+                    "payload":{"type":"object","description":"Route payload by kind: {kind:task}; {kind:candidate, claim} (needs task.evidence_refs); {kind:assessment, result}; {kind:ranked_targets, targets:[{rank,target,rationale}]}; {kind:supported_finding, result} (assessment supported); {kind:remediation, finding_refs[]}; {kind:patch, patch_refs[], test_refs[]}; {kind:patch_assessment, patch_refs[], test_refs[], result}. A result is a WorkResult: completion (complete/incomplete/blocked), assessment (supported/contradicted/inconclusive/not_applicable), summary, observations[], evidence_refs[], artifact_refs[], unresolved_questions[]."}
+                },
+                "required":["to_profile","task","scope","payload"],
+                "additionalProperties":false
+            }}),
             &["message", "handoff"],
         );
     }

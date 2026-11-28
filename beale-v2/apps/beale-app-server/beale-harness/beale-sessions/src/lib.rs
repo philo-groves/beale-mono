@@ -34,7 +34,7 @@ use beale_goals::{GoalRow, GoalStore};
 use beale_providers::{
     AuthMode, CredentialStore, OpenAiConnection, Provider, ProviderClient, ProviderProgress,
     TextMessage, TextRole, ToolStepRequest, input_messages, provider_error_message,
-    provider_error_retryable, tool_output,
+    provider_error_retryable,
 };
 #[cfg(feature = "runbooks")]
 use beale_runbooks::RunbookStore;
@@ -456,9 +456,9 @@ const RECENT_TURNS: usize = 64;
 const MAX_RECENT_HISTORY_BYTES: usize = 1_048_576;
 const MAX_HISTORY_BYTES: usize = 4_194_304;
 const TOOL_PAGE_BYTES: usize = 8_000;
-const INTERRUPTED_ANSWER: &str =
-    "The provider could not complete this turn. Tool activity was saved.";
-const STOPPED_ANSWER: &str = "Stopped by the user. Completed tool activity was saved.";
+// Swarm scheduling and history reconstruction recognize these exact saved
+// answers; every agent loop shares one definition.
+use beale_agent_loop::answers::{INTERRUPTED_ANSWER, REVIEW_UNAVAILABLE_ANSWER, STOPPED_ANSWER};
 
 fn compact_openai_context(input: &[Value]) -> Vec<Value> {
     let start = input
@@ -518,24 +518,6 @@ fn validate_swarm_selection(
             workspace_id,
         );
         Err(StatusCode::BAD_REQUEST)
-    }
-}
-
-fn append_tool_result(
-    input: &mut Vec<Value>,
-    anthropic_results: &mut Vec<Value>,
-    provider: Provider,
-    mode: AuthMode,
-    id: &str,
-    output: &str,
-) {
-    let result = tool_output(provider, mode, id, output);
-    if provider == Provider::Anthropic {
-        if let Some(blocks) = result.get("content").and_then(Value::as_array) {
-            anthropic_results.extend(blocks.iter().cloned());
-        }
-    } else {
-        input.push(result);
     }
 }
 
@@ -615,6 +597,9 @@ struct SessionState {
     worker_recovery: Arc<std::sync::Mutex<Vec<distributed::WorkerRecovery>>>,
     #[cfg(feature = "swarms")]
     fleet_origin: Option<String>,
+    /// Running Swarm scans and their schedulers on this host.
+    #[cfg(feature = "swarms")]
+    swarm_scans: Arc<hierarchy::scheduler::Registry>,
 }
 
 struct StoredSession {
@@ -677,6 +662,14 @@ impl SessionRuntime {
 
     pub fn router(&self) -> Router {
         session_router(self.state.clone())
+    }
+
+    /// Only the scoped worker route, authorized by per-attempt worker
+    /// credentials. Serve it where local containers can connect; it carries
+    /// none of the host control API.
+    #[cfg(feature = "swarms")]
+    pub fn worker_router(&self) -> Router {
+        distributed::router().with_state(self.state.clone())
     }
 
     pub fn start_automation_scheduler(&self) -> tokio::task::JoinHandle<()> {
@@ -745,6 +738,8 @@ fn build_state_with_runtime(
         worker_recovery: Arc::new(std::sync::Mutex::new(Vec::new())),
         #[cfg(feature = "swarms")]
         fleet_origin: None,
+        #[cfg(feature = "swarms")]
+        swarm_scans: Arc::default(),
     })
 }
 
@@ -2390,23 +2385,21 @@ mod tests {
             {"type":"tool_use","id":"tool-two","name":"read","input":{}}
         ]})];
         let mut results = Vec::new();
-        append_tool_result(
-            &mut input,
-            &mut results,
-            Provider::Anthropic,
-            AuthMode::ApiKey,
-            "tool-one",
-            "Example one",
-        );
-        append_tool_result(
-            &mut input,
-            &mut results,
-            Provider::Anthropic,
-            AuthMode::ApiKey,
-            "tool-two",
-            "Example two",
-        );
-        input.push(json!({"role":"user","content":results}));
+        // Sessions batch only for the Anthropic provider; the API key route
+        // uses the Anthropic message format.
+        let format = beale_providers::message_format(Provider::Anthropic, AuthMode::ApiKey);
+        let config = beale_agent_loop::LoopConfig::session(true, true);
+        for (id, output) in [("tool-one", "Example one"), ("tool-two", "Example two")] {
+            beale_agent_loop::append_tool_result(
+                format,
+                config.batch_results,
+                &mut input,
+                &mut results,
+                id,
+                output,
+            );
+        }
+        beale_agent_loop::flush_tool_results(&mut input, &mut results);
         assert_eq!(input.len(), 2);
         assert_eq!(input[1]["content"].as_array().unwrap().len(), 2);
         assert_eq!(input[1]["content"][0]["tool_use_id"], "tool-one");

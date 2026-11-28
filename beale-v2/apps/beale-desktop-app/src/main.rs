@@ -678,6 +678,9 @@ struct State {
     session_error: String,
     session_pending_prompt: Option<String>,
     session_pending_role: String,
+    /// A message sent to a running Swarm, restored to the composer if the
+    /// host does not accept it.
+    session_queued_prompt: Option<String>,
     session_pending_turn: u64,
     session_stream_turn: u64,
     session_generation: u64,
@@ -974,6 +977,7 @@ impl Default for State {
             session_error: String::new(),
             session_pending_prompt: None,
             session_pending_role: String::new(),
+            session_queued_prompt: None,
             session_pending_turn: 0,
             session_stream_turn: 0,
             session_generation: 0,
@@ -1617,6 +1621,7 @@ impl State {
                 subagent_canvas::refresh(self);
                 runbook_canvas::refresh(self);
                 self.session_pending_prompt = None;
+                self.session_queued_prompt = None;
                 self.session_pending_role.clear();
                 self.session_error.clear();
             }
@@ -1630,7 +1635,10 @@ impl State {
                             .map_or(0, |detail| detail.messages.len()),
                     );
                 }
-                if let Some(prompt) = self.session_pending_prompt.take() {
+                // A message sent to a running Swarm is the one to restore; the
+                // earlier prompt's turn belongs to the scan.
+                let queued = self.session_queued_prompt.take();
+                if let Some(prompt) = queued.or_else(|| self.session_pending_prompt.take()) {
                     self.new_research_prompt = TextEdit::new(prompt);
                 }
                 self.session_pending_role.clear();
@@ -2449,8 +2457,25 @@ fn parse_goal_limit(value: &str) -> Option<u64> {
     }
 }
 
+/// Whether a send while busy can join the running Swarm: the host queues the
+/// message for the leader and the new stream replaces the current one.
+fn swarm_attach_available(state: &State) -> bool {
+    state.session_busy
+        && !state.session_stopping
+        && state.session_loading_id.is_none()
+        && state.session_stop_id.is_some()
+        && state
+            .session_submission
+            .as_ref()
+            .is_some_and(sessions::SubmissionControl::is_accepted)
+        && state.active_session.as_ref().is_some_and(|detail| {
+            detail.summary.is_some() && sessions::swarm_definition(detail).is_some()
+        })
+}
+
 fn start_session_turn(state: &mut State) {
-    if state.session_busy {
+    let attach = swarm_attach_available(state);
+    if state.session_busy && !attach {
         return;
     }
     if state.workspaces.is_empty() {
@@ -2576,6 +2601,11 @@ fn start_session_turn(state: &mut State) {
             String::new()
         },
     };
+    if attach && let Some(previous) = state.session_submission.take() {
+        // The previous stream ends without a stop; the scan keeps running and
+        // the new stream follows it to completion.
+        previous.detach();
+    }
     state.session_generation = state.session_generation.wrapping_add(1);
     let generation = state.session_generation;
     state.session_busy = true;
@@ -2585,22 +2615,29 @@ fn start_session_turn(state: &mut State) {
     state.session_submission = Some(submission.clone());
     state.session_stopping = false;
     state.session_error.clear();
-    state.session_live_events.clear();
-    state.session_agent_tab_manual = false;
-    state.session_elapsed_ms = 0;
-    state.session_turn_started = Some(Instant::now());
-    state.session_agent_started_at.clear();
-    state.session_pending_turn = state
-        .active_session
-        .as_ref()
-        .map_or(1, |d| d.committed_turn_number.saturating_add(1));
-    state.session_stream_turn = 0;
-    state.session_pending_prompt = Some(prompt);
-    state.session_pending_role = if request.agent_role.is_empty() {
-        state.session_agent_role.clone()
+    if !attach {
+        // A joined Swarm keeps its live activity, timer, and pending turn;
+        // the queued message becomes its own leader turn.
+        state.session_live_events.clear();
+        state.session_agent_tab_manual = false;
+        state.session_elapsed_ms = 0;
+        state.session_turn_started = Some(Instant::now());
+        state.session_agent_started_at.clear();
+        state.session_pending_turn = state
+            .active_session
+            .as_ref()
+            .map_or(1, |d| d.committed_turn_number.saturating_add(1));
+        state.session_stream_turn = 0;
+        state.session_pending_prompt = Some(prompt);
+        state.session_queued_prompt = None;
+        state.session_pending_role = if request.agent_role.is_empty() {
+            state.session_agent_role.clone()
+        } else {
+            request.agent_role.clone()
+        };
     } else {
-        request.agent_role.clone()
-    };
+        state.session_queued_prompt = Some(prompt);
+    }
     state.new_research_prompt.clear();
     state.session_input_history.reset();
     let timer_running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
@@ -10789,6 +10826,51 @@ mod tests {
         assert_eq!(parse_goal_limit("-1"), None);
         assert_eq!(parse_goal_limit("1.5"), None);
         assert_eq!(parse_goal_limit("9223372036854775808"), None);
+    }
+
+    #[test]
+    fn running_swarm_accepts_a_queued_message_and_restores_it_on_failure() {
+        let saved = beale_swarms::VDH_VVS_SWARM.snapshot.clone();
+        let detail = SessionDetail {
+            summary: Some(beale_contracts::v1::SessionSummary {
+                id: "00000000-0000-4000-8000-000000000012".into(),
+                workspace_id: "00000000-0000-4000-8000-000000000011".into(),
+                title: "Synthetic swarm".into(),
+                last_message_at_ms: 1,
+            }),
+            swarm_id: saved.id.clone(),
+            swarm_template_json: serde_json::to_string(&saved).unwrap(),
+            ..Default::default()
+        };
+        let control = sessions::SubmissionControl::default();
+        let mut state = State {
+            session_generation: 1,
+            session_busy: true,
+            session_stop_id: Some("00000000-0000-4000-8000-000000000013".into()),
+            session_submission: Some(control.clone()),
+            active_session: Some(detail.clone()),
+            ..State::default()
+        };
+        // The running request must be accepted before another can follow it.
+        assert!(!swarm_attach_available(&state));
+        control.mark_accepted();
+        assert!(swarm_attach_available(&state));
+        state.session_stopping = true;
+        assert!(!swarm_attach_available(&state));
+        state.session_stopping = false;
+        // Ordinary sessions keep one turn at a time.
+        let mut ordinary = detail;
+        ordinary.swarm_id.clear();
+        ordinary.swarm_template_json.clear();
+        state.active_session = Some(ordinary);
+        assert!(!swarm_attach_available(&state));
+        // A rejected queued message returns to the composer, not the prompt of
+        // the turn the scan is still running.
+        state.session_pending_prompt = Some("Synthetic first objective".into());
+        state.session_queued_prompt = Some("Synthetic follow-up".into());
+        state.finish_session_turn(1, Err("Scan request failed (409 Conflict)".into()));
+        assert_eq!(state.new_research_prompt.text, "Synthetic follow-up");
+        assert!(state.session_queued_prompt.is_none());
     }
 
     #[test]

@@ -154,11 +154,15 @@ impl DockerBackend {
             "{}/state/{}",
             handle.runtime_directory, target.identity.attempt_id
         ));
+        // Inside the container, loopback is the container itself; a loopback
+        // leader is reached through the container host alias instead.
+        let leader = beale_contracts::swarm_host::container_leader_origin(&launch.leader_origin)
+            .map_err(anyhow::Error::msg)?;
         let bootstrap = ContainerPreparation {
             launch: super::WorkerLaunch {
                 version: 1,
                 identity: target.identity.clone(),
-                leader: launch.leader_origin.clone(),
+                leader,
                 bearer: launch.worker_bearer.clone(),
                 workspace,
                 protected_root,

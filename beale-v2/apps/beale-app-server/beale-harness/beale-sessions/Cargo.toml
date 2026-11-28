@@ -22,6 +22,7 @@ beale-webfetch = { path = "../../../../extensions/features/beale-webfetch", opti
 beale-fleet = { path = "../beale-fleet" }
 anyhow.workspace = true
 axum.workspace = true
+beale-agent-loop = { path = "../beale-agent-loop" }
 beale-contracts = { path = "../beale-contracts" }
 beale-agent-feedback = { path = "../../../../extensions/features/beale-agent-feedback", optional = true }
 beale-extender = { path = "../beale-extender" }

@@ -7,11 +7,7 @@
 
 use super::*;
 
-struct CompletedLocalCall {
-    name: String,
-    arguments: String,
-    output: String,
-}
+mod ports;
 
 /// Why a turn could not run or complete.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -803,562 +799,68 @@ pub(crate) async fn run_one_turn(
     if provider != Provider::OpenAi {
         input.insert(0, json!({"role":"system","content":system}));
     }
-    let mut openai_connection = OpenAiConnection::default();
-    let mut goal_signal: Option<beale_goals::Signal> = None;
-    let mut tool_rows = Vec::<ToolCallRow>::new();
-    // Provider call IDs identify results within this execution. Repeated replies
-    // must replay the result, not perform the tool operation a second time.
-    let mut completed_calls = HashMap::<String, CompletedLocalCall>::new();
-    let mut replayed_calls = 0;
-
+    // The shared agent loop owns rounds, retries, call replay, and endings;
+    // the engine ports stream progress and collect rows for one commit.
+    let loop_config =
+        beale_agent_loop::LoopConfig::session(local.is_some(), provider == Provider::Anthropic);
+    let mut loop_state =
+        beale_agent_loop::LoopState::new(beale_providers::message_format(provider, mode), input);
+    let mut ports = ports::EnginePorts {
+        state,
+        workspace_id: &request.workspace_id,
+        session_id: &session.id,
+        local,
+        provider,
+        mode,
+        active_model: &active_model,
+        definitions: &definitions,
+        system: &system,
+        reasoning_effort,
+        workspace: &workspace,
+        review_context: &review_context,
+        callable_plugins: &callable_plugins,
+        redactor: &redactor,
+        agent_files: &agent_files,
+        progress: progress.clone(),
+        stop: stop.take(),
+        goal_active,
+        next_turn_number,
+        started,
+        openai_connection: OpenAiConnection::default(),
+        goal_signal: None,
+        tool_rows: Vec::new(),
+        reasoning_rows: Vec::new(),
+        commentary_rows: Vec::new(),
+        model_usage: Vec::new(),
+        segment_index: 0,
+        call_started: Instant::now(),
+    };
+    let finished = beale_agent_loop::run(&mut loop_state, &loop_config, &mut ports).await;
+    let ports::EnginePorts {
+        stop: loop_stop,
+        goal_signal,
+        tool_rows,
+        reasoning_rows,
+        commentary_rows,
+        model_usage,
+        ..
+    } = ports;
+    stop = loop_stop;
+    let mut input = loop_state.input;
     let child_turns = Vec::<ChildTurnRow>::new();
-    let mut reasoning_rows = Vec::<ReasoningSummaryRow>::new();
-    let mut commentary_rows = Vec::<CommentaryRow>::new();
-    let mut model_usage = Vec::<ModelUsageRow>::new();
 
-    let answer: Option<String>;
-    let mut segment_index = 0_u32;
-
-    'rounds: loop {
-        if local.is_some() && tool_rows.len() + replayed_calls >= 512 {
-            answer = Some("Execution paused after the per-turn tool activity safeguard; saved work can be resumed.".into());
-            break;
-        }
-        // Reserve one stream segment for the answer and one for each reasoning part.
-        segment_index = segment_index.saturating_add(17);
-        if stop_requested(&stop) {
-            answer = Some(STOPPED_ANSWER.to_owned());
-            break;
-        }
-        let (provider_tx, forward) = if let Some(client_tx) = progress.clone() {
-            let (provider_tx, mut provider_rx) = mpsc::channel::<ProviderProgress>(32);
-            let stream_role = active_model.node_id.clone();
-            let forward = tokio::spawn(async move {
-                let mut reasoning_segments = std::collections::BTreeMap::new();
-                while let Some(update) = provider_rx.recv().await {
-                    let (kind, text, item_segment) = match update {
-                        ProviderProgress::MessageDelta(text) => {
-                            (SessionStreamKind::MessageDelta, text, segment_index)
-                        }
-                        ProviderProgress::ReasoningDelta(text, key) => {
-                            let next = reasoning_segments.len() as u32 + 1;
-                            let part = *reasoning_segments.entry(key).or_insert(next);
-                            (
-                                SessionStreamKind::ReasoningDelta,
-                                text,
-                                segment_index.saturating_add(part),
-                            )
-                        }
-                    };
-                    if client_tx
-                        .send(SessionStreamEvent {
-                            turn_number: 0,
-                            runbook_progress: None,
-                            kind: kind as i32,
-                            text,
-                            tool: None,
-                            detail: None,
-                            segment_index: item_segment,
-                            agent_role: stream_role.clone(),
-                            tool_detail: None,
-                            usage_delta: None,
-                            subagent_id: String::new(),
-                            subagent: None,
-                        })
-                        .await
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-            });
-            (Some(provider_tx), Some(forward))
-        } else {
-            (None, None)
-        };
-        let call_started = Instant::now();
-        let provider_call = async {
-            let recovering_tools = local.is_some() && !tool_rows.is_empty();
-            let attempts = if recovering_tools { 3 } else { 2 };
-            for attempt in 0..attempts {
-                let step_request = ToolStepRequest {
-                    model: &active_model.model,
-                    input: &input,
-                    tools: &definitions,
-                    instructions: (provider == Provider::OpenAi).then_some(system.as_str()),
-                    reasoning_effort,
-                    workspace_root: Some(&workspace),
-                };
-                let result = if provider == Provider::OpenAi {
-                    state
-                        .provider
-                        .openai_tool_step(
-                            mode,
-                            step_request,
-                            &state.credentials,
-                            provider_tx.as_ref(),
-                            &mut openai_connection,
-                        )
-                        .await
-                } else {
-                    state
-                        .provider
-                        .tool_step(
-                            provider,
-                            mode,
-                            step_request,
-                            &state.credentials,
-                            provider_tx.as_ref(),
-                        )
-                        .await
-                };
-                let retry = match &result {
-                    Err(error) => {
-                        recovering_tools || (attempt == 0 && provider_error_retryable(error))
-                    }
-                    Ok(step) => {
-                        recovering_tools && step.calls.is_empty() && step.text.trim().is_empty()
-                    }
-                };
-                if retry && attempt + 1 < attempts {
-                    beale_host_log::error!(
-                        "session provider step requires bounded retry; retaining tool exchange"
-                    );
-                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                    continue;
-                }
-                return result;
-            }
-            unreachable!("provider step returns after its final attempt")
-        };
-        let attributed = async {
-            if let Some(local) = local {
-                beale_providers::pacing::scope(
-                    state.db.clone(),
-                    &local.scan_id,
-                    beale_contracts::pacing::CallClass::Research,
-                    provider_call,
-                )
-                .await
-            } else {
-                provider_call.await
-            }
-        };
-        let step = until_stopped(attributed, &mut stop).await;
-        drop(provider_tx);
-        if let Some(forward) = forward {
-            let _ = forward.await;
-        }
-        let Some(step) = step else {
-            answer = Some(STOPPED_ANSWER.to_owned());
-            break;
-        };
-        let step = match step {
-            Ok(step) => step,
-            Err(error) => {
-                beale_host_log::error!("session provider turn failed: {error:#}");
-                if tool_rows.is_empty() {
-                    if local.is_none()
-                        && let Some(tx) = &progress
-                    {
-                        let _ = tx
-                            .send(SessionStreamEvent {
-                                turn_number: 0,
-                                runbook_progress: None,
-                                kind: SessionStreamKind::Failed as i32,
-                                text: provider_error_message(provider, mode, &error),
-                                tool: None,
-                                detail: None,
-                                segment_index: 0,
-                                agent_role: active_model.node_id.clone(),
-                                tool_detail: None,
-                                usage_delta: None,
-                                subagent_id: String::new(),
-                                subagent: None,
-                            })
-                            .await;
-                    }
-                    return Err(TurnError::Provider);
-                }
-                answer = Some(format!(
-                    "{INTERRUPTED_ANSWER} {}",
-                    provider_error_message(provider, mode, &error)
-                ));
-                break;
-            }
-        };
-        if stop_requested(&stop) {
-            answer = Some(STOPPED_ANSWER.to_owned());
-            break;
-        }
-        model_usage.push(ModelUsageRow {
-            agent_id: active_model.node_id.clone(),
-            role: active_model.node_id.clone(),
-            provider: active_model.provider,
-            method: active_model.method,
-            model: active_model.model.clone(),
-            input_tokens: step.usage.map(|usage| usage.input_tokens as i64),
-            output_tokens: step.usage.map(|usage| usage.output_tokens as i64),
-            cache_read_tokens: step
-                .usage
-                .and_then(|usage| usage.cache_read_tokens.map(|count| count as i64)),
-            work_elapsed_ms: Some(started.elapsed().as_millis().min(i64::MAX as u128) as i64),
-            duration_ms: call_started.elapsed().as_millis().min(i64::MAX as u128) as i64,
-            observed_at_ms: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map_or(0, |duration| {
-                    duration.as_millis().min(i64::MAX as u128) as i64
-                }),
-        });
-        if let Some(tx) = &progress
-            && let Some(item) = model_usage.last()
-        {
-            let _ = tx.send(usage_update(item, &active_model.node_id)).await;
-        }
-        for summary in step.reasoning_summaries {
-            if summary.trim().is_empty() {
-                continue;
-            }
-            reasoning_rows.push(ReasoningSummaryRow {
-                turn_number: next_turn_number,
-                ordinal: reasoning_rows.len() as i64,
-                after_tool_count: tool_rows.len() as i64,
-                text: summary,
-                agent_role: active_model.node_id.clone(),
-            });
-        }
-        let prior_input_len = input.len();
-        input.extend(step.continuation);
-        if step.calls.is_empty() {
-            answer = Some(step.text);
-            break;
-        }
-        if !step.text.trim().is_empty() {
-            let text = step.text;
-            if !text.trim().is_empty() {
-                commentary_rows.push(CommentaryRow {
-                    turn_number: next_turn_number,
-                    ordinal: commentary_rows.len() as i64,
-                    after_tool_count: tool_rows.len() as i64,
-                    text,
-                    agent_role: active_model.node_id.clone(),
-                });
-            }
-        }
-        let mut anthropic_tool_results = Vec::new();
-
-        for call in step.calls {
-            if stop_requested(&stop) {
-                input.truncate(prior_input_len);
-                answer = Some(STOPPED_ANSWER.to_owned());
-                break 'rounds;
-            }
-            if call.id.is_empty()
-                || call.id.len() > 256
-                || call.name.len() > 128
-                || call.arguments.len() > 65_536
-            {
-                if tool_rows.is_empty() {
-                    return Err(TurnError::Provider);
-                }
-                answer = Some(format!(
-                    "{INTERRUPTED_ANSWER} The provider returned an invalid tool call."
-                ));
-                break 'rounds;
-            }
-            let args: Result<Value, _> = serde_json::from_str(&call.arguments);
-            let call_arguments = args
-                .as_ref()
-                .map_or_else(|_| call.arguments.clone(), Value::to_string);
-            if local.is_some()
-                && let Some(completed) = completed_calls.get(&call.id)
-            {
-                if completed.name != call.name || completed.arguments != call_arguments {
-                    answer = Some(format!(
-                        "{INTERRUPTED_ANSWER} The provider reused a tool identity with different content."
-                    ));
-                    break 'rounds;
-                }
-                append_tool_result(
-                    &mut input,
-                    &mut anthropic_tool_results,
-                    provider,
-                    mode,
-                    &call.id,
-                    &completed.output,
-                );
-                replayed_calls += 1;
-                continue;
-            }
-            let id = Uuid::new_v4().to_string();
-            let summary = if call.name == "goal_status" {
-                goal_status_summary(args.as_ref().unwrap_or(&Value::Null))
-            } else if cfg!(feature = "agent-feedback") && call.name == "agent_feedback" {
-                "Record agent feedback".to_owned()
-            } else if cfg!(feature = "surfaces") && call.name.starts_with("surface_") {
-                #[cfg(feature = "surfaces")]
-                {
-                    beale_surfaces::summary(
-                        &state.workspaces,
-                        &request.workspace_id,
-                        &call.name,
-                        args.as_ref().unwrap_or(&Value::Null),
-                    )
-                }
-                #[cfg(not(feature = "surfaces"))]
-                {
-                    base_tool_summary(&call.name, args.as_ref().unwrap_or(&Value::Null))
-                }
-            } else if cfg!(feature = "findings") && call.name.starts_with("findings_") {
-                #[cfg(feature = "findings")]
-                {
-                    beale_findings::summary(
-                        &state.db,
-                        &request.workspace_id,
-                        &call.name,
-                        args.as_ref().unwrap_or(&Value::Null),
-                    )
-                }
-                #[cfg(not(feature = "findings"))]
-                {
-                    base_tool_summary(&call.name, args.as_ref().unwrap_or(&Value::Null))
-                }
-            } else if cfg!(feature = "memories") && call.name.starts_with("memory_") {
-                #[cfg(feature = "memories")]
-                {
-                    beale_memories::summary(
-                        state.workspaces.root(),
-                        &request.workspace_id,
-                        &call.name,
-                        args.as_ref().unwrap_or(&Value::Null),
-                    )
-                }
-                #[cfg(not(feature = "memories"))]
-                {
-                    base_tool_summary(&call.name, args.as_ref().unwrap_or(&Value::Null))
-                }
-            } else if cfg!(feature = "runbooks") && call.name.starts_with("runbook_") {
-                #[cfg(feature = "runbooks")]
-                {
-                    beale_runbooks::summary(
-                        &state.db,
-                        &request.workspace_id,
-                        &session.id,
-                        &call.name,
-                        args.as_ref().unwrap_or(&Value::Null),
-                    )
-                }
-                #[cfg(not(feature = "runbooks"))]
-                {
-                    base_tool_summary(&call.name, args.as_ref().unwrap_or(&Value::Null))
-                }
-            } else {
-                tool_summary(&call.name, args.as_ref().unwrap_or(&Value::Null))
-            };
-
-            if let Some(tx) = &progress {
-                let _ = tx
-                    .send(SessionStreamEvent {
-                        turn_number: 0,
-                        runbook_progress: None,
-                        kind: SessionStreamKind::ToolStarted as i32,
-                        text: String::new(),
-                        tool: Some(SessionToolSummary {
-                            id: id.clone(),
-                            name: call.name.clone(),
-                            summary: summary.clone(),
-                            is_error: false,
-                            agent_role: active_model.node_id.clone(),
-                        }),
-                        detail: None,
-                        segment_index: 0,
-                        agent_role: active_model.node_id.clone(),
-                        tool_detail: Some(SessionToolDetailPage {
-                            id: id.clone(),
-                            name: call.name.clone(),
-                            arguments: call.arguments.clone(),
-                            output: String::new(),
-                            offset: 0,
-                            next_offset: 0,
-                            total_bytes: 0,
-                            is_error: false,
-                        }),
-                        usage_delta: None,
-                        subagent_id: String::new(),
-                        subagent: None,
-                    })
-                    .await;
-            }
-            let runtime = tool_runtime::ToolRuntime {
-                local,
-                state,
-                workspace_id: &request.workspace_id,
-                session_id: &session.id,
-                agent_id: local.map_or(active_model.node_id.as_str(), |local| {
-                    local.agent_id.as_str()
-                }),
-                agent_role: &active_model.node_id,
-                workspace: &workspace,
-                review: tool_runtime::ReviewTarget {
-                    provider,
-                    mode,
-                    model: &active_model.model,
-                    context: &review_context,
-                },
-                definitions: &definitions,
-                callable_plugins: &callable_plugins,
-                redactor: &redactor,
-                mutation_lock: None,
-                progress: progress.as_ref(),
-            };
-            let gate = runtime
-                .gate(&call.name, args.as_ref().ok(), &mut stop)
-                .await;
-            let review_unavailable = std::cell::Cell::new(false);
-            let (output, is_error) = match gate {
-                tool_runtime::Gate::Run { reviewed } => match args {
-                    Ok(args) if call.name == beale_goals::TOOL_NAME && goal_active => {
-                        if goal_signal.is_some() {
-                            (
-                                "Goal status was already recorded for this turn.".to_owned(),
-                                true,
-                            )
-                        } else {
-                            match beale_goals::parse_signal(&args) {
-                                Ok(signal) => {
-                                    goal_signal = Some(signal);
-                                    ("Goal status recorded.".to_owned(), false)
-                                }
-                                Err(error) => (format!("Invalid goal status: {error}"), true),
-                            }
-                        }
-                    }
-
-                    args => {
-                        let result = runtime
-                            .execute(&id, &call.name, args, reviewed, &tool_rows, &mut stop)
-                            .await;
-                        review_unavailable.set(result.review_unavailable);
-                        (result.output, result.is_error)
-                    }
-                },
-                blocked => {
-                    let result = blocked.blocked().unwrap_or_else(|| {
-                        tool_runtime::ToolResult::error("Tool was not run.".to_owned())
-                    });
-                    review_unavailable.set(result.review_unavailable);
-                    (result.output, result.is_error)
-                }
-            };
-            let model_output = {
-                if let Some(tx) = &progress {
-                    let _ = tx
-                        .send(SessionStreamEvent {
-                            turn_number: 0,
-                            runbook_progress: None,
-                            kind: SessionStreamKind::ToolFinished as i32,
-                            text: String::new(),
-                            tool: Some(SessionToolSummary {
-                                id: id.clone(),
-                                name: call.name.clone(),
-                                summary: summary.clone(),
-                                is_error,
-                                agent_role: active_model.node_id.clone(),
-                            }),
-                            detail: None,
-                            segment_index: 0,
-                            agent_role: active_model.node_id.clone(),
-                            tool_detail: Some(SessionToolDetailPage {
-                                id: id.clone(),
-                                name: call.name.clone(),
-                                arguments: call.arguments.clone(),
-                                output: page(&output, 0, TOOL_PAGE_BYTES)
-                                    .map_or_else(|_| String::new(), |(first, _)| first),
-                                offset: 0,
-                                next_offset: page(&output, 0, TOOL_PAGE_BYTES)
-                                    .map_or(0, |(_, next)| next as u64),
-                                total_bytes: output.len() as u64,
-                                is_error,
-                            }),
-                            usage_delta: None,
-                            subagent_id: String::new(),
-                            subagent: None,
-                        })
-                        .await;
-                }
-                tool_rows.push(ToolCallRow {
-                    id: id.clone(),
-                    turn_number: next_turn_number,
-                    ordinal: tool_rows.len() as i64,
-                    name: call.name.clone(),
-                    summary,
-                    arguments: call.arguments,
-                    output: output.clone(),
-                    is_error,
-                    agent_role: active_model.node_id.clone(),
-                    created_at_ms: tool_runtime::unix_ms(),
-                });
-                model_tool_preview(&call.name, &id, &output, is_error, &agent_files)
-            };
-            append_tool_result(
-                &mut input,
-                &mut anthropic_tool_results,
-                provider,
-                mode,
-                &call.id,
-                &model_output,
-            );
-            if local.is_some() {
-                completed_calls.insert(
-                    call.id.clone(),
-                    CompletedLocalCall {
-                        name: call.name.clone(),
-                        arguments: call_arguments,
-                        output: model_output,
-                    },
-                );
-            }
-            if let Some(local) = local {
-                let store = beale_storage::swarm_state::SwarmStore::open(state.db.clone())
-                    .map_err(|_| TurnError::Internal)?;
-                if store
-                    .local_yield_requested(local)
-                    .map_err(|_| TurnError::Internal)?
-                {
-                    answer = Some(
-                        "Delegation accepted. Waiting for child execution after a safe checkpoint."
-                            .into(),
-                    );
-                    break 'rounds;
-                }
-            }
-            if review_unavailable.get() {
-                answer = Some("Auto-Review was unavailable, so the requested tool was not run. Saved activity can be resumed after the review service is available.".to_owned());
-                break 'rounds;
-            }
-        }
-        if !anthropic_tool_results.is_empty() {
-            input.push(json!({"role":"user","content":anthropic_tool_results}));
-        }
-    }
-
-    let mut answer = answer.ok_or(TurnError::Provider)?;
-    if answer.trim().is_empty() || history_bytes.saturating_add(answer.len()) > MAX_HISTORY_BYTES {
-        if tool_rows.is_empty() {
+    let mut answer = match finished {
+        Ok(finished) => finished.answer,
+        Err(beale_agent_loop::LoopError::Provider { message }) => {
             if local.is_none()
                 && let Some(tx) = &progress
             {
-                let text = if answer.trim().is_empty() {
-                    "The provider completed without a message or tool call. Try again."
-                } else {
-                    "The provider answer exceeded this session's history limit."
-                };
                 let _ = tx
                     .send(SessionStreamEvent {
                         turn_number: 0,
                         runbook_progress: None,
                         kind: SessionStreamKind::Failed as i32,
-                        text: text.to_owned(),
+                        text: message,
                         tool: None,
                         detail: None,
                         segment_index: 0,
@@ -1372,13 +874,45 @@ pub(crate) async fn run_one_turn(
             }
             return Err(TurnError::Provider);
         }
-        answer = if answer.trim().is_empty() {
-            format!("{INTERRUPTED_ANSWER} The provider completed without a message.")
-        } else {
-            format!(
-                "{INTERRUPTED_ANSWER} The provider answer exceeded the session history boundary."
-            )
-        };
+        Err(
+            beale_agent_loop::LoopError::InvalidCall
+            | beale_agent_loop::LoopError::ProviderExhausted { .. },
+        ) => return Err(TurnError::Provider),
+        Err(beale_agent_loop::LoopError::Port(error)) => {
+            beale_host_log::error!("session turn failed: {error:#}");
+            return Err(TurnError::Internal);
+        }
+    };
+    // The shared loop already rejected an empty answer; only the session's
+    // history boundary remains to check.
+    if history_bytes.saturating_add(answer.len()) > MAX_HISTORY_BYTES {
+        if tool_rows.is_empty() {
+            if local.is_none()
+                && let Some(tx) = &progress
+            {
+                let _ = tx
+                    .send(SessionStreamEvent {
+                        turn_number: 0,
+                        runbook_progress: None,
+                        kind: SessionStreamKind::Failed as i32,
+                        text: "The provider answer exceeded this session's history limit."
+                            .to_owned(),
+                        tool: None,
+                        detail: None,
+                        segment_index: 0,
+                        agent_role: active_model.node_id.clone(),
+                        tool_detail: None,
+                        usage_delta: None,
+                        subagent_id: String::new(),
+                        subagent: None,
+                    })
+                    .await;
+            }
+            return Err(TurnError::Provider);
+        }
+        answer = beale_agent_loop::answers::interrupted(
+            "The provider answer exceeded the session history boundary.",
+        );
     }
     if let Some(goal) = goal.as_mut().filter(|_| goal_active) {
         goal.turns_used = goal.turns_used.checked_add(1).ok_or(TurnError::Conflict)?;
@@ -1521,7 +1055,7 @@ pub(crate) async fn run_one_turn(
     if local.is_some()
         && !tool_rows.is_empty()
         && (latest.answer.starts_with(INTERRUPTED_ANSWER)
-            || (latest.answer.starts_with("Auto-Review was unavailable")
+            || (latest.answer.starts_with(REVIEW_UNAVAILABLE_ANSWER)
                 && tool_rows.iter().any(|row| !row.is_error)))
     {
         return Err(TurnError::RecoveryExhausted);

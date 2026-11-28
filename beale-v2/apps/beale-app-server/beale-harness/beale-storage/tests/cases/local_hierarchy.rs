@@ -5,8 +5,10 @@ use beale_contracts::swarm_local::*;
 mod handoff_lifecycle;
 
 fn setup() -> (Fixture, LocalTurn) {
+    setup_with(config())
+}
+fn setup_with(mut c: ScanConfig) -> (Fixture, LocalTurn) {
     let f = Fixture::new();
-    let mut c = config();
     c.destinations.clear();
     let state = f.store.create_scan(c, true, true).unwrap();
     let leader = state.agents[0].summary.id.clone();
@@ -586,12 +588,9 @@ fn parent_handoffs_are_durable_content_bound_and_reject_spoofed_sources() {
         false,
     );
     let worker = claim(&f, &worker);
-    let handoff = HandoffRequest {
-        id: "handoff-example".into(),
-        from_agent: worker.agent_id.clone(),
-        parent_id: dep.clone(),
-        route_id: "research-request".into(),
-        destination_profile: profile("research"),
+    let draft = HandoffDraft {
+        to_profile: "research".into(),
+        route_id: None,
         task: task(),
         artifact_refs: vec!["artifact-example".into()],
         record_revisions: vec![RecordRevision {
@@ -605,21 +604,27 @@ fn parent_handoffs_are_durable_content_bound_and_reject_spoofed_sources() {
     };
     let command = SwarmCommand::MessageParent(Box::new(MessageParent {
         message: "Evidence handoff".into(),
-        handoff: Some(handoff.clone()),
+        handoff: Some(draft.clone()),
     }));
-    for _ in 0..2 {
-        f.store
-            .local_dispatch(&worker, "handoff", command.clone(), Admission::Ready)
-            .unwrap();
-    }
-    assert_eq!(
-        f.reopen()
-            .load("scan-example", true)
-            .unwrap()
-            .handoffs
-            .len(),
-        1
+    let replies: Vec<_> = (0..2)
+        .map(|_| {
+            f.store
+                .local_dispatch(&worker, "handoff", command.clone(), Admission::Ready)
+                .unwrap()
+        })
+        .collect();
+    assert_eq!(replies[0], replies[1]);
+    // The host completes the envelope from durable identity and saved state.
+    let handoff = draft.clone().into_request(
+        replies[0]["handoff_id"].as_str().unwrap().into(),
+        worker.agent_id.clone(),
+        dep.clone(),
+        "research-request".into(),
+        profile("research"),
     );
+    let saved = f.reopen().load("scan-example", true).unwrap();
+    assert_eq!(saved.handoffs.len(), 1);
+    assert_eq!(saved.handoffs[0].request, handoff);
     assert_eq!(
         f.store
             .local_state("scan-example")
@@ -643,16 +648,34 @@ fn parent_handoffs_are_durable_content_bound_and_reject_spoofed_sources() {
             .unwrap()
             .is_none()
     );
-    let mut spoofed = handoff;
-    spoofed.from_agent = leader.agent_id.clone();
+    // Host identity is not model input: a draft naming a source, parent,
+    // envelope ID or destination revision is rejected before any dispatch.
+    for field in ["from_agent", "parent_id", "id", "destination_profile"] {
+        let mut arguments = serde_json::to_value(MessageParent {
+            message: "Handoff".into(),
+            handoff: Some(draft.clone()),
+        })
+        .unwrap();
+        arguments["handoff"][field] = json!(leader.agent_id);
+        assert!(
+            serde_json::from_value::<SwarmCommand>(
+                json!({"tool":"swarm_message_parent","arguments":arguments})
+            )
+            .is_err(),
+            "{field}"
+        );
+    }
+    // Reusing an operation with different content is rejected.
+    let mut changed = draft;
+    changed.observations = vec!["Changed synthetic observation".into()];
     assert!(
         f.store
             .local_dispatch(
                 &worker,
-                "spoof",
+                "handoff",
                 SwarmCommand::MessageParent(Box::new(MessageParent {
-                    message: "Handoff".into(),
-                    handoff: Some(spoofed)
+                    message: "Evidence handoff".into(),
+                    handoff: Some(changed),
                 })),
                 Admission::Ready
             )
@@ -895,12 +918,9 @@ fn full_handoffs_are_batched_without_losing_unread_payloads() {
         observations.push("x".into());
         let mut command = SwarmCommand::MessageParent(Box::new(MessageParent {
             message: "Evidence handoff".into(),
-            handoff: Some(HandoffRequest {
-                id: format!("handoff-{n}"),
-                from_agent: worker.agent_id.clone(),
-                parent_id: dep.into(),
-                route_id: "research-request".into(),
-                destination_profile: profile("research"),
+            handoff: Some(HandoffDraft {
+                to_profile: "research".into(),
+                route_id: None,
                 task: task(),
                 scope: vec!["Synthetic scope".into()],
                 record_revisions: vec![],
@@ -910,19 +930,40 @@ fn full_handoffs_are_batched_without_losing_unread_payloads() {
                 payload: HandoffPayload::Task {},
             }),
         }));
-        let extra = 65536 - serde_json::to_vec(&command).unwrap().len();
+        // Fill the envelope the host will store to exactly its size bound. The
+        // host ID has a fixed length, so a placeholder of that length suffices.
+        let SwarmCommand::MessageParent(m) = &command else {
+            unreachable!()
+        };
+        let completed = m.handoff.clone().unwrap().into_request(
+            format!("handoff-{}", "0".repeat(32)),
+            worker.agent_id.clone(),
+            dep.into(),
+            "research-request".into(),
+            profile("research"),
+        );
+        let extra = 65536 - serde_json::to_vec(&completed).unwrap().len();
+        let mut draft = None;
         if let SwarmCommand::MessageParent(m) = &mut command {
             let h = m.handoff.as_mut().unwrap();
             h.observations
                 .last_mut()
                 .unwrap()
                 .push_str(&"x".repeat(extra));
-            expected.push(h.clone());
+            draft = Some(h.clone());
         }
         command.validate().unwrap();
-        f.store
+        let reply = f
+            .store
             .local_dispatch(&worker, &format!("message-{n}"), command, Admission::Ready)
             .unwrap();
+        expected.push(draft.unwrap().into_request(
+            reply["handoff_id"].as_str().unwrap().into(),
+            worker.agent_id.clone(),
+            dep.into(),
+            "research-request".into(),
+            profile("research"),
+        ));
     }
     // The initial assignment remains required after a failed first execution.
     f.store.local_failed(&deputy).unwrap();
@@ -1079,5 +1120,306 @@ fn full_mailbox_cannot_block_lifecycle_or_lose_notifications() {
             .local_claim("scan-example", &leader.agent_id, 5, 4)
             .unwrap()
             .is_none()
+    );
+}
+
+#[test]
+fn operator_follow_up_resumes_a_stopped_leader_after_its_execution_stopped() {
+    let (f, leader) = setup();
+    let dep = spawn(&f, &leader, "deputy", "research", Admission::Ready, false);
+    f.store
+        .local_stop("scan-example", &leader.agent_id)
+        .unwrap();
+    // The leader's own execution has not stopped yet: resuming it now could
+    // run a replacement beside the old attempt.
+    assert!(
+        f.store
+            .local_message_deliverable("scan-example", &leader.agent_id)
+            .is_err()
+    );
+    assert!(
+        f.store
+            .local_message(
+                "scan-example",
+                "early-follow-up",
+                &leader.agent_id,
+                "Continue"
+            )
+            .is_err()
+    );
+    f.store
+        .local_finish(&leader, json!({"saved":"leader context"}), "Stopped", true)
+        .unwrap();
+    f.store
+        .local_message_deliverable("scan-example", &leader.agent_id)
+        .unwrap();
+    f.store
+        .local_message("scan-example", "follow-up", &leader.agent_id, "Continue")
+        .unwrap();
+    let controls = f.store.local_state("scan-example").unwrap().controls;
+    let control = |id: &str| controls.iter().find(|c| c.agent_id == id).unwrap().clone();
+    assert!(!control(&leader.agent_id).stop_requested);
+    assert_eq!(control(&leader.agent_id).failures, 0);
+    // Descendants stay stopped until their parent explicitly resumes them.
+    assert!(control(&dep).stop_requested);
+    let resumed = claim(&f, &leader.agent_id);
+    assert_ne!(resumed.attempt_id, leader.attempt_id);
+    assert!(resumed.prompt.contains("Continue"));
+    assert!(
+        f.store
+            .local_claim("scan-example", &dep, 3, 4)
+            .unwrap()
+            .is_none()
+    );
+    // The operator cannot resume a stopped non-leader directly.
+    assert!(
+        f.store
+            .local_message("scan-example", "deputy-follow-up", &dep, "Continue")
+            .is_err()
+    );
+    // Replaying the accepted follow-up does not queue it twice.
+    f.store
+        .local_message("scan-example", "follow-up", &leader.agent_id, "Continue")
+        .unwrap();
+    assert_eq!(
+        f.store
+            .local_state("scan-example")
+            .unwrap()
+            .inbox
+            .iter()
+            .filter(|m| m.id == "follow-up")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn parent_resumes_a_stopped_child_only_after_its_execution_stopped() {
+    let (f, leader) = setup();
+    let dep = spawn(&f, &leader, "deputy", "research", Admission::Ready, false);
+    let deputy = claim(&f, &dep);
+    let stop = |id: &str| {
+        f.store.local_dispatch(
+            &leader,
+            id,
+            SwarmCommand::Stop(Stop {
+                child_id: dep.clone(),
+            }),
+            Admission::Ready,
+        )
+    };
+    let message = |id: &str| {
+        f.store.local_dispatch(
+            &leader,
+            id,
+            SwarmCommand::MessageChild(MessageChild {
+                child_id: dep.clone(),
+                message: "Continue the synthetic inspection".into(),
+            }),
+            Admission::Ready,
+        )
+    };
+    stop("stop-deputy").unwrap();
+    let early = message("early-resume").unwrap_err();
+    assert_eq!(
+        early
+            .downcast_ref::<beale_contracts::tool_error::ToolError>()
+            .map(|e| e.code),
+        Some(beale_contracts::tool_error::ToolErrorCode::Conflict)
+    );
+    f.store
+        .local_finish(
+            &deputy,
+            json!({"partial":"saved evidence"}),
+            "Partial",
+            true,
+        )
+        .unwrap();
+    assert_eq!(
+        f.store
+            .load("scan-example", true)
+            .unwrap()
+            .agent(&dep)
+            .unwrap()
+            .summary
+            .state,
+        AgentState::Stopped
+    );
+    assert_eq!(message("resume").unwrap()["queued"], true);
+    let saved = f.store.load("scan-example", true).unwrap();
+    assert!(saved.assignments.iter().any(|a| a.child_id == dep
+        && a.state == AssignmentState::Queued
+        && a.task.question == "Continue the synthetic inspection"));
+    assert!(
+        !f.store
+            .local_state("scan-example")
+            .unwrap()
+            .controls
+            .iter()
+            .find(|c| c.agent_id == dep)
+            .unwrap()
+            .stop_requested
+    );
+    let resumed = claim(&f, &dep);
+    assert_ne!(resumed.attempt_id, deputy.attempt_id);
+    assert_eq!(
+        f.store
+            .load("scan-example", true)
+            .unwrap()
+            .agent(&dep)
+            .unwrap()
+            .checkpoint
+            .context["partial"],
+        "saved evidence"
+    );
+}
+
+fn draft_command(draft: HandoffDraft) -> SwarmCommand {
+    SwarmCommand::MessageParent(Box::new(MessageParent {
+        message: "Synthetic handoff".into(),
+        handoff: Some(draft),
+    }))
+}
+
+fn task_draft() -> HandoffDraft {
+    HandoffDraft {
+        to_profile: "research".into(),
+        route_id: None,
+        task: task(),
+        scope: vec!["Synthetic scope".into()],
+        record_revisions: vec![],
+        artifact_refs: vec![],
+        observations: vec![],
+        unresolved_questions: vec![],
+        payload: HandoffPayload::Task {},
+    }
+}
+
+fn rejection(error: anyhow::Error) -> beale_contracts::tool_error::ToolError {
+    error
+        .downcast_ref::<beale_contracts::tool_error::ToolError>()
+        .cloned()
+        .unwrap_or_else(|| panic!("expected a typed rejection, got {error:#}"))
+}
+
+#[test]
+fn handoff_drafts_resolve_saved_routes_or_return_typed_rejections() {
+    use beale_contracts::tool_error::ToolErrorCode;
+    let (f, leader) = setup();
+    let dep = spawn(&f, &leader, "deputy", "research", Admission::Ready, false);
+    let deputy = claim(&f, &dep);
+    let dispatch = |id: &str, draft: HandoffDraft| {
+        f.store
+            .local_dispatch(&deputy, id, draft_command(draft), Admission::Ready)
+    };
+    let mut unknown = task_draft();
+    unknown.to_profile = "missing-profile".into();
+    assert_eq!(
+        rejection(dispatch("unknown-profile", unknown).unwrap_err()).code,
+        ToolErrorCode::NotFound
+    );
+    // Workers are not deputies; a handoff can only address a deputy profile.
+    let mut worker_destination = task_draft();
+    worker_destination.to_profile = "investigator".into();
+    assert_eq!(
+        rejection(dispatch("worker-destination", worker_destination).unwrap_err()).code,
+        ToolErrorCode::NotFound
+    );
+    // No saved route carries this payload kind.
+    let mut unrouted = task_draft();
+    unrouted.task.evidence_refs = vec!["evidence-example".into()];
+    unrouted.payload = HandoffPayload::Candidate {
+        claim: "Synthetic claim".into(),
+    };
+    let error = rejection(dispatch("unrouted", unrouted).unwrap_err());
+    assert_eq!(error.code, ToolErrorCode::Rejected);
+    assert!(error.message.contains("candidate"), "{}", error.message);
+    let mut wrong_route = task_draft();
+    wrong_route.route_id = Some("other-route".into());
+    assert_eq!(
+        rejection(dispatch("wrong-route", wrong_route).unwrap_err()).code,
+        ToolErrorCode::Rejected
+    );
+    // A draft that fits the command bound but not the completed envelope.
+    let mut oversized = task_draft();
+    oversized.observations = vec!["x".repeat(4096); 15];
+    oversized.observations.push("x".into());
+    let command = draft_command(oversized.clone());
+    let room = 65536 - serde_json::to_vec(&command).unwrap().len();
+    oversized
+        .observations
+        .last_mut()
+        .unwrap()
+        .push_str(&"x".repeat(room));
+    assert!(draft_command(oversized.clone()).validate().is_ok());
+    let error = rejection(dispatch("oversized", oversized).unwrap_err());
+    assert_eq!(error.code, ToolErrorCode::InvalidArguments);
+    assert!(error.message.contains("shorten"), "{}", error.message);
+    assert!(
+        f.store
+            .load("scan-example", true)
+            .unwrap()
+            .handoffs
+            .is_empty()
+    );
+    // A unique match resolves without a route ID, and an explicit matching ID
+    // is accepted. Distinct operations receive distinct envelope IDs.
+    let implicit = dispatch("implicit-route", task_draft()).unwrap();
+    let mut explicit = task_draft();
+    explicit.route_id = Some("research-request".into());
+    let explicit = dispatch("explicit-route", explicit).unwrap();
+    assert_ne!(implicit["handoff_id"], explicit["handoff_id"]);
+    let saved = f.store.load("scan-example", true).unwrap();
+    assert_eq!(saved.handoffs.len(), 2);
+    assert!(
+        saved
+            .handoffs
+            .iter()
+            .all(|h| h.request.route_id == "research-request"
+                && h.request.from_agent == dep
+                && h.request.parent_id == leader.agent_id
+                && h.request.destination_profile == profile("research"))
+    );
+}
+
+#[test]
+fn ambiguous_saved_routes_require_an_explicit_route_id() {
+    use beale_contracts::tool_error::ToolErrorCode;
+    let mut c = config();
+    let ScanMode::Swarm { snapshot } = &mut c.mode else {
+        unreachable!()
+    };
+    snapshot.definition["routes"].as_array_mut().unwrap().push(
+        json!({"id":"research-request-alt","from":"research","to":"research","payload":"task"}),
+    );
+    let (f, leader) = setup_with(c);
+    let dep = spawn(&f, &leader, "deputy", "research", Admission::Ready, false);
+    let deputy = claim(&f, &dep);
+    let error = rejection(
+        f.store
+            .local_dispatch(
+                &deputy,
+                "ambiguous",
+                draft_command(task_draft()),
+                Admission::Ready,
+            )
+            .unwrap_err(),
+    );
+    assert_eq!(error.code, ToolErrorCode::InvalidArguments);
+    assert!(
+        error.message.contains("research-request-alt"),
+        "{}",
+        error.message
+    );
+    let mut chosen = task_draft();
+    chosen.route_id = Some("research-request-alt".into());
+    f.store
+        .local_dispatch(&deputy, "chosen", draft_command(chosen), Admission::Ready)
+        .unwrap();
+    assert_eq!(
+        f.store.load("scan-example", true).unwrap().handoffs[0]
+            .request
+            .route_id,
+        "research-request-alt"
     );
 }

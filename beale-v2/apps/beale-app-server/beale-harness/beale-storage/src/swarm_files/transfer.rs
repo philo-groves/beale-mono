@@ -3,9 +3,13 @@ use super::*;
 use beale_contracts::swarm_worker::ExecutionIdentity;
 
 impl ResearchFiles {
+    /// Serves one bounded chunk without holding the host database lock while
+    /// reading content. A blob is hashed once, when its first chunk is served;
+    /// the receiver independently verifies each complete object against its
+    /// manifest digest before publishing it.
     pub fn snapshot_chunk(&self, scan: &str, request: &SnapshotRead) -> Result<SnapshotChunk> {
         request.validate().map_err(anyhow::Error::msg)?;
-        let (digest, manifest) = self.snapshot(scan)?;
+        let (digest, manifest) = self.snapshot_manifest(scan)?;
         ensure!(digest == request.snapshot, "snapshot identity mismatch");
         let (total, bytes) = if let Some(blob) = &request.blob {
             let size = manifest
@@ -28,6 +32,9 @@ impl ResearchFiles {
                 fs::symlink_metadata(&path)?.file_type().is_file(),
                 "invalid snapshot blob"
             );
+            if request.offset == 0 {
+                self.verify_blob(blob, size)?;
+            }
             let mut file = fs::File::open(path)?;
             ensure!(
                 file.metadata()?.len() == size && request.offset <= size,

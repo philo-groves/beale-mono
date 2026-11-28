@@ -118,7 +118,9 @@ pub struct Stop {
 #[serde(deny_unknown_fields)]
 pub struct MessageParent {
     pub message: String,
-    pub handoff: Option<HandoffRequest>,
+    /// Handoff intent only; the host completes the envelope. See
+    /// [`crate::swarm_workflows::HandoffDraft`].
+    pub handoff: Option<crate::swarm_workflows::HandoffDraft>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "admission", rename_all = "snake_case", deny_unknown_fields)]
